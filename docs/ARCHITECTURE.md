@@ -484,8 +484,11 @@ host, not a description of a running deployment (**not yet verified on any hosti
 
 Operational targets in the spec (median button-to-observed-result < 500 ms, p95 < 1.5 s, bounded
 idle memory) are **targets to measure, not achieved claims**: `tests/test_load_smoke.py` prints
-throughput, latency and RSS as numbers for 40 simulated agents and controllers but no results have
-been recorded in this build, so DoMe is **not load-tested**.
+throughput, latency and RSS as numbers for 40 simulated agents and controllers. The one recorded run
+(2026-10-08, loopback, every endpoint in the test process on a shared 4-CPU machine): 400 commands
+in 13.47 s = 30 commands/s, round trip p50 1314 ms / p95 1629 ms, RSS 215 → 218 MiB. That is a smoke
+test, not a capacity measurement: DoMe is **load-tested (small)** at best, and the spec's device
+latency targets remain unmeasured.
 
 ## 6. Seams left for later phases
 
@@ -504,9 +507,9 @@ been recorded in this build, so DoMe is **not load-tested**.
 | Claim group | Evidence tag |
 | --- | --- |
 | Contract parsing/signing/derivations identical across Python and TypeScript | unit-tested (`shared/python` 128 tests, `shared/ts` 82 tests, fixtures verified in both directions) |
-| Relay REST and routing behaviour, isolation, revocation, deadlines | integration-tested (cloud-api, 76 tests against PostgreSQL 16 + `tools/dev-idp` + uvicorn in-process) |
+| Relay REST and routing behaviour, isolation, revocation, deadlines | integration-tested (cloud-api, 86 tests against PostgreSQL 16 + `tools/dev-idp` + uvicorn in-process) |
 | Agent authorization, executor, confirmations, bridge framing, relay client | unit-tested on Linux with explicit fakes (pc-agent, 194 tests) |
 | Extension worker, player adapter, frames | unit-tested in jsdom with a `chrome` stub (90 tests); built bundle smoke-tested without `eval` |
 | PWA libraries, stores, components | unit-tested in jsdom (205 tests) |
-| Phone-sign → relay → real agent process → fake extension, including security and reliability scenarios | integration-tested (Linux, fake platform, fake extension; `tests/`) — see `docs/ACCEPTANCE.md` once written for the run record |
+| Phone-sign → relay → real agent process → fake extension, including security and reliability scenarios | integration-tested (Linux, fake platform, fake extension): `cd tests && uv run pytest -q --deselect test_load_smoke.py` → 19 passed in 179 s on 2026-10-08 against PostgreSQL 16 and `tools/dev-idp` |
 | Any Windows API path, DPAPI, tray, native host registration, real YouTube DOM, iPhone Safari key persistence/camera/resume, hosting provider behaviour, load | not yet verified |
