@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.spec.bak
+
+# Node
+node_modules/
+*.tsbuildinfo
+.vite/
+coverage/
+playwright-report/
+test-results/
+
+# Local state and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+!shared/protocol/fixtures/*.pem
+pc-agent/.dome-dev-state/
+cloud-api/.dome-dev-state/
+/tmp/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

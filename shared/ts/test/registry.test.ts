@@ -1,0 +1,50 @@
+import { describe, expect, it } from "vitest";
+
+import { CAPABILITIES, ERRORS, PROTOCOL_VERSION, ProtocolError, protocolCompatible, registry, schemas } from "../src/index.ts";
+
+describe("registry", () => {
+  it("loads a consistent action registry", () => {
+    expect(PROTOCOL_VERSION).toBe("1.0");
+    for (const [name, spec] of registry.actions()) {
+      expect(spec.name).toBe(name);
+      expect(spec.paramsSchema.additionalProperties).toBe(false);
+      expect(CAPABILITIES[spec.capability]).toBeDefined();
+      if (spec.risk === "disruptive") {
+        expect(spec.confirmation).toBe("challenge");
+        expect(spec.routineAllowed).toBe(false);
+      }
+      if (spec.routineAllowed) expect(spec.confirmation).toBe("none");
+    }
+    expect(Object.keys(ERRORS).every((c) => /^[A-Z_]+$/.test(c))).toBe(true);
+  });
+
+  it("validates params and targets", () => {
+    expect(registry.validateParams("youtube.set_volume", { value: 50 })).toEqual({ value: 50 });
+    expect(() => registry.validateParams("youtube.set_volume", { value: 101 })).toThrow(ProtocolError);
+    expect(() => registry.validateParams("youtube.seek_relative", { seconds: 0 })).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateParams("windows.lock", { extra: 1 })).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateTarget("youtube.next", null)).toThrow(/TARGET_REQUIRED/);
+    expect(() => registry.validateTarget("windows.lock", { app_id: "x" })).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateTarget("app.focus", {})).toThrow(/INVALID_PARAMETERS/);
+    expect(registry.validateTarget("app.focus", { app_id: "discord" })).toEqual({ app_id: "discord" });
+    expect(() => registry.get("nope.nope")).toThrow(/UNKNOWN_ACTION/);
+  });
+
+  it("validates frames by direction", () => {
+    schemas.validateFrame("controller_to_relay", { type: "ping" });
+    schemas.validateFrame("controller_to_relay", { type: "subscribe", pc_ids: ["33333333-3333-4333-8333-333333333333"] });
+    expect(() => schemas.validateFrame("controller_to_relay", { type: "ping", extra: 1 })).toThrow(ProtocolError);
+    expect(() => schemas.validateFrame("controller_to_relay", { type: "grants_snapshot" })).toThrow(ProtocolError);
+    schemas.validateFrame("agent_to_relay", { type: "ack", command_id: "33333333-3333-4333-8333-333333333333", state: "accepted", at: "2026-10-08T12:00:00.000Z" });
+    expect(() => schemas.validateFrame("agent_to_relay", { type: "ack", command_id: "x", state: "accepted", at: "2026-10-08T12:00:00.000Z" })).toThrow(ProtocolError);
+    schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "next", args: { tab_id: 1 } });
+    expect(() => schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "eval", args: {} })).toThrow(ProtocolError);
+  });
+
+  it("negotiates versions", () => {
+    expect(protocolCompatible("1.0", ["1.2"])).toBe(true);
+    expect(protocolCompatible("1.3", ["1.2"])).toBe(false);
+    expect(protocolCompatible("2.0", ["1.2"])).toBe(false);
+    expect(protocolCompatible("x", ["1.0"])).toBe(false);
+  });
+});

@@ -1,0 +1,49 @@
+{
+  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices.",
+  "plans": {
+    "free": {
+      "display_name": "DoMe Free",
+      "max_enabled_pcs": 1,
+      "max_controllers": 2,
+      "custom_layouts": false,
+      "routines": false,
+      "routine_max_steps": 0,
+      "routine_max_seconds": 0,
+      "ai_interpretations_per_period": 0,
+      "ai_transcription_minutes_per_period": 0,
+      "manual_command_rate_limit": { "per_minute": 120, "burst": 30 }
+    },
+    "pro": {
+      "display_name": "DoMe Pro",
+      "max_enabled_pcs": 5,
+      "max_controllers": 5,
+      "custom_layouts": true,
+      "routines": true,
+      "routine_max_steps": 10,
+      "routine_max_seconds": 60,
+      "ai_interpretations_per_period": 0,
+      "ai_transcription_minutes_per_period": 0,
+      "manual_command_rate_limit": { "per_minute": 120, "burst": 30 },
+      "$comment": "AI allowances stay 0 until the Phase E release gate; the cost model evaluates 250 interpretations / 30 minutes."
+    }
+  },
+  "pricing_defaults": {
+    "currency": "USD",
+    "monthly_cents": 599,
+    "annual_cents": 4999,
+    "$comment": "Pricing experiment inputs only. Live amounts come from the Stripe price objects referenced by DOME_STRIPE_PRICE_MONTHLY / DOME_STRIPE_PRICE_ANNUAL."
+  },
+  "downgrade_policy": {
+    "selection_window_days": 14,
+    "default_selection": "most_recently_seen",
+    "$comment": "On Pro expiry the customer picks which 1 PC and 2 controllers stay enabled within the window; otherwise the most recently seen are kept. Nothing is deleted. Revocation and emergency stop work for every paired device regardless of plan."
+  },
+  "billing_grace": {
+    "past_due_grace_days": 7,
+    "agent_offline_assertion_grace_hours": 72
+  },
+  "entitlement_assertion": {
+    "algorithm": "EdDSA",
+    "lifetime_seconds": 3600
+  }
+}

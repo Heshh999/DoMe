@@ -1,0 +1,22 @@
+[project]
+name = "dome-protocol"
+version = "1.0.0"
+description = "DoMe shared protocol library: strict JSON, ES256 envelopes, action registry, schema validation"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=45,<51",
+    "jsonschema>=4.23,<5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dome_protocol"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../protocol" = "dome_protocol/_contract"

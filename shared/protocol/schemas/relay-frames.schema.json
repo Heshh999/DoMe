@@ -1,0 +1,1160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dome.app/schemas/relay-frames.schema.json",
+  "title": "DoMe relay WebSocket frames",
+  "description": "All frames are JSON objects with a `type`. Frames are limited to 65536 bytes. Unknown `type` or unknown fields are rejected with MALFORMED_MESSAGE and the socket may be closed. The relay never alters a signed envelope; it adds routing metadata in sibling fields which receivers treat as informational only.",
+  "$defs": {
+    "uuid": {
+      "$ref": "command.schema.json#/$defs/uuid"
+    },
+    "timestamp": {
+      "$ref": "command.schema.json#/$defs/timestamp"
+    },
+    "envelope": {
+      "$ref": "envelope.schema.json"
+    },
+    "lifecycle_state": {
+      "type": "string",
+      "enum": [
+        "created",
+        "awaiting_confirmation",
+        "accepted",
+        "executing",
+        "succeeded",
+        "failed",
+        "expired",
+        "canceled",
+        "outcome_unknown"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z_]+$",
+          "maxLength": 64
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "object"
+        }
+      }
+    },
+    "pc_connection_state": {
+      "type": "string",
+      "enum": [
+        "online",
+        "reconnecting",
+        "offline"
+      ]
+    },
+    "hello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "component",
+        "component_version",
+        "protocol_versions",
+        "registry_version"
+      ],
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "component": {
+          "type": "string",
+          "enum": [
+            "controller",
+            "agent",
+            "relay"
+          ]
+        },
+        "component_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "protocol_versions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+$"
+          }
+        },
+        "registry_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          }
+        }
+      }
+    },
+    "hello_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "server_time",
+        "connection_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "hello_ack"
+        },
+        "protocol_version": {
+          "type": "string"
+        },
+        "server_time": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "connection_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "error_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "error"
+      ],
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "ref_command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      }
+    },
+    "ping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "ping"
+        },
+        "t": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "pong": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "pong"
+        },
+        "t": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "controller_subscribe": {
+      "description": "Controller → relay. Subscribe to state/result events for PCs the controller is granted on. The relay checks ownership and grant; a PC the account does not own yields GRANT_MISSING and nothing else.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_ids"
+      ],
+      "properties": {
+        "type": {
+          "const": "subscribe"
+        },
+        "pc_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      }
+    },
+    "controller_command": {
+      "description": "Controller → relay. The relay verifies the envelope signature against the controller's registered key, checks the payload's account/controller/target ownership and grant, enforces rate limits and queue depth, then forwards to the PC. It never executes anything itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "envelope"
+      ],
+      "properties": {
+        "type": {
+          "const": "command"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        }
+      }
+    },
+    "controller_confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "envelope"
+      ],
+      "properties": {
+        "type": {
+          "const": "confirmation"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        }
+      }
+    },
+    "controller_cancel": {
+      "description": "Controller → relay → PC. Best-effort cancel of a queued or countdown command. Not signed in v1.0 because the worst case is a cancelled action; the relay checks the controller owns the command.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "command_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "cancel"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "relay_to_agent_command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "envelope",
+        "relay"
+      ],
+      "properties": {
+        "type": {
+          "const": "command"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        },
+        "relay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "received_at",
+            "connection_id"
+          ],
+          "properties": {
+            "received_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "connection_id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        }
+      }
+    },
+    "relay_to_agent_confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "envelope",
+        "relay"
+      ],
+      "properties": {
+        "type": {
+          "const": "confirmation"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        },
+        "relay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "received_at",
+            "connection_id"
+          ],
+          "properties": {
+            "received_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "connection_id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        }
+      }
+    },
+    "relay_to_agent_cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "command_id",
+        "controller_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "cancel"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "grants_snapshot": {
+      "description": "Relay → agent, sent immediately after hello_ack and whenever grants change. The agent must apply it before accepting commands after (re)connect. Lists every currently valid controller for this PC; anything absent is revoked.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "account_id",
+        "snapshot_id",
+        "controllers"
+      ],
+      "properties": {
+        "type": {
+          "const": "grants_snapshot"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "account_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controllers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "controller_id",
+              "kid",
+              "public_jwk",
+              "capabilities",
+              "display_name"
+            ],
+            "properties": {
+              "controller_id": {
+                "$ref": "#/$defs/uuid"
+              },
+              "kid": {
+                "type": "string"
+              },
+              "public_jwk": {
+                "$ref": "#/$defs/ec_public_jwk"
+              },
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "display_name": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          }
+        },
+        "entitlement_assertion": {
+          "type": "string",
+          "description": "Compact JWS (EdDSA) or absent on Free",
+          "maxLength": 4096
+        }
+      }
+    },
+    "pairing_request": {
+      "description": "Relay → agent. A signed-in controller submitted this PC's pairing code. The agent computes the verification code from (pairing_id, pc_id, kid) and shows it with the display name; the user approves locally.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pairing_id",
+        "controller_display_name",
+        "public_jwk",
+        "kid",
+        "requested_capabilities",
+        "expires_at"
+      ],
+      "properties": {
+        "type": {
+          "const": "pairing_request"
+        },
+        "pairing_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_display_name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "public_jwk": {
+          "$ref": "#/$defs/ec_public_jwk"
+        },
+        "kid": {
+          "type": "string"
+        },
+        "requested_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "pairing_decision": {
+      "description": "Agent → relay after the local approve/decline. On approve, `kid` must equal the kid the agent computed from the JWK it stored; the relay only then creates the controller/grant rows.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pairing_id",
+        "decision",
+        "kid",
+        "granted_capabilities"
+      ],
+      "properties": {
+        "type": {
+          "const": "pairing_decision"
+        },
+        "pairing_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "decline"
+          ]
+        },
+        "kid": {
+          "type": "string"
+        },
+        "granted_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agent_ack": {
+      "description": "Agent → relay → controller. Delivery/authorization acknowledgement only; NOT an execution result.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "command_id",
+        "state",
+        "at"
+      ],
+      "properties": {
+        "type": {
+          "const": "ack"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "state": {
+          "$ref": "#/$defs/lifecycle_state"
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "agent_confirmation_required": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "command_id",
+        "challenge"
+      ],
+      "properties": {
+        "type": {
+          "const": "confirmation_required"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "challenge": {
+          "$ref": "#/$defs/challenge"
+        }
+      }
+    },
+    "challenge": {
+      "description": "Issued by the PC. The controller displays `display` fields verbatim and signs a confirmation containing SHA-256 of this object as serialised by the PC (the relay forwards the raw text).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challenge_id",
+        "command_id",
+        "controller_id",
+        "pc_id",
+        "action",
+        "params",
+        "target",
+        "target_state_digest",
+        "expires_at",
+        "display"
+      ],
+      "properties": {
+        "challenge_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "action": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "target_state_digest": {
+          "type": "string",
+          "description": "base64url SHA-256 of the relevant target state (e.g., window title + handle) at challenge time; the PC re-checks before executing"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "display": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pc_name",
+            "action_label",
+            "detail"
+          ],
+          "properties": {
+            "pc_name": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "action_label": {
+              "type": "string",
+              "maxLength": 80
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        }
+      }
+    },
+    "agent_result": {
+      "description": "Agent → relay → controller. Terminal execution result.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "command_id",
+        "state",
+        "at",
+        "duration_ms"
+      ],
+      "properties": {
+        "type": {
+          "const": "result"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed",
+            "expired",
+            "canceled",
+            "outcome_unknown"
+          ]
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "result": {
+          "type": "object",
+          "description": "Action-specific resulting state (e.g. new video id, volume)"
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        },
+        "warning": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "e.g. 'A previous Next may have executed before the connection dropped'"
+        }
+      }
+    },
+    "agent_state": {
+      "description": "Agent → relay → subscribed controllers. Periodic and on-change PC state. Media titles are untrusted display data.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "at",
+        "state"
+      ],
+      "properties": {
+        "type": {
+          "const": "state"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "state": {
+          "$ref": "#/$defs/pc_state"
+        }
+      }
+    },
+    "pc_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "remote_enabled",
+        "session_locked",
+        "extension_connected"
+      ],
+      "properties": {
+        "remote_enabled": {
+          "type": "boolean"
+        },
+        "session_locked": {
+          "type": "boolean"
+        },
+        "media_while_locked": {
+          "type": "boolean"
+        },
+        "extension_connected": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "windows",
+            "development"
+          ]
+        },
+        "volume": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "muted": {
+              "type": "boolean"
+            }
+          }
+        },
+        "browser_instances": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "browser_instance_id",
+              "browser"
+            ],
+            "properties": {
+              "browser_instance_id": {
+                "type": "string"
+              },
+              "browser": {
+                "type": "string",
+                "enum": [
+                  "chrome",
+                  "edge",
+                  "unknown"
+                ]
+              },
+              "profile_label": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          }
+        },
+        "youtube_tabs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/youtube_tab"
+          }
+        },
+        "media_sessions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/media_session"
+          }
+        },
+        "pending_power_action": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "command_id",
+                "fires_at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "command_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "fires_at": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "youtube_tab": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "browser_instance_id",
+        "tab_id",
+        "context"
+      ],
+      "properties": {
+        "browser_instance_id": {
+          "type": "string"
+        },
+        "tab_id": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "video_id": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "volume": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "position_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "context": {
+          "type": "string",
+          "enum": [
+            "watch",
+            "shorts",
+            "music",
+            "live",
+            "ad",
+            "playlist",
+            "other"
+          ]
+        },
+        "has_next": {
+          "type": "boolean"
+        },
+        "has_previous": {
+          "type": "boolean"
+        },
+        "active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "media_session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "status",
+        "controls"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "app_label": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "artist": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "playing",
+            "paused",
+            "stopped",
+            "changing",
+            "closed",
+            "opened",
+            "unknown"
+          ]
+        },
+        "controls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "play",
+              "pause",
+              "next",
+              "previous"
+            ]
+          }
+        }
+      }
+    },
+    "pc_status_event": {
+      "description": "Relay → controller. Connection-level status the relay knows (not execution state). `last_seen` is the last frame received from the PC.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "connection",
+        "last_seen"
+      ],
+      "properties": {
+        "type": {
+          "const": "pc_status"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "connection": {
+          "$ref": "#/$defs/pc_connection_state"
+        },
+        "last_seen": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        },
+        "last_power_request": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "at": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "revoked": {
+      "description": "Relay → controller when this controller's grant or session was revoked; the socket closes afterwards.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "reason"
+      ],
+      "properties": {
+        "type": {
+          "const": "revoked"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "controller_revoked",
+            "grant_revoked",
+            "session_ended",
+            "account_deleted"
+          ]
+        }
+      }
+    },
+    "ec_public_jwk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kty",
+        "crv",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "kty": {
+          "const": "EC"
+        },
+        "crv": {
+          "const": "P-256"
+        },
+        "x": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "y": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "controller_to_relay": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello"
+        },
+        {
+          "$ref": "#/$defs/controller_subscribe"
+        },
+        {
+          "$ref": "#/$defs/controller_command"
+        },
+        {
+          "$ref": "#/$defs/controller_confirmation"
+        },
+        {
+          "$ref": "#/$defs/controller_cancel"
+        },
+        {
+          "$ref": "#/$defs/ping"
+        },
+        {
+          "$ref": "#/$defs/pong"
+        }
+      ]
+    },
+    "relay_to_controller": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello_ack"
+        },
+        {
+          "$ref": "#/$defs/error_frame"
+        },
+        {
+          "$ref": "#/$defs/agent_ack"
+        },
+        {
+          "$ref": "#/$defs/agent_confirmation_required"
+        },
+        {
+          "$ref": "#/$defs/agent_result"
+        },
+        {
+          "$ref": "#/$defs/agent_state"
+        },
+        {
+          "$ref": "#/$defs/pc_status_event"
+        },
+        {
+          "$ref": "#/$defs/revoked"
+        },
+        {
+          "$ref": "#/$defs/ping"
+        },
+        {
+          "$ref": "#/$defs/pong"
+        }
+      ]
+    },
+    "agent_to_relay": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello"
+        },
+        {
+          "$ref": "#/$defs/agent_ack"
+        },
+        {
+          "$ref": "#/$defs/agent_confirmation_required"
+        },
+        {
+          "$ref": "#/$defs/agent_result"
+        },
+        {
+          "$ref": "#/$defs/agent_state"
+        },
+        {
+          "$ref": "#/$defs/pairing_decision"
+        },
+        {
+          "$ref": "#/$defs/error_frame"
+        },
+        {
+          "$ref": "#/$defs/ping"
+        },
+        {
+          "$ref": "#/$defs/pong"
+        }
+      ]
+    },
+    "relay_to_agent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello_ack"
+        },
+        {
+          "$ref": "#/$defs/grants_snapshot"
+        },
+        {
+          "$ref": "#/$defs/relay_to_agent_command"
+        },
+        {
+          "$ref": "#/$defs/relay_to_agent_confirmation"
+        },
+        {
+          "$ref": "#/$defs/relay_to_agent_cancel"
+        },
+        {
+          "$ref": "#/$defs/pairing_request"
+        },
+        {
+          "$ref": "#/$defs/error_frame"
+        },
+        {
+          "$ref": "#/$defs/ping"
+        },
+        {
+          "$ref": "#/$defs/pong"
+        }
+      ]
+    }
+  }
+}

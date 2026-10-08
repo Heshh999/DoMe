@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dome.app/schemas/confirmation.schema.json",
+  "title": "DoMe signed confirmation payload",
+  "description": "Signed by the same controller key as the command it confirms. `challenge_digest` is base64url(SHA-256(challenge JSON exactly as received)) so the PC can detect any relay tampering with the displayed action.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "protocol_version", "command_id", "challenge_id", "challenge_digest", "controller_id", "target_pc_id", "decision", "issued_at", "nonce"],
+  "properties": {
+    "type": { "const": "confirmation" },
+    "protocol_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "command_id": { "$ref": "command.schema.json#/$defs/uuid" },
+    "challenge_id": { "$ref": "command.schema.json#/$defs/uuid" },
+    "challenge_digest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "controller_id": { "$ref": "command.schema.json#/$defs/uuid" },
+    "target_pc_id": { "$ref": "command.schema.json#/$defs/uuid" },
+    "decision": { "type": "string", "enum": ["approve", "decline"] },
+    "issued_at": { "$ref": "command.schema.json#/$defs/timestamp" },
+    "nonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" }
+  }
+}

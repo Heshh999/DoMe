@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dome.app/schemas/bridge.schema.json",
+  "title": "DoMe browser bridge frames (extension ⇄ native host ⇄ agent)",
+  "description": "Chrome Native Messaging frames between the extension service worker and `dome-native-host`, and the identical JSON forwarded over the host's protected local IPC to the tray agent. Native messaging frames are limited to 1 MiB by Chrome; DoMe limits them to 64 KiB. The agent treats every field originating from a web page (titles, video ids) as untrusted display data.",
+  "$defs": {
+    "bridge_hello": {
+      "description": "Extension → host → agent on port connect. `browser_instance_id` is a random id generated once per extension installation (chrome.storage.local) and identifies the browser profile.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "browser_instance_id",
+        "browser",
+        "extension_version",
+        "protocol_versions"
+      ],
+      "properties": {
+        "type": {
+          "const": "bridge_hello"
+        },
+        "browser_instance_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "browser": {
+          "type": "string",
+          "enum": [
+            "chrome",
+            "edge",
+            "unknown"
+          ]
+        },
+        "extension_version": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "protocol_versions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+$"
+          }
+        },
+        "profile_label": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "bridge_hello_ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "agent_version"
+      ],
+      "properties": {
+        "type": {
+          "const": "bridge_hello_ack"
+        },
+        "protocol_version": {
+          "type": "string"
+        },
+        "agent_version": {
+          "type": "string"
+        }
+      }
+    },
+    "bridge_request": {
+      "description": "Agent → host → extension. `op` is a browser-adapter operation, not the public action name; the agent maps actions to ops.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "request_id",
+        "op",
+        "args"
+      ],
+      "properties": {
+        "type": {
+          "const": "bridge_request"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f-]{36}$"
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "list_tabs",
+            "get_state",
+            "set_paused",
+            "next",
+            "previous",
+            "seek_relative",
+            "seek_to",
+            "set_muted",
+            "set_volume",
+            "set_theater",
+            "request_fullscreen"
+          ]
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tab_id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expected_video_id": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "seconds": {
+              "type": "integer"
+            },
+            "position_seconds": {
+              "type": "number"
+            },
+            "muted": {
+              "type": "boolean"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 60000
+        }
+      }
+    },
+    "bridge_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "request_id",
+        "ok"
+      ],
+      "properties": {
+        "type": {
+          "const": "bridge_response"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "result": {
+          "type": "object"
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "pattern": "^[A-Z_]+$"
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 512
+            }
+          }
+        }
+      }
+    },
+    "bridge_event": {
+      "description": "Extension → agent. Tab/player state changes, debounced to at most 2 per second per tab.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "event",
+        "at"
+      ],
+      "properties": {
+        "type": {
+          "const": "bridge_event"
+        },
+        "event": {
+          "type": "string",
+          "enum": [
+            "tabs_changed",
+            "player_state"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "tabs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "relay-frames.schema.json#/$defs/youtube_tab"
+          }
+        },
+        "tab": {
+          "$ref": "relay-frames.schema.json#/$defs/youtube_tab"
+        }
+      }
+    },
+    "extension_to_agent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/bridge_hello"
+        },
+        {
+          "$ref": "#/$defs/bridge_response"
+        },
+        {
+          "$ref": "#/$defs/bridge_event"
+        }
+      ]
+    },
+    "agent_to_extension": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/bridge_hello_ack"
+        },
+        {
+          "$ref": "#/$defs/bridge_request"
+        }
+      ]
+    }
+  }
+}

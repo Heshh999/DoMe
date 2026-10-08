@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dome.app/schemas/envelope.schema.json",
+  "title": "DoMe signed envelope",
+  "description": "Detached signature over the exact UTF-8 bytes of `payload`. Verifiers check `sig` first, then parse `payload` exactly once with a strict parser.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "alg", "kid", "payload", "sig"],
+  "properties": {
+    "v": { "const": 1 },
+    "alg": { "type": "string", "enum": ["ES256"] },
+    "kid": { "type": "string", "description": "base64url RFC 7638 JWK thumbprint (SHA-256) of the signing public key", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "payload": { "type": "string", "minLength": 2, "maxLength": 16384 },
+    "sig": { "type": "string", "description": "base64url, IEEE P1363 r||s, 64 bytes", "pattern": "^[A-Za-z0-9_-]{86}$" }
+  }
+}

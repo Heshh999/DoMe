@@ -1,0 +1,17 @@
+{
+  "protocol_version": "1.0",
+  "compatibility_rule": "Components exchange `hello` frames listing supported protocol versions as MAJOR.MINOR strings. A peer accepts a message only if its MAJOR equals a supported MAJOR and its MINOR is less than or equal to the highest supported MINOR for that MAJOR. Unknown fields are rejected, not ignored. Incompatible peers receive error code PROTOCOL_INCOMPATIBLE with both version lists so the UI can tell the customer which component to update.",
+  "signing_algorithms": ["ES256"],
+  "limits": {
+    "max_payload_bytes": 16384,
+    "max_json_depth": 8,
+    "max_frame_bytes": 65536,
+    "default_command_lifetime_seconds": 30,
+    "max_command_lifetime_seconds": 300,
+    "max_clock_skew_seconds": 5,
+    "confirmation_challenge_lifetime_seconds": 60,
+    "pairing_code_lifetime_seconds": 300,
+    "device_link_code_lifetime_seconds": 600,
+    "per_pc_queue_depth": 16
+  }
+}
