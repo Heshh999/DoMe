@@ -3,8 +3,6 @@
  * otherwise `getUserMedia` frames decoded by jsQR on a canvas. Decoded text is handed to the caller
  * exactly once per distinct value and is never logged.
  */
-import jsQR from "jsqr";
-
 export type QrSupport = "barcode-detector" | "jsqr" | "unsupported";
 
 interface BarcodeDetectorLike {
@@ -70,6 +68,7 @@ export async function startQrScanner(video: HTMLVideoElement, onCode: (text: str
     }
   }
   const method: QrSupport = detector ? "barcode-detector" : "jsqr";
+  const jsQR = detector ? null : (await import("jsqr")).default;
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
@@ -87,7 +86,7 @@ export async function startQrScanner(video: HTMLVideoElement, onCode: (text: str
         if (detector) {
           const codes = await detector.detect(video);
           for (const c of codes) deliver(c.rawValue);
-        } else if (ctx) {
+        } else if (ctx && jsQR) {
           const w = Math.min(video.videoWidth, 640);
           const h = Math.round((video.videoHeight / video.videoWidth) * w);
           canvas.width = w;

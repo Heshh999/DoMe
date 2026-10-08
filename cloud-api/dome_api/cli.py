@@ -30,7 +30,14 @@ def main(argv: list[str] | None = None) -> int:
         upgrade_to_head(settings.database_url)
         log.info("migrations.done")
     host, port = settings.bind_host_port
-    log.info("serve", host=host, port=port, env=settings.env, reload=args.reload)
+    log.info(
+        "serve",
+        host=host,
+        port=port,
+        env=settings.env,
+        reload=args.reload,
+        trusted_proxies=settings.trusted_proxy_list or "none",
+    )
     uvicorn.run(
         "dome_api.main:create_app",
         host=host,
@@ -42,8 +49,10 @@ def main(argv: list[str] | None = None) -> int:
         ws_max_size=settings.relay_max_frame_bytes,
         ws_ping_interval=20.0,
         ws_ping_timeout=20.0,
-        proxy_headers=True,
-        forwarded_allow_ips="*" if settings.env != "development" else "127.0.0.1",
+        # Forwarded headers are resolved by the application itself (dome_api.security.proxy) against
+        # DOME_TRUSTED_PROXIES; uvicorn's own handling (and the FORWARDED_ALLOW_IPS environment
+        # variable) is switched off so no deployment can widen the trust to "*" by accident.
+        proxy_headers=False,
         timeout_graceful_shutdown=20,
     )
     return 0

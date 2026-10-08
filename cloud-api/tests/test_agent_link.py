@@ -159,15 +159,47 @@ async def test_token_with_unknown_or_revoked_credential_is_401(env: Env, alice: 
     assert r.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
-async def test_relink_same_pc_key_reuses_row_and_rotates_credential(env: Env, alice: Browser) -> None:
+async def test_relink_after_unlink_reuses_row_without_grants(env: Env, alice: Browser) -> None:
     agent = AgentSim(env)
     await agent.link(alice, "Desk")
     old_credential = agent.credential
+    await alice.delete(f"/v1/pcs/{agent.pc_id}")
     again = await agent.link(alice, "Desk again")
     assert again["pc_id"] == agent.pc_id and again["pc_name"] == "Desk again"
     assert (await alice.get("/v1/pcs"))["pcs"][0]["name"] == "Desk again"
+    assert (await alice.get(f"/v1/pcs/{agent.pc_id}/grants", schema="grants_response"))["grants"] == []
     r = await env.http.post("/v1/agent/token", json={"pc_credential": old_credential})
     assert r.status_code == 401
+
+
+async def test_copied_public_key_cannot_take_over_a_linked_pc(env: Env, alice: Browser) -> None:
+    """Link start carries no proof of possession, so a code naming the key of a PC that is still linked is
+    refused at approval: the real PC keeps its credential, socket and grants."""
+    victim = AgentSim(env)
+    await victim.link(alice, "Real PC")
+    await victim.connect()
+    impostor = AgentSim(env, key=victim.key)  # knows only the public half in practice; same JWK on the wire
+    start = (
+        await impostor.rest(
+            "POST",
+            "/v1/agent-link/start",
+            {"pc_public_jwk": victim.jwk, "agent_version": "t", "platform": "development"},
+            expect=200,
+        )
+    ).json()
+    r = await alice.request(
+        "POST", f"/v1/agent-link/{start['user_code']}/approve", {"pc_name": "taken", "remote_enabled": True}, expect=409
+    )
+    assert r.json()["error"]["code"] == "PC_ALREADY_LINKED"
+    # nothing was handed out, the code stays pending, the real PC is untouched
+    pending = await impostor.rest("POST", "/v1/agent-link/poll", {"device_code": start["device_code"]}, expect=428)
+    assert pending.json()["status"] in ("authorization_pending", "slow_down")
+    assert await victim.fetch_token()
+    pcs = (await alice.get("/v1/pcs"))["pcs"]
+    assert [(p["name"], p["connection"]) for p in pcs] == [("Real PC", "online")]
+    await victim.send({"type": "ping"})
+    assert (await victim.recv())["type"] == "pong"
+    await victim.close()
 
 
 async def test_pc_key_linked_to_another_account_is_refused(env: Env, alice: Browser, bob: Browser) -> None:

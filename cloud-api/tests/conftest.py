@@ -157,6 +157,7 @@ def settings(
         rate_pairing_claim_per_ip=100_000,
         rate_login_per_minute=100_000,
         rate_agent_token_per_minute=100_000,
+        rate_link_code_failures_per_ip=100_000,  # per-account budget (tested) keeps its default
     )
 
 
@@ -190,6 +191,7 @@ async def env(settings: Settings, ports: dict[str, int], database_url: str) -> A
         lifespan="on",
         log_level="warning",
         timeout_graceful_shutdown=3,
+        proxy_headers=False,  # as `dome-api` runs it: forwarded headers are the application's decision
     )
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())

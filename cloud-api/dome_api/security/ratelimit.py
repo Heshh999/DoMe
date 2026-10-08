@@ -37,6 +37,10 @@ class TokenBucketLimiter:
             return True
         return False
 
+    def forget(self, key: str) -> None:
+        """Drop a key whose owner is gone (a closed socket); pruning would get to it eventually."""
+        self._buckets.pop(key, None)
+
     def _prune(self, now: float) -> None:
         self._last_prune = now
         stale = [k for k, b in self._buckets.items() if now - b.updated > 600]
@@ -59,15 +63,25 @@ class SlidingWindowLimiter:
         self._last_prune = time.monotonic()
 
     def allow(self, key: str) -> bool:
+        """Record an event if the key still has budget; ``False`` when the limit is reached."""
+        if self.exhausted(key):
+            return False
+        self._windows[key].hits.append(time.monotonic())
+        return True
+
+    def exhausted(self, key: str) -> bool:
+        """Whether the key has reached its limit, without recording anything."""
         now = time.monotonic()
         w = self._windows.setdefault(key, _Window())
         w.hits = [t for t in w.hits if now - t < self.window]
         if now - self._last_prune > 300:
             self._prune(now)
-        if len(w.hits) >= self.limit:
-            return False
-        w.hits.append(now)
-        return True
+        return len(w.hits) >= self.limit
+
+    def hit(self, key: str) -> None:
+        """Record an event unconditionally (used to count *failures* after the fact)."""
+        self.exhausted(key)
+        self._windows[key].hits.append(time.monotonic())
 
     def _prune(self, now: float) -> None:
         self._last_prune = now

@@ -71,10 +71,13 @@ export function normalizeText(text: string): string {
     .trim()
     .replace(/[.!?,;:]+$/g, "")
     .trim();
-  // politeness / wake words that do not change meaning
-  t = t.replace(/^(?:(?:hey|ok|okay)\s+)?(?:dome[,]?\s+)?(?:please\s+)?(?:can you|could you|would you|will you)?\s*/, "").trim();
-  t = t.replace(/\s+(?:please|now|for me|thanks|thank you)$/g, "").trim();
-  t = t.replace(/^(?:please\s+)/, "").trim();
+  // politeness / wake words that do not change meaning (applied twice so "…, please?" fully unwraps)
+  for (let i = 0; i < 2; i++) {
+    t = t.replace(/^(?:(?:hey|ok|okay)\s+)?(?:dome[,]?\s+)?(?:please\s+)?(?:can you|could you|would you|will you)?\s*/, "").trim();
+    t = t.replace(/,?\s+(?:please|now|for me|thanks|thank you)$/g, "").trim();
+    t = t.replace(/^(?:please\s+)/, "").trim();
+    t = t.replace(/[.!?,;:]+$/g, "").trim();
+  }
   return t;
 }
 
@@ -163,15 +166,6 @@ export function parseIntent(rawText: string, ctx: IntentContext = {}): Intent {
     return action("youtube.seek_relative", { seconds: s }, `Skip ahead ${s} seconds`, { needsTarget: "youtube" });
   }
 
-  // --- volume: absolute -------------------------------------------------------------------------------
-  m = new RegExp(String.raw`^(?:set|change|put|turn) (?:the |my )?(youtube|video|player|pc|computer|windows|system|speaker)? ?volume to ${NUM}(?: percent)?$`).exec(text);
-  if (!m) m = new RegExp(String.raw`^(youtube|video|player|pc|computer|windows|system|speaker)? ?volume ${NUM}(?: percent)?$`).exec(text);
-  if (m) {
-    const n = parseNumberWords(m[2]!);
-    if (n === null || n < 0 || n > 100) return clarify("Volume must be between 0 and 100 percent.");
-    if (m[1] && /^(youtube|video|player)$/.test(m[1])) return action("youtube.set_volume", { value: n }, `Set YouTube volume to ${n}%`, { needsTarget: "youtube" });
-    return action("windows.set_volume", { value: n }, `Set PC volume to ${n}%`);
-  }
   // --- volume: relative -------------------------------------------------------------------------------
   m = /^(?:turn (?:the |my )?(youtube|video|player|pc|computer)? ?(?:volume )?(up|down)|(youtube|video|player|pc|computer)? ?volume (up|down)|louder|quieter|softer)$/.exec(text);
   if (m) {
@@ -188,6 +182,15 @@ export function parseIntent(rawText: string, ctx: IntentContext = {}): Intent {
     return action("windows.set_volume", { value: v }, `Set PC volume to ${v}%`);
   }
 
+  // --- volume: absolute -------------------------------------------------------------------------------
+  m = new RegExp(String.raw`^(?:set|change|put|turn) (?:the |my )?(youtube|video|player|pc|computer|windows|system|speaker)? ?volume to ${NUM}(?: percent)?$`).exec(text);
+  if (!m) m = new RegExp(String.raw`^(youtube|video|player|pc|computer|windows|system|speaker)? ?volume ${NUM}(?: percent)?$`).exec(text);
+  if (m) {
+    const n = parseNumberWords(m[2]!);
+    if (n === null || n < 0 || n > 100) return clarify("Volume must be between 0 and 100 percent.");
+    if (m[1] && /^(youtube|video|player)$/.test(m[1])) return action("youtube.set_volume", { value: n }, `Set YouTube volume to ${n}%`, { needsTarget: "youtube" });
+    return action("windows.set_volume", { value: n }, `Set PC volume to ${n}%`);
+  }
   // --- mute ---------------------------------------------------------------------------------------------
   m = /^(un)?mute(?: (?:the |my )?(youtube|video|player|pc|computer|windows|system|speakers?|sound))?$/.exec(text);
   if (m) {

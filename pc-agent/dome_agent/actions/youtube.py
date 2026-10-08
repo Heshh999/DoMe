@@ -5,7 +5,9 @@ Target resolution (design → authorization step 7) is shared with :mod:`dome_ag
 have navigated or closed while the command sat in the queue. The extension performs the
 ``observe_player_state`` / ``observe_video_transition`` verification and reports the post-action
 tab; the handler double-checks that the reported state matches what was requested so an optimistic
-extension cannot turn a no-op into a success.
+extension cannot turn a no-op into a success. For non-idempotent ops (``next``/``previous``/
+``seek_relative``) a lost answer after the request was written is ``OUTCOME_UNKNOWN`` (the executor
+reports ``outcome_unknown`` + warning), never a retryable failure (spec §8).
 """
 
 from __future__ import annotations
@@ -117,7 +119,11 @@ async def _run(ctx: ExecutionContext) -> dict[str, Any]:
     if ctx.command.spec.verification == "observe_video_transition" or not ctx.command.spec.idempotent:
         ctx.mark_side_effect()
     result = await bridge.request(
-        str(ctx.target["browser_instance_id"]), op, _args(ctx), timeout_ms=ctx.command.spec.timeout_ms - 500
+        str(ctx.target["browser_instance_id"]),
+        op,
+        _args(ctx),
+        timeout_ms=ctx.command.spec.timeout_ms - 500,
+        non_idempotent=not ctx.command.spec.idempotent,
     )
     if op != "get_state":
         _verify(action, ctx.params, result, before_video_id)

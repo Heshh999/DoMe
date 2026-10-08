@@ -35,3 +35,6 @@ class Services:
     pairing_claim_ip_limiter: SlidingWindowLimiter
     login_limiter: SlidingWindowLimiter
     agent_token_limiter: SlidingWindowLimiter
+    # failed user_code lookups (unknown/expired) per account and per IP, 15-minute windows
+    link_code_account_limiter: SlidingWindowLimiter
+    link_code_ip_limiter: SlidingWindowLimiter

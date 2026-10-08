@@ -18,6 +18,7 @@ from dome_protocol import (
     verify_and_parse_command,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.db.models import PC, Account, Command, Controller, Grant
@@ -25,7 +26,8 @@ from dome_api.logging import get_logger
 from dome_api.plans import Plan, plan_for
 from dome_api.relay import frames
 from dome_api.relay.manager import CLOSE_REVOKED, AgentConn, ConnectionManager, ControllerConn, InFlight
-from dome_api.security.ratelimit import TokenBucketLimiter
+from dome_api.security.ratelimit import SlidingWindowLimiter, TokenBucketLimiter
+from dome_api.settings import Settings
 from dome_api.state import Services
 from dome_api.util import ts_required, utcnow
 
@@ -47,11 +49,26 @@ class Rejection(Exception):  # noqa: N818 - routing control flow, always convert
 
 
 class RateLimiters:
-    """Per-plan token buckets keyed by controller id (plans.json manual/coalescable limits)."""
+    """Relay-side limiters.
 
-    def __init__(self) -> None:
+    * per-plan token buckets keyed by controller id (plans.json manual/coalescable command limits),
+      applied at routing step 7 after the command verified;
+    * ``frames``: one token bucket per controller *socket*, applied to every inbound frame before any
+      database work, so an authenticated flood is cut at the socket;
+    * ``events``: a cap on security-event rows a single socket may write per minute, so rejections
+      cannot grow ``security_events`` without bound.
+    """
+
+    def __init__(self, settings: Settings) -> None:
         self._manual: dict[str, TokenBucketLimiter] = {}
         self._coalescable: dict[str, TokenBucketLimiter] = {}
+        self.frames = TokenBucketLimiter(
+            settings.relay_controller_frames_per_minute, settings.relay_controller_frame_burst
+        )
+        self.events = SlidingWindowLimiter(settings.relay_security_events_per_connection_per_minute, 60)
+
+    def forget_connection(self, conn: ControllerConn) -> None:
+        self.frames.forget(str(conn.connection_id))
 
     def allow(self, plan: Plan, controller_id: uuid.UUID, *, coalescable: bool) -> bool:
         table = self._coalescable if coalescable else self._manual
@@ -60,6 +77,43 @@ class RateLimiters:
             rl = plan.coalescable_command_rate_limit if coalescable else plan.manual_command_rate_limit
             limiter = table[plan.id] = TokenBucketLimiter(rl.per_minute, rl.burst)
         return limiter.allow(str(controller_id))
+
+
+async def audited_event(
+    mgr: ConnectionManager,
+    limiters: RateLimiters,
+    conn: ControllerConn,
+    *,
+    kind: str,
+    severity: str,
+    detail: dict[str, Any] | None,
+) -> bool:
+    """Write a controller-attributed security event unless this socket exhausted its per-minute budget.
+    The first suppressed event is replaced by one ``relay_events_throttled`` row so the flood itself stays
+    visible in the account's security log; everything after that is only logged. Returns whether a row
+    was written for ``kind``."""
+    if limiters.events.allow(str(conn.connection_id)):
+        await mgr.security_event(
+            account_id=conn.account_id,
+            kind=kind,
+            severity=severity,
+            actor="controller",
+            subject_id=conn.controller_id,
+            detail=detail,
+        )
+        return True
+    conn.events_suppressed += 1
+    if conn.events_suppressed == 1:
+        await mgr.security_event(
+            account_id=conn.account_id,
+            kind="relay_events_throttled",
+            severity="warning",
+            actor="controller",
+            subject_id=conn.controller_id,
+            detail={"first_suppressed": kind, "per_minute": limiters.events.limit},
+        )
+    log.info("security_event.suppressed", kind=kind, controller_id=str(conn.controller_id), n=conn.events_suppressed)
+    return False
 
 
 def untrusted_command_id(envelope: Any) -> str | None:
@@ -100,6 +154,8 @@ def compute_deadline(cmd: VerifiedCommand, received_at: datetime, registry_limit
 async def route_command(
     svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]
 ) -> None:
+    """Steps 2-10 of the design's routing order (step 1, the frame schema, and the per-socket frame
+    bucket happen in ``controller_ws._loop`` before this is called)."""
     pc_id_str: str = frame["pc_id"]
     envelope = frame["envelope"]
     received_at = utcnow()
@@ -158,8 +214,12 @@ async def route_command(
             )
             if grant is None or cmd.spec.capability not in set(grant.capabilities):
                 raise Rejection("GRANT_MISSING")
-            # duplicate / reuse handling (rules.duplicate_command) — before anything that consumes budget
-            existing = await db.get(Command, uuid.UUID(cmd.command_id))
+            # duplicate / reuse handling (rules.duplicate_command) — before anything that consumes budget.
+            # Scoped to the account: a command id that lives in another tenant is invisible here and only
+            # surfaces as a primary-key conflict at insert time (same COMMAND_ID_REUSED answer, no oracle).
+            existing = await db.scalar(
+                select(Command).where(Command.id == uuid.UUID(cmd.command_id), Command.account_id == conn.account_id)
+            )
             if existing is not None:
                 if existing.digest != cmd.digest or existing.controller_id != ctrl.id or existing.pc_id != pc.id:
                     raise Rejection("COMMAND_ID_REUSED")
@@ -204,7 +264,11 @@ async def route_command(
             )
             if cmd.spec.capability == "power" and cmd.spec.requires_confirmation:
                 pc.last_power_request = {"action": cmd.spec.name, "at": ts_required(received_at)}
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                raise Rejection("COMMAND_ID_REUSED") from None
             agent.inflight[inf.command_id] = inf
             forwarded = {
                 "type": "command",
@@ -220,7 +284,22 @@ async def route_command(
                 return
             log.info("command.forwarded", action=cmd.spec.name, pc_id=pc_id_str, controller_id=str(ctrl.id))
     except Rejection as rej:
-        await _reject(mgr, conn, pc_id_str, command_id, rej, received_at)
+        await _reject(mgr, limiters, conn, pc_id_str, command_id, rej, received_at)
+
+
+async def reject_throttled(mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:
+    """Answer a frame the per-socket bucket refused without touching the database: a ``command`` still
+    ends with a ``result`` when its id is readable (DECISIONS #7), anything else gets an ``error``."""
+    pc_id = frame.get("pc_id")
+    ref = pc_id if isinstance(pc_id, str) and _UUID_RE.match(pc_id) else None
+    if frame.get("type") == "command":
+        cid = untrusted_command_id(frame.get("envelope"))
+        if cid is not None:
+            await conn.send(
+                frames.relay_result(cid, "failed", error=frames.error_object("RATE_LIMITED"), started_at=utcnow())
+            )
+            return
+    await conn.send(frames.error_frame("RATE_LIMITED", "Too many frames on this connection", ref_pc_id=ref))
 
 
 async def _answer_duplicate(conn: ControllerConn, agent: AgentConn | None, existing: Command) -> None:
@@ -245,6 +324,7 @@ async def _answer_duplicate(conn: ControllerConn, agent: AgentConn | None, exist
 
 async def _reject(
     mgr: ConnectionManager,
+    limiters: RateLimiters,
     conn: ControllerConn,
     pc_id: str,
     command_id: str | None,
@@ -257,12 +337,12 @@ async def _reject(
     else:
         await conn.send(frames.error_frame(rej.code, rej.message, ref_pc_id=pc_id if _UUID_RE.match(pc_id) else None))
     log.info("command.rejected", code=rej.code, controller_id=str(conn.controller_id), pc_id=pc_id)
-    await mgr.security_event(
-        account_id=conn.account_id,
+    await audited_event(
+        mgr,
+        limiters,
+        conn,
         kind="command_rejected",
         severity="notice" if rej.code in ("PC_OFFLINE", "QUEUE_FULL", "RATE_LIMITED", "COMMAND_EXPIRED") else "warning",
-        actor="controller",
-        subject_id=conn.controller_id,
         detail={"reason": rej.code, "pc_id": pc_id},
     )
     if rej.close:
@@ -272,7 +352,9 @@ async def _reject(
 __all__ = [
     "RateLimiters",
     "Rejection",
+    "audited_event",
     "compute_deadline",
+    "reject_throttled",
     "resolve_controller_record",
     "route_command",
     "IN_FLIGHT_STATES",

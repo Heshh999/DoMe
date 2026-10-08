@@ -142,6 +142,19 @@ export class RelayClient {
     void this.open();
   }
 
+  /** Force a fresh socket (e.g. after pairing, so `hello` binds the newly created controller). */
+  reconnect(): void {
+    if (!this.wantOpen) {
+      this.connect();
+      return;
+    }
+    this.clearReconnect();
+    this.teardownSocket(4000, "rebind");
+    this.setController(null);
+    this.emitStatus("reconnecting");
+    void this.open();
+  }
+
   /** Replaces the subscription set; sent immediately when open and on every (re)connect. */
   setSubscriptions(pcIds: string[]): void {
     const ids = [...new Set(pcIds)].slice(0, 16);

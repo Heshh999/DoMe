@@ -3,6 +3,7 @@ validated once at start-up so a misconfigured deployment fails fast instead of a
 
 from __future__ import annotations
 
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     public_origin: str = Field(description="Exact origin the PWA is served from (Origin checks, cookies, QR links)")
     extra_origins: str = Field(default="", description="Comma-separated additional exact origins allowed for CSRF/WS")
     api_bind: str = "127.0.0.1:8000"
+    # Reverse proxies whose X-Forwarded-For / X-Forwarded-Proto headers are honoured: comma-separated IP
+    # addresses or CIDR networks, or the literal "none" when the process is reached directly. Empty means
+    # "nothing is trusted" (the TCP peer is the client); "*" is refused because it makes every per-IP abuse
+    # limit and every recorded ip_hash attacker-chosen. Staging and production must set it explicitly.
+    trusted_proxies: str = ""
     database_url: str
     session_secret: SecretStr = Field(min_length=16)
     session_idle_days: int = Field(default=30, ge=1, le=90)
@@ -52,6 +58,13 @@ class Settings(BaseSettings):
     relay_per_pc_queue_depth: int = Field(default=16, ge=1, le=64)
     relay_sweep_interval_seconds: float = Field(default=5.0, gt=0)
     relay_hello_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Per controller socket: sustained inbound frames per minute and burst, counted before any database
+    # work. Sized above the plan command limits (plans.json: 120/min manual + 360/min coalescable per
+    # controller) so legitimate sockets hit the per-command plan limiter first; floods are cut here.
+    relay_controller_frames_per_minute: int = Field(default=600, ge=1)
+    relay_controller_frame_burst: int = Field(default=120, ge=1)
+    # Security-event rows a single controller socket may write per minute (rejections, refused subscribes).
+    relay_security_events_per_connection_per_minute: int = Field(default=20, ge=1)
     # Public URLs handed to the agent at link time. Default: derived from public_origin.
     relay_url: str | None = None
     api_url: str | None = None
@@ -63,6 +76,9 @@ class Settings(BaseSettings):
     rate_pairing_claim_per_ip: int = Field(default=5, ge=1, description="per 15 minutes")
     rate_login_per_minute: int = Field(default=60, ge=1)
     rate_agent_token_per_minute: int = Field(default=30, ge=1)
+    # Failed user_code lookups (unknown / expired code) per 15 minutes before 429 (RFC 8628 section 5.1).
+    rate_link_code_failures_per_account: int = Field(default=10, ge=1, description="per 15 minutes")
+    rate_link_code_failures_per_ip: int = Field(default=10, ge=1, description="per 15 minutes")
     static_dir: Path | None = None
     log_level: str = "INFO"
 
@@ -95,6 +111,25 @@ class Settings(BaseSettings):
             raise ValueError("DOME_OIDC_REDIRECT_PATH must be an absolute path without query/fragment")
         return v
 
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _v_trusted_proxies(cls, v: str) -> str:
+        raw = v.strip()
+        if raw.lower() == "none":
+            return "none"
+        entries = [e.strip() for e in raw.split(",") if e.strip()]
+        for entry in entries:
+            if entry == "*":
+                raise ValueError(
+                    "DOME_TRUSTED_PROXIES must list proxy addresses or CIDR networks; '*' would let any client "
+                    "spoof X-Forwarded-For"
+                )
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                raise ValueError(f"DOME_TRUSTED_PROXIES entry {entry!r} is not an IP address or CIDR network") from None
+        return ",".join(entries)
+
     @field_validator("database_url")
     @classmethod
     def _v_db(cls, v: str) -> str:
@@ -111,6 +146,11 @@ class Settings(BaseSettings):
                 raise ValueError("production requires an https DOME_OIDC_ISSUER")
             if self.session_secret.get_secret_value().startswith("change-me"):
                 raise ValueError("production requires a real DOME_SESSION_SECRET")
+        if self.env in ("staging", "production") and not self.trusted_proxies:
+            raise ValueError(
+                f"{self.env} requires DOME_TRUSTED_PROXIES: the addresses/CIDRs of the ingress proxy whose "
+                "X-Forwarded-For is trusted, or 'none' when clients reach this process directly"
+            )
         if self.static_dir is not None and not self.static_dir.is_dir():
             raise ValueError(f"DOME_STATIC_DIR {self.static_dir} is not a directory")
         return self
@@ -120,6 +160,13 @@ class Settings(BaseSettings):
     def allowed_origins(self) -> frozenset[str]:
         extras = {_origin(o) for o in self.extra_origins.split(",") if o.strip()}
         return frozenset({self.public_origin, *extras})
+
+    @property
+    def trusted_proxy_list(self) -> list[str]:
+        """Proxy addresses/networks whose forwarded headers are honoured; empty = none."""
+        if not self.trusted_proxies or self.trusted_proxies == "none":
+            return []
+        return self.trusted_proxies.split(",")
 
     @property
     def cookie_secure(self) -> bool:

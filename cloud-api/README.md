@@ -52,6 +52,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_PUBLIC_ORIGIN` | — (required) | Exact origin the PWA is served from. Used for Origin checks, cookies, QR/link URLs and as the OIDC redirect base. |
 | `DOME_EXTRA_ORIGINS` | `` | Comma-separated additional exact origins (e.g. the Vite dev server). |
 | `DOME_API_BIND` | `127.0.0.1:8000` | Listen address. |
+| `DOME_TRUSTED_PROXIES` | `` (development/test) | Comma-separated IP addresses or CIDR networks of the reverse proxy whose `X-Forwarded-For` / `X-Forwarded-Proto` are honoured, or `none` when clients reach the process directly. **Required in `staging` and `production`**; `*` is refused. See "Client addresses behind a proxy". |
 | `DOME_DATABASE_URL` | — (required) | `postgresql+psycopg://user@host:port/db` (unix socket: `postgresql+psycopg://dome@/dome_dev?host=/tmp&port=54329`). |
 | `DOME_SESSION_SECRET` | — (required, ≥16 chars) | HMAC key for session-cookie ids and IP hashes. Rotating it signs everyone out. |
 | `DOME_SESSION_IDLE_DAYS` / `DOME_SESSION_ABSOLUTE_DAYS` | `30` / `90` | Sliding idle expiry and absolute cap of web sessions. |
@@ -65,14 +66,37 @@ misconfiguration stops the process with a plain error.
 | `DOME_RELAY_PER_PC_QUEUE_DEPTH` | `16` | In-flight commands per PC (`QUEUE_FULL` beyond). |
 | `DOME_RELAY_SWEEP_INTERVAL_SECONDS` | `5` | In-flight deadline sweeper period. |
 | `DOME_RELAY_HELLO_TIMEOUT_SECONDS` | `10` | Time a socket has to send `hello`. |
+| `DOME_RELAY_CONTROLLER_FRAMES_PER_MINUTE` / `DOME_RELAY_CONTROLLER_FRAME_BURST` | `600` / `120` | Inbound frames one controller socket may send (token bucket, checked before any database work). Refused frames are answered `RATE_LIMITED` from memory; after `burst` refusals the socket is closed (4000) with one `controller_throttled` security event. |
+| `DOME_RELAY_SECURITY_EVENTS_PER_CONNECTION_PER_MINUTE` | `20` | Security-event rows one controller socket may write per minute (`command_rejected`, `subscribe_refused`); the first suppressed one becomes a single `relay_events_throttled` row. |
 | `DOME_RELAY_URL` / `DOME_API_URL` | derived from the public origin | URLs handed to the agent at link time (`wss://…/ws/agent`, `https://…`). |
 | `DOME_PC_ACCESS_TOKEN_SECONDS` | `3600` | Lifetime of PC access tokens. |
 | `DOME_RATE_LINK_START_PER_HOUR` | `10` | `POST /v1/agent-link/start` per client IP. |
 | `DOME_RATE_PAIRING_CLAIM_PER_ACCOUNT` / `DOME_RATE_PAIRING_CLAIM_PER_IP` | `5` / `5` | Pairing claims per 15 minutes (each failure is a `pairing_failed` security event). |
 | `DOME_RATE_LOGIN_PER_MINUTE` / `DOME_RATE_AGENT_TOKEN_PER_MINUTE` | `60` / `30` | Login starts and credential→token exchanges per client IP. |
+| `DOME_RATE_LINK_CODE_FAILURES_PER_ACCOUNT` / `DOME_RATE_LINK_CODE_FAILURES_PER_IP` | `10` / `10` | Failed `user_code` lookups (unknown, expired or decided codes on `GET/approve/deny /v1/agent-link/{user_code}`) per 15 minutes before `429` (RFC 8628 §5.1); each counted failure is a `link_code_lookup_failed` security event. |
 | `DOME_STATIC_DIR` | unset | Built PWA directory to serve at `/` (SPA fallback to `index.html`). |
 | `DOME_LOG_LEVEL` | `INFO` | structlog level. JSON output except in `development`. |
 | `DOME_STRIPE_*`, `DOME_AI_*` | blank / false | Declared for Phase C/E; billing endpoints are not implemented yet (`GET /v1/plans` reports `billing_enabled: false`). |
+
+### Client addresses behind a proxy
+
+Every per-IP abuse limit and every `ip_hash` stored with a security event uses the client address the
+application resolved. That address is taken from `X-Forwarded-For` **only** when the TCP peer is one of
+`DOME_TRUSTED_PROXIES`, and then it is the right-most hop that is not itself a trusted proxy (the entry
+the proxy appended), never the left-most value a client can forge. `dome-api` starts uvicorn with its
+own proxy handling disabled (`proxy_headers=False`, so `FORWARDED_ALLOW_IPS` has no effect) and applies
+`dome_api.security.proxy.TrustedProxyMiddleware` itself; running uvicorn any other way must keep
+`--proxy-headers` off or the policy is weakened.
+
+Settings by deployment:
+
+- development / tests: leave it empty — the TCP peer is the client and forwarded headers are ignored.
+- behind an ingress proxy (ADR-0001 D2 names Fly.io): set the address range the proxy connects *from*
+  as seen by this process (on Fly.io the proxy reaches the VM over the private 6PN network; verify the
+  range with `fly ssh console` + `ss -tn` before trusting it). Example: `DOME_TRUSTED_PROXIES=fdaa::/16`.
+- a process reached directly over TLS: `DOME_TRUSTED_PROXIES=none`.
+
+Staging and production refuse to start without an explicit value.
 
 ### Entitlement signing key
 
@@ -110,6 +134,8 @@ frame against `relay-frames.schema.json`.
 - Logs are JSON on stderr. Keys such as `token`, `pc_credential`, `code_hash`, `challenge_text`,
   `payload`, `sig`, `title`, `email` and anything ending in `_token/_secret/_code/_credential/_key`
   are redacted; URLs are logged as paths only.
+- Request log lines carry the matched route template and a masked path: a device-link `user_code`
+  never appears (`/v1/agent-link/{user_code}/approve`); query strings are never logged.
 - Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: no-referrer`,
   `X-Content-Type-Options: nosniff`, `Permissions-Policy: camera=(self)`, HSTS in production,
   `Cache-Control: no-store` on `/v1`, `/ws` and `/healthz`.

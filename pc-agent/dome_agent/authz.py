@@ -9,6 +9,8 @@
  3. local ``remote_enabled`` (→ PC_REMOTE_DISABLED), snapshot ``pc_enabled`` (→ PC_PLAN_DISABLED),
     controller status (→ CONTROLLER_PLAN_DISABLED)
  4. capability ∈ local ∩ snapshot (→ GRANT_MISSING)
+    Steps 3-4 are :meth:`Authorizer.recheck_grant` and are re-applied when a confirmation arrives,
+    right before execution and whenever a new ``grants_snapshot`` lands.
  5. journal: identical duplicate → re-emit; same id, different bytes → COMMAND_ID_REUSED; new → row
  6. availability conditions
  7. target resolution
@@ -109,22 +111,11 @@ class Authorizer:
             )
         if not snapshot_received:
             return Decision("rejected", command=vc, command_id=vc.command_id, error=self._err("PC_RECONNECTING"))
-        # step 3
+        # steps 3 + 4 (re-applied by recheck_grant before every later state transition)
         store = self._s.store
-        if not store.remote_enabled:
-            return self._reject(vc, "PC_REMOTE_DISABLED")
-        if not store.snapshot_pc_enabled():
-            return self._reject(vc, "PC_PLAN_DISABLED")
-        grant = store.get_grant(vc.controller_id)
-        if grant is None or grant.revoked:
-            return self._reject(vc, "CONTROLLER_REVOKED")
-        if grant.snapshot_status != "active":
-            return self._reject(vc, "CONTROLLER_PLAN_DISABLED")
-        # step 4
-        if vc.spec.capability not in vc.key.capabilities:
-            return self._reject(
-                vc, "GRANT_MISSING", f"This phone does not have the '{vc.spec.capability}' permission on this PC."
-            )
+        blocker = self.recheck_grant(vc)
+        if blocker is not None:
+            return self._reject(vc, blocker)
         # step 5
         existing = store.journal_get(vc.command_id)
         if existing is not None:
@@ -177,8 +168,39 @@ class Authorizer:
         return Decision("execute", command=vc, command_id=vc.command_id, journaled=True)
 
     # ----- helpers ----------------------------------------------------------------------------------------
+    def recheck_grant(self, vc: VerifiedCommand) -> ProtocolError | None:
+        """Authorization steps 3 + 4 against the CURRENT local state and snapshot.
+
+        Applied at receipt, again when a confirmation arrives (the command may have waited up to 60 s),
+        again by the executor right before the handler runs, and to every pending command when a new
+        ``grants_snapshot`` lands — so a capability removed from the phone, a plan change or a local
+        *Disable remote control* takes effect before the side effect, not only before acceptance
+        (``rules.grants_snapshot``: effective capabilities = local ∩ snapshot, at all times)."""
+        store = self._s.store
+        if not store.remote_enabled:
+            return self._err("PC_REMOTE_DISABLED")
+        if not store.snapshot_pc_enabled():
+            return self._err("PC_PLAN_DISABLED")
+        grant = store.get_grant(vc.controller_id)
+        if grant is None or grant.revoked:
+            return self._err("CONTROLLER_REVOKED")
+        if grant.snapshot_status != "active":
+            return self._err("CONTROLLER_PLAN_DISABLED")
+        if vc.spec.capability not in grant.effective_capabilities(store.current_snapshot_id()):
+            return self._err(
+                "GRANT_MISSING", f"This phone does not have the '{vc.spec.capability}' permission on this PC."
+            )
+        return None
+
+    async def precheck(self, vc: VerifiedCommand) -> ProtocolError | None:
+        """Executor precheck right before the handler runs: grant/plan state, then availability."""
+        blocker = self.recheck_grant(vc)
+        if blocker is not None:
+            return blocker
+        return await self.check_availability(vc)
+
     async def check_availability(self, vc: VerifiedCommand) -> ProtocolError | None:
-        """Availability conditions (also re-checked by the executor right before running)."""
+        """Availability conditions (step 6; also re-applied by :meth:`precheck` right before running)."""
         if not self._s.store.remote_enabled:
             return self._err("PC_REMOTE_DISABLED")
         locked: bool | None = None

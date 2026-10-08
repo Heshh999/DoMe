@@ -1,3 +1,5 @@
+/// <reference types="vitest/config" />
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -10,6 +12,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = resolve(here, "..");
 const sharedTsSrc = resolve(repoRoot, "shared/ts/src");
 const pwaRegistry = resolve(here, "src/protocol/registry.ts");
+const pkg = JSON.parse(readFileSync(resolve(here, "package.json"), "utf8")) as { version: string };
 
 /**
  * `@dome/protocol`'s `registry.ts` compiles Ajv validators with `new Function` when imported.
@@ -33,6 +36,9 @@ function domeProtocolNoEval(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     domeProtocolNoEval(),
     react(),

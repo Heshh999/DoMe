@@ -118,8 +118,11 @@ async def unlink_pc(pc_id: str, auth: Auth, db: DB, svc: Svc) -> Response:
         db, account_id=auth.account.id, kind="pc_unlinked", severity="notice", actor="account", subject_id=pc.id
     )
     await db.commit()
+    agent = svc.relay.agent_for(pc.id)
+    last_seen = agent.last_seen if agent is not None else pc.last_seen_at
     await svc.relay.disconnect_agent(pc.id, revoked_reason="pc_unlinked")
-    await svc.relay.broadcast_pc_status(pc.id)
+    # subscribed phones get a final pc_status{offline, enabled:false} and lose their subscription
+    await svc.relay.announce_pc_unlinked(pc.id, last_seen)
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 

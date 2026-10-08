@@ -13,7 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.auth.deps import DB, AgentPublic, Auth, Svc
-from dome_api.db.models import PC, Account, DeviceLinkCode, PCCredential
+from dome_api.auth.sessions import Authenticated
+from dome_api.db.models import PC, Account, DeviceLinkCode, Grant, PCCredential
 from dome_api.errors import ApiError
 from dome_api.plans import plan_for
 from dome_api.security import events
@@ -70,27 +71,59 @@ async def start(request: Request, _: AgentPublic, db: DB, svc: Svc) -> Any:
     return rest_response(svc.settings.validate_rest_responses, "agent_link_start_response", out)
 
 
-async def _pending_code(db: AsyncSession, user_code: str, *, for_update: bool = False) -> DeviceLinkCode:
+async def _pending_code(
+    db: AsyncSession, svc: Svc, request: Request, auth: Authenticated, user_code: str, *, for_update: bool = False
+) -> DeviceLinkCode:
+    """Resolve a user-typed code to its pending row.
+
+    Codes are 40 bits (RFC 8628 section 5.1 requires rate limiting their entry): failed lookups (unknown,
+    expired or already decided codes) are counted per account and per client IP and, past the budget, every
+    further lookup is answered 429 without touching the table. Each counted failure is a security event.
+    """
+    ip = client_ip(request)
+    account_id = auth.account.id  # read before any rollback expires the loaded row
+    acct_key, ip_key = f"acct:{account_id}", f"ip:{ip or '?'}"
+    if svc.link_code_account_limiter.exhausted(acct_key) or svc.link_code_ip_limiter.exhausted(ip_key):
+        raise ApiError(429, "RATE_LIMITED", "Too many unknown link codes; try again later")
+
+    async def failed(reason: str, status: int, code: str) -> ApiError:
+        svc.link_code_account_limiter.hit(acct_key)
+        svc.link_code_ip_limiter.hit(ip_key)
+        # The request transaction ends with this error anyway; end it now so the row lock approve() holds
+        # on the account (FOR UPDATE) cannot block the FK check of the event row written on its own connection.
+        await db.rollback()
+        await events.record_now(
+            svc.db,
+            account_id=account_id,
+            kind="link_code_lookup_failed",
+            severity="notice",
+            actor="account",
+            detail={"reason": reason},
+            ip_hash=ip_hash(svc.settings.session_secret.get_secret_value(), ip),
+        )
+        return ApiError(status, code)
+
     normalized = normalize_user_code(user_code)
     if normalized is None:
-        raise ApiError(404, "NOT_FOUND")
+        raise await failed("malformed", 404, "NOT_FOUND")
     stmt = select(DeviceLinkCode).where(DeviceLinkCode.user_code == normalized)
     if for_update:
         stmt = stmt.with_for_update()
     row = await db.scalar(stmt)
     if row is None:
-        raise ApiError(404, "NOT_FOUND")
+        raise await failed("unknown", 404, "NOT_FOUND")
     if row.state != "pending":
-        raise ApiError(410, "LINK_EXPIRED")
+        raise await failed("decided", 410, "LINK_EXPIRED")
     if row.expires_at <= utcnow():
         row.state = "expired"
-        raise ApiError(410, "LINK_EXPIRED")
+        await db.commit()  # keep the state change although the request ends with an error
+        raise await failed("expired", 410, "LINK_EXPIRED")
     return row
 
 
 @router.get("/agent-link/{user_code}")
-async def preview(user_code: str, auth: Auth, db: DB, svc: Svc) -> Any:
-    row = await _pending_code(db, user_code)
+async def preview(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc) -> Any:
+    row = await _pending_code(db, svc, request, auth, user_code)
     out: dict[str, Any] = {
         "user_code": row.user_code,
         "agent_version": row.agent_version,
@@ -121,11 +154,20 @@ async def approve(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc
     # ONE transaction: lock the account row so concurrent approvals cannot exceed max_enabled_pcs.
     account = await db.scalar(select(Account).where(Account.id == auth.account.id).with_for_update())
     assert account is not None
-    row = await _pending_code(db, user_code, for_update=True)
+    row = await _pending_code(db, svc, request, auth, user_code, for_update=True)
     plan = plan_for(account.plan)
     existing = await db.scalar(select(PC).where(PC.kid == row.kid).with_for_update())
     if existing is not None and existing.account_id != account.id:
         raise ApiError(409, "FORBIDDEN", "This PC key is already linked to a different account. Unlink it there first.")
+    if existing is not None and existing.deleted_at is None:
+        # Link start carries no proof of possession of the PC key (CONTRACT_ISSUES #10), so a code that
+        # names the key of a PC that is still linked must not take over that PC's identity, credentials and
+        # grants. The customer unlinks the PC first; the soft-deleted row is then reused without grants.
+        raise ApiError(
+            409,
+            "PC_ALREADY_LINKED",
+            "This PC is already linked to your account. Unlink it under Devices first, then approve again.",
+        )
     enabled_count = await count_enabled_pcs(db, account.id, exclude=existing.id if existing else None)
     enabled = enabled_count < plan.max_enabled_pcs
     if existing is None:
@@ -142,7 +184,9 @@ async def approve(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc
         db.add(pc)
         await db.flush()
     else:
-        # Re-link of a known PC key (reinstall / credential lost): reuse the row, rotate credentials.
+        # Re-link of a previously unlinked PC key (same machine, re-installed or credential discarded):
+        # the soft-deleted row comes back so history survives, but with no credentials and no grants —
+        # phones pair again. Unlink already revoked both; this is the invariant, not a fallback.
         pc = existing
         pc.name = body["pc_name"]
         pc.deleted_at = None
@@ -153,6 +197,10 @@ async def approve(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc
             await db.execute(select(PCCredential).where(PCCredential.pc_id == pc.id, PCCredential.revoked_at.is_(None)))
         ).scalars():
             cred.revoked_at = now
+        for grant in (
+            await db.execute(select(Grant).where(Grant.pc_id == pc.id, Grant.revoked_at.is_(None)))
+        ).scalars():
+            grant.revoked_at = now
     row.state = "approved"
     row.account_id = account.id
     row.pc_id = pc.id
@@ -171,13 +219,14 @@ async def approve(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc
         out["reason"] = "DEVICE_LIMIT_REACHED"
     await db.commit()
     if existing is not None:
+        # a socket cannot exist for a soft-deleted PC (unlink closed it); belt and braces for a stale one
         await svc.relay.disconnect_agent(pc.id, revoked_reason="credential_rotated")
     return rest_response(svc.settings.validate_rest_responses, "agent_link_approve_response", out)
 
 
 @router.post("/agent-link/{user_code}/deny", status_code=204)
-async def deny(user_code: str, auth: Auth, db: DB, svc: Svc) -> Response:
-    row = await _pending_code(db, user_code, for_update=True)
+async def deny(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc) -> Response:
+    row = await _pending_code(db, svc, request, auth, user_code, for_update=True)
     row.state = "denied"
     row.account_id = auth.account.id
     events.record(

@@ -52,12 +52,13 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
                 await deny_upgrade(ws, 401, "PC access token invalid or expired")
                 return
             pc_id, account_id = identity.pc.id, identity.account.id
-    if not mgr.has_capacity():
+    if not mgr.reserve_slot():  # pre-hello sockets count toward the cap
         await deny_upgrade(ws, 503, "The relay is at its connection limit")
         return
 
     await ws.accept()
     conn = AgentConn(ws, pc_id, account_id)
+    slot_reserved = True
     try:
         hello = await _receive_frame(ws, svc, "agent_to_relay", wait_seconds=svc.settings.relay_hello_timeout_seconds)
         if hello is None or hello.get("type") != "hello" or hello.get("component") != "agent":
@@ -79,6 +80,8 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
             return
         await conn.send(frames.hello_ack(conn.connection_id, pc_id=pc_id))
         await mgr.register_agent(conn)
+        mgr.release_slot()  # the registered socket is counted from here on
+        slot_reserved = False
         async with svc.db() as db:
             async with db.begin():
                 pc = await db.get(PC, pc_id)
@@ -111,6 +114,8 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
         log.exception("agent.socket_error", pc_id=str(pc_id))
         await conn.close(CLOSE_PROTOCOL_ERROR)
     finally:
+        if slot_reserved:
+            mgr.release_slot()
         conn.closed = True
         was_current = mgr.agents.get(pc_id) is conn
         await mgr.unregister_agent(conn)

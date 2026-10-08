@@ -289,8 +289,20 @@ class BridgeServer:
         return inst.tabs.get(int(tab_id))
 
     async def request(
-        self, browser_instance_id: str, op: str, args: dict[str, Any], timeout_ms: int = DEFAULT_REQUEST_TIMEOUT_MS
+        self,
+        browser_instance_id: str,
+        op: str,
+        args: dict[str, Any],
+        timeout_ms: int = DEFAULT_REQUEST_TIMEOUT_MS,
+        *,
+        non_idempotent: bool = False,
     ) -> dict[str, Any]:
+        """Send one ``bridge_request`` and await its ``bridge_response``.
+
+        Before the frame has been written, every failure is ``EXTENSION_DISCONNECTED`` (retryable: the
+        op never reached the browser). Once the frame is on the wire, a lost answer (timeout, native
+        host gone) is ``EXTENSION_DISCONNECTED`` for idempotent ops but ``OUTCOME_UNKNOWN``
+        (non-retryable) when ``non_idempotent`` is set — the browser may well have executed it."""
         instance = self._instances.get(browser_instance_id)
         if instance is None:
             raise ProtocolError("EXTENSION_DISCONNECTED", "That browser is not connected", retryable=True)
@@ -315,6 +327,20 @@ class BridgeServer:
             return await asyncio.wait_for(fut, timeout_ms / 1000)
         except TimeoutError:
             self._pending.pop(request_id, None)
+            if non_idempotent:
+                raise ProtocolError(
+                    "OUTCOME_UNKNOWN",
+                    "The browser did not confirm the action in time; it may have executed.",
+                    retryable=False,
+                ) from None
             raise ProtocolError(
                 "EXTENSION_DISCONNECTED", "The browser extension did not respond in time", retryable=True
             ) from None
+        except ProtocolError as exc:
+            if non_idempotent and exc.code == "EXTENSION_DISCONNECTED":
+                raise ProtocolError(
+                    "OUTCOME_UNKNOWN",
+                    "The browser extension disconnected after the action was sent; it may have executed.",
+                    retryable=False,
+                ) from exc
+            raise

@@ -8,3 +8,6 @@ interface ImportMetaEnv {
   /** Optional support contact URL (mailto: or https:). Unset = "not configured yet" copy. */
   readonly VITE_DOME_SUPPORT_URL?: string;
 }
+
+/** Injected by Vite `define` from package.json (see vite.config.ts). */
+declare const __APP_VERSION__: string;

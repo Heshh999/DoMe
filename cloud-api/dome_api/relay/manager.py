@@ -114,7 +114,7 @@ class AgentConn(_Conn):
 
 
 class ControllerConn(_Conn):
-    __slots__ = ("session_id", "kid", "controller_id", "subs")
+    __slots__ = ("session_id", "kid", "controller_id", "subs", "throttle_violations", "events_suppressed")
 
     def __init__(self, ws: WebSocket, session_id: uuid.UUID, account_id: uuid.UUID, kid: str) -> None:
         super().__init__(ws, account_id)
@@ -122,6 +122,8 @@ class ControllerConn(_Conn):
         self.kid = kid
         self.controller_id: uuid.UUID | None = None
         self.subs: set[uuid.UUID] = set()
+        self.throttle_violations = 0  # inbound frames refused by the per-socket bucket
+        self.events_suppressed = 0  # security-event rows not written because the per-socket cap was hit
 
     async def send(self, frame: dict[str, Any], *, validate: bool = True) -> bool:
         if validate:
@@ -146,13 +148,26 @@ class ConnectionManager:
     agents: dict[uuid.UUID, AgentConn] = field(default_factory=dict)
     controllers: dict[uuid.UUID, ControllerConn] = field(default_factory=dict)
     subs: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
+    # sockets accepted but not yet past ``hello`` (they hold a slot so a hello-less flood cannot exceed the cap)
+    pending_handshakes: int = 0
 
     # ----- capacity ------------------------------------------------------------------------------
     def connection_count(self) -> int:
-        return len(self.agents) + len(self.controllers)
+        return len(self.agents) + len(self.controllers) + self.pending_handshakes
 
     def has_capacity(self) -> bool:
         return self.connection_count() < self.settings.relay_max_connections
+
+    def reserve_slot(self) -> bool:
+        """Claim a connection slot for a socket about to be accepted; ``False`` when the relay is full.
+        The caller releases it with :meth:`release_slot` once the socket is registered or gone."""
+        if not self.has_capacity():
+            return False
+        self.pending_handshakes += 1
+        return True
+
+    def release_slot(self) -> None:
+        self.pending_handshakes = max(0, self.pending_handshakes - 1)
 
     # ----- agents --------------------------------------------------------------------------------
     def agent_for(self, pc_id: uuid.UUID) -> AgentConn | None:
@@ -331,6 +346,26 @@ class ConnectionManager:
         frame = await self.pc_status_frame(pc_id)
         if frame is not None:
             await self.broadcast_to_subscribers(pc_id, frame)
+
+    async def announce_pc_unlinked(self, pc_id: uuid.UUID, last_seen: datetime | None) -> int:
+        """After ``DELETE /v1/pcs/{id}``: every subscribed phone gets a final
+        ``pc_status{connection:'offline', enabled:false}`` and its subscription to the PC is dropped, so no
+        live view keeps showing an unlinked PC as online. Returns the number of sockets informed."""
+        conn_ids = list(self.subs.get(pc_id, ()))
+        if not conn_ids:
+            return 0
+        frame = frames.pc_status(
+            pc_id, connection="offline", last_seen=last_seen, last_power_request=None, enabled=False
+        )
+        n = 0
+        for conn_id in conn_ids:
+            conn = self.controllers.get(conn_id)
+            if conn is not None:
+                if await conn.send(frame):
+                    n += 1
+                self._unsubscribe(conn, pc_id)
+        self.subs.pop(pc_id, None)
+        return n
 
     async def touch_pc_last_seen(self, pc_id: uuid.UUID, at: datetime, *, force: bool = False) -> None:
         conn = self.agents.get(pc_id)

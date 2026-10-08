@@ -21,7 +21,13 @@ from dome_api.relay.manager import (
     ConnectionManager,
     ControllerConn,
 )
-from dome_api.relay.router import RateLimiters, resolve_controller_record, route_command
+from dome_api.relay.router import (
+    RateLimiters,
+    audited_event,
+    reject_throttled,
+    resolve_controller_record,
+    route_command,
+)
 from dome_api.relay.ws_http import deny_upgrade
 from dome_api.security.origin import origin_allowed
 from dome_api.state import Services
@@ -42,12 +48,13 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
                 await deny_upgrade(ws, 401, "Sign in to continue")
                 return
             session_id, account_id = auth.session.id, auth.account.id
-    if not mgr.has_capacity():
+    if not mgr.reserve_slot():  # pre-hello sockets count toward the cap
         await deny_upgrade(ws, 503, "The relay is at its connection limit")
         return
 
     await ws.accept()
     conn: ControllerConn | None = None
+    slot_reserved = True
     try:
         hello = await _receive_frame(ws, svc, wait_seconds=svc.settings.relay_hello_timeout_seconds)
         if (
@@ -88,6 +95,8 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
                     conn.controller_id = ctrl.id
                     ctrl.last_seen_at = utcnow()
         mgr.register_controller(conn)
+        mgr.release_slot()  # the registered socket is counted from here on
+        slot_reserved = False
         await conn.send(frames.hello_ack(conn.connection_id, controller_id=conn.controller_id))
         await _loop(ws, svc, mgr, limiters, conn)
     except WebSocketDisconnect:
@@ -97,9 +106,12 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
         if conn is not None:
             await conn.close(CLOSE_PROTOCOL_ERROR)
     finally:
+        if slot_reserved:
+            mgr.release_slot()
         if conn is not None:
             conn.closed = True
             mgr.unregister_controller(conn)
+            limiters.forget_connection(conn)
 
 
 async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | None = None) -> dict[str, Any] | None:
@@ -121,12 +133,31 @@ async def _loop(
     ws: WebSocket, svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn
 ) -> None:
     bad_frames = 0
+    bucket_key = str(conn.connection_id)
     while not conn.closed:
         frame = await _receive_frame(ws, svc)
         conn.last_seen = utcnow()
         if frame is None:
             bad_frames += 1
             if bad_frames >= 5:
+                await conn.close(CLOSE_PROTOCOL_ERROR)
+                return
+            continue
+        # Per-socket inbound budget, before any database work: a flood of well-formed frames is answered
+        # from memory and, after ``burst`` refusals, the socket is closed (4000) with one security event.
+        if not limiters.frames.allow(bucket_key):
+            conn.throttle_violations += 1
+            await reject_throttled(mgr, conn, frame)
+            if conn.throttle_violations >= limiters.frames.burst:
+                log.info("controller.throttled_close", controller_id=str(conn.controller_id))
+                await mgr.security_event(
+                    account_id=conn.account_id,
+                    kind="controller_throttled",
+                    severity="warning",
+                    actor="controller",
+                    subject_id=conn.controller_id,
+                    detail={"refused_frames": conn.throttle_violations},
+                )
                 await conn.close(CLOSE_PROTOCOL_ERROR)
                 return
             continue
@@ -138,7 +169,7 @@ async def _loop(
         elif kind == "hello":
             await conn.send(frames.error_frame("MALFORMED_MESSAGE", "hello already received"))
         elif kind == "subscribe":
-            await _on_subscribe(svc, mgr, conn, frame)
+            await _on_subscribe(svc, mgr, limiters, conn, frame)
         elif kind == "command":
             await route_command(svc, mgr, limiters, conn, frame)
         elif kind == "confirmation":
@@ -147,7 +178,9 @@ async def _loop(
             await _on_cancel(mgr, conn, frame)
 
 
-async def _on_subscribe(svc: Services, mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:
+async def _on_subscribe(
+    svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]
+) -> None:
     requested = [uuid.UUID(p) for p in frame["pc_ids"]]
     accepted: set[uuid.UUID] = set()
     if conn.controller_id is None:
@@ -172,13 +205,8 @@ async def _on_subscribe(svc: Services, mgr: ConnectionManager, conn: ControllerC
                 )
             if grant is None:
                 await conn.send(frames.error_frame("GRANT_MISSING", ref_pc_id=pc_id))
-                await mgr.security_event(
-                    account_id=conn.account_id,
-                    kind="subscribe_refused",
-                    severity="warning",
-                    actor="controller",
-                    subject_id=conn.controller_id,
-                    detail={"pc_id": str(pc_id)},
+                await audited_event(
+                    mgr, limiters, conn, kind="subscribe_refused", severity="warning", detail={"pc_id": str(pc_id)}
                 )
             else:
                 accepted.add(pc_id)

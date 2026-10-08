@@ -1,30 +1,32 @@
 @import "tailwindcss";
 
-/* Design tokens. Dark is the default; light follows the system preference. */
+/* Design tokens (`--dome-*`). Dark is the default; light follows the system preference.
+   `@theme inline` below maps them onto Tailwind utility names (bg-bg, text-text-muted, rounded-card …)
+   without creating self-referencing variables. */
 :root {
   color-scheme: dark;
-  --color-bg: #0b0f17;
-  --color-bg-elevated: #121826;
-  --color-bg-sunken: #070a10;
-  --color-surface: #182033;
-  --color-surface-hover: #1f2940;
-  --color-border: #263146;
-  --color-border-strong: #37445f;
-  --color-text: #eef2f8;
-  --color-text-muted: #9aa7bd;
-  --color-text-faint: #6b778c;
-  --color-accent: #5ee1c0;
-  --color-accent-strong: #2fd1a7;
-  --color-on-accent: #04110d;
-  --color-success: #4fd18b;
-  --color-warning: #f3c14f;
-  --color-danger: #ff6b6b;
-  --color-danger-strong: #e04848;
-  --color-info: #7fb2ff;
-  --color-focus: #9be7ff;
-  --radius-card: 1.1rem;
-  --radius-control: 0.9rem;
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
+  --dome-color-bg: #0b0f17;
+  --dome-color-bg-elevated: #121826;
+  --dome-color-bg-sunken: #070a10;
+  --dome-color-surface: #182033;
+  --dome-color-surface-hover: #1f2940;
+  --dome-color-border: #263146;
+  --dome-color-border-strong: #37445f;
+  --dome-color-text: #eef2f8;
+  --dome-color-text-muted: #9aa7bd;
+  --dome-color-text-faint: #6b778c;
+  --dome-color-accent: #5ee1c0;
+  --dome-color-accent-strong: #2fd1a7;
+  --dome-color-on-accent: #04110d;
+  --dome-color-success: #4fd18b;
+  --dome-color-warning: #f3c14f;
+  --dome-color-danger: #ff6b6b;
+  --dome-color-danger-strong: #e04848;
+  --dome-color-info: #7fb2ff;
+  --dome-color-focus: #9be7ff;
+  --dome-radius-card: 1.1rem;
+  --dome-radius-control: 0.9rem;
+  --dome-shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.35);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
@@ -34,51 +36,51 @@
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --color-bg: #f6f7fb;
-    --color-bg-elevated: #ffffff;
-    --color-bg-sunken: #eceff5;
-    --color-surface: #ffffff;
-    --color-surface-hover: #f1f3f8;
-    --color-border: #d9dee8;
-    --color-border-strong: #b9c2d3;
-    --color-text: #101522;
-    --color-text-muted: #4c5768;
-    --color-text-faint: #7b8597;
-    --color-accent: #0c8f70;
-    --color-accent-strong: #0a7a5f;
-    --color-on-accent: #ffffff;
-    --color-success: #1f8f55;
-    --color-warning: #9a6a00;
-    --color-danger: #c62e2e;
-    --color-danger-strong: #a81f1f;
-    --color-info: #2457b8;
-    --color-focus: #1a6fd8;
-    --shadow-card: 0 1px 2px rgba(16, 21, 34, 0.06), 0 8px 24px rgba(16, 21, 34, 0.06);
+    --dome-color-bg: #f6f7fb;
+    --dome-color-bg-elevated: #ffffff;
+    --dome-color-bg-sunken: #eceff5;
+    --dome-color-surface: #ffffff;
+    --dome-color-surface-hover: #f1f3f8;
+    --dome-color-border: #d9dee8;
+    --dome-color-border-strong: #b9c2d3;
+    --dome-color-text: #101522;
+    --dome-color-text-muted: #4c5768;
+    --dome-color-text-faint: #7b8597;
+    --dome-color-accent: #0c8f70;
+    --dome-color-accent-strong: #0a7a5f;
+    --dome-color-on-accent: #ffffff;
+    --dome-color-success: #1f8f55;
+    --dome-color-warning: #9a6a00;
+    --dome-color-danger: #c62e2e;
+    --dome-color-danger-strong: #a81f1f;
+    --dome-color-info: #2457b8;
+    --dome-color-focus: #1a6fd8;
+    --dome-shadow-card: 0 1px 2px rgba(16, 21, 34, 0.06), 0 8px 24px rgba(16, 21, 34, 0.06);
   }
 }
 
 @theme inline {
-  --color-bg: var(--color-bg);
-  --color-bg-elevated: var(--color-bg-elevated);
-  --color-bg-sunken: var(--color-bg-sunken);
-  --color-surface: var(--color-surface);
-  --color-surface-hover: var(--color-surface-hover);
-  --color-border: var(--color-border);
-  --color-border-strong: var(--color-border-strong);
-  --color-text: var(--color-text);
-  --color-text-muted: var(--color-text-muted);
-  --color-text-faint: var(--color-text-faint);
-  --color-accent: var(--color-accent);
-  --color-accent-strong: var(--color-accent-strong);
-  --color-on-accent: var(--color-on-accent);
-  --color-success: var(--color-success);
-  --color-warning: var(--color-warning);
-  --color-danger: var(--color-danger);
-  --color-danger-strong: var(--color-danger-strong);
-  --color-info: var(--color-info);
-  --color-focus: var(--color-focus);
-  --radius-card: var(--radius-card);
-  --radius-control: var(--radius-control);
+  --color-bg: var(--dome-color-bg);
+  --color-bg-elevated: var(--dome-color-bg-elevated);
+  --color-bg-sunken: var(--dome-color-bg-sunken);
+  --color-surface: var(--dome-color-surface);
+  --color-surface-hover: var(--dome-color-surface-hover);
+  --color-border: var(--dome-color-border);
+  --color-border-strong: var(--dome-color-border-strong);
+  --color-text: var(--dome-color-text);
+  --color-text-muted: var(--dome-color-text-muted);
+  --color-text-faint: var(--dome-color-text-faint);
+  --color-accent: var(--dome-color-accent);
+  --color-accent-strong: var(--dome-color-accent-strong);
+  --color-on-accent: var(--dome-color-on-accent);
+  --color-success: var(--dome-color-success);
+  --color-warning: var(--dome-color-warning);
+  --color-danger: var(--dome-color-danger);
+  --color-danger-strong: var(--dome-color-danger-strong);
+  --color-info: var(--dome-color-info);
+  --color-focus: var(--dome-color-focus);
+  --radius-card: var(--dome-radius-card);
+  --radius-control: var(--dome-radius-control);
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -91,8 +93,8 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: var(--dome-color-bg);
+  color: var(--dome-color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -117,7 +119,7 @@ textarea {
 }
 
 :focus-visible {
-  outline: 3px solid var(--color-focus);
+  outline: 3px solid var(--dome-color-focus);
   outline-offset: 2px;
   border-radius: 6px;
 }
@@ -145,12 +147,12 @@ input[type="range"].slider {
 input[type="range"].slider::-webkit-slider-runnable-track {
   height: 8px;
   border-radius: 999px;
-  background: var(--color-border-strong);
+  background: var(--dome-color-border-strong);
 }
 input[type="range"].slider::-moz-range-track {
   height: 8px;
   border-radius: 999px;
-  background: var(--color-border-strong);
+  background: var(--dome-color-border-strong);
 }
 input[type="range"].slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -159,19 +161,31 @@ input[type="range"].slider::-webkit-slider-thumb {
   height: 32px;
   margin-top: -12px;
   border-radius: 50%;
-  background: var(--color-accent);
-  border: 3px solid var(--color-bg);
+  background: var(--dome-color-accent);
+  border: 3px solid var(--dome-color-bg);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 input[type="range"].slider::-moz-range-thumb {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--color-accent);
-  border: 3px solid var(--color-bg);
+  background: var(--dome-color-accent);
+  border: 3px solid var(--dome-color-bg);
 }
 input[type="range"].slider:disabled::-webkit-slider-thumb {
-  background: var(--color-text-faint);
+  background: var(--dome-color-text-faint);
+}
+
+/* Native <dialog> used by Sheet: centred on larger screens, bottom sheet on phones. */
+dialog[open] {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+@media (min-width: 640px) {
+  dialog[open] {
+    align-items: center;
+  }
 }
 
 .sr-only {

@@ -4,7 +4,8 @@ One asyncio worker, queue depth 16. Coalescing group = (``coalesce`` key, canoni
 ``""``) across all controllers: enqueuing a new command in a group terminates earlier *queued, not yet
 executing* commands in that group as ``canceled`` / ``COMMAND_SUPERSEDED``. Each command:
 ``ack{executing}`` + durable journal state ``executing`` → handler under ``asyncio.wait_for(timeout_ms)``
-→ ``result``. A timeout after a non-idempotent side effect was issued is ``outcome_unknown``; the
+→ ``result``. A timeout — or a lost browser/OS answer (``OUTCOME_UNKNOWN`` from the bridge) — after a
+non-idempotent side effect was issued is ``outcome_unknown`` with a warning, never ``failed``; the
 agent never retries anything. Results are validated against the action's result schema before they
 are emitted.
 
@@ -143,6 +144,14 @@ class Executor:
     @property
     def deferred_ids(self) -> list[str]:
         return list(self._deferred)
+
+    def queued_commands(self) -> list[VerifiedCommand]:
+        """Authorized commands waiting for the worker (for re-authorization on a new snapshot)."""
+        return [e.command for e in self._queue]
+
+    def deferred_commands(self) -> list[VerifiedCommand]:
+        """Commands whose result arrives through :meth:`complete` (armed power countdowns)."""
+        return list(self._deferred.values())
 
     def in_flight_ids(self) -> list[str]:
         ids = self.queued_ids + list(self._deferred)
@@ -318,6 +327,9 @@ class Executor:
                 vc.command_id, "succeeded", result=validated, duration_ms=_ms_since(entry.enqueued_at)
             )
         except ActionFailed as exc:
+            if self._is_outcome_unknown(vc, ctx, exc):
+                await self._outcome_unknown(vc, entry, exc)
+                return
             await self._emit.result(
                 vc.command_id,
                 "failed",
@@ -326,6 +338,9 @@ class Executor:
                 duration_ms=_ms_since(entry.enqueued_at),
             )
         except ProtocolError as exc:
+            if self._is_outcome_unknown(vc, ctx, exc):
+                await self._outcome_unknown(vc, entry, exc)
+                return
             await self._emit.result(vc.command_id, "failed", error=exc, duration_ms=_ms_since(entry.enqueued_at))
         except asyncio.CancelledError:
             raise
@@ -340,6 +355,22 @@ class Executor:
         finally:
             if self._running is running:
                 self._running = None
+
+    @staticmethod
+    def _is_outcome_unknown(vc: VerifiedCommand, ctx: ExecutionContext, exc: ProtocolError) -> bool:
+        """A failure raised AFTER a non-idempotent side effect was issued whose code says the outcome is
+        uncertain (the bridge/adapter lost the answer, not the request) must not be reported ``failed``:
+        a clean failure invites a retry and a double skip (spec §8)."""
+        return exc.code == "OUTCOME_UNKNOWN" and ctx.side_effect_issued and not vc.spec.idempotent
+
+    async def _outcome_unknown(self, vc: VerifiedCommand, entry: _Entry, exc: ProtocolError) -> None:
+        await self._emit.result(
+            vc.command_id,
+            "outcome_unknown",
+            error=self._registry.make_error("OUTCOME_UNKNOWN", exc.message, retryable=False),
+            warning="The action may have executed. Check the PC's current state before retrying.",
+            duration_ms=_ms_since(entry.enqueued_at),
+        )
 
     async def _timeout(self, vc: VerifiedCommand, ctx: ExecutionContext, entry: _Entry) -> None:
         seconds = vc.spec.timeout_ms / 1000

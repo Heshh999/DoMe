@@ -274,6 +274,12 @@ async def test_unlink_pc_revokes_everything(
     assert revoked["reason"] == "pc_unlinked"
     assert await close_code(online_agent.ws) == 4003  # type: ignore[arg-type]
     online_agent.ws = None
+    # the subscribed phone is told, once, that the PC is gone and its subscription is dropped
+    final = await paired.recv_type("pc_status", pc_id=online_agent.pc_id)
+    assert final["connection"] == "offline" and final["enabled"] is False
+    import uuid as _uuid
+
+    assert _uuid.UUID(online_agent.pc_id) not in env.services.relay.subs
     assert (await alice.get("/v1/pcs"))["pcs"] == []
     r = await online_agent.rest("POST", "/v1/agent/token", {"pc_credential": online_agent.credential}, expect=401)
     assert r.json()["error"]["code"] == "UNAUTHENTICATED"

@@ -65,8 +65,33 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_wrapper)
 
 
+_SECRET_PATH_PREFIXES = ("/v1/agent-link/",)
+_SECRET_PATH_PUBLIC_LEAVES = frozenset({"start", "poll"})
+
+
+def loggable_path(path: str) -> str:
+    """The request path as it may appear in a log line: never the query string (the middleware only
+    sees ``scope["path"]``) and never a device-link ``user_code`` (``/v1/agent-link/ABCD-EFGH[/approve]``
+    becomes ``/v1/agent-link/{user_code}[/approve]``; ``/start`` and ``/poll`` are endpoint names)."""
+    for prefix in _SECRET_PATH_PREFIXES:
+        if path.startswith(prefix):
+            rest = path[len(prefix) :]
+            head, sep, tail = rest.partition("/")
+            if head and head not in _SECRET_PATH_PUBLIC_LEAVES:
+                return f"{prefix}{{user_code}}{sep}{tail}"
+    return path[:256]
+
+
+def route_template(scope: Scope) -> str | None:
+    """The matched route's path template (``/v1/pcs/{pc_id}``) when Starlette recorded one."""
+    route = scope.get("route")
+    template = getattr(route, "path", None)
+    return template if isinstance(template, str) and template else None
+
+
 class RequestLogMiddleware:
-    """Logs method, path (never the query string), status and duration."""
+    """Logs method, route template and masked path (never the query string or a user_code), status and
+    duration."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -89,7 +114,8 @@ class RequestLogMiddleware:
             log.info(
                 "request",
                 method=scope.get("method"),
-                path=scope.get("path"),
+                route=route_template(scope),
+                path=loggable_path(str(scope.get("path", ""))),
                 status=status_holder["status"],
                 duration_ms=int((time.monotonic() - started) * 1000),
             )

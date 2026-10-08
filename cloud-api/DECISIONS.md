@@ -7,10 +7,16 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
    `pc_credential` is stored and that `POST /v1/agent-link/poll` returns it exactly once. Generating it
    when the agent polls (state `approved` → `consumed` in the same transaction) avoids keeping the
    plaintext anywhere between approval and delivery.
-2. **Re-linking a known PC key reuses the PC row.** `pcs.kid` is unique. If an agent with an existing
-   key links again on the same account (reinstall, lost credential) the row is kept (grants and history
-   survive), its credentials are revoked (`revoked{credential_rotated}` to a live socket) and a fresh
-   credential is issued. A key already linked to *another* account is refused with 409 `FORBIDDEN`.
+2. **Re-linking a known PC key is allowed only for an unlinked (soft-deleted) PC.** `pcs.kid` is unique.
+   `POST /v1/agent-link/start` carries no proof that the caller holds the private key
+   (`CONTRACT_ISSUES.md` #10), so approving a code whose key belongs to a PC that is *still linked* must
+   not hand that PC's identity, credentials and grants to whoever submitted the code: it is refused with
+   409 `PC_ALREADY_LINKED` and the pending code stays pending (the owner can unlink under Devices and
+   approve again within the code's lifetime). A key that belongs to a soft-deleted PC on the same account
+   (the agent kept its identity key and lost its credential after `revoked{pc_unlinked}`) reuses the row so
+   history survives, with every credential and grant revoked — phones pair again. A key linked to
+   *another* account is refused with 409 `FORBIDDEN`. (Changed after review; previously a live PC was
+   silently re-linked and kept its grants.)
 3. **Disabling a PC never revokes it.** `PATCH /v1/pcs/{id} {enabled:false}` pushes
    `grants_snapshot{pc_enabled:false}` and a `pc_status{enabled:false}`; the socket stays open and local
    grants stay (ADR-0001 D5/D8: plan/account state, not revocation). Only `DELETE /v1/pcs/{id}` sends
@@ -63,3 +69,32 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     (pairing codes); a rejection's error code is stored under `reason`.
 20. **Test doubles**: none exist in `dome_api`. The agent and controller in `tests/` are simulators built
     on the shared library and only live under `tests/`.
+21. **Client address resolution lives in the application, not in uvicorn's flags.** `X-Forwarded-For` is
+    honoured only from `DOME_TRUSTED_PROXIES` (explicit addresses/CIDRs; `*` refused; required in
+    staging/production, `none` for a directly reached process) and resolves to the right-most hop that is
+    not a trusted proxy. `dome-api` starts uvicorn with `proxy_headers=False` so `FORWARDED_ALLOW_IPS` in
+    the environment cannot widen the trust. The middleware wraps uvicorn's well-tested
+    `ProxyHeadersMiddleware` walk rather than re-implementing it.
+22. **Per-socket frame budget and bounded security events (relay).** Every inbound controller frame is
+    charged to a token bucket per connection *before* any database work (default 600/min, burst 120 —
+    above the plan limits in `plans.json` so legitimate sliders hit the per-command plan limiter, which
+    gives a precise `RATE_LIMITED` result, first). A refused `command` still gets a relay `result`
+    (DECISIONS #7, when its id is readable), other refused frames an `error`; after `burst` refusals the
+    socket closes with 4000 and one `controller_throttled` event. Security-event rows per socket are
+    capped per minute; the first suppressed row becomes one `relay_events_throttled` row so the flood is
+    still visible in the account's security log. Sockets that were accepted but have not sent `hello`
+    hold a slot toward `DOME_RELAY_MAX_CONNECTIONS`. Agent sockets are authenticated by a PC credential
+    and are not frame-limited (see `KNOWN_ISSUES.md`).
+23. **`user_code` entry is rate limited by failures, not by lookups.** Successful previews of a pending
+    code (the approval page) are unlimited; unknown/expired/decided codes count against a 15-minute
+    budget per account and per client IP (defaults 10) after which every lookup, approval and denial from
+    that key is `429` without touching the table. Each counted failure is a `link_code_lookup_failed`
+    security event (bounded by the budget).
+24. **Unlinking a PC is announced to its subscribers.** After `DELETE /v1/pcs/{id}` every subscribed
+    controller receives one `pc_status{connection:"offline", enabled:false}` and its subscription to that
+    PC is dropped; later commands to it are `ACCOUNT_MISMATCH` ("No such PC on this account") as for
+    any PC that is not on the account.
+25. **Command ids are looked up within the account.** The duplicate check filters `commands` by
+    `account_id`; an id that exists in another tenant is invisible and surfaces only as a primary-key
+    conflict at insert time, answered with the same `COMMAND_ID_REUSED` — no cross-tenant oracle, and
+    the probe costs the caller a fully verified command.
