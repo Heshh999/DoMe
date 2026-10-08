@@ -32,11 +32,11 @@ def main(argv: list[str] | None = None) -> int:
     host, port = settings.bind_host_port
     log.info("serve", host=host, port=port, env=settings.env, reload=args.reload)
     uvicorn.run(
-        "dome_api.main:app",
+        "dome_api.main:create_app",
         host=host,
         port=port,
         reload=args.reload,
-        factory=False,
+        factory=True,
         log_config=None,
         access_log=False,
         ws_max_size=settings.relay_max_frame_bytes,

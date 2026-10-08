@@ -47,7 +47,9 @@ class EntitlementSigner:
         public.update({"kid": self.kid, "use": "sig", "alg": self.alg})
         return {"keys": [public]}
 
-    def claims_for(self, account_id: uuid.UUID, pc_id: uuid.UUID, plan: Plan, *, now: int | None = None) -> dict[str, Any] | None:
+    def claims_for(
+        self, account_id: uuid.UUID, pc_id: uuid.UUID, plan: Plan, *, now: int | None = None
+    ) -> dict[str, Any] | None:
         if not plan.issues_entitlement_assertion:
             return None
         iat = int(now if now is not None else time.time())
@@ -75,6 +77,8 @@ class EntitlementSigner:
         tok = jwt.decode(assertion, keyset, algorithms=[self.alg])
         if tok.header.get("typ") != TYP or tok.header.get("kid") != self.kid:
             raise ValueError("unexpected assertion header")
-        jwt.JWTClaimsRegistry(iss={"essential": True, "value": self.issuer}, exp={"essential": True}).validate(tok.claims)
+        jwt.JWTClaimsRegistry(iss={"essential": True, "value": self.issuer}, exp={"essential": True}).validate(
+            tok.claims
+        )
         load_schemas().validate_entitlement_claims(tok.claims)
         return dict(tok.claims)

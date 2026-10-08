@@ -101,9 +101,20 @@ class OIDCClient:
         verifier = secrets.token_urlsafe(64)  # 86 chars, within RFC 7636's 43..128
         now = utcnow()
         await db.execute(delete(AuthFlow).where(AuthFlow.expires_at < now))
-        db.add(AuthFlow(state=state, nonce=nonce, code_verifier=verifier, return_to=return_to, created_at=now, expires_at=now + FLOW_LIFETIME))
+        db.add(
+            AuthFlow(
+                state=state,
+                nonce=nonce,
+                code_verifier=verifier,
+                return_to=return_to,
+                created_at=now,
+                expires_at=now + FLOW_LIFETIME,
+            )
+        )
         async with self._client() as client:
-            url, _ = client.create_authorization_url(disc["authorization_endpoint"], state=state, nonce=nonce, code_verifier=verifier)
+            url, _ = client.create_authorization_url(
+                disc["authorization_endpoint"], state=state, nonce=nonce, code_verifier=verifier
+            )
         return str(url)
 
     async def complete(self, db: AsyncSession, code: str, state: str) -> tuple[Identity, str]:
@@ -137,7 +148,9 @@ class OIDCClient:
         subject = str(claims["sub"])
         email = str(claims.get("email") or "")[:254]
         name = str(claims.get("name") or claims.get("preferred_username") or email.split("@")[0] or "DoMe user")[:128]
-        return Identity(issuer=self.settings.oidc_issuer, subject=subject, email=email, display_name=name), flow.return_to
+        return Identity(
+            issuer=self.settings.oidc_issuer, subject=subject, email=email, display_name=name
+        ), flow.return_to
 
     async def _verify_id_token(self, id_token: str, nonce: str) -> dict[str, Any]:
         keyset = await self.jwks()

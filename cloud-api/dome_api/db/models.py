@@ -84,7 +84,9 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False, unique=True)
     csrf_token: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = created_at_col()
@@ -112,7 +114,9 @@ class PC(Base):
     __table_args__ = (_enum_check("platform", PLATFORMS, "ck_pcs_platform"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     public_jwk: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     kid: Mapped[str] = mapped_column(String(43), nullable=False, unique=True)
@@ -179,7 +183,9 @@ class Controller(Base):
     __table_args__ = (UniqueConstraint("account_id", "kid", name="uq_controllers_account_kid"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     kid: Mapped[str] = mapped_column(String(43), nullable=False)
     public_jwk: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -191,12 +197,22 @@ class Controller(Base):
 class Grant(Base):
     __tablename__ = "grants"
     __table_args__ = (
-        Index("uq_grants_live_controller_pc", "controller_id", "pc_id", unique=True, postgresql_where=text("revoked_at IS NULL")),
+        Index(
+            "uq_grants_live_controller_pc",
+            "controller_id",
+            "pc_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
-    controller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("controllers.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    controller_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("controllers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     pc_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pcs.id", ondelete="CASCADE"), nullable=False, index=True)
     capabilities: Mapped[list[str]] = mapped_column(ARRAY(String(32)), nullable=False)
     created_at: Mapped[datetime] = created_at_col()
@@ -207,11 +223,18 @@ class PairingSession(Base):
     __tablename__ = "pairing_sessions"
     __table_args__ = (
         _enum_check("state", PAIRING_STATES, "ck_pairing_sessions_state"),
-        Index("uq_pairing_sessions_open_code_hash", "code_hash", unique=True, postgresql_where=text("state IN ('open', 'claimed')")),
+        Index(
+            "uq_pairing_sessions_open_code_hash",
+            "code_hash",
+            unique=True,
+            postgresql_where=text("state IN ('open', 'claimed')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     pc_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pcs.id", ondelete="CASCADE"), nullable=False, index=True)
     code_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
@@ -237,7 +260,9 @@ class Command(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     controller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("controllers.id", ondelete="CASCADE"), nullable=False)
     pc_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pcs.id", ondelete="CASCADE"), nullable=False)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -292,7 +317,9 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="stripe")
     provider_customer_id: Mapped[str | None] = mapped_column(String(128), index=True)
     provider_subscription_id: Mapped[str | None] = mapped_column(String(128), unique=True)
@@ -327,7 +354,9 @@ class UsagePeriod(Base):
     __table_args__ = (UniqueConstraint("account_id", "period_start", name="uq_usage_periods_account_start"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ai_interpretations_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -340,7 +369,9 @@ class Layout(Base):
     __tablename__ = "layouts"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     definition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = created_at_col()
@@ -352,7 +383,9 @@ class Routine(Base):
     __tablename__ = "routines"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     pc_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pcs.id", ondelete="SET NULL"))
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     steps: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -365,7 +398,9 @@ class SupportDiagnostic(Base):
     __tablename__ = "support_diagnostics"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     pc_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pcs.id", ondelete="SET NULL"))
     redacted_bundle: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = created_at_col()
@@ -376,7 +411,9 @@ class PendingDeletion(Base):
     __tablename__ = "pending_deletions"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
     requested_at: Mapped[datetime] = created_at_col()
     provider_cancel_state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -21,3 +21,15 @@ def alembic_config(database_url: str) -> Config:
 def upgrade_to_head(database_url: str) -> None:
     """Apply every pending migration. Synchronous; call before the event loop starts or in a thread."""
     command.upgrade(alembic_config(database_url), "head")
+
+
+def head_revision() -> str:
+    """The newest revision id in the migrations directory (compared with ``alembic_version`` at start-up)."""
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(_INI))
+    cfg.set_main_option("script_location", str(_SCRIPTS))
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    if len(heads) != 1:
+        raise RuntimeError(f"expected exactly one Alembic head, found {heads!r}")
+    return str(heads[0])

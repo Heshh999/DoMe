@@ -36,7 +36,9 @@ def write_key(path: Path, *, force: bool = False) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate the DoMe entitlement signing key (Ed25519, PKCS8 PEM).")
-    parser.add_argument("path", nargs="?", default=os.environ.get("DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH") or str(DEFAULT_PATH))
+    parser.add_argument(
+        "path", nargs="?", default=os.environ.get("DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH") or str(DEFAULT_PATH)
+    )
     parser.add_argument("--force", action="store_true", help="replace an existing key file")
     args = parser.parse_args(argv)
     try:

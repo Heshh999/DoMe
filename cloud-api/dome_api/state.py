@@ -15,6 +15,7 @@ from dome_api.settings import Settings
 
 if TYPE_CHECKING:
     from dome_api.relay.manager import ConnectionManager
+    from dome_api.relay.router import RateLimiters
 
 
 @dataclass(slots=True)
@@ -27,8 +28,10 @@ class Services:
     registry: Registry
     schemas: Schemas
     relay: ConnectionManager
+    limiters: RateLimiters
     # REST abuse limits (design: link start 10/hour per IP; pairing claim 5 per 15 min per account and per IP)
     link_start_limiter: SlidingWindowLimiter
     pairing_claim_account_limiter: SlidingWindowLimiter
     pairing_claim_ip_limiter: SlidingWindowLimiter
     login_limiter: SlidingWindowLimiter
+    agent_token_limiter: SlidingWindowLimiter

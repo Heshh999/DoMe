@@ -83,7 +83,11 @@ class PlanCatalog:
     @property
     def pricing_defaults(self) -> dict[str, Any]:
         p = self.raw["pricing_defaults"]
-        return {"currency": p["currency"], "monthly_cents": int(p["monthly_cents"]), "annual_cents": int(p["annual_cents"])}
+        return {
+            "currency": p["currency"],
+            "monthly_cents": int(p["monthly_cents"]),
+            "annual_cents": int(p["annual_cents"]),
+        }
 
     @property
     def downgrade_policy(self) -> dict[str, Any]:
@@ -99,7 +103,9 @@ class PlanCatalog:
 
     def public_plans(self) -> dict[str, Any]:
         """plans.json ``plans`` object without ``$comment`` members (for GET /v1/plans)."""
-        return {pid: {k: v for k, v in body.items() if not k.startswith("$")} for pid, body in self.raw["plans"].items()}
+        return {
+            pid: {k: v for k, v in body.items() if not k.startswith("$")} for pid, body in self.raw["plans"].items()
+        }
 
     def entitlement_state_for(self, plan: Plan) -> str:
         """Phase A/B: an account is either on the default plan or has an active paid plan.

@@ -57,10 +57,44 @@ async def strict_body(request: Request, rest_def: str) -> dict[str, Any]:
         load_schemas().validate_rest(rest_def, parsed)
     except Exception as exc:  # ProtocolError carries the code; anything else is malformed
         code = getattr(exc, "code", "MALFORMED_MESSAGE")
-        raise ApiError(400, code if code in ("MALFORMED_MESSAGE", "PAYLOAD_TOO_LARGE") else "MALFORMED_MESSAGE") from None
+        raise ApiError(
+            400, code if code in ("MALFORMED_MESSAGE", "PAYLOAD_TOO_LARGE") else "MALFORMED_MESSAGE"
+        ) from None
     assert isinstance(parsed, dict)
     return parsed
 
 
 def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+def rest_response(
+    settings_validate: bool,
+    body_name: str,
+    body: dict[str, Any],
+    *,
+    status: int = 200,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """Build a JSON response for a body that is one of ``rest.schema.json#/$defs``.
+
+    Outside production (``Settings.validate_rest_responses``) the body is validated first; a contract
+    violation becomes an ``INTERNAL`` 500 instead of a non-conforming 200.
+    """
+    from fastapi.responses import JSONResponse
+
+    if settings_validate:
+        try:
+            load_schemas().validate_rest(body_name, body)
+        except Exception as exc:  # ProtocolError: our own body does not match the contract
+            raise ApiError(
+                500, "INTERNAL", f"response does not match rest.schema.json#/$defs/{body_name}: {exc}"
+            ) from None
+    return JSONResponse(body, status_code=status, headers={"Cache-Control": "no-store", **(headers or {})})
+
+
+def b64url_to_sha256(value: str) -> bytes:
+    """Decode a 43-char base64url SHA-256 handle (already pattern-checked by the REST schema)."""
+    from dome_protocol.keys import b64url_decode
+
+    return b64url_decode(value, expected_len=32)

@@ -6,14 +6,21 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
-from dome_protocol import KeyRecord, ProtocolError, VerifiedCommand, loads_strict, parse_rfc3339, verify_and_parse_command
+from dome_protocol import (
+    KeyRecord,
+    ProtocolError,
+    VerifiedCommand,
+    loads_strict,
+    parse_rfc3339,
+    verify_and_parse_command,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dome_api.db.models import PC, Command, Controller, Grant
+from dome_api.db.models import PC, Account, Command, Controller, Grant
 from dome_api.logging import get_logger
 from dome_api.plans import Plan, plan_for
 from dome_api.relay import frames
@@ -24,10 +31,14 @@ from dome_api.util import ts_required, utcnow
 
 log = get_logger("dome_api.relay.router")
 _UUID_RE = re.compile(r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+TERMINAL_STATES = ("succeeded", "failed", "expired", "canceled", "outcome_unknown")
+IN_FLIGHT_STATES = ("created", "accepted", "executing", "awaiting_confirmation")
 
 
-class Rejection(Exception):
-    def __init__(self, code: str, message: str | None = None, *, close: bool = False, detail: dict[str, Any] | None = None) -> None:
+class Rejection(Exception):  # noqa: N818 - routing control flow, always converted to a result frame
+    def __init__(
+        self, code: str, message: str | None = None, *, close: bool = False, detail: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.message = message
@@ -36,7 +47,7 @@ class Rejection(Exception):
 
 
 class RateLimiters:
-    """Per-plan token buckets keyed by controller id."""
+    """Per-plan token buckets keyed by controller id (plans.json manual/coalescable limits)."""
 
     def __init__(self) -> None:
         self._manual: dict[str, TokenBucketLimiter] = {}
@@ -65,7 +76,9 @@ def untrusted_command_id(envelope: Any) -> str | None:
         return None
 
 
-async def resolve_controller_record(db: AsyncSession, conn: ControllerConn) -> tuple[Controller | None, KeyRecord | None]:
+async def resolve_controller_record(
+    db: AsyncSession, conn: ControllerConn
+) -> tuple[Controller | None, KeyRecord | None]:
     if conn.controller_id is None:
         return None, None
     ctrl = await db.get(Controller, conn.controller_id)
@@ -75,7 +88,8 @@ async def resolve_controller_record(db: AsyncSession, conn: ControllerConn) -> t
     return ctrl, KeyRecord(controller_id=str(ctrl.id), account_id=str(ctrl.account_id), jwk=jwk)
 
 
-def compute_deadline(cmd: VerifiedCommand, received_at: Any, registry_limits: dict[str, int]) -> Any:
+def compute_deadline(cmd: VerifiedCommand, received_at: datetime, registry_limits: dict[str, int]) -> datetime:
+    """``rules.in_flight``: max(expires_at, received_at + timeout) [+ challenge lifetime] + 10 s."""
     expires = parse_rfc3339(cmd.payload["expires_at"])
     base = max(expires, received_at + timedelta(milliseconds=cmd.spec.timeout_ms))
     if cmd.spec.requires_confirmation:
@@ -83,7 +97,9 @@ def compute_deadline(cmd: VerifiedCommand, received_at: Any, registry_limits: di
     return base + timedelta(seconds=10)
 
 
-async def route_command(svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]) -> None:
+async def route_command(
+    svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]
+) -> None:
     pc_id_str: str = frame["pc_id"]
     envelope = frame["envelope"]
     received_at = utcnow()
@@ -91,29 +107,36 @@ async def route_command(svc: Services, mgr: ConnectionManager, limiters: RateLim
     try:
         # 2. socket binding
         if envelope.get("kid") != conn.kid:
+            command_id = untrusted_command_id(envelope)
             raise Rejection("UNKNOWN_KEY", "Envelope kid does not match this connection", close=True)
         if conn.controller_id is None:
+            command_id = untrusted_command_id(envelope)
             raise Rejection("GRANT_MISSING", "This connection is not bound to a paired controller")
         async with svc.db() as db:
             ctrl, record = await resolve_controller_record(db, conn)
             if ctrl is None or record is None:
+                command_id = untrusted_command_id(envelope)
                 raise Rejection("UNKNOWN_KEY", close=True)
             if ctrl.revoked_at is not None:
+                command_id = untrusted_command_id(envelope)
                 raise Rejection("CONTROLLER_REVOKED", close=True)
-            from dome_api.db.models import Account
-
             account = await db.get(Account, conn.account_id)
             plan = plan_for(account.plan if account else None)
             enabled_ids = await mgr.plan_enabled_controller_ids(db, conn.account_id, plan)
-            if ctrl.id not in enabled_ids:
-                raise Rejection("CONTROLLER_PLAN_DISABLED")
-            # 3. signature, strict parse, schema, binding, window, registry
+            # 3. signature, strict parse, schema, controller/account binding, window, registry
             try:
-                cmd = verify_and_parse_command(envelope, lambda kid: record if kid == conn.kid else None, registry=svc.registry, schemas=svc.schemas)
+                cmd = verify_and_parse_command(
+                    envelope,
+                    lambda kid: record if kid == conn.kid else None,
+                    registry=svc.registry,
+                    schemas=svc.schemas,
+                )
             except ProtocolError as exc:
                 command_id = untrusted_command_id(envelope)
                 raise Rejection(exc.code, exc.message, detail=exc.detail or None) from None
             command_id = cmd.command_id
+            if ctrl.id not in enabled_ids:
+                raise Rejection("CONTROLLER_PLAN_DISABLED")
             # 4. frame/payload PC agreement
             if cmd.target_pc_id != pc_id_str:
                 raise Rejection("TARGET_PC_MISMATCH")
@@ -126,10 +149,22 @@ async def route_command(svc: Services, mgr: ConnectionManager, limiters: RateLim
                 raise Rejection("PC_PLAN_DISABLED")
             # 6. grant covers the capability
             grant = await db.scalar(
-                select(Grant).where(Grant.controller_id == ctrl.id, Grant.pc_id == pc.id, Grant.account_id == conn.account_id, Grant.revoked_at.is_(None))
+                select(Grant).where(
+                    Grant.controller_id == ctrl.id,
+                    Grant.pc_id == pc.id,
+                    Grant.account_id == conn.account_id,
+                    Grant.revoked_at.is_(None),
+                )
             )
             if grant is None or cmd.spec.capability not in set(grant.capabilities):
                 raise Rejection("GRANT_MISSING")
+            # duplicate / reuse handling (rules.duplicate_command) — before anything that consumes budget
+            existing = await db.get(Command, uuid.UUID(cmd.command_id))
+            if existing is not None:
+                if existing.digest != cmd.digest or existing.controller_id != ctrl.id or existing.pc_id != pc.id:
+                    raise Rejection("COMMAND_ID_REUSED")
+                await _answer_duplicate(conn, mgr.agent_for(pc.id), existing)
+                return
             # 7. rate limit
             if not limiters.allow(plan, ctrl.id, coalescable=cmd.spec.coalesce is not None):
                 raise Rejection("RATE_LIMITED")
@@ -137,13 +172,6 @@ async def route_command(svc: Services, mgr: ConnectionManager, limiters: RateLim
             agent = mgr.agent_for(pc.id)
             if agent is None or not agent.snapshot_sent:
                 raise Rejection("PC_OFFLINE")
-            # duplicate / reuse handling (rules.duplicate_command)
-            existing = await db.get(Command, uuid.UUID(cmd.command_id))
-            if existing is not None:
-                if existing.digest != cmd.digest:
-                    raise Rejection("COMMAND_ID_REUSED")
-                await _answer_duplicate(mgr, conn, agent, existing)
-                return
             # 9. queue depth
             if len(agent.inflight) >= svc.settings.relay_per_pc_queue_depth:
                 raise Rejection("QUEUE_FULL")
@@ -161,23 +189,22 @@ async def route_command(svc: Services, mgr: ConnectionManager, limiters: RateLim
                 timeout_ms=cmd.spec.timeout_ms,
                 requires_confirmation=cmd.spec.requires_confirmation,
             )
-            async with db.begin():
-                db.add(
-                    Command(
-                        id=inf.command_id,
-                        account_id=conn.account_id,
-                        controller_id=ctrl.id,
-                        pc_id=pc.id,
-                        action=cmd.spec.name,
-                        digest=cmd.digest,
-                        state="created",
-                        created_at=received_at,
-                        deadline_at=deadline,
-                    )
+            db.add(
+                Command(
+                    id=inf.command_id,
+                    account_id=conn.account_id,
+                    controller_id=ctrl.id,
+                    pc_id=pc.id,
+                    action=cmd.spec.name,
+                    digest=cmd.digest,
+                    state="created",
+                    created_at=received_at,
+                    deadline_at=deadline,
                 )
-                if cmd.spec.capability == "power" and cmd.spec.requires_confirmation:
-                    pc.last_power_request = {"action": cmd.spec.name, "at": ts_required(received_at)}
-                    db.add(pc)
+            )
+            if cmd.spec.capability == "power" and cmd.spec.requires_confirmation:
+                pc.last_power_request = {"action": cmd.spec.name, "at": ts_required(received_at)}
+            await db.commit()
             agent.inflight[inf.command_id] = inf
             forwarded = {
                 "type": "command",
@@ -186,27 +213,44 @@ async def route_command(svc: Services, mgr: ConnectionManager, limiters: RateLim
             }
             if not await agent.send(forwarded, validate=False):
                 agent.inflight.pop(inf.command_id, None)
-                raise Rejection("PC_OFFLINE")
+                failed = frames.relay_result(
+                    inf.command_id, "failed", error=frames.error_object("PC_OFFLINE"), started_at=received_at
+                )
+                await mgr.finish_command(inf, "failed", "PC_OFFLINE", failed)
+                return
+            log.info("command.forwarded", action=cmd.spec.name, pc_id=pc_id_str, controller_id=str(ctrl.id))
     except Rejection as rej:
         await _reject(mgr, conn, pc_id_str, command_id, rej, received_at)
 
 
-async def _answer_duplicate(mgr: ConnectionManager, conn: ControllerConn, agent: AgentConn, existing: Command) -> None:
+async def _answer_duplicate(conn: ControllerConn, agent: AgentConn | None, existing: Command) -> None:
     """Identical re-submission: re-emit the known terminal result, or the current ack while running."""
-    inf = agent.inflight.get(existing.id)
+    inf = agent.inflight.get(existing.id) if agent is not None else None
     if inf is not None:
         if inf.state in ("accepted", "executing", "awaiting_confirmation"):
-            await conn.send({"type": "ack", "command_id": str(existing.id), "state": inf.state, "at": ts_required(utcnow())})
+            await conn.send(
+                {"type": "ack", "command_id": str(existing.id), "state": inf.state, "at": ts_required(utcnow())}
+            )
         return  # still 'created': the original ack/result will arrive on its own
-    frame = frames.relay_result(existing.id, existing.state if existing.state in ("succeeded", "failed", "expired", "canceled", "outcome_unknown") else "failed")
+    state = existing.state if existing.state in TERMINAL_STATES else "failed"
+    frame = frames.relay_result(existing.id, state)
     if existing.error_code:
         frame["error"] = frames.error_object(existing.error_code)
+    elif state == "failed":
+        frame["error"] = frames.error_object("OUTCOME_UNKNOWN")
     frame["duration_ms"] = int(existing.duration_ms or 0)
     frame["warning"] = "Duplicate of a command this relay already completed; the original outcome is shown."
     await conn.send(frame)
 
 
-async def _reject(mgr: ConnectionManager, conn: ControllerConn, pc_id: str, command_id: str | None, rej: Rejection, received_at: Any) -> None:
+async def _reject(
+    mgr: ConnectionManager,
+    conn: ControllerConn,
+    pc_id: str,
+    command_id: str | None,
+    rej: Rejection,
+    received_at: datetime,
+) -> None:
     error = frames.error_object(rej.code, rej.message, detail=rej.detail)
     if command_id is not None:
         await conn.send(frames.relay_result(command_id, "failed", error=error, started_at=received_at))
@@ -223,3 +267,13 @@ async def _reject(mgr: ConnectionManager, conn: ControllerConn, pc_id: str, comm
     )
     if rej.close:
         await conn.close(CLOSE_REVOKED)
+
+
+__all__ = [
+    "RateLimiters",
+    "Rejection",
+    "compute_deadline",
+    "resolve_controller_record",
+    "route_command",
+    "IN_FLIGHT_STATES",
+]

@@ -16,7 +16,13 @@ Env = Literal["development", "staging", "production", "test"]
 
 def _origin(value: str) -> str:
     parts = urlsplit(value.strip())
-    if parts.scheme not in ("http", "https") or not parts.netloc or parts.path not in ("", "/") or parts.query or parts.fragment:
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.netloc
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
         raise ValueError(f"not an origin: {value!r} (expected scheme://host[:port])")
     return f"{parts.scheme}://{parts.netloc}".lower()
 
@@ -135,7 +141,14 @@ class Settings(BaseSettings):
 
     @property
     def issuer_origin(self) -> str:
-        return _origin(self.oidc_issuer.split("/", 3)[0] + "//" + self.oidc_issuer.split("/", 3)[2])
+        parts = urlsplit(self.oidc_issuer)
+        return _origin(f"{parts.scheme}://{parts.netloc}")
+
+    @property
+    def validate_rest_responses(self) -> bool:
+        """Outside production every REST response body is checked against rest.schema.json before it
+        leaves the process (a contract violation becomes a loud 500 in development and tests)."""
+        return self.env != "production"
 
 
 @lru_cache(maxsize=1)

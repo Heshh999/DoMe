@@ -66,7 +66,9 @@ def redact(value: Any, *, _depth: int = 0) -> Any:
     if _depth > 12:
         return REDACTED
     if isinstance(value, Mapping):
-        return {str(k): (REDACTED if _should_redact(str(k)) else redact(v, _depth=_depth + 1)) for k, v in value.items()}
+        return {
+            str(k): (REDACTED if _should_redact(str(k)) else redact(v, _depth=_depth + 1)) for k, v in value.items()
+        }
     if isinstance(value, list | tuple | set | frozenset):
         return [redact(v, _depth=_depth + 1) for v in value]
     return value
@@ -99,7 +101,11 @@ def configure_logging(level: str = "INFO", *, json_output: bool = True) -> None:
     )
     # Route stdlib logging (uvicorn, sqlalchemy, alembic) through the same redacting pipeline.
     formatter = structlog.stdlib.ProcessorFormatter(
-        processors=[structlog.stdlib.ProcessorFormatter.remove_processors_meta, structlog.processors.EventRenamer("message"), renderer],
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.EventRenamer("message"),
+            renderer,
+        ],
         foreign_pre_chain=shared,
     )
     handler = logging.StreamHandler(sys.stderr)

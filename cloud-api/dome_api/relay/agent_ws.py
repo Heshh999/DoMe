@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from typing import Any
 
-from dome_protocol import ProtocolError, dumps_compact, loads_strict, protocol_compatible
+from dome_protocol import ProtocolError, dumps_compact, loads_strict, parse_rfc3339, protocol_compatible
 from dome_protocol.keys import kid_from_jwk
 from sqlalchemy import select, update
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -16,16 +16,16 @@ from dome_api.db.models import PC, Command, Controller, Grant, PairingSession
 from dome_api.logging import get_logger
 from dome_api.relay import frames
 from dome_api.relay.manager import (
-    CLOSE_AUTH_REQUIRED,
     CLOSE_FRAME_TOO_LARGE,
     CLOSE_PROTOCOL_ERROR,
     CLOSE_REVOKED,
     AgentConn,
     ConnectionManager,
 )
-from dome_api.security.origin import origin_allowed
+from dome_api.relay.ws_http import deny_upgrade
+from dome_api.security import events
 from dome_api.state import Services
-from dome_api.util import ts_required, utcnow
+from dome_api.util import utcnow
 
 log = get_logger("dome_api.relay.agent")
 TERMINAL = ("succeeded", "failed", "expired", "canceled", "outcome_unknown")
@@ -35,27 +35,31 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
     mgr = svc.relay
     headers = ws.headers
     if "origin" in headers:
-        await ws.close(code=CLOSE_REVOKED)
+        await deny_upgrade(ws, 403, "Browser origins may not open the agent socket")
         return
     scheme, _, token = headers.get("authorization", "").partition(" ")
-    if scheme.lower() != "bearer" or not (32 <= len(token.strip()) <= 128) or ws.query_params.get("access_token") is not None:
-        await ws.close(code=CLOSE_AUTH_REQUIRED)
+    if (
+        scheme.lower() != "bearer"
+        or not (32 <= len(token.strip()) <= 128)
+        or ws.query_params.get("access_token") is not None
+    ):
+        await deny_upgrade(ws, 401, "PC access token required in the Authorization header")
         return
     async with svc.db() as db:
         async with db.begin():
             identity = await resolve_agent_token(db, token.strip())
             if identity is None:
-                await ws.close(code=CLOSE_AUTH_REQUIRED)
+                await deny_upgrade(ws, 401, "PC access token invalid or expired")
                 return
             pc_id, account_id = identity.pc.id, identity.account.id
     if not mgr.has_capacity():
-        await ws.close(code=1013)
+        await deny_upgrade(ws, 503, "The relay is at its connection limit")
         return
 
     await ws.accept()
     conn = AgentConn(ws, pc_id, account_id)
     try:
-        hello = await _receive_frame(ws, svc, "agent_to_relay", timeout=svc.settings.relay_hello_timeout_seconds)
+        hello = await _receive_frame(ws, svc, "agent_to_relay", wait_seconds=svc.settings.relay_hello_timeout_seconds)
         if hello is None or hello.get("type") != "hello" or hello.get("component") != "agent":
             await conn.send(frames.error_frame("MALFORMED_MESSAGE", "first frame must be an agent hello"))
             await conn.close(CLOSE_PROTOCOL_ERROR)
@@ -64,7 +68,11 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
             await conn.send(
                 frames.error_frame(
                     "PROTOCOL_INCOMPATIBLE",
-                    detail={"peer": hello["protocol_versions"], "supported": [svc.registry.protocol_version], "registry": svc.registry.registry_version},
+                    detail={
+                        "peer": hello["protocol_versions"],
+                        "supported": [svc.registry.protocol_version],
+                        "registry": svc.registry.registry_version,
+                    },
                 )
             )
             await conn.close(CLOSE_PROTOCOL_ERROR)
@@ -85,7 +93,14 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
             return
         conn.snapshot_sent = True
         await mgr.broadcast_pc_status(pc_id)
-        await mgr.security_event(account_id=account_id, kind="agent_connected", severity="info", actor="pc", subject_id=pc_id, detail={"agent_version": pc.agent_version})
+        await mgr.security_event(
+            account_id=account_id,
+            kind="agent_connected",
+            severity="info",
+            actor="pc",
+            subject_id=pc_id,
+            detail={"agent_version": pc.agent_version},
+        )
         delivered = await mgr.redeliver_pending_pairing_requests(conn)
         if delivered:
             log.info("pairing.redelivered", pc_id=str(pc_id), count=delivered)
@@ -100,7 +115,9 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
         was_current = mgr.agents.get(pc_id) is conn
         await mgr.unregister_agent(conn)
         if was_current:
-            await mgr.security_event(account_id=account_id, kind="agent_disconnected", severity="info", actor="pc", subject_id=pc_id)
+            await mgr.security_event(
+                account_id=account_id, kind="agent_disconnected", severity="info", actor="pc", subject_id=pc_id
+            )
 
 
 def _versions_ok(svc: Services, hello: dict[str, Any]) -> bool:
@@ -110,11 +127,13 @@ def _versions_ok(svc: Services, hello: dict[str, Any]) -> bool:
     return proto_ok and reg_ok
 
 
-async def _receive_frame(ws: WebSocket, svc: Services, direction: str, *, timeout: float | None = None) -> dict[str, Any] | None:
+async def _receive_frame(
+    ws: WebSocket, svc: Services, direction: str, *, wait_seconds: float | None = None
+) -> dict[str, Any] | None:
     """Receive one text frame; enforce the size limit and the schema. Returns None on protocol error
     after sending an error frame (the caller decides whether to close)."""
-    if timeout is not None:
-        text = await asyncio.wait_for(ws.receive_text(), timeout)
+    if wait_seconds is not None:
+        text = await asyncio.wait_for(ws.receive_text(), wait_seconds)
     else:
         text = await ws.receive_text()
     if len(text.encode("utf-8", "surrogatepass")) > svc.settings.relay_max_frame_bytes:
@@ -178,33 +197,61 @@ async def _on_ack(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]
     async with mgr.db() as db:
         async with db.begin():
             await db.execute(
-                update(Command).where(Command.id == cid, Command.state.in_(("created", "accepted", "executing", "awaiting_confirmation"))).values(state=state, acked_at=utcnow())
+                update(Command)
+                .where(
+                    Command.id == cid, Command.state.in_(("created", "accepted", "executing", "awaiting_confirmation"))
+                )
+                .values(state=state, acked_at=utcnow())
             )
     await mgr.send_to_controller(inf.controller_id, inf.controller_conn_id, frame, validate=False)
 
 
-async def _on_confirmation_required(svc: Services, mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+async def _on_confirmation_required(
+    svc: Services, mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]
+) -> None:
     cid = uuid.UUID(frame["command_id"])
     inf = conn.inflight.get(cid)
     if inf is None:
         log.info("confirmation_required.unknown_command", pc_id=str(conn.pc_id))
         return
     try:
-        challenge = svc.schemas.validate_challenge_text(frame["challenge_text"], max_bytes=svc.registry.limits["max_challenge_text_bytes"])
-        if challenge["command_id"] != str(cid) or challenge["pc_id"] != str(conn.pc_id) or challenge["controller_id"] != str(inf.controller_id):
+        challenge = svc.schemas.validate_challenge_text(
+            frame["challenge_text"], max_bytes=svc.registry.limits["max_challenge_text_bytes"]
+        )
+        if (
+            challenge["command_id"] != str(cid)
+            or challenge["pc_id"] != str(conn.pc_id)
+            or challenge["controller_id"] != str(inf.controller_id)
+        ):
             raise ProtocolError("MALFORMED_MESSAGE", "challenge does not bind to this command")
     except ProtocolError as exc:
         log.warning("confirmation_required.invalid", pc_id=str(conn.pc_id), code=exc.code)
-        await mgr.security_event(account_id=conn.account_id, kind="relay_frame_rejected", severity="warning", actor="pc", subject_id=conn.pc_id, detail={"frame": "confirmation_required", "code": exc.code})
+        await mgr.security_event(
+            account_id=conn.account_id,
+            kind="relay_frame_rejected",
+            severity="warning",
+            actor="pc",
+            subject_id=conn.pc_id,
+            detail={"frame": "confirmation_required", "code": exc.code},
+        )
         conn.inflight.pop(cid, None)
         await conn.send({"type": "cancel", "command_id": str(cid), "controller_id": str(inf.controller_id)})
-        result = frames.relay_result(cid, "failed", error=frames.error_object("MALFORMED_MESSAGE", "The PC sent an invalid confirmation challenge."), started_at=inf.received_at)
+        result = frames.relay_result(
+            cid,
+            "failed",
+            error=frames.error_object("MALFORMED_MESSAGE", "The PC sent an invalid confirmation challenge."),
+            started_at=inf.received_at,
+        )
         await mgr.finish_command(inf, "failed", "MALFORMED_MESSAGE", result)
         return
     inf.state = "awaiting_confirmation"
     async with mgr.db() as db:
         async with db.begin():
-            await db.execute(update(Command).where(Command.id == cid, Command.state.in_(("created", "accepted", "executing"))).values(state="awaiting_confirmation", acked_at=utcnow()))
+            await db.execute(
+                update(Command)
+                .where(Command.id == cid, Command.state.in_(("created", "accepted", "executing")))
+                .values(state="awaiting_confirmation", acked_at=utcnow())
+            )
     # forward the ORIGINAL frame (challenge_text untouched)
     await mgr.send_to_controller(inf.controller_id, inf.controller_conn_id, frame, validate=False)
 
@@ -251,16 +298,14 @@ async def _on_state(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, An
     pp = state.get("pending_power_action")
     if isinstance(pp, dict):
         try:
-            from dome_protocol import parse_rfc3339
-
             conn.pending_power = (uuid.UUID(pp["command_id"]), parse_rfc3339(pp["fires_at"]))
         except (ProtocolError, ValueError):
             conn.pending_power = None
     else:
         conn.pending_power = None
     remote_enabled = bool(state["remote_enabled"])
-    if getattr(conn, "_remote_enabled_reported", None) != remote_enabled:
-        conn._remote_enabled_reported = remote_enabled  # type: ignore[attr-defined]
+    if conn.remote_enabled_reported != remote_enabled:
+        conn.remote_enabled_reported = remote_enabled
         async with mgr.db() as db:
             async with db.begin():
                 await db.execute(update(PC).where(PC.id == conn.pc_id).values(remote_enabled_reported=remote_enabled))
@@ -274,7 +319,11 @@ async def _on_pairing_decision(svc: Services, mgr: ConnectionManager, conn: Agen
     outcome: str | None = None
     async with svc.db() as db:
         async with db.begin():
-            ps = await db.scalar(select(PairingSession).where(PairingSession.id == pairing_id, PairingSession.pc_id == conn.pc_id).with_for_update())
+            ps = await db.scalar(
+                select(PairingSession)
+                .where(PairingSession.id == pairing_id, PairingSession.pc_id == conn.pc_id)
+                .with_for_update()
+            )
             if ps is None or ps.state != "claimed":
                 log.info("pairing_decision.ignored", pc_id=str(conn.pc_id), reason="not_claimed")
                 return
@@ -287,25 +336,49 @@ async def _on_pairing_decision(svc: Services, mgr: ConnectionManager, conn: Agen
                 ps.decided_at = now
                 outcome = "declined"
             else:
-                if frame["kid"] != ps.controller_kid or ps.controller_public_jwk is None or kid_from_jwk(ps.controller_public_jwk) != frame["kid"]:
+                if (
+                    frame["kid"] != ps.controller_kid
+                    or ps.controller_public_jwk is None
+                    or kid_from_jwk(ps.controller_public_jwk) != frame["kid"]
+                ):
                     log.warning("pairing_decision.kid_mismatch", pc_id=str(conn.pc_id))
                     ps.state = "declined"
                     ps.decided_at = now
                     outcome = "kid_mismatch"
                 else:
                     granted = sorted(set(frame["granted_capabilities"]) & set(ps.requested_capabilities or []))
-                    ctrl = await db.scalar(select(Controller).where(Controller.account_id == ps.account_id, Controller.kid == ps.controller_kid).with_for_update())
+                    ctrl = await db.scalar(
+                        select(Controller)
+                        .where(Controller.account_id == ps.account_id, Controller.kid == ps.controller_kid)
+                        .with_for_update()
+                    )
                     if ctrl is None:
-                        ctrl = Controller(account_id=ps.account_id, kid=ps.controller_kid, public_jwk=ps.controller_public_jwk, display_name=(ps.controller_display_name or "Phone")[:64], created_at=now)
+                        ctrl = Controller(
+                            account_id=ps.account_id,
+                            kid=ps.controller_kid,
+                            public_jwk=ps.controller_public_jwk,
+                            display_name=(ps.controller_display_name or "Phone")[:64],
+                            created_at=now,
+                        )
                         db.add(ctrl)
                         await db.flush()
                     else:
                         ctrl.revoked_at = None
                         ctrl.public_jwk = ps.controller_public_jwk
                         ctrl.display_name = (ps.controller_display_name or ctrl.display_name)[:64]
-                    grant = await db.scalar(select(Grant).where(Grant.controller_id == ctrl.id, Grant.pc_id == ps.pc_id, Grant.revoked_at.is_(None)).with_for_update())
+                    grant = await db.scalar(
+                        select(Grant)
+                        .where(Grant.controller_id == ctrl.id, Grant.pc_id == ps.pc_id, Grant.revoked_at.is_(None))
+                        .with_for_update()
+                    )
                     if grant is None:
-                        grant = Grant(account_id=ps.account_id, controller_id=ctrl.id, pc_id=ps.pc_id, capabilities=granted, created_at=now)
+                        grant = Grant(
+                            account_id=ps.account_id,
+                            controller_id=ctrl.id,
+                            pc_id=ps.pc_id,
+                            capabilities=granted,
+                            created_at=now,
+                        )
                         db.add(grant)
                         await db.flush()
                     else:
@@ -315,13 +388,25 @@ async def _on_pairing_decision(svc: Services, mgr: ConnectionManager, conn: Agen
                     ps.controller_id = ctrl.id
                     ps.grant_id = grant.id
                     outcome = "approved"
-                    from dome_api.security import events
-
-                    events.record(db, account_id=ps.account_id, kind="controller_paired", severity="notice", actor="pc", subject_id=ctrl.id, detail={"pc_id": str(ps.pc_id), "capabilities": granted})
+                    events.record(
+                        db,
+                        account_id=ps.account_id,
+                        kind="controller_paired",
+                        severity="notice",
+                        actor="pc",
+                        subject_id=ctrl.id,
+                        detail={"pc_id": str(ps.pc_id), "capabilities": granted},
+                    )
             if outcome in ("declined", "kid_mismatch", "expired"):
-                from dome_api.security import events
-
-                events.record(db, account_id=ps.account_id, kind="pairing_declined", severity="notice", actor="pc", subject_id=ps.pc_id, detail={"reason": outcome})
+                events.record(
+                    db,
+                    account_id=ps.account_id,
+                    kind="pairing_declined",
+                    severity="notice",
+                    actor="pc",
+                    subject_id=ps.pc_id,
+                    detail={"reason": outcome},
+                )
     if outcome == "approved":
         await mgr.push_grants_snapshot(conn.pc_id)
 
@@ -336,19 +421,19 @@ async def _on_revoke_controller(mgr: ConnectionManager, conn: AgentConn, frame: 
                 log.info("revoke_controller.ignored", pc_id=str(conn.pc_id))
                 return
             res = await db.execute(
-                update(Grant).where(Grant.controller_id == controller_id, Grant.pc_id == conn.pc_id, Grant.revoked_at.is_(None)).values(revoked_at=now)
+                update(Grant)
+                .where(Grant.controller_id == controller_id, Grant.pc_id == conn.pc_id, Grant.revoked_at.is_(None))
+                .values(revoked_at=now)
             )
-            from dome_api.security import events
-
-            events.record(db, account_id=conn.account_id, kind="grant_revoked", severity="notice", actor="pc", subject_id=controller_id, detail={"pc_id": str(conn.pc_id), "reason": frame["reason"], "grants": int(res.rowcount or 0)})
-    # Cancel anything this controller still has in flight on this PC.
-    for inf in [i for i in conn.inflight.values() if i.controller_id == controller_id]:
-        conn.inflight.pop(inf.command_id, None)
-        result = frames.relay_result(inf.command_id, "canceled", error=frames.error_object("CONTROLLER_REVOKED"), started_at=inf.received_at)
-        await mgr.finish_command(inf, "canceled", "CONTROLLER_REVOKED", result)
-    await mgr.revoke_controller_sockets(controller_id, "grant_revoked", pc_id=conn.pc_id)
-    await mgr.push_grants_snapshot(conn.pc_id)
-
-
-def _ts_now() -> str:
-    return ts_required(utcnow())
+            events.record(
+                db,
+                account_id=conn.account_id,
+                kind="grant_revoked",
+                severity="notice",
+                actor="pc",
+                subject_id=controller_id,
+                detail={"pc_id": str(conn.pc_id), "reason": frame["reason"], "grants": int(res.rowcount or 0)},
+            )
+    await mgr.apply_controller_revocation(
+        controller_id, reason="grant_revoked", pc_ids=[conn.pc_id], revoked_pc_id=conn.pc_id
+    )

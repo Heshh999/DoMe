@@ -12,7 +12,9 @@ from dome_protocol import ProtocolError, load_registry, load_schemas
 from dome_api.util import ts_required, utcnow
 
 
-def error_object(code: str, message: str | None = None, *, retryable: bool | None = None, detail: dict[str, Any] | None = None) -> dict[str, Any]:
+def error_object(
+    code: str, message: str | None = None, *, retryable: bool | None = None, detail: dict[str, Any] | None = None
+) -> dict[str, Any]:
     reg = load_registry()
     defaults = reg.errors.get(code) or reg.errors["INTERNAL"]
     out: dict[str, Any] = {
@@ -29,7 +31,13 @@ def error_from_exc(exc: ProtocolError) -> dict[str, Any]:
     return error_object(exc.code, exc.message, retryable=exc.retryable, detail=exc.detail or None)
 
 
-def error_frame(code: str, message: str | None = None, *, ref_pc_id: uuid.UUID | str | None = None, detail: dict[str, Any] | None = None) -> dict[str, Any]:
+def error_frame(
+    code: str,
+    message: str | None = None,
+    *,
+    ref_pc_id: uuid.UUID | str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     frame: dict[str, Any] = {"type": "error", "error": error_object(code, message, detail=detail)}
     if ref_pc_id is not None:
         frame["ref_pc_id"] = str(ref_pc_id)
@@ -61,7 +69,9 @@ def relay_result(
     return frame
 
 
-def hello_ack(connection_id: uuid.UUID, *, controller_id: uuid.UUID | None = None, pc_id: uuid.UUID | None = None) -> dict[str, Any]:
+def hello_ack(
+    connection_id: uuid.UUID, *, controller_id: uuid.UUID | None = None, pc_id: uuid.UUID | None = None
+) -> dict[str, Any]:
     frame: dict[str, Any] = {
         "type": "hello_ack",
         "protocol_version": load_registry().protocol_version,
@@ -75,7 +85,14 @@ def hello_ack(connection_id: uuid.UUID, *, controller_id: uuid.UUID | None = Non
     return frame
 
 
-def pc_status(pc_id: uuid.UUID, *, connection: str, last_seen: datetime | None, last_power_request: dict[str, Any] | None, enabled: bool) -> dict[str, Any]:
+def pc_status(
+    pc_id: uuid.UUID,
+    *,
+    connection: str,
+    last_seen: datetime | None,
+    last_power_request: dict[str, Any] | None,
+    enabled: bool,
+) -> dict[str, Any]:
     return {
         "type": "pc_status",
         "pc_id": str(pc_id),

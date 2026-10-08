@@ -29,11 +29,20 @@ def services(request: Request) -> Services:
 
 
 async def db_session(request: Request) -> AsyncIterator[AsyncSession]:
-    """One transaction per request: committed when the handler returns, rolled back on any error."""
+    """One transaction per request: committed when the handler returns, rolled back on any error.
+
+    Handlers that must perform a side effect only *after* the data is durable (delivering a frame to
+    a live socket) call ``await db.commit()`` themselves first; the final commit here is then a no-op.
+    """
     svc = services(request)
     async with svc.db() as session:
-        async with session.begin():
+        try:
             yield session
+        except BaseException:
+            await session.rollback()
+            raise
+        else:
+            await session.commit()
 
 
 DB = Annotated[AsyncSession, Depends(db_session)]
@@ -73,7 +82,9 @@ async def agent_identity(request: Request, db: DB, svc: Svc) -> AgentIdentity:
         raise ApiError(401, "UNAUTHENTICATED", "PC access token required", headers={"WWW-Authenticate": "Bearer"})
     identity = await resolve_agent_token(db, token.strip())
     if identity is None:
-        raise ApiError(401, "UNAUTHENTICATED", "PC access token invalid or expired", headers={"WWW-Authenticate": "Bearer"})
+        raise ApiError(
+            401, "UNAUTHENTICATED", "PC access token invalid or expired", headers={"WWW-Authenticate": "Bearer"}
+        )
     return identity
 
 

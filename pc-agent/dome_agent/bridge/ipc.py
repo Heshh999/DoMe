@@ -31,8 +31,11 @@ from typing import Any
 
 from .framing import make_exact_reader, read_frame
 
-PIPE_PREFIX = r"\\.\pipe\DoMe.Agent."
+PIPE_PREFIXES = {"bridge": r"\\.\pipe\DoMe.Agent.", "control": r"\\.\pipe\DoMe.Control."}
+PIPE_PREFIX = PIPE_PREFIXES["bridge"]
+SOCKET_NAMES = {"bridge": "bridge.sock", "control": "control.sock"}
 PIPE_BUFFER = 65536
+EndpointKind = str  # "bridge" (native host ⇄ agent) | "control" (CLI/tray ⇄ agent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,23 +97,23 @@ def _own_identity() -> tuple[str, str]:
     return str(os.getuid()), ""
 
 
-def pipe_name_for(sid: str, session: str) -> str:
+def pipe_name_for(sid: str, session: str, kind: EndpointKind = "bridge") -> str:
     digest = hashlib.sha256(f"{sid}|{session}".encode()).hexdigest()[:16]
-    return f"{PIPE_PREFIX}{digest}"
+    return f"{PIPE_PREFIXES[kind]}{digest}"
 
 
-def endpoint_address(state_dir: Path) -> str:
+def endpoint_address(state_dir: Path, kind: EndpointKind = "bridge") -> str:
     if sys.platform == "win32":
         sid, session = _own_identity()
-        return pipe_name_for(sid, session)
-    return str(state_dir / "bridge.sock")
+        return pipe_name_for(sid, session, kind)
+    return str(state_dir / SOCKET_NAMES[kind])
 
 
 # ----- client (used by dome-native-host) ----------------------------------------------------------
 
 
-def connect(state_dir: Path, timeout: float = 5.0) -> FrameConnection:
-    address = endpoint_address(state_dir)
+def connect(state_dir: Path, timeout: float = 5.0, kind: EndpointKind = "bridge") -> FrameConnection:
+    address = endpoint_address(state_dir, kind)
     if sys.platform == "win32":
         return _connect_pipe(address, timeout)
     return _connect_unix(address, timeout)
@@ -190,14 +193,15 @@ OnIdentityMismatch = Callable[[PeerInfo], None]
 class IpcServer:
     """Accepts bridge connections in a background thread and verifies the peer identity."""
 
-    def __init__(self, state_dir: Path, on_connection: OnConnection, on_identity_mismatch: OnIdentityMismatch) -> None:
+    def __init__(self, state_dir: Path, on_connection: OnConnection, on_identity_mismatch: OnIdentityMismatch, *, kind: EndpointKind = "bridge") -> None:
         self._state_dir = state_dir
         self._on_connection = on_connection
         self._on_mismatch = on_identity_mismatch
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
-        self.address = endpoint_address(state_dir)
+        self.kind = kind
+        self.address = endpoint_address(state_dir, kind)
         self._own_sid, self._own_session = _own_identity()
 
     def start(self) -> None:

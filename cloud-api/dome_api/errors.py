@@ -84,9 +84,13 @@ async def protocol_error_handler(_request: Request, exc: Exception) -> JSONRespo
 
 async def http_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, StarletteHTTPException)
-    code = {401: "UNAUTHENTICATED", 403: "FORBIDDEN", 404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 429: "RATE_LIMITED"}.get(
-        exc.status_code, "MALFORMED_MESSAGE" if exc.status_code < 500 else "INTERNAL"
-    )
+    code = {
+        401: "UNAUTHENTICATED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        405: "METHOD_NOT_ALLOWED",
+        429: "RATE_LIMITED",
+    }.get(exc.status_code, "MALFORMED_MESSAGE" if exc.status_code < 500 else "INTERNAL")
     message = exc.detail if isinstance(exc.detail, str) and code in ("MALFORMED_MESSAGE",) else None
     headers = dict(exc.headers or {})
     return _response(ApiError(exc.status_code, code, message, headers=headers))

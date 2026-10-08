@@ -10,6 +10,7 @@ from dome_protocol import ProtocolError, Registry
 from dome_protocol.commands import VerifiedCommand
 
 if TYPE_CHECKING:
+    from ..approved_apps import ApprovedApps
     from ..bridge.server import BridgeServer
     from ..identity import Identity
     from ..platform.protocol import PlatformSet
@@ -29,6 +30,7 @@ class AgentServices:
     state: StateAggregator
     power: PowerManager
     identity: Identity
+    apps: ApprovedApps
 
 
 @dataclass(slots=True)
@@ -60,4 +62,25 @@ class ExecutionContext:
         self.best_known_error = error
 
 
-Handler = Callable[[ExecutionContext], Awaitable[dict[str, Any]]]
+class Deferred:
+    """Returned by a handler whose result is delivered later through ``Executor.complete`` (power
+    countdowns). The worker moves on; the journal row stays ``executing`` until completion."""
+
+    __slots__ = ()
+
+
+DEFERRED = Deferred()
+
+
+class ActionFailed(ProtocolError):
+    """A failure that also carries the best-known post-failure state (same shape as the result)."""
+
+    def __init__(self, code: str, message: str, *, result: dict[str, Any] | None = None, retryable: bool | None = None) -> None:
+        from dome_protocol import load_registry
+
+        defaults = load_registry().error_defaults(code)
+        super().__init__(code, message, retryable=bool(defaults["retryable"]) if retryable is None else retryable)
+        self.result = result
+
+
+Handler = Callable[[ExecutionContext], Awaitable[dict[str, Any] | Deferred]]

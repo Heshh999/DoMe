@@ -26,7 +26,9 @@ def _row(
 ) -> SecurityEvent:
     clean = redact(detail or {})
     assert isinstance(clean, dict)
-    log.info("security_event", kind=kind, severity=severity, actor=actor, account_id=str(account_id) if account_id else None)
+    log.info(
+        "security_event", kind=kind, severity=severity, actor=actor, account_id=str(account_id) if account_id else None
+    )
     return SecurityEvent(
         account_id=account_id,
         kind=kind,
@@ -50,7 +52,17 @@ def record(
     ip_hash: bytes | None = None,
 ) -> None:
     """Add an event to the caller's transaction (committed together with the change it describes)."""
-    db.add(_row(account_id=account_id, kind=kind, severity=severity, actor=actor, subject_id=subject_id, detail=detail, ip_hash=ip_hash))
+    db.add(
+        _row(
+            account_id=account_id,
+            kind=kind,
+            severity=severity,
+            actor=actor,
+            subject_id=subject_id,
+            detail=detail,
+            ip_hash=ip_hash,
+        )
+    )
 
 
 async def record_now(
@@ -67,4 +79,14 @@ async def record_now(
     """Write an event in its own transaction (for failure paths whose main transaction rolls back)."""
     async with factory() as db:
         async with db.begin():
-            db.add(_row(account_id=account_id, kind=kind, severity=severity, actor=actor, subject_id=subject_id, detail=detail, ip_hash=ip_hash))
+            db.add(
+                _row(
+                    account_id=account_id,
+                    kind=kind,
+                    severity=severity,
+                    actor=actor,
+                    subject_id=subject_id,
+                    detail=detail,
+                    ip_hash=ip_hash,
+                )
+            )

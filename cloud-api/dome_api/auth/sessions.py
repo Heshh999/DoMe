@@ -41,7 +41,9 @@ def user_agent_hash(ua: str | None) -> bytes | None:
     return hashlib.sha256(ua.encode("utf-8", "replace")).digest() if ua else None
 
 
-async def create_session(db: AsyncSession, settings: Settings, account_id: uuid.UUID, user_agent: str | None) -> tuple[Session, str]:
+async def create_session(
+    db: AsyncSession, settings: Settings, account_id: uuid.UUID, user_agent: str | None
+) -> tuple[Session, str]:
     token = new_token()
     now = utcnow()
     row = Session(

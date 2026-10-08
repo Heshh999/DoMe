@@ -8,12 +8,14 @@ only awaits inside critical sections are socket sends guarded by a per-connectio
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
 from dome_protocol import dumps_compact
+from dome_protocol.keys import b64url_encode
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.websockets import WebSocket, WebSocketState
@@ -80,14 +82,20 @@ class _Conn:
         if self.closed:
             return
         self.closed = True
-        try:
+        with contextlib.suppress(Exception):  # peer may already be gone
             await self.ws.close(code=code)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 class AgentConn(_Conn):
-    __slots__ = ("pc_id", "state_frame", "inflight", "pending_power", "snapshot_sent")
+    __slots__ = (
+        "pc_id",
+        "state_frame",
+        "inflight",
+        "pending_power",
+        "snapshot_sent",
+        "last_seen_written",
+        "remote_enabled_reported",
+    )
 
     def __init__(self, ws: WebSocket, pc_id: uuid.UUID, account_id: uuid.UUID) -> None:
         super().__init__(ws, account_id)
@@ -96,6 +104,8 @@ class AgentConn(_Conn):
         self.inflight: dict[uuid.UUID, InFlight] = {}
         self.pending_power: tuple[uuid.UUID, datetime] | None = None
         self.snapshot_sent = False
+        self.last_seen_written: datetime | None = None
+        self.remote_enabled_reported: bool | None = None
 
     async def send(self, frame: dict[str, Any], *, validate: bool = True) -> bool:
         if validate:
@@ -174,10 +184,17 @@ class ConnectionManager:
         conn.inflight.clear()
         for inf in pending:
             if inf.executing_seen:
-                frame = frames.relay_result(inf.command_id, "outcome_unknown", error=frames.error_object("OUTCOME_UNKNOWN"), started_at=inf.received_at)
+                frame = frames.relay_result(
+                    inf.command_id,
+                    "outcome_unknown",
+                    error=frames.error_object("OUTCOME_UNKNOWN"),
+                    started_at=inf.received_at,
+                )
                 await self.finish_command(inf, "outcome_unknown", "OUTCOME_UNKNOWN", frame)
             else:
-                frame = frames.relay_result(inf.command_id, "failed", error=frames.error_object("PC_OFFLINE"), started_at=inf.received_at)
+                frame = frames.relay_result(
+                    inf.command_id, "failed", error=frames.error_object("PC_OFFLINE"), started_at=inf.received_at
+                )
                 await self.finish_command(inf, "failed", "PC_OFFLINE", frame)
         if pending:
             log.info("agent.inflight_failed", pc_id=str(conn.pc_id), count=len(pending), reason=reason)
@@ -223,7 +240,9 @@ class ConnectionManager:
     def session_conns(self, session_id: uuid.UUID) -> list[ControllerConn]:
         return [c for c in self.controllers.values() if c.session_id == session_id and not c.closed]
 
-    async def revoke_controller_sockets(self, controller_id: uuid.UUID, reason: str, *, pc_id: uuid.UUID | None = None) -> int:
+    async def revoke_controller_sockets(
+        self, controller_id: uuid.UUID, reason: str, *, pc_id: uuid.UUID | None = None
+    ) -> int:
         """Send ``revoked`` to every socket bound to the controller and close them (4003)."""
         n = 0
         for conn in self.controller_conns(controller_id):
@@ -236,6 +255,24 @@ class ConnectionManager:
             n += 1
         return n
 
+    async def apply_controller_revocation(
+        self, controller_id: uuid.UUID, *, reason: str, pc_ids: list[uuid.UUID], revoked_pc_id: uuid.UUID | None = None
+    ) -> None:
+        """Everything the live relay does after a grant/controller revocation was committed:
+        best-effort ``cancel`` to the PC for the controller's in-flight commands (their results still
+        terminate them honestly), ``revoked`` + close for the controller's sockets, fresh snapshots."""
+        for pc_id in pc_ids:
+            agent = self.agent_for(pc_id)
+            if agent is None:
+                continue
+            for inf in [i for i in agent.inflight.values() if i.controller_id == controller_id]:
+                await agent.send(
+                    {"type": "cancel", "command_id": str(inf.command_id), "controller_id": str(controller_id)}
+                )
+        await self.revoke_controller_sockets(controller_id, reason, pc_id=revoked_pc_id)
+        for pc_id in pc_ids:
+            await self.push_grants_snapshot(pc_id)
+
     async def close_session_sockets(self, session_id: uuid.UUID) -> int:
         n = 0
         for conn in self.session_conns(session_id):
@@ -245,7 +282,14 @@ class ConnectionManager:
             n += 1
         return n
 
-    async def send_to_controller(self, controller_id: uuid.UUID, preferred_conn_id: uuid.UUID | None, frame: dict[str, Any], *, validate: bool = True) -> bool:
+    async def send_to_controller(
+        self,
+        controller_id: uuid.UUID,
+        preferred_conn_id: uuid.UUID | None,
+        frame: dict[str, Any],
+        *,
+        validate: bool = True,
+    ) -> bool:
         """Deliver to the originating socket when it is still open, else to every socket bound to the controller."""
         if preferred_conn_id is not None:
             conn = self.controllers.get(preferred_conn_id)
@@ -292,13 +336,13 @@ class ConnectionManager:
         conn = self.agents.get(pc_id)
         if conn is not None and not force:
             # throttle writes: the in-memory value is authoritative while online
-            if (at - getattr(conn, "_last_seen_written", at - timedelta(days=1))).total_seconds() < 30:
+            if conn.last_seen_written is not None and (at - conn.last_seen_written).total_seconds() < 30:
                 return
         async with self.db() as db:
             async with db.begin():
                 await db.execute(update(PC).where(PC.id == pc_id).values(last_seen_at=at))
         if conn is not None:
-            conn._last_seen_written = at  # type: ignore[attr-defined]
+            conn.last_seen_written = at
 
     # ----- grants snapshot -----------------------------------------------------------------------
     async def snapshot_controllers(self, db: AsyncSession, pc: PC, plan: Plan) -> list[SnapshotController]:
@@ -306,7 +350,12 @@ class ConnectionManager:
             await db.execute(
                 select(Grant, Controller)
                 .join(Controller, Controller.id == Grant.controller_id)
-                .where(Grant.pc_id == pc.id, Grant.account_id == pc.account_id, Grant.revoked_at.is_(None), Controller.revoked_at.is_(None))
+                .where(
+                    Grant.pc_id == pc.id,
+                    Grant.account_id == pc.account_id,
+                    Grant.revoked_at.is_(None),
+                    Controller.revoked_at.is_(None),
+                )
             )
         ).all()
         enabled_ids = await self.plan_enabled_controller_ids(db, pc.account_id, plan)
@@ -380,9 +429,6 @@ class ConnectionManager:
     # ----- pairing requests ----------------------------------------------------------------------
     @staticmethod
     def pairing_request_frame(ps: PairingSession) -> dict[str, Any]:
-        from dome_api.security.tokens import TOKEN_CHARS  # noqa: F401  (documentation: hashes are 43 chars)
-        from dome_protocol.keys import b64url_encode
-
         return {
             "type": "pairing_request",
             "pairing_id": str(ps.id),
@@ -403,12 +449,20 @@ class ConnectionManager:
     async def redeliver_pending_pairing_requests(self, conn: AgentConn) -> int:
         async with self.db() as db:
             rows = (
-                await db.execute(
-                    select(PairingSession).where(
-                        PairingSession.pc_id == conn.pc_id, PairingSession.state == "claimed", PairingSession.expires_at > utcnow()
-                    ).order_by(PairingSession.created_at)
+                (
+                    await db.execute(
+                        select(PairingSession)
+                        .where(
+                            PairingSession.pc_id == conn.pc_id,
+                            PairingSession.state == "claimed",
+                            PairingSession.expires_at > utcnow(),
+                        )
+                        .order_by(PairingSession.created_at)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         n = 0
         for ps in rows:
             if await conn.send(self.pairing_request_frame(ps)):
@@ -423,8 +477,16 @@ class ConnectionManager:
             async with db.begin():
                 await db.execute(
                     update(Command)
-                    .where(Command.id == inf.command_id, Command.state.in_(("created", "accepted", "executing", "awaiting_confirmation")))
-                    .values(state=state, error_code=error_code, finished_at=now, duration_ms=int((now - inf.received_at).total_seconds() * 1000))
+                    .where(
+                        Command.id == inf.command_id,
+                        Command.state.in_(("created", "accepted", "executing", "awaiting_confirmation")),
+                    )
+                    .values(
+                        state=state,
+                        error_code=error_code,
+                        finished_at=now,
+                        duration_ms=int((now - inf.received_at).total_seconds() * 1000),
+                    )
                 )
         inf.state = state
         await self.send_to_controller(inf.controller_id, inf.controller_conn_id, frame)
@@ -443,10 +505,20 @@ class ConnectionManager:
                     continue
                 conn.inflight.pop(inf.command_id, None)
                 if inf.executing_seen:
-                    frame = frames.relay_result(inf.command_id, "outcome_unknown", error=frames.error_object("OUTCOME_UNKNOWN"), started_at=inf.received_at)
+                    frame = frames.relay_result(
+                        inf.command_id,
+                        "outcome_unknown",
+                        error=frames.error_object("OUTCOME_UNKNOWN"),
+                        started_at=inf.received_at,
+                    )
                     await self.finish_command(inf, "outcome_unknown", "OUTCOME_UNKNOWN", frame)
                 else:
-                    frame = frames.relay_result(inf.command_id, "failed", error=frames.error_object("COMMAND_EXPIRED"), started_at=inf.received_at)
+                    frame = frames.relay_result(
+                        inf.command_id,
+                        "failed",
+                        error=frames.error_object("COMMAND_EXPIRED"),
+                        started_at=inf.received_at,
+                    )
                     await self.finish_command(inf, "failed", "COMMAND_EXPIRED", frame)
                 swept += 1
         return swept
@@ -457,7 +529,9 @@ class ConnectionManager:
         async with self.db() as db:
             async with db.begin():
                 r1 = await db.execute(
-                    update(Command).where(Command.state == "executing").values(state="outcome_unknown", error_code="OUTCOME_UNKNOWN", finished_at=now)
+                    update(Command)
+                    .where(Command.state == "executing")
+                    .values(state="outcome_unknown", error_code="OUTCOME_UNKNOWN", finished_at=now)
                 )
                 r2 = await db.execute(
                     update(Command)
@@ -467,8 +541,25 @@ class ConnectionManager:
         return int(r1.rowcount or 0) + int(r2.rowcount or 0)
 
     # ----- security events -----------------------------------------------------------------------
-    async def security_event(self, *, account_id: uuid.UUID | None, kind: str, severity: str = "notice", actor: str = "system", subject_id: uuid.UUID | None = None, detail: dict[str, Any] | None = None) -> None:
+    async def security_event(
+        self,
+        *,
+        account_id: uuid.UUID | None,
+        kind: str,
+        severity: str = "notice",
+        actor: str = "system",
+        subject_id: uuid.UUID | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
         try:
-            await events.record_now(self.db, account_id=account_id, kind=kind, severity=severity, actor=actor, subject_id=subject_id, detail=detail)
+            await events.record_now(
+                self.db,
+                account_id=account_id,
+                kind=kind,
+                severity=severity,
+                actor=actor,
+                subject_id=subject_id,
+                detail=detail,
+            )
         except Exception:  # noqa: BLE001 - never let auditing break routing
             log.exception("security_event.failed", kind=kind)
