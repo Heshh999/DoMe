@@ -27,7 +27,7 @@ not Windows-device-tested, not iPhone-tested. See `docs/ACCEPTANCE.md` for the s
 # once: PostgreSQL on /tmp:54329 (make db-start db-create from the root), tools/dev-idp venv
 cd tests
 uv venv --python 3.12 && uv sync
-uv run pytest -q                 # ~3–4 minutes
+uv run pytest -q                 # ~3.5 minutes; last full run: 20 passed in 214 s
 uv run pytest -q -k load         # the small load smoke only (prints numbers; never a pass/fail promise)
 ```
 
@@ -43,4 +43,4 @@ state directory is a short temporary path because Unix socket paths are limited 
 | `test_e2e_youtube.py` | 1, 2 — Next in a background tab with an observed transition; pause/seek/volume; two tabs need an explicit target; player vs Windows volume |
 | `test_e2e_security.py` | 3, 5, 6, 7, 8, 13 — cross-account isolation, pairing rules and offline claim delivery, revocation (account and local), replay/duplicate/expiry/target-changed/confirmation-digest rejections, client state cannot unlock Pro |
 | `test_e2e_reliability.py` | 9, 10, 11, 14-ish — kill the agent mid-execution → `outcome_unknown` and no re-execution; offline PC never queues; volume burst coalesces within budget; confirmed power countdown + cancel on the fake platform |
-| `test_load_smoke.py` | 17 — 40 simulated agents + 40 controllers, 400 commands; prints throughput/latency and RSS as numbers |
+| `test_load_smoke.py` | 17 — 40 simulated agents + 40 controllers, 400 commands; prints throughput/latency and RSS as numbers. Last run on the shared 4-CPU build machine: 400 commands in 13.47 s = 30 cmd/s, round trip p50 1314 ms / p95 1629 ms, RSS 215 → 218 MiB (loopback, every endpoint in the test process; numbers, not a promise) |
