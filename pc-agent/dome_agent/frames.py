@@ -7,13 +7,13 @@ producing a frame the relay would reject.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeAlias
 
 from dome_protocol import ProtocolError, format_rfc3339, load_registry, now_utc
 
 from . import SUPPORTED_PROTOCOL_VERSIONS, __version__
 
-ErrorSpec = ProtocolError | tuple[str, str] | tuple[str, str, bool]
+ErrorSpec: TypeAlias = ProtocolError | tuple[str, str] | tuple[str, str, bool]
 
 
 def now_text() -> str:

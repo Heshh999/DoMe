@@ -90,7 +90,7 @@ async def resolve_controller_record(
 
 def compute_deadline(cmd: VerifiedCommand, received_at: datetime, registry_limits: dict[str, int]) -> datetime:
     """``rules.in_flight``: max(expires_at, received_at + timeout) [+ challenge lifetime] + 10 s."""
-    expires = parse_rfc3339(cmd.payload["expires_at"])
+    expires: datetime = parse_rfc3339(cmd.payload["expires_at"])
     base = max(expires, received_at + timedelta(milliseconds=cmd.spec.timeout_ms))
     if cmd.spec.requires_confirmation:
         base += timedelta(seconds=registry_limits["confirmation_challenge_lifetime_seconds"])
@@ -263,7 +263,7 @@ async def _reject(
         severity="notice" if rej.code in ("PC_OFFLINE", "QUEUE_FULL", "RATE_LIMITED", "COMMAND_EXPIRED") else "warning",
         actor="controller",
         subject_id=conn.controller_id,
-        detail={"code": rej.code, "pc_id": pc_id},
+        detail={"reason": rej.code, "pc_id": pc_id},
     )
     if rej.close:
         await conn.close(CLOSE_REVOKED)

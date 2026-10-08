@@ -19,7 +19,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from dome_protocol import ProtocolError, challenge_digest, dumps_compact, format_rfc3339, load_schemas, now_utc, parse_rfc3339, sha256_b64url
+from dome_protocol import (
+    ProtocolError,
+    challenge_digest,
+    dumps_compact,
+    format_rfc3339,
+    load_schemas,
+    now_utc,
+    parse_rfc3339,
+    sha256_b64url,
+)
 from dome_protocol.commands import VerifiedCommand, VerifiedConfirmation
 
 from .logsetup import get_logger
@@ -53,11 +62,14 @@ class ConfirmationOutcome:
 
 
 class ConfirmationError(ProtocolError):
-    """A confirmation that could be matched to a command but must terminate it."""
+    """A rejected confirmation. ``terminated`` is True when the challenge was consumed and the
+    command must now end with ``result{result_state}``; False when nothing matched (the pending
+    command, if any, is left untouched and only an ``error`` frame is sent)."""
 
-    def __init__(self, code: str, message: str, result_state: str = "failed") -> None:
+    def __init__(self, code: str, message: str, result_state: str = "failed", *, terminated: bool = False) -> None:
         super().__init__(code, message, retryable=(code == "CONFIRMATION_EXPIRED"))
         self.result_state = result_state
+        self.terminated = terminated
 
 
 async def compute_target_state_digest(services: AgentServices, vc: VerifiedCommand) -> str:
@@ -172,24 +184,24 @@ class ConfirmationManager:
         if vconf.envelope.kid != row.kid or payload["controller_id"] != row.controller_id:
             self._store.consume_challenge(row.challenge_id, new_command_state="failed", error_code="CONFIRMATION_INVALID")
             self._pending.pop(command_id, None)
-            raise ConfirmationError("CONFIRMATION_INVALID", "The confirmation was signed by a different controller")
+            raise ConfirmationError("CONFIRMATION_INVALID", "The confirmation was signed by a different controller", terminated=True)
         if payload["challenge_digest"] != row.digest:
             self._store.consume_challenge(row.challenge_id, new_command_state="failed", error_code="CONFIRMATION_INVALID")
             self._pending.pop(command_id, None)
-            raise ConfirmationError("CONFIRMATION_INVALID", "The confirmation does not match the challenge shown")
+            raise ConfirmationError("CONFIRMATION_INVALID", "The confirmation does not match the challenge shown", terminated=True)
         if parse_rfc3339(row.expires_at) < self._clock() - timedelta(seconds=MAX_SKEW_SECONDS):
             self._store.consume_challenge(row.challenge_id, new_command_state="expired", error_code="CONFIRMATION_EXPIRED")
             self._pending.pop(command_id, None)
-            raise ConfirmationError("CONFIRMATION_EXPIRED", "The confirmation timed out", result_state="expired")
+            raise ConfirmationError("CONFIRMATION_EXPIRED", "The confirmation timed out", result_state="expired", terminated=True)
         if not vconf.approved:
             self._store.consume_challenge(row.challenge_id, new_command_state="canceled", error_code="CONFIRMATION_DECLINED")
             self._pending.pop(command_id, None)
-            raise ConfirmationError("CONFIRMATION_DECLINED", "You declined this action", result_state="canceled")
+            raise ConfirmationError("CONFIRMATION_DECLINED", "You declined this action", result_state="canceled", terminated=True)
         current_digest = await recompute_target_digest(pending.command)
         if current_digest != row.target_state_digest:
             self._store.consume_challenge(row.challenge_id, new_command_state="failed", error_code="TARGET_CHANGED")
             self._pending.pop(command_id, None)
-            raise ConfirmationError("TARGET_CHANGED", "The target changed since you were asked to confirm")
+            raise ConfirmationError("TARGET_CHANGED", "The target changed since you were asked to confirm", terminated=True)
         if not self._store.consume_challenge(row.challenge_id, new_command_state="accepted"):
             self._pending.pop(command_id, None)
             raise ConfirmationError("CONFIRMATION_INVALID", "This confirmation was already used")

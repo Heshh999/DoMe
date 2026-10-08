@@ -226,7 +226,7 @@ async def _on_confirmation(svc: Services, mgr: ConnectionManager, conn: Controll
             severity="warning",
             actor="controller",
             subject_id=conn.controller_id,
-            detail={"code": exc.code},
+            detail={"reason": exc.code},
         )
         return
     agent = mgr.agent_for(uuid.UUID(pc_id_str))

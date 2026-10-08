@@ -44,6 +44,7 @@ SETTING_PC_NAME = "pc_name"
 SETTING_PC_ENABLED = "snapshot_pc_enabled"
 SETTING_LAST_SNAPSHOT_ID = "last_snapshot_id"
 SETTING_ENTITLEMENT = "entitlement_last_verified"
+PROVISIONAL_PREFIX = "pending-"  # controller_id placeholder until the first grants_snapshot names the real one
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -257,16 +258,22 @@ class Store:
     def add_grant(
         self,
         *,
-        controller_id: str,
+        controller_id: str | None,
         kid: str,
         public_jwk: dict[str, str],
         capabilities: Iterable[str],
         display_name: str,
         snapshot_id: str | None = None,
     ) -> GrantRow:
-        """Written only at local pairing approval. Re-approving a known kid replaces the grant."""
+        """Written only at local pairing approval. Re-approving a known kid replaces the grant.
+
+        ``controller_id`` is None when the relay has not named the controller yet (``pairing_request``
+        carries no controller_id); a provisional id is stored and replaced by the first snapshot that
+        lists the kid. Until then no command can bind to the grant (CONTROLLER_MISMATCH)."""
         caps = tuple(dict.fromkeys(capabilities))
         now = format_rfc3339(now_utc())
+        if controller_id is None:
+            controller_id = PROVISIONAL_PREFIX + kid
         with self._tx():
             self._conn.execute("DELETE FROM grants WHERE kid = ? OR controller_id = ?", (kid, controller_id))
             self._conn.execute(
@@ -333,8 +340,16 @@ class Store:
         now = format_rfc3339(now_utc())
         with self._tx():
             local = {r.controller_id: r for r in self.list_grants(include_revoked=True)}
+            by_kid = {r.kid: r for r in local.values()}
             for cid, entry in listed_by_controller.items():
                 row = local.get(cid)
+                if row is None:
+                    provisional = by_kid.get(entry["kid"])
+                    if provisional is not None and provisional.controller_id.startswith(PROVISIONAL_PREFIX):
+                        self._conn.execute("UPDATE grants SET controller_id = ? WHERE controller_id = ?", (cid, provisional.controller_id))
+                        del local[provisional.controller_id]
+                        row = _grant(self._conn.execute("SELECT * FROM grants WHERE controller_id = ?", (cid,)).fetchone())
+                        local[cid] = row
                 if row is None or row.kid != entry["kid"]:
                     unknown.append((cid, entry["kid"]))
                     continue
@@ -403,7 +418,7 @@ class Store:
             args.append(1 if sent else 0)
         args.append(command_id)
         with self._lock:
-            self._conn.execute(f"UPDATE journal SET {', '.join(sets)} WHERE command_id = ?", args)  # noqa: S608
+            self._conn.execute(f"UPDATE journal SET {', '.join(sets)} WHERE command_id = ?", args)  # noqa: S608 - column names are literals above
 
     def journal_mark_sent(self, command_id: str, sent: bool = True) -> None:
         with self._lock:

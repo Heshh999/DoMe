@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.auth.deps import DB, Auth, Svc
 from dome_api.db.models import Controller, Grant
@@ -49,7 +50,7 @@ async def list_controllers(auth: Auth, db: DB, svc: Svc) -> Any:
     )
 
 
-async def owned_controller(db: Any, account_id: uuid.UUID, controller_id: str) -> Controller:
+async def owned_controller(db: AsyncSession, account_id: uuid.UUID, controller_id: str) -> Controller:
     cid = parse_uuid(controller_id)
     ctrl = await db.scalar(
         select(Controller).where(Controller.id == cid, Controller.account_id == account_id).with_for_update()

@@ -15,8 +15,9 @@ import asyncio
 import contextlib
 import json
 import time
+import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dome_protocol import ProtocolError, load_registry, load_schemas
 
@@ -68,8 +69,11 @@ def verify_assertion(assertion: str, jwks: dict[str, Any], *, account_id: str, p
     if not isinstance(assertion, str) or assertion.count(".") != 2 or len(assertion) > 4096:
         raise EntitlementError("entitlement assertion is not a compact JWS")
     try:
-        key_set = KeySet.import_key_set(jwks)
-        token = jwt.decode(assertion, key_set, algorithms=[ALG])
+        key_set = KeySet.import_key_set(cast(Any, jwks))
+        with warnings.catch_warnings():
+            # joserfc flags the generic "EdDSA" name (RFC 9864 prefers "Ed25519"); the contract pins EdDSA.
+            warnings.simplefilter("ignore")
+            token = jwt.decode(assertion, key_set, algorithms=[ALG])
     except (JoseError, ValueError, KeyError, TypeError) as exc:
         raise EntitlementError(f"entitlement assertion did not verify ({exc.__class__.__name__})") from None
     header = token.header

@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.auth.deps import DB, Auth, Svc
 from dome_api.db.models import PC, Account, Grant, PairingSession, PCAccessToken, PCCredential
@@ -37,7 +38,7 @@ def pc_body(pc: PC, relay: ConnectionManager) -> dict[str, Any]:
     return out
 
 
-async def owned_pc(db: Any, account_id: uuid.UUID, pc_id: str, *, for_update: bool = False) -> PC:
+async def owned_pc(db: AsyncSession, account_id: uuid.UUID, pc_id: str, *, for_update: bool = False) -> PC:
     pid = parse_uuid(pc_id)
     stmt = select(PC).where(PC.id == pid, PC.account_id == account_id, PC.deleted_at.is_(None))
     if for_update:

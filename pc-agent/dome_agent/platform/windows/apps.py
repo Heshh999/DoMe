@@ -120,7 +120,7 @@ class WindowsApps:
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             win32gui.BringWindowToTop(hwnd)
             win32gui.SetForegroundWindow(hwnd)
-        except Exception:  # pywintypes.error: access denied when Windows refuses the focus change
+        except Exception:  # noqa: S110 - pywintypes.error: Windows refused the focus change; reported via GetForegroundWindow
             pass
         return bool(win32gui.GetForegroundWindow() == hwnd)
 

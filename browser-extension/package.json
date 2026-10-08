@@ -1,0 +1,35 @@
+{
+  "name": "@dome/browser-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DoMe for YouTube: Chrome/Edge Manifest V3 extension (background service worker + YouTube player adapter + Native Messaging bridge to the DoMe agent)",
+  "type": "module",
+  "scripts": {
+    "build": "vite build --mode background && vite build --mode content && vite build --mode popup",
+    "gen:validators": "tsx scripts/gen-validators.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.tools.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "@dome/protocol": "link:../shared/ts",
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/chrome": "0.3.4",
+    "@types/node": "22.20.5",
+    "eslint": "9.39.5",
+    "globals": "17.13.0",
+    "jsdom": "29.1.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "7.3.7",
+    "vitest": "3.2.7"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

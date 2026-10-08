@@ -71,11 +71,11 @@ def _build_services(settings: Settings) -> Services:
         schemas=load_schemas(),
         relay=relay,
         limiters=RateLimiters(),
-        link_start_limiter=SlidingWindowLimiter(10, 3600),
-        pairing_claim_account_limiter=SlidingWindowLimiter(5, 900),
-        pairing_claim_ip_limiter=SlidingWindowLimiter(5, 900),
-        login_limiter=SlidingWindowLimiter(60, 60),
-        agent_token_limiter=SlidingWindowLimiter(30, 60),
+        link_start_limiter=SlidingWindowLimiter(settings.rate_link_start_per_hour, 3600),
+        pairing_claim_account_limiter=SlidingWindowLimiter(settings.rate_pairing_claim_per_account, 900),
+        pairing_claim_ip_limiter=SlidingWindowLimiter(settings.rate_pairing_claim_per_ip, 900),
+        login_limiter=SlidingWindowLimiter(settings.rate_login_per_minute, 60),
+        agent_token_limiter=SlidingWindowLimiter(settings.rate_agent_token_per_minute, 60),
     )
 
 

@@ -63,7 +63,9 @@ async def start(request: Request, agent: Agent, db: DB, svc: Svc) -> Any:
     return rest_response(svc.settings.validate_rest_responses, "pairing_start_response", out)
 
 
-async def _claim_failed(svc: Svc, account_id: Any, ip: str | None, reason: str) -> ApiError:
+async def _claim_failed(svc: Svc, db: DB, account_id: Any, ip: str | None, reason: str) -> ApiError:
+    # The request transaction may hold the account row FOR UPDATE; the event row's FK check would wait on it.
+    await db.rollback()
     await events.record_now(
         svc.db,
         account_id=account_id,
@@ -90,7 +92,7 @@ async def claim(request: Request, auth: Auth, db: DB, svc: Svc) -> Any:
     try:
         kid = kid_from_jwk(body["public_jwk"])
     except ProtocolError:
-        raise await _claim_failed(svc, auth.account.id, ip, "bad_jwk") from None
+        raise await _claim_failed(svc, db, auth.account.id, ip, "bad_jwk") from None
     now = utcnow()
     # Lock the account row: controller limit enforcement must be transactional.
     account = await db.scalar(select(Account).where(Account.id == auth.account.id).with_for_update())
@@ -108,7 +110,7 @@ async def claim(request: Request, auth: Auth, db: DB, svc: Svc) -> Any:
         .with_for_update(of=PairingSession)
     )
     if ps is None:
-        raise await _claim_failed(svc, auth.account.id, ip, "no_open_session")
+        raise await _claim_failed(svc, db, auth.account.id, ip, "no_open_session")
     plan = plan_for(account.plan)
     known = await db.scalar(
         select(Controller).where(

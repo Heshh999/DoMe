@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     api_url: str | None = None
 
     pc_access_token_seconds: int = Field(default=3600, ge=60)
+    # Abuse limits (design: link start 10/hour per IP; pairing claim 5 per 15 min per account and per IP).
+    rate_link_start_per_hour: int = Field(default=10, ge=1)
+    rate_pairing_claim_per_account: int = Field(default=5, ge=1, description="per 15 minutes")
+    rate_pairing_claim_per_ip: int = Field(default=5, ge=1, description="per 15 minutes")
+    rate_login_per_minute: int = Field(default=60, ge=1)
+    rate_agent_token_per_minute: int = Field(default=30, ge=1)
     static_dir: Path | None = None
     log_level: str = "INFO"
 

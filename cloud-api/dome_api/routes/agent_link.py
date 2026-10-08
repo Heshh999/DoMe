@@ -10,6 +10,7 @@ from dome_protocol import ProtocolError, kid_from_jwk
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.auth.deps import DB, AgentPublic, Auth, Svc
 from dome_api.db.models import PC, Account, DeviceLinkCode, PCCredential
@@ -23,7 +24,7 @@ router = APIRouter(tags=["agent-link"])
 POLL_INTERVAL_SECONDS = 5
 
 
-async def _unique_user_code(db: Any) -> str:
+async def _unique_user_code(db: AsyncSession) -> str:
     for _ in range(8):
         code = new_user_code()
         if await db.scalar(select(DeviceLinkCode.id).where(DeviceLinkCode.user_code == code)) is None:
@@ -69,7 +70,7 @@ async def start(request: Request, _: AgentPublic, db: DB, svc: Svc) -> Any:
     return rest_response(svc.settings.validate_rest_responses, "agent_link_start_response", out)
 
 
-async def _pending_code(db: Any, user_code: str, *, for_update: bool = False) -> DeviceLinkCode:
+async def _pending_code(db: AsyncSession, user_code: str, *, for_update: bool = False) -> DeviceLinkCode:
     normalized = normalize_user_code(user_code)
     if normalized is None:
         raise ApiError(404, "NOT_FOUND")
@@ -102,7 +103,7 @@ async def preview(user_code: str, auth: Auth, db: DB, svc: Svc) -> Any:
     return rest_response(svc.settings.validate_rest_responses, "agent_link_preview_response", out)
 
 
-async def count_enabled_pcs(db: Any, account_id: uuid.UUID, *, exclude: uuid.UUID | None = None) -> int:
+async def count_enabled_pcs(db: AsyncSession, account_id: uuid.UUID, *, exclude: uuid.UUID | None = None) -> int:
     stmt = (
         select(func.count())
         .select_from(PC)

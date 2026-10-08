@@ -23,7 +23,7 @@ def ts(dt: datetime | None) -> str | None:
 
 
 def ts_required(dt: datetime) -> str:
-    return format_rfc3339(dt)
+    return str(format_rfc3339(dt))
 
 
 def plus(seconds: float) -> datetime:
@@ -97,4 +97,4 @@ def b64url_to_sha256(value: str) -> bytes:
     """Decode a 43-char base64url SHA-256 handle (already pattern-checked by the REST schema)."""
     from dome_protocol.keys import b64url_decode
 
-    return b64url_decode(value, expected_len=32)
+    return bytes(b64url_decode(value, expected_len=32))

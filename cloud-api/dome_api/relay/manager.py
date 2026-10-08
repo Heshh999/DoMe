@@ -538,7 +538,7 @@ class ConnectionManager:
                     .where(Command.state.in_(("created", "accepted", "awaiting_confirmation")))
                     .values(state="expired", error_code="COMMAND_EXPIRED", finished_at=now)
                 )
-        return int(r1.rowcount or 0) + int(r2.rowcount or 0)
+        return int(getattr(r1, "rowcount", 0) or 0) + int(getattr(r2, "rowcount", 0) or 0)
 
     # ----- security events -----------------------------------------------------------------------
     async def security_event(

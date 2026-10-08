@@ -101,8 +101,10 @@ def validate_app_id(app_id: str) -> str:
 def validate_executable_path(raw: str, *, temp_dirs: Iterable[Path] | None = None) -> ValidatedExecutable:
     if not isinstance(raw, str) or not raw.strip():
         raise ApprovalError("an executable path is required")
-    text = raw.strip()
-    if any(ch in _FORBIDDEN_CHARS for ch in text) or _ARGUMENT_RE.search(text) or "\n" in text or "\r" in text or "\t" in text:
+    if any(ord(ch) < 32 for ch in raw):  # newlines, tabs and other control characters
+        raise ApprovalError("the path may not contain control characters")
+    text = raw.strip(" ")
+    if any(ch in _FORBIDDEN_CHARS for ch in text) or _ARGUMENT_RE.search(text):
         raise ApprovalError("the path may not contain arguments, quotes or shell characters; approve the executable file only")
     path = Path(text)
     if not path.is_absolute():

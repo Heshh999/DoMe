@@ -61,9 +61,15 @@ class OIDCClient:
         async with self._lock:
             if self._discovery is None or time.monotonic() - self._discovery_at > _DISCOVERY_TTL:
                 url = self.settings.oidc_issuer + "/.well-known/openid-configuration"
-                resp = await self._http.get(url)
-                resp.raise_for_status()
-                doc = resp.json()
+                try:
+                    resp = await self._http.get(url)
+                    resp.raise_for_status()
+                    doc = resp.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    log.warning("oidc.discovery_failed", error=type(exc).__name__)
+                    raise ApiError(
+                        503, "SERVICE_UNAVAILABLE", "Sign-in is temporarily unavailable. Try again shortly."
+                    ) from None
                 if not isinstance(doc, dict) or doc.get("issuer", "").rstrip("/") != self.settings.oidc_issuer:
                     raise RuntimeError("OIDC discovery document issuer mismatch")
                 for key in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
@@ -77,9 +83,15 @@ class OIDCClient:
         disc = await self.discovery()
         async with self._lock:
             if force or self._jwks is None or time.monotonic() - self._jwks_at > _JWKS_TTL:
-                resp = await self._http.get(disc["jwks_uri"])
-                resp.raise_for_status()
-                self._jwks = KeySet.import_key_set(resp.json())
+                try:
+                    resp = await self._http.get(disc["jwks_uri"])
+                    resp.raise_for_status()
+                    self._jwks = KeySet.import_key_set(resp.json())
+                except (httpx.HTTPError, ValueError) as exc:
+                    log.warning("oidc.jwks_failed", error=type(exc).__name__)
+                    raise ApiError(
+                        503, "SERVICE_UNAVAILABLE", "Sign-in is temporarily unavailable. Try again shortly."
+                    ) from None
                 self._jwks_at = time.monotonic()
             return self._jwks
 

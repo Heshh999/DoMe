@@ -24,16 +24,6 @@ import httpx
 import psycopg
 import pytest
 import uvicorn
-import websockets
-from sqlalchemy.engine import make_url
-from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosed
-
-from dome_api.db.migrate import upgrade_to_head
-from dome_api.keygen import write_key
-from dome_api.main import create_app
-from dome_api.settings import Settings
-from dome_api.state import Services
 from dome_protocol import (
     dumps_compact,
     format_rfc3339,
@@ -50,6 +40,15 @@ from dome_protocol import (
     sign_payload,
 )
 from dome_protocol.keys import b64url_encode
+from sqlalchemy.engine import make_url
+from websockets.asyncio.client import ClientConnection, connect
+from websockets.exceptions import ConnectionClosed
+
+from dome_api.db.migrate import upgrade_to_head
+from dome_api.keygen import write_key
+from dome_api.main import create_app
+from dome_api.settings import Settings
+from dome_api.state import Services
 
 REPO = Path(__file__).resolve().parents[2]
 DEV_IDP_BIN = REPO / "tools" / "dev-idp" / ".venv" / "bin" / "dome-dev-idp"
@@ -82,7 +81,10 @@ def database_url() -> AsyncIterator[str]:
     upgrade_to_head(url)
     yield url  # type: ignore[misc]
     with psycopg.connect(admin.render_as_string(hide_password=False), autocommit=True) as conn:
-        conn.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", (name,))
+        conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+            (name,),
+        )
         conn.execute(f'DROP DATABASE "{name}"')
 
 
@@ -132,7 +134,9 @@ def static_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def settings(ports: dict[str, int], database_url: str, dev_idp: str, static_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Settings:
+def settings(
+    ports: dict[str, int], database_url: str, dev_idp: str, static_dir: Path, tmp_path_factory: pytest.TempPathFactory
+) -> Settings:
     key_path = write_key(tmp_path_factory.mktemp("keys") / "entitlement-ed25519.pem")
     return Settings(
         env="test",
@@ -148,6 +152,11 @@ def settings(ports: dict[str, int], database_url: str, dev_idp: str, static_dir:
         relay_hello_timeout_seconds=5.0,
         static_dir=static_dir,
         log_level="WARNING",
+        # the whole suite shares one client IP: keep the per-account pairing limit (tested) and relax per-IP ones
+        rate_link_start_per_hour=100_000,
+        rate_pairing_claim_per_ip=100_000,
+        rate_login_per_minute=100_000,
+        rate_agent_token_per_minute=100_000,
     )
 
 
@@ -180,6 +189,7 @@ async def env(settings: Settings, ports: dict[str, int], database_url: str) -> A
         ws_max_size=settings.relay_max_frame_bytes,
         lifespan="on",
         log_level="warning",
+        timeout_graceful_shutdown=3,
     )
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())
@@ -233,7 +243,9 @@ async def recv_frame(ws: ClientConnection, direction: str, timeout: float = RECV
     return frame_from_text(raw, direction)
 
 
-async def recv_until(ws: ClientConnection, direction: str, kind: str, timeout: float = RECV_TIMEOUT, **match: Any) -> dict[str, Any]:
+async def recv_until(
+    ws: ClientConnection, direction: str, kind: str, timeout: float = RECV_TIMEOUT, **match: Any
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
@@ -307,7 +319,18 @@ class Browser:
             h["X-DoMe-CSRF"] = self.csrf
         return h
 
-    async def request(self, method: str, path: str, json_body: Any = None, *, schema: str | None = None, expect: int | None = None, csrf: bool = True, origin: bool = True, headers: dict[str, str] | None = None) -> httpx.Response:
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_body: Any = None,
+        *,
+        schema: str | None = None,
+        expect: int | None = None,
+        csrf: bool = True,
+        origin: bool = True,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
         h = {**self.headers(csrf=csrf, origin=origin), **(headers or {})}
         r = await self.client.request(method, path, json=json_body, headers=h)
         r.body_checked = check_rest(r, schema)  # type: ignore[attr-defined]
@@ -356,7 +379,16 @@ class AgentSim:
     def kid(self) -> str:
         return kid_from_jwk(self.jwk)
 
-    async def rest(self, method: str, path: str, json_body: Any = None, *, bearer: bool = False, schema: str | None = None, expect: int | None = None) -> httpx.Response:
+    async def rest(
+        self,
+        method: str,
+        path: str,
+        json_body: Any = None,
+        *,
+        bearer: bool = False,
+        schema: str | None = None,
+        expect: int | None = None,
+    ) -> httpx.Response:
         headers = {"Authorization": f"Bearer {self.token}"} if bearer else {}
         r = await self.env.http.request(method, path, json=json_body, headers=headers)
         r.body_checked = check_rest(r, schema)  # type: ignore[attr-defined]
@@ -365,14 +397,30 @@ class AgentSim:
         return r
 
     async def link(self, browser: Browser, name: str = "Desk PC") -> dict[str, Any]:
-        start = await self.rest("POST", "/v1/agent-link/start", {"pc_public_jwk": self.jwk, "agent_version": "0.1.0-test", "platform": "development"}, schema="agent_link_start_response", expect=200)
+        start = await self.rest(
+            "POST",
+            "/v1/agent-link/start",
+            {"pc_public_jwk": self.jwk, "agent_version": "0.1.0-test", "platform": "development"},
+            schema="agent_link_start_response",
+            expect=200,
+        )
         s = start.body_checked  # type: ignore[attr-defined]
         preview = await browser.get(f"/v1/agent-link/{s['user_code']}", schema="agent_link_preview_response")
         assert preview["kid"] == self.kid
         pending = await self.rest("POST", "/v1/agent-link/poll", {"device_code": s["device_code"]}, expect=428)
         assert pending.body_checked["status"] == "authorization_pending"  # type: ignore[attr-defined]
-        approve = await browser.post(f"/v1/agent-link/{s['user_code']}/approve", {"pc_name": name, "remote_enabled": True}, schema="agent_link_approve_response")
-        poll = await self.rest("POST", "/v1/agent-link/poll", {"device_code": s["device_code"]}, schema="agent_link_poll_response", expect=200)
+        approve = await browser.post(
+            f"/v1/agent-link/{s['user_code']}/approve",
+            {"pc_name": name, "remote_enabled": True},
+            schema="agent_link_approve_response",
+        )
+        poll = await self.rest(
+            "POST",
+            "/v1/agent-link/poll",
+            {"device_code": s["device_code"]},
+            schema="agent_link_poll_response",
+            expect=200,
+        )
         body = poll.body_checked  # type: ignore[attr-defined]
         assert body["pc_id"] == approve["pc_id"] and body["enabled"] == approve["enabled"]
         self.pc_id, self.account_id, self.credential = body["pc_id"], body["account_id"], body["pc_credential"]
@@ -380,13 +428,29 @@ class AgentSim:
         return {**body, "approve": approve, "start": s}
 
     async def fetch_token(self) -> str:
-        r = await self.rest("POST", "/v1/agent/token", {"pc_credential": self.credential}, schema="agent_token_response", expect=200)
+        r = await self.rest(
+            "POST", "/v1/agent/token", {"pc_credential": self.credential}, schema="agent_token_response", expect=200
+        )
         self.token = r.body_checked["access_token"]  # type: ignore[attr-defined]
         return self.token
 
-    async def connect(self, *, protocol_versions: tuple[str, ...] = ("1.0",), expect_snapshot: bool = True) -> dict[str, Any]:
-        self.ws = await connect(self.env.ws_base + "/ws/agent", additional_headers={"Authorization": f"Bearer {self.token}"}, max_size=1 << 20)
-        await self.send({"type": "hello", "component": "agent", "component_version": "0.1.0-test", "protocol_versions": list(protocol_versions), "registry_version": REGISTRY.registry_version})
+    async def connect(
+        self, *, protocol_versions: tuple[str, ...] = ("1.0",), expect_snapshot: bool = True
+    ) -> dict[str, Any]:
+        self.ws = await connect(
+            self.env.ws_base + "/ws/agent",
+            additional_headers={"Authorization": f"Bearer {self.token}"},
+            max_size=1 << 20,
+        )
+        await self.send(
+            {
+                "type": "hello",
+                "component": "agent",
+                "component_version": "0.1.0-test",
+                "protocol_versions": list(protocol_versions),
+                "registry_version": REGISTRY.registry_version,
+            }
+        )
         ack = await self.recv()
         if not expect_snapshot:
             return ack
@@ -423,8 +487,23 @@ class AgentSim:
     async def ack(self, command_id: str, state: str) -> None:
         await self.send({"type": "ack", "command_id": command_id, "state": state, "at": format_rfc3339(now_utc())})
 
-    async def result(self, command_id: str, state: str = "succeeded", *, result: dict[str, Any] | None = None, error: dict[str, Any] | None = None, duration_ms: int = 12) -> None:
-        frame: dict[str, Any] = {"type": "result", "command_id": command_id, "origin": "agent", "state": state, "at": format_rfc3339(now_utc()), "duration_ms": duration_ms}
+    async def result(
+        self,
+        command_id: str,
+        state: str = "succeeded",
+        *,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+        duration_ms: int = 12,
+    ) -> None:
+        frame: dict[str, Any] = {
+            "type": "result",
+            "command_id": command_id,
+            "origin": "agent",
+            "state": state,
+            "at": format_rfc3339(now_utc()),
+            "duration_ms": duration_ms,
+        }
         if result is not None:
             frame["result"] = result
         if error is not None:
@@ -432,7 +511,11 @@ class AgentSim:
         await self.send(frame)
 
     def ping_result(self) -> dict[str, Any]:
-        return {"agent_time": format_rfc3339(now_utc()), "agent_version": "0.1.0-test", "protocol_version": REGISTRY.protocol_version}
+        return {
+            "agent_time": format_rfc3339(now_utc()),
+            "agent_version": "0.1.0-test",
+            "protocol_version": REGISTRY.protocol_version,
+        }
 
     async def serve_one(self, *, executing: bool = True) -> dict[str, Any]:
         """Receive one command, ack it and answer succeeded with a registry-valid result."""
@@ -442,27 +525,69 @@ class AgentSim:
         await self.ack(cid, "accepted")
         if executing:
             await self.ack(cid, "executing")
-        result = self.ping_result() if payload["action"] == "system.ping" else {"value": int(payload["params"].get("value", 0)), "muted": False}
+        result = (
+            self.ping_result()
+            if payload["action"] == "system.ping"
+            else {"value": int(payload["params"].get("value", 0)), "muted": False}
+        )
         REGISTRY.validate_result(payload["action"], result)
         await self.result(cid, "succeeded", result=result)
         return payload
 
     async def state(self, **overrides: Any) -> dict[str, Any]:
-        frame = {"type": "state", "pc_id": self.pc_id, "at": format_rfc3339(now_utc()), "state": {"remote_enabled": True, "session_locked": False, "extension_connected": False, "platform": "development", "volume": {"value": 40, "muted": False}, **overrides}}
+        frame = {
+            "type": "state",
+            "pc_id": self.pc_id,
+            "at": format_rfc3339(now_utc()),
+            "state": {
+                "remote_enabled": True,
+                "session_locked": False,
+                "extension_connected": False,
+                "platform": "development",
+                "volume": {"value": 40, "muted": False},
+                **overrides,
+            },
+        }
         await self.send(frame)
         return frame
 
     # --- pairing (PC side) ---
     async def start_pairing(self) -> tuple[str, dict[str, Any]]:
         code = generate_pairing_code()
-        r = await self.rest("POST", "/v1/pairing/start", {"code_hash": pairing_code_handle(code)}, bearer=True, schema="pairing_start_response", expect=200)
+        r = await self.rest(
+            "POST",
+            "/v1/pairing/start",
+            {"code_hash": pairing_code_handle(code)},
+            bearer=True,
+            schema="pairing_start_response",
+            expect=200,
+        )
         return code, r.body_checked  # type: ignore[attr-defined]
 
-    async def decide_pairing(self, request: dict[str, Any], code: str, *, approve: bool = True, granted: list[str] | None = None, expected_phone_code: str | None = None) -> None:
+    async def decide_pairing(
+        self,
+        request: dict[str, Any],
+        code: str,
+        *,
+        approve: bool = True,
+        granted: list[str] | None = None,
+        expected_phone_code: str | None = None,
+    ) -> None:
         assert kid_from_jwk(request["public_jwk"]) == request["kid"]
         if expected_phone_code is not None:
-            assert pairing_verification_code(code, request["pairing_id"], self.pc_id, request["kid"]) == expected_phone_code
-        await self.send({"type": "pairing_decision", "pairing_id": request["pairing_id"], "decision": "approve" if approve else "decline", "kid": request["kid"], "granted_capabilities": granted if granted is not None else request["requested_capabilities"]})
+            assert (
+                pairing_verification_code(code, request["pairing_id"], self.pc_id, request["kid"])
+                == expected_phone_code
+            )
+        await self.send(
+            {
+                "type": "pairing_decision",
+                "pairing_id": request["pairing_id"],
+                "decision": "approve" if approve else "decline",
+                "kid": request["kid"],
+                "granted_capabilities": granted if granted is not None else request["requested_capabilities"],
+            }
+        )
 
 
 @dataclass
@@ -485,10 +610,27 @@ class ControllerSim:
     def kid(self) -> str:
         return kid_from_jwk(self.jwk)
 
-    async def claim(self, code: str, capabilities: tuple[str, ...] = ("status", "media", "volume"), *, expect: int = 202) -> Any:
-        return await self.browser.post("/v1/pairing/claim", {"code_hash": pairing_code_handle(code), "public_jwk": self.jwk, "display_name": self.name, "requested_capabilities": list(capabilities)}, schema="pairing_status_response", expect=expect)
+    async def claim(
+        self, code: str, capabilities: tuple[str, ...] = ("status", "media", "volume"), *, expect: int = 202
+    ) -> Any:
+        return await self.browser.post(
+            "/v1/pairing/claim",
+            {
+                "code_hash": pairing_code_handle(code),
+                "public_jwk": self.jwk,
+                "display_name": self.name,
+                "requested_capabilities": list(capabilities),
+            },
+            schema="pairing_status_response",
+            expect=expect,
+        )
 
-    async def pair(self, agent: AgentSim, capabilities: tuple[str, ...] = ("status", "media", "volume"), granted: list[str] | None = None) -> dict[str, Any]:
+    async def pair(
+        self,
+        agent: AgentSim,
+        capabilities: tuple[str, ...] = ("status", "media", "volume"),
+        granted: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Full pairing with an online agent: start on the PC, claim from the phone, approve on the PC."""
         code, started = await agent.start_pairing()
         status = await self.claim(code, capabilities)
@@ -509,7 +651,16 @@ class ControllerSim:
         if cookie:
             headers["Cookie"] = f"dome_session={self.browser.session_cookie}"
         self.ws = await connect(self.env.ws_base + "/ws/controller", additional_headers=headers, max_size=1 << 20)
-        await self.send({"type": "hello", "component": "controller", "kid": self.kid, "component_version": "0.1.0-test", "protocol_versions": ["1.0"], "registry_version": REGISTRY.registry_version})
+        await self.send(
+            {
+                "type": "hello",
+                "component": "controller",
+                "kid": self.kid,
+                "component_version": "0.1.0-test",
+                "protocol_versions": ["1.0"],
+                "registry_version": REGISTRY.registry_version,
+            }
+        )
         ack = await self.recv()
         assert ack["type"] == "hello_ack", ack
         return ack
@@ -530,7 +681,21 @@ class ControllerSim:
     async def subscribe(self, *pc_ids: str) -> None:
         await self.send({"type": "subscribe", "pc_ids": list(pc_ids)})
 
-    def envelope(self, pc_id: str, action: str, params: dict[str, Any] | None = None, target: dict[str, Any] | None = None, *, lifetime: int = 30, command_id: str | None = None, controller_id: str | None = None, account_id: str | None = None, issued_at: Any = None, key: Any = None, nonce: str | None = None) -> tuple[str, dict[str, Any]]:
+    def envelope(
+        self,
+        pc_id: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+        target: dict[str, Any] | None = None,
+        *,
+        lifetime: int = 30,
+        command_id: str | None = None,
+        controller_id: str | None = None,
+        account_id: str | None = None,
+        issued_at: Any = None,
+        key: Any = None,
+        nonce: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
         issued = issued_at or now_utc()
         from datetime import timedelta
 
@@ -551,7 +716,14 @@ class ControllerSim:
         env = sign_payload(key or self.key, dumps_compact(payload)).to_dict()
         return payload["command_id"], env
 
-    async def command(self, pc_id: str, action: str, params: dict[str, Any] | None = None, target: dict[str, Any] | None = None, **kw: Any) -> str:
+    async def command(
+        self,
+        pc_id: str,
+        action: str,
+        params: dict[str, Any] | None = None,
+        target: dict[str, Any] | None = None,
+        **kw: Any,
+    ) -> str:
         cid, env = self.envelope(pc_id, action, params, target, **kw)
         await self.send({"type": "command", "pc_id": pc_id, "envelope": env})
         return cid
@@ -621,3 +793,15 @@ async def paired(env: Env, alice: Browser, online_agent: AgentSim) -> AsyncItera
 
 def dump(obj: Any) -> str:
     return json.dumps(obj, indent=1, default=str)
+
+
+async def wait_pairing_state(
+    browser: Browser, pairing_id: str, state: str, timeout: float = RECV_TIMEOUT
+) -> dict[str, Any]:
+    """Poll GET /v1/pairing/{id} until it reaches ``state`` (agent frames are processed asynchronously)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        status = await browser.get(f"/v1/pairing/{pairing_id}", schema="pairing_status_response")
+        if status["state"] == state or time.monotonic() > deadline:
+            return status
+        await asyncio.sleep(0.05)

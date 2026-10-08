@@ -14,6 +14,7 @@ from collections.abc import Callable
 from .context import DEFERRED, ActionFailed, AgentServices, Deferred, ExecutionContext, Handler
 
 _HANDLERS: dict[str, Handler] = {}
+_LOADED = False
 
 
 def handler(action: str) -> Callable[[Handler], Handler]:
@@ -27,8 +28,10 @@ def handler(action: str) -> Callable[[Handler], Handler]:
 
 
 def _load() -> None:
-    if _HANDLERS:
+    global _LOADED
+    if _LOADED:
         return
+    _LOADED = True
     from . import apps, media, power, system, volume, windows, youtube  # noqa: F401  (registration side effects)
 
 

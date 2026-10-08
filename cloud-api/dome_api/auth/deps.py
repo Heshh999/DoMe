@@ -45,7 +45,9 @@ async def db_session(request: Request) -> AsyncIterator[AsyncSession]:
             await session.commit()
 
 
-DB = Annotated[AsyncSession, Depends(db_session)]
+# scope="function": the exit code (commit/rollback) runs BEFORE the response is sent, so a client that
+# receives 2xx can rely on the data being durable (FastAPI >= 0.118 defaults to exiting after the response).
+DB = Annotated[AsyncSession, Depends(db_session, scope="function")]
 Svc = Annotated[Services, Depends(services)]
 
 

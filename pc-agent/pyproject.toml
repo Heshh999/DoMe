@@ -73,8 +73,9 @@ warn_unreachable = false
 ignore_missing_imports = true
 packages = ["dome_agent"]
 exclude = ["packaging/"]
+mypy_path = "../shared/python"
 
 [[tool.mypy.overrides]]
-module = ["dome_protocol.*"]
-ignore_missing_imports = true
-follow_imports = "silent"
+# Real Windows APIs (winreg attributes, ctypes.WinDLL, pywin32) have no stubs on the Linux build host.
+module = ["dome_agent.platform.windows.*"]
+disable_error_code = ["attr-defined", "no-any-return"]

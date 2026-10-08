@@ -15,7 +15,7 @@ class _Bucket:
 class TokenBucketLimiter:
     """``per_minute`` sustained rate with ``burst`` capacity, keyed by an opaque string."""
 
-    def __init__(self, per_minute: int, burst: int, *, clock: type[time] | None = None) -> None:
+    def __init__(self, per_minute: int, burst: int) -> None:
         self.rate = per_minute / 60.0
         self.burst = float(burst)
         self._buckets: dict[str, _Bucket] = {}

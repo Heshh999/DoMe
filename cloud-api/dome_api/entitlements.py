@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from dome_protocol import load_schemas
 from joserfc import jwt
@@ -38,7 +38,8 @@ class EntitlementSigner:
             pem = path.read_bytes()
         except FileNotFoundError:
             raise RuntimeError(
-                f"entitlement signing key not found at {path}; run `uv run dome-api-gen-entitlement-key` for development"
+                f"entitlement signing key not found at {path}; "
+                "run `uv run dome-api-gen-entitlement-key` for development"
             ) from None
         return cls(pem, issuer)
 
@@ -69,11 +70,11 @@ class EntitlementSigner:
         if claims is None:
             return None
         load_schemas().validate_entitlement_claims(claims)
-        return jwt.encode({"alg": self.alg, "typ": TYP, "kid": self.kid}, claims, self._key)
+        return jwt.encode({"alg": self.alg, "typ": TYP, "kid": self.kid}, claims, self._key, algorithms=[self.alg])
 
     def verify(self, assertion: str) -> dict[str, Any]:
         """Verify one of our own assertions (used by tests and diagnostics)."""
-        keyset = KeySet.import_key_set(self.jwks())
+        keyset = KeySet.import_key_set(cast(Any, self.jwks()))
         tok = jwt.decode(assertion, keyset, algorithms=[self.alg])
         if tok.header.get("typ") != TYP or tok.header.get("kid") != self.kid:
             raise ValueError("unexpected assertion header")

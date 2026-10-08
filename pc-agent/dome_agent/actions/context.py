@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -72,7 +72,7 @@ class Deferred:
 DEFERRED = Deferred()
 
 
-class ActionFailed(ProtocolError):
+class ActionFailed(ProtocolError):  # noqa: N818 - matches ProtocolError's naming
     """A failure that also carries the best-known post-failure state (same shape as the result)."""
 
     def __init__(self, code: str, message: str, *, result: dict[str, Any] | None = None, retryable: bool | None = None) -> None:
@@ -83,4 +83,4 @@ class ActionFailed(ProtocolError):
         self.result = result
 
 
-Handler = Callable[[ExecutionContext], Awaitable[dict[str, Any] | Deferred]]
+Handler = Callable[[ExecutionContext], Coroutine[Any, Any, dict[str, Any] | Deferred]]

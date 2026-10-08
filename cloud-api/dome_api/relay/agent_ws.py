@@ -232,7 +232,7 @@ async def _on_confirmation_required(
             severity="warning",
             actor="pc",
             subject_id=conn.pc_id,
-            detail={"frame": "confirmation_required", "code": exc.code},
+            detail={"frame": "confirmation_required", "reason": exc.code},
         )
         conn.inflight.pop(cid, None)
         await conn.send({"type": "cancel", "command_id": str(cid), "controller_id": str(inf.controller_id)})
@@ -432,7 +432,11 @@ async def _on_revoke_controller(mgr: ConnectionManager, conn: AgentConn, frame: 
                 severity="notice",
                 actor="pc",
                 subject_id=controller_id,
-                detail={"pc_id": str(conn.pc_id), "reason": frame["reason"], "grants": int(res.rowcount or 0)},
+                detail={
+                    "pc_id": str(conn.pc_id),
+                    "reason": frame["reason"],
+                    "grants": int(getattr(res, "rowcount", 0) or 0),
+                },
             )
     await mgr.apply_controller_revocation(
         controller_id, reason="grant_revoked", pc_ids=[conn.pc_id], revoked_pc_id=conn.pc_id
