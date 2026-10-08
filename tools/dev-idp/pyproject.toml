@@ -1,0 +1,21 @@
+[project]
+name = "dome-dev-idp"
+version = "0.1.0"
+description = "Development-only OpenID Connect issuer for DoMe local development and integration tests. Never deploy."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "joserfc>=1.0,<2",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+dome-dev-idp = "dome_dev_idp.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dome_dev_idp"]

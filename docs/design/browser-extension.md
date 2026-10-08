@@ -1,0 +1,88 @@
+# browser-extension design
+
+Chrome/Edge Manifest V3 extension, TypeScript, built with Vite (two entries: `background.ts`
+service worker and `content.ts`). Depends on `@dome/protocol` (`link:../shared/ts`) for frame
+validation. No remote code, no `eval`, no remotely loaded configuration.
+
+## Manifest
+
+```json
+{
+  "manifest_version": 3,
+  "name": "DoMe for YouTube",
+  "version": "0.1.0",
+  "description": "Lets the DoMe agent on this PC control YouTube playback in this browser. Nothing leaves your PC except through the DoMe agent you installed.",
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [{ "matches": ["https://www.youtube.com/*"], "js": ["content.js"], "run_at": "document_idle" }],
+  "action": { "default_title": "DoMe", "default_popup": "popup.html" },
+  "minimum_chrome_version": "116"
+}
+```
+
+No `tabs`, `history`, `cookies`, `debugger`, `<all_urls>`. Tab titles/urls for youtube.com tabs are
+readable through the host permission. The production extension id is pinned via a `key` field once
+the founder creates the Web Store listing; development builds have no `key` and are loaded unpacked.
+
+## Background service worker
+
+- Persistent facts live in `chrome.storage.local`: `browser_instance_id` (random 22-char
+  base64url, created on install), `profile_label` (user-settable in the popup), last known
+  native-host connection state. Nothing else is assumed to survive worker termination.
+- `connect()` → `chrome.runtime.connectNative("com.dome.agent")`, send `bridge_hello`
+  (`browser` detected from `navigator.userAgentData.brands`: "Microsoft Edge" → `edge`, "Google
+  Chrome" → `chrome`, else `unknown`). On `onDisconnect` schedule reconnect with backoff via
+  `chrome.alarms` (1 → 60 s); on `onStartup`/`onInstalled`/alarm → connect if not connected.
+- Inbound `bridge_request` → validate (`schemas.validateBridgeFrame("agent_to_extension")`) →
+  for `list_tabs`: `chrome.tabs.query({url:"https://www.youtube.com/*"})` plus the cached
+  per-tab player state → response. For tab ops: `chrome.tabs.get(tab_id)` (→ `TARGET_GONE` if
+  missing or not youtube.com) → `chrome.tabs.sendMessage(tab_id, {op, args, request_id})` with a
+  timeout (`timeout_ms` or 8000) → response; no content script → `UNSUPPORTED_CONTEXT` after one
+  retry via `chrome.scripting`? **No** (no `scripting` permission): report `UNSUPPORTED_CONTEXT`
+  with message "reload the YouTube tab".
+- Content-script `player_state` messages are cached per tab (`Map` in memory is fine; it is
+  rebuilt from `tabs_changed` + fresh `get_state` after a worker restart) and forwarded as
+  `bridge_event{event:"player_state"}` at most twice per second per tab.
+- `chrome.tabs.onRemoved/onUpdated` → `bridge_event{tabs_changed}` (debounced 300 ms).
+
+## Content script (player adapter)
+
+Runs in the isolated world: full DOM access, no access to page JavaScript objects. Everything is
+done through the `HTMLVideoElement` (`video.html5-main-video`) and YouTube's own control buttons.
+
+| op | implementation | success criterion |
+| --- | --- | --- |
+| `get_state` | read `video.paused/currentTime/duration/muted/volume`, title from `h1.ytd-watch-metadata yt-formatted-string` or `document.title` fallback, `video_id` from `URL.searchParams.get("v")` or `/shorts/<id>`, context flags | response |
+| `set_paused` | `video.pause()` / `video.play()` (play may reject → `ACTION_UNAVAILABLE`) | `video.paused === paused` after ≤ 1 s |
+| `next` | guard `expected_video_id`; find `.ytp-next-button` (must exist, not `aria-disabled`) → `click()` → wait for `yt-navigate-finish` or `video_id` change | new `video_id` ≠ old within timeout, else `NO_NEXT_VIDEO` / `TARGET_CHANGED` |
+| `previous` | `.ytp-prev-button` when present and enabled, else `NO_PREVIOUS_VIDEO` | as above |
+| `seek_relative` / `seek_to` | `video.currentTime = clamp(...)` | `|currentTime - target| < 1.5 s` or ended |
+| `set_muted` / `set_volume` | `video.muted = …` / `video.volume = value/100` **plus** click YouTube mute button when needed so the UI stays consistent | read-back |
+| `set_theater` | `.ytp-size-button` click until `ytd-watch-flexy[theater]` matches | attribute read-back |
+| `request_fullscreen` | `document.querySelector("#movie_player").requestFullscreen()` → rejection → `ACTIVATION_REQUIRED` | `document.fullscreenElement` |
+
+Context detection: `#movie_player.ad-showing` → `ad` (control ops other than `set_paused`/`set_muted`/`set_volume`
+return `UNSUPPORTED_CONTEXT`); `.ytp-live` badge → `live` (seek disabled); `/shorts/` → `shorts`
+(next/previous unsupported at launch); `list=` in URL → `playlist`; music.youtube.com is not in
+scope (no host permission). `has_next`/`has_previous` derive from button presence/enabled state.
+
+SPA handling: listen to `yt-navigate-finish`, `yt-page-data-updated`, and a `MutationObserver` on
+`#movie_player` to re-acquire the video element; `video` events (`play`, `pause`, `timeupdate`
+throttled, `volumechange`, `ended`) emit `player_state` to the worker. All DOM strings are plain
+text; nothing is inserted into any DOM (the extension has no UI on the page).
+
+## Popup
+
+Shows connection state (connected to agent / agent not running / native host missing), the
+`profile_label` field, the `browser_instance_id` (so the phone's tab picker label can be matched),
+and troubleshooting links. No controls.
+
+## Tests (vitest)
+
+- `player-adapter.test.ts` with DOM fixtures under `fixtures/` (watch page, ad showing, live,
+  shorts, no next button): each op's success path and each failure code.
+- `background.test.ts` with a `chrome` API stub: hello on connect, request routing, tab gone,
+  timeout, reconnect alarms, storage-backed `browser_instance_id` survives "worker restart".
+- `frames.test.ts`: every emitted frame validates against `bridge.schema.json`.
+- `pnpm build` produces `dist/` loadable unpacked.
