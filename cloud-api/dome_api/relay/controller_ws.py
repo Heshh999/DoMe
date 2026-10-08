@@ -1,0 +1,202 @@
+"""``/ws/controller`` — the phone's socket (cookie session + exact Origin)."""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from typing import Any
+
+from dome_protocol import ProtocolError, dumps_compact, loads_strict, protocol_compatible, verify_and_parse_confirmation
+from sqlalchemy import select
+from starlette.websockets import WebSocket, WebSocketDisconnect
+
+from dome_api.auth.sessions import COOKIE_NAME, resolve_session
+from dome_api.db.models import PC, Controller, Grant
+from dome_api.logging import get_logger
+from dome_api.relay import frames
+from dome_api.relay.manager import (
+    CLOSE_AUTH_REQUIRED,
+    CLOSE_FRAME_TOO_LARGE,
+    CLOSE_PROTOCOL_ERROR,
+    CLOSE_REVOKED,
+    ConnectionManager,
+    ControllerConn,
+)
+from dome_api.relay.router import RateLimiters, resolve_controller_record, route_command
+from dome_api.security.origin import origin_allowed
+from dome_api.state import Services
+from dome_api.util import ts_required, utcnow
+
+log = get_logger("dome_api.relay.controller")
+
+
+async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimiters) -> None:
+    mgr = svc.relay
+    if not origin_allowed(ws.headers.get("origin"), svc.settings.allowed_origins):
+        await ws.close(code=CLOSE_REVOKED)
+        return
+    async with svc.db() as db:
+        async with db.begin():
+            auth = await resolve_session(db, svc.settings, ws.cookies.get(COOKIE_NAME))
+            if auth is None:
+                await ws.close(code=CLOSE_AUTH_REQUIRED)
+                return
+            session_id, account_id = auth.session.id, auth.account.id
+    if not mgr.has_capacity():
+        await ws.close(code=1013)
+        return
+
+    await ws.accept()
+    conn: ControllerConn | None = None
+    try:
+        hello = await _receive_frame(ws, svc, timeout=svc.settings.relay_hello_timeout_seconds)
+        if hello is None or hello.get("type") != "hello" or hello.get("component") != "controller" or "kid" not in hello:
+            await ws.send_text(dumps_compact(frames.error_frame("MALFORMED_MESSAGE", "first frame must be a controller hello with kid")))
+            await ws.close(code=CLOSE_PROTOCOL_ERROR)
+            return
+        ours = (svc.registry.protocol_version,)
+        if not any(protocol_compatible(v, ours) for v in hello["protocol_versions"]) or not protocol_compatible(hello["registry_version"], (svc.registry.registry_version,)):
+            await ws.send_text(
+                dumps_compact(frames.error_frame("PROTOCOL_INCOMPATIBLE", detail={"peer": hello["protocol_versions"], "supported": list(ours)}))
+            )
+            await ws.close(code=CLOSE_PROTOCOL_ERROR)
+            return
+        conn = ControllerConn(ws, session_id, account_id, hello["kid"])
+        async with svc.db() as db:
+            async with db.begin():
+                ctrl = await db.scalar(select(Controller).where(Controller.account_id == account_id, Controller.kid == conn.kid, Controller.revoked_at.is_(None)))
+                if ctrl is not None:
+                    conn.controller_id = ctrl.id
+                    ctrl.last_seen_at = utcnow()
+        mgr.register_controller(conn)
+        await conn.send(frames.hello_ack(conn.connection_id, controller_id=conn.controller_id))
+        await _loop(ws, svc, mgr, limiters, conn)
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        log.exception("controller.socket_error")
+        if conn is not None:
+            await conn.close(CLOSE_PROTOCOL_ERROR)
+    finally:
+        if conn is not None:
+            conn.closed = True
+            mgr.unregister_controller(conn)
+
+
+async def _receive_frame(ws: WebSocket, svc: Services, *, timeout: float | None = None) -> dict[str, Any] | None:
+    text = await (asyncio.wait_for(ws.receive_text(), timeout) if timeout is not None else ws.receive_text())
+    if len(text.encode("utf-8", "surrogatepass")) > svc.settings.relay_max_frame_bytes:
+        await ws.close(code=CLOSE_FRAME_TOO_LARGE)
+        raise WebSocketDisconnect(CLOSE_FRAME_TOO_LARGE)
+    try:
+        frame = loads_strict(text, max_bytes=svc.settings.relay_max_frame_bytes, max_depth=12, require_object=True)
+        svc.schemas.validate_frame("controller_to_relay", frame)
+    except ProtocolError as exc:
+        await ws.send_text(dumps_compact(frames.error_frame(exc.code, exc.message)))
+        return None
+    assert isinstance(frame, dict)
+    return frame
+
+
+async def _loop(ws: WebSocket, svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn) -> None:
+    bad_frames = 0
+    while not conn.closed:
+        frame = await _receive_frame(ws, svc)
+        conn.last_seen = utcnow()
+        if frame is None:
+            bad_frames += 1
+            if bad_frames >= 5:
+                await conn.close(CLOSE_PROTOCOL_ERROR)
+                return
+            continue
+        kind = frame["type"]
+        if kind == "ping":
+            await conn.send({"type": "pong", **({"t": frame["t"]} if "t" in frame else {})})
+        elif kind == "pong":
+            pass
+        elif kind == "hello":
+            await conn.send(frames.error_frame("MALFORMED_MESSAGE", "hello already received"))
+        elif kind == "subscribe":
+            await _on_subscribe(svc, mgr, conn, frame)
+        elif kind == "command":
+            await route_command(svc, mgr, limiters, conn, frame)
+        elif kind == "confirmation":
+            await _on_confirmation(svc, mgr, conn, frame)
+        elif kind == "cancel":
+            await _on_cancel(mgr, conn, frame)
+
+
+async def _on_subscribe(svc: Services, mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:
+    requested = [uuid.UUID(p) for p in frame["pc_ids"]]
+    accepted: set[uuid.UUID] = set()
+    if conn.controller_id is None:
+        for pc_id in requested:
+            await conn.send(frames.error_frame("GRANT_MISSING", "This phone is not paired on this account", ref_pc_id=pc_id))
+        mgr.set_subscriptions(conn, set())
+        return
+    async with svc.db() as db:
+        for pc_id in requested:
+            pc = await db.get(PC, pc_id)
+            grant = None
+            if pc is not None and pc.deleted_at is None and pc.account_id == conn.account_id:
+                grant = await db.scalar(
+                    select(Grant.id).where(Grant.controller_id == conn.controller_id, Grant.pc_id == pc_id, Grant.account_id == conn.account_id, Grant.revoked_at.is_(None))
+                )
+            if grant is None:
+                await conn.send(frames.error_frame("GRANT_MISSING", ref_pc_id=pc_id))
+                await mgr.security_event(account_id=conn.account_id, kind="subscribe_refused", severity="warning", actor="controller", subject_id=conn.controller_id, detail={"pc_id": str(pc_id)})
+            else:
+                accepted.add(pc_id)
+        mgr.set_subscriptions(conn, accepted)
+        for pc_id in accepted:
+            status = await mgr.pc_status_frame(pc_id, db)
+            if status is not None:
+                await conn.send(status)
+            agent = mgr.agent_for(pc_id)
+            if agent is not None and agent.state_frame is not None:
+                await conn.send(agent.state_frame, validate=False)  # cached, unchanged, original `at`
+
+
+async def _on_confirmation(svc: Services, mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:
+    envelope = frame["envelope"]
+    pc_id_str: str = frame["pc_id"]
+    if envelope.get("kid") != conn.kid or conn.controller_id is None:
+        await conn.send(frames.error_frame("UNKNOWN_KEY", "Envelope kid does not match this connection", ref_pc_id=pc_id_str))
+        await conn.close(CLOSE_REVOKED)
+        return
+    async with svc.db() as db:
+        ctrl, record = await resolve_controller_record(db, conn)
+    if ctrl is None or record is None or ctrl.revoked_at is not None:
+        await conn.send(frames.error_frame("CONTROLLER_REVOKED", ref_pc_id=pc_id_str))
+        await conn.close(CLOSE_REVOKED)
+        return
+    try:
+        conf = verify_and_parse_confirmation(envelope, lambda kid: record if kid == conn.kid else None, registry=svc.registry, schemas=svc.schemas)
+    except ProtocolError as exc:
+        await conn.send(frames.error_frame(exc.code, exc.message, ref_pc_id=pc_id_str))
+        await mgr.security_event(account_id=conn.account_id, kind="confirmation_rejected", severity="warning", actor="controller", subject_id=conn.controller_id, detail={"code": exc.code})
+        return
+    agent = mgr.agent_for(uuid.UUID(pc_id_str))
+    inf = agent.inflight.get(uuid.UUID(conf.command_id)) if agent is not None else None
+    if agent is None or inf is None or inf.controller_id != conn.controller_id or conf.payload["target_pc_id"] != pc_id_str:
+        await conn.send(frames.error_frame("CONFIRMATION_INVALID", "No pending confirmation for that command on this PC", ref_pc_id=pc_id_str))
+        return
+    if not conf.approved:
+        # the PC owns the challenge; it answers the command with CONFIRMATION_DECLINED
+        pass
+    await agent.send(
+        {"type": "confirmation", "envelope": envelope, "relay": {"received_at": ts_required(utcnow()), "connection_id": str(conn.connection_id)}},
+        validate=False,
+    )
+
+
+async def _on_cancel(mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:
+    if conn.controller_id is None:
+        await conn.send(frames.error_frame("GRANT_MISSING", ref_pc_id=frame["pc_id"]))
+        return
+    agent = mgr.agent_for(uuid.UUID(frame["pc_id"]))
+    inf = agent.inflight.get(uuid.UUID(frame["command_id"])) if agent is not None else None
+    if agent is None or inf is None or inf.controller_id != conn.controller_id:
+        log.info("cancel.ignored", controller_id=str(conn.controller_id))
+        return
+    await agent.send({"type": "cancel", "command_id": frame["command_id"], "controller_id": str(conn.controller_id)})
