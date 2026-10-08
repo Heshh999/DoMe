@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dome.app/schemas/bridge.schema.json",
   "title": "DoMe browser bridge frames (extension ⇄ native host ⇄ agent)",
-  "description": "Chrome Native Messaging frames between the extension service worker and `dome-native-host`, and the identical JSON forwarded over the host's protected local IPC to the tray agent. Native messaging frames are limited to 1 MiB by Chrome; DoMe limits them to 64 KiB. The agent treats every field originating from a web page (titles, video ids) as untrusted display data.",
+  "description": "Chrome Native Messaging frames between the extension service worker and `dome-native-host`, and the identical JSON forwarded over the host's protected local IPC to the tray agent. Native messaging frames are limited to 1 MiB by Chrome; DoMe limits them to 64 KiB. The agent treats every field originating from a web page (titles, video ids) as untrusted display data. IPC identity rule (Windows): the agent and dome-native-host each derive the endpoint name from the SID of their OWN process token (GetTokenInformation TokenUser) and ProcessIdToSessionId(GetCurrentProcessId()); the agent creates the pipe with FILE_FLAG_FIRST_PIPE_INSTANCE | PIPE_REJECT_REMOTE_CLIENTS and a DACL granting only that SID, and on each connection verifies via GetNamedPipeClientProcessId that the client's session id and token SID equal its own before sending bridge_hello_ack; a mismatch is closed silently and logged as a local security event. Per-op result shapes: list_tabs → results.schema.json#/$defs/tabs_result; every other op → results.schema.json#/$defs/youtube_state_result (next/previous include previous_video_id).",
   "$defs": {
     "bridge_hello": {
       "description": "Extension → host → agent on port connect. `browser_instance_id` is a random id generated once per extension installation (chrome.storage.local) and identifies the browser profile.",
@@ -169,7 +169,14 @@
           "type": "boolean"
         },
         "result": {
-          "type": "object"
+          "oneOf": [
+            {
+              "$ref": "results.schema.json#/$defs/tabs_result"
+            },
+            {
+              "$ref": "results.schema.json#/$defs/youtube_state_result"
+            }
+          ]
         },
         "error": {
           "type": "object",

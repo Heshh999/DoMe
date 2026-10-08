@@ -1,5 +1,5 @@
 {
-  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices.",
+  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices. manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release.",
   "plans": {
     "free": {
       "display_name": "DoMe Free",
@@ -11,7 +11,14 @@
       "routine_max_seconds": 0,
       "ai_interpretations_per_period": 0,
       "ai_transcription_minutes_per_period": 0,
-      "manual_command_rate_limit": { "per_minute": 120, "burst": 30 }
+      "manual_command_rate_limit": {
+        "per_minute": 120,
+        "burst": 30
+      },
+      "coalescable_command_rate_limit": {
+        "per_minute": 360,
+        "burst": 60
+      }
     },
     "pro": {
       "display_name": "DoMe Pro",
@@ -23,8 +30,15 @@
       "routine_max_seconds": 60,
       "ai_interpretations_per_period": 0,
       "ai_transcription_minutes_per_period": 0,
-      "manual_command_rate_limit": { "per_minute": 120, "burst": 30 },
-      "$comment": "AI allowances stay 0 until the Phase E release gate; the cost model evaluates 250 interpretations / 30 minutes."
+      "manual_command_rate_limit": {
+        "per_minute": 120,
+        "burst": 30
+      },
+      "$comment": "AI allowances stay 0 until the Phase E release gate; the cost model evaluates 250 interpretations / 30 minutes.",
+      "coalescable_command_rate_limit": {
+        "per_minute": 360,
+        "burst": 60
+      }
     }
   },
   "pricing_defaults": {

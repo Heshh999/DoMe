@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dome.app/schemas/relay-frames.schema.json",
   "title": "DoMe relay WebSocket frames",
-  "description": "All frames are JSON objects with a `type`. Frames are limited to 65536 bytes. Unknown `type` or unknown fields are rejected with MALFORMED_MESSAGE and the socket may be closed. The relay never alters a signed envelope or a challenge_text; it adds routing metadata in sibling fields which receivers treat as informational only. Terminal-result rule: every command_id a controller sends ends with exactly one `result` frame (see version.json rules.terminal_result); `error` frames are for situations with no command_id.",
+  "description": "All frames are JSON objects with a `type`. Frames are limited to 65536 bytes. Unknown `type` or unknown fields are rejected with MALFORMED_MESSAGE and the socket may be closed. The relay never alters a signed envelope or a challenge_text; it adds routing metadata in sibling fields which receivers treat as informational only. Terminal-result rule: every command_id a controller sends ends with exactly one `result` frame (see version.json rules.terminal_result); `error` frames are for situations with no command_id. Close codes: 1009 frame too large; 4000 protocol error; 4001 superseded by another connection of the same PC (the agent must NOT auto-reconnect; it shows a tray warning with a manual Reconnect); 4003 revoked/unauthorised; 4008 authentication required.",
   "$defs": {
     "uuid": {
       "$ref": "command.schema.json#/$defs/uuid"
@@ -83,6 +83,11 @@
             "relay"
           ]
         },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "description": "REQUIRED when component is 'controller': the installation's controller key id. The relay binds the socket to the controller row (session account, kid); every envelope on this socket must carry the same kid."
+        },
         "component_version": {
           "type": "string",
           "maxLength": 64
@@ -108,7 +113,8 @@
             "maxLength": 32
           }
         }
-      }
+      },
+      "description": "First frame on every socket. Controller sockets MUST include kid (bound to the session's account); agent sockets are identified by their bearer token."
     },
     "hello_ack": {
       "type": "object",
@@ -138,7 +144,8 @@
         "pc_id": {
           "$ref": "#/$defs/uuid"
         }
-      }
+      },
+      "description": "controller_id is present on controller sockets whose kid matched a non-revoked controller of the account; a socket without controller_id may only be used to poll pairing status via REST, never for subscribe/command/confirmation/cancel (those answer error GRANT_MISSING). pc_id is present on agent sockets and must equal the agent's stored identity."
     },
     "error_frame": {
       "type": "object",
@@ -153,6 +160,10 @@
         },
         "error": {
           "$ref": "#/$defs/error"
+        },
+        "ref_pc_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Required for subscription errors so the controller knows which PC was refused"
         }
       },
       "description": "Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors). Command-scoped failures are always `result` frames."
@@ -188,7 +199,7 @@
       }
     },
     "controller_subscribe": {
-      "description": "Controller → relay. Subscribe to state/result events for PCs the controller is granted on. The relay checks ownership and grant; a PC the account does not own yields GRANT_MISSING and nothing else.",
+      "description": "Controller → relay. Idempotent; REPLACES the socket's subscription set (subscriptions never survive a socket). Each pc_id must be a PC of the session's account on which THIS controller (bound at hello) holds a live grant; otherwise error{GRANT_MISSING, ref_pc_id} for that id and no subscription. For each accepted id the relay sends pc_status and then the cached last `state` frame of that PC (unchanged, with its original `at`) when one exists.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -358,7 +369,7 @@
       }
     },
     "grants_snapshot": {
-      "description": "Relay → agent, sent immediately after hello_ack and whenever grants change. The agent applies it BEFORE accepting commands after (re)connect. It is a revocation/intersection list over the PC's LOCALLY approved controllers: a controller is usable only if locally approved AND listed here; effective capabilities = local ∩ snapshot. It carries no public keys and can never add a controller or widen a grant. A listed controller_id/kid the PC does not know locally is ignored and reported as a security event.",
+      "description": "Relay → agent, sent immediately after hello_ack and whenever grants change. The agent applies it BEFORE accepting commands after (re)connect. It is a revocation/intersection list over the PC's LOCALLY approved controllers: a controller is usable only if locally approved AND listed here; effective capabilities = local ∩ snapshot. It carries no public keys and can never add a controller or widen a grant. A listed controller_id/kid the PC does not know locally is ignored and reported as a security event. pc_enabled=false or status=plan_disabled are plan/account states, not revocations: local grants stay, commands are refused with PC_PLAN_DISABLED / CONTROLLER_PLAN_DISABLED.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -366,6 +377,7 @@
         "pc_id",
         "account_id",
         "snapshot_id",
+        "pc_enabled",
         "controllers"
       ],
       "properties": {
@@ -381,6 +393,10 @@
         "snapshot_id": {
           "$ref": "#/$defs/uuid"
         },
+        "pc_enabled": {
+          "type": "boolean",
+          "description": "False when the PC is disabled by the account or by the plan after a downgrade; the agent then refuses every command with PC_PLAN_DISABLED (local emergency controls still work)"
+        },
         "controllers": {
           "type": "array",
           "maxItems": 64,
@@ -391,7 +407,8 @@
               "controller_id",
               "kid",
               "capabilities",
-              "display_name"
+              "display_name",
+              "status"
             ],
             "properties": {
               "controller_id": {
@@ -420,6 +437,14 @@
               "display_name": {
                 "type": "string",
                 "maxLength": 64
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "plan_disabled"
+                ],
+                "description": "plan_disabled keeps the LOCAL grant intact (revocation/emergency stop keep working) but the PC refuses commands with CONTROLLER_PLAN_DISABLED"
               }
             }
           }
@@ -432,12 +457,13 @@
       }
     },
     "pairing_request": {
-      "description": "Relay → agent. A signed-in controller submitted this PC's pairing code. The agent computes the verification code from (pairing_id, pc_id, kid) and shows it with the display name; the user approves locally.",
+      "description": "Relay → agent. A signed-in controller claimed this PC's pairing code (by hash). Delivered immediately when the agent is online and re-delivered, for every unexpired claimed pairing session of this PC, right after grants_snapshot on each (re)connect. The agent MUST recompute kid_from_jwk(public_jwk) and refuse on mismatch, then compute the verification code HMAC(code, pairing_id|pc_id|kid) locally and show it with controller_display_name (untrusted text) for the user to approve or decline.",
       "type": "object",
       "additionalProperties": false,
       "required": [
         "type",
         "pairing_id",
+        "code_hash",
         "controller_display_name",
         "public_jwk",
         "kid",
@@ -450,6 +476,11 @@
         },
         "pairing_id": {
           "$ref": "#/$defs/uuid"
+        },
+        "code_hash": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "description": "SHA-256 handle of the pairing code the PC is displaying; the agent ignores requests whose code_hash does not match its current pairing session"
         },
         "controller_display_name": {
           "type": "string",
@@ -867,7 +898,10 @@
         "browser_instance_id",
         "tab_id",
         "script_attached",
-        "context"
+        "context",
+        "ad_showing",
+        "is_live",
+        "in_playlist"
       ],
       "properties": {
         "browser_instance_id": {
@@ -918,11 +952,24 @@
             "watch",
             "shorts",
             "music",
-            "live",
-            "ad",
-            "playlist",
             "other"
-          ]
+          ],
+          "description": "Page kind. Orthogonal flags below refine it."
+        },
+        "ad_showing": {
+          "type": "boolean"
+        },
+        "is_live": {
+          "type": "boolean"
+        },
+        "in_playlist": {
+          "type": "boolean"
+        },
+        "theater": {
+          "type": "boolean"
+        },
+        "fullscreen": {
+          "type": "boolean"
         },
         "has_next": {
           "type": "boolean"
@@ -1037,6 +1084,10 @@
               }
             }
           ]
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "PC enabled on the account/plan"
         }
       }
     },

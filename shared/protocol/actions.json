@@ -1,5 +1,5 @@
 {
-  "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: later commands with the same coalesce key replace queued earlier ones), routine_allowed (may appear in Pro routines), idempotent (safe to return the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts).",
+  "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), target (name in target_schemas or null), result (name of a $def in schemas/results.schema.json; the agent validates before emitting, the controller before rendering), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: the coalescing GROUP is (coalesce key, canonical target JSON or '' when null) per PC across all controllers; a later command in the same group replaces queued earlier ones, which terminate as canceled/COMMAND_SUPERSEDED), routine_allowed (may appear in Pro routines), idempotent (safe to re-emit the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts).",
   "registry_version": "1.0",
   "capabilities": {
     "status": "Read PC, media and browser state.",
@@ -90,6 +90,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "ping_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -107,6 +108,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "status_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -124,6 +126,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "tabs_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -136,13 +139,14 @@
       "routine_allowed": false
     },
     "youtube.get_state": {
-      "summary": "Current player state for one tab: title, video id, paused, position, duration, muted, volume, context flags (ad, live, shorts, playlist, music).",
+      "summary": "Current player state for one tab: title, video id, paused, position, duration, muted, volume, page kind (watch/shorts/music/other) plus orthogonal flags ad_showing, is_live, in_playlist, theater, fullscreen.",
       "params": {
         "type": "object",
         "additionalProperties": false,
         "properties": {}
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -169,6 +173,7 @@
         }
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -189,6 +194,7 @@
         "properties": {}
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -209,6 +215,7 @@
         "properties": {}
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -241,6 +248,7 @@
         }
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -270,6 +278,7 @@
         }
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -297,6 +306,7 @@
         }
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -326,6 +336,7 @@
         }
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -340,7 +351,7 @@
       "routine_allowed": true
     },
     "youtube.set_theater": {
-      "summary": "Toggle theater mode as an absolute state. Separately tested; labelled distinctly from fullscreen.",
+      "summary": "Set theater mode as an absolute state (youtube_tab.theater read back). Separately tested; labelled distinctly from fullscreen.",
       "params": {
         "type": "object",
         "additionalProperties": false,
@@ -354,6 +365,7 @@
         }
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -374,6 +386,7 @@
         "properties": {}
       },
       "target": "youtube_target",
+      "result": "youtube_state_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -394,6 +407,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "media_sessions_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -420,6 +434,7 @@
         }
       },
       "target": "media_session_target",
+      "result": "media_session_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -440,6 +455,7 @@
         "properties": {}
       },
       "target": "media_session_target",
+      "result": "media_session_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -460,6 +476,7 @@
         "properties": {}
       },
       "target": "media_session_target",
+      "result": "media_session_result",
       "capability": "media",
       "risk": "low",
       "confirmation": "none",
@@ -480,6 +497,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "volume_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -508,6 +526,7 @@
         }
       },
       "target": null,
+      "result": "volume_result",
       "capability": "volume",
       "risk": "low",
       "confirmation": "none",
@@ -535,6 +554,7 @@
         }
       },
       "target": null,
+      "result": "volume_result",
       "capability": "volume",
       "risk": "low",
       "confirmation": "none",
@@ -554,6 +574,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "accepted_result",
       "capability": "lock",
       "risk": "moderate",
       "confirmation": "none",
@@ -574,6 +595,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "apps_result",
       "capability": "status",
       "risk": "low",
       "confirmation": "none",
@@ -603,6 +625,7 @@
         }
       },
       "target": null,
+      "result": "app_launch_result",
       "capability": "apps",
       "risk": "moderate",
       "confirmation": "none",
@@ -623,6 +646,7 @@
         "properties": {}
       },
       "target": "window_target",
+      "result": "app_focus_result",
       "capability": "apps",
       "risk": "moderate",
       "confirmation": "none",
@@ -643,6 +667,7 @@
         "properties": {}
       },
       "target": "window_target",
+      "result": "app_minimize_result",
       "capability": "apps",
       "risk": "low",
       "confirmation": "none",
@@ -663,6 +688,7 @@
         "properties": {}
       },
       "target": "window_target",
+      "result": "app_close_result",
       "capability": "apps",
       "risk": "disruptive",
       "confirmation": "challenge",
@@ -690,6 +716,7 @@
         }
       },
       "target": null,
+      "result": "power_result",
       "capability": "power",
       "risk": "disruptive",
       "confirmation": "challenge",
@@ -716,6 +743,7 @@
         }
       },
       "target": null,
+      "result": "power_result",
       "capability": "power",
       "risk": "disruptive",
       "confirmation": "challenge",
@@ -742,6 +770,7 @@
         }
       },
       "target": null,
+      "result": "power_result",
       "capability": "power",
       "risk": "disruptive",
       "confirmation": "challenge",
@@ -761,6 +790,7 @@
         "properties": {}
       },
       "target": null,
+      "result": "power_cancel_result",
       "capability": "power",
       "risk": "low",
       "confirmation": "none",

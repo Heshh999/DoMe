@@ -13,7 +13,11 @@ between the phone PWA, the cloud backend/relay, the Windows agent and the browse
 | `schemas/command.schema.json` | The signed `command` payload |
 | `schemas/confirmation.schema.json` | The signed `confirmation` payload |
 | `schemas/relay-frames.schema.json` | WebSocket frames on `/ws/controller` and `/ws/agent` |
-| `schemas/bridge.schema.json` | Native-messaging frames between the extension and the agent's native host |
+| `schemas/bridge.schema.json` | Native-messaging frames between the extension and the agent's native host (+ IPC identity rule) |
+| `schemas/results.schema.json` | Per-action result shapes (named by `actions.json[action].result`) |
+| `schemas/entitlement.schema.json` | Claims of the EdDSA entitlement assertion and its refresh rule |
+| `schemas/rest.schema.json` | REST request/response bodies that cross component boundaries |
+| `version.json` → `rules` | Normative behavioural rules (terminal result, duplicates, snapshot semantics, pairing, identity binding, caching, in-flight deadlines, coalescing) |
 | `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations |
 
 Rules:

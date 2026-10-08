@@ -39,6 +39,7 @@ class ActionSpec:
     params_schema: dict[str, Any]
     target_schema: dict[str, Any] | None
     target_name: str | None
+    result_name: str
     capability: str
     risk: str
     confirmation: str
@@ -78,6 +79,7 @@ class Registry:
                 params_schema=spec["params"],
                 target_schema=self._target_schemas.get(target_name) if target_name else None,
                 target_name=target_name,
+                result_name=spec["result"],
                 capability=spec["capability"],
                 risk=spec["risk"],
                 confirmation=spec["confirmation"],
@@ -153,6 +155,16 @@ class Registry:
         except ValidationError as exc:
             raise ProtocolError("INVALID_PARAMETERS", f"target: {_short(exc)}") from None
         return dict(target)
+
+    def validate_result(self, action: str, result: Any) -> dict[str, Any]:
+        """Validate an action's result object against its declared result schema."""
+        from .schemas import load_schemas  # local import: schemas depends on registry for contract_dir
+
+        spec = self.get(action)
+        if not isinstance(result, dict):
+            raise ProtocolError("MALFORMED_MESSAGE", "result must be an object")
+        load_schemas().validate_result(spec.result_name, result)
+        return dict(result)
 
     def plan(self, plan_id: str) -> dict[str, Any]:
         plans = self.plans["plans"]

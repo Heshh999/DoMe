@@ -16,7 +16,7 @@ from .errors import ProtocolError
 from .registry import contract_dir
 from .strict_regex import StrictValidator
 
-SCHEMA_FILES = ("envelope", "command", "confirmation", "relay-frames", "bridge")
+SCHEMA_FILES = ("envelope", "command", "confirmation", "relay-frames", "bridge", "results", "entitlement", "rest")
 BASE = "https://dome.app/schemas/"
 
 
@@ -90,6 +90,17 @@ class Schemas:
 
     def validate_def(self, doc_name: str, def_name: str, value: Any) -> None:
         self._validate(doc_name, f"/$defs/{def_name}", value)
+
+    def validate_result(self, result_name: str, value: Any) -> None:
+        """Validate an action result against results.schema.json#/$defs/<result_name>."""
+        self._validate("results", f"/$defs/{result_name}", value, code="MALFORMED_MESSAGE")
+
+    def validate_rest(self, body_name: str, value: Any) -> None:
+        """Validate a REST request/response body against rest.schema.json#/$defs/<body_name>."""
+        self._validate("rest", f"/$defs/{body_name}", value)
+
+    def validate_entitlement_claims(self, claims: Any) -> None:
+        self._validate("entitlement", None, claims, code="ENTITLEMENT_REQUIRED")
 
     def document(self, name: str) -> dict[str, Any]:
         return self._docs[name]

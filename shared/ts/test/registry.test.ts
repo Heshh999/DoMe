@@ -43,7 +43,16 @@ describe("registry", () => {
     schemas.validateFrame("relay_to_controller", { type: "result", command_id: "33333333-3333-4333-8333-333333333333", origin: "relay", state: "failed", at: "2026-10-08T12:00:00.000Z", duration_ms: 0, error: { code: "PC_OFFLINE", message: "x", retryable: true } });
     schemas.validateFrame("relay_to_agent", { type: "revoked", reason: "pc_unlinked" });
     schemas.validateFrame("agent_to_relay", { type: "revoke_controller", controller_id: "33333333-3333-4333-8333-333333333333", kid: "A".repeat(43), reason: "local_revocation" });
-    const snap = { type: "grants_snapshot", pc_id: "33333333-3333-4333-8333-333333333333", account_id: "11111111-1111-4111-8111-111111111111", snapshot_id: "33333333-3333-4333-8333-333333333333", controllers: [{ controller_id: "22222222-2222-4222-8222-222222222222", kid: "A".repeat(43), capabilities: ["media"], display_name: "Phone" }] };
+    const snap = { type: "grants_snapshot", pc_id: "33333333-3333-4333-8333-333333333333", account_id: "11111111-1111-4111-8111-111111111111", snapshot_id: "33333333-3333-4333-8333-333333333333", pc_enabled: true, controllers: [{ controller_id: "22222222-2222-4222-8222-222222222222", kid: "A".repeat(43), capabilities: ["media"], display_name: "Phone", status: "active" }] };
+    schemas.validateFrame("controller_to_relay", { type: "hello", component: "controller", kid: "A".repeat(43), component_version: "0.1", protocol_versions: ["1.0"], registry_version: "1.0" });
+    expect(registry.validateResult("windows.set_volume", { value: 35, muted: false })).toEqual({ value: 35, muted: false });
+    expect(() => registry.validateResult("windows.set_volume", { value: 135, muted: false })).toThrow(ProtocolError);
+    expect(() => registry.validateResult("windows.lock", { accepted: false })).toThrow(ProtocolError);
+    schemas.validateRest("agent_token_response", { access_token: "A".repeat(43), expires_in: 3600, pc_id: "33333333-3333-4333-8333-333333333333", account_id: "11111111-1111-4111-8111-111111111111" });
+    expect(() => schemas.validateRest("agent_token_response", { access_token: "A".repeat(43) })).toThrow(ProtocolError);
+    const poll = { pc_id: "33333333-3333-4333-8333-333333333333", account_id: "11111111-1111-4111-8111-111111111111", pc_credential: "A".repeat(43), relay_url: "wss://relay.example/ws/agent", api_url: "https://api.example", pc_name: "Office", enabled: true };
+    schemas.validateRest("agent_link_poll_response", poll);
+    expect(() => schemas.validateRest("agent_link_poll_response", { ...poll, api_url: "not a url" })).toThrow(ProtocolError);
     schemas.validateFrame("relay_to_agent", snap);
     expect(() => schemas.validateFrame("relay_to_agent", { ...snap, controllers: [{ ...snap.controllers[0], public_jwk: { kty: "EC", crv: "P-256", x: "A".repeat(43), y: "A".repeat(43) } }] })).toThrow(ProtocolError);
     expect(() => schemas.validateFrame("relay_to_agent", { ...snap, controllers: [{ ...snap.controllers[0], capabilities: ["shell"] }] })).toThrow(ProtocolError);

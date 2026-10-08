@@ -87,7 +87,7 @@
     },
     "PC_SESSION_LOCKED": {
       "retryable": false,
-      "user_message": "The PC is locked. Only limited media control is allowed."
+      "user_message": "The PC is locked. Unlock it on the PC to continue."
     },
     "QUEUE_FULL": {
       "retryable": true,
@@ -220,6 +220,26 @@
     "TAB_NOT_CONTROLLABLE": {
       "retryable": false,
       "user_message": "Reload the YouTube tab on the PC so DoMe can control it."
+    },
+    "PC_SESSION_LOCKED_MEDIA_ONLY": {
+      "retryable": false,
+      "user_message": "The PC is locked. Only media controls are allowed until it is unlocked."
+    },
+    "PC_PLAN_DISABLED": {
+      "retryable": false,
+      "user_message": "This PC is not enabled on your current plan. Choose it in Devices or upgrade to DoMe Pro."
+    },
+    "CONTROLLER_PLAN_DISABLED": {
+      "retryable": false,
+      "user_message": "This phone is not enabled on your current plan. Choose it in Devices or upgrade to DoMe Pro."
+    },
+    "ENTITLEMENT_PENDING": {
+      "retryable": true,
+      "user_message": "Your payment is being confirmed. Pro features unlock automatically once it is verified."
+    },
+    "BILLING_PAST_DUE": {
+      "retryable": false,
+      "user_message": "Your last payment did not go through. Update your payment method to keep DoMe Pro."
     }
   }
 }

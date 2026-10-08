@@ -12,7 +12,7 @@ import re
 from functools import lru_cache
 from typing import Any
 
-from jsonschema import Draft202012Validator, validators
+from jsonschema import Draft202012Validator, FormatChecker, validators
 from jsonschema.exceptions import ValidationError
 
 
@@ -49,6 +49,24 @@ def _strict_pattern(validator: Any, pattern: str, instance: Any, schema: Any):  
         yield ValidationError(f"{instance!r} does not match {pattern!r}")
 
 
-StrictValidator = validators.extend(Draft202012Validator, validators={"pattern": _strict_pattern})
+_BaseStrict = validators.extend(Draft202012Validator, validators={"pattern": _strict_pattern})
 
-__all__ = ["StrictValidator", "pattern_matches", "compile_pattern"]
+# The only `format` the contract uses is `uri`; both languages check it with this same regex.
+URI_FORMAT = re.compile(r"\A(?:https?|wss?)://[^\s/?#]+[^\s]*\Z", re.ASCII)
+_format_checker = FormatChecker(formats=())
+
+
+@_format_checker.checks("uri")
+def _check_uri(instance: Any) -> bool:
+    return not isinstance(instance, str) or URI_FORMAT.match(instance) is not None
+
+
+class StrictValidator(_BaseStrict):  # type: ignore[misc,valid-type]
+    """Draft 2020-12 with ECMA-262 pattern semantics and the contract's `uri` format enforced."""
+
+    def __init__(self, schema: Any, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("format_checker", _format_checker)
+        super().__init__(schema, *args, **kwargs)
+
+
+__all__ = ["StrictValidator", "pattern_matches", "compile_pattern", "URI_FORMAT"]

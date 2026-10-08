@@ -84,22 +84,26 @@ All account-owned tables carry `account_id` and every query is scoped by it; the
   Revoked/unlinked credential → 401 and the agent must re-link.
 - `POST /v1/agent/entitlement` (PC bearer) → `{assertion}` (Pro) or `{assertion:null, plan:"free"}`.
 
-## Pairing
+## Pairing (contract: `version.json` rules `pairing_secret`, `pairing_offline`)
 
-- `POST /v1/pairing/start` (PC bearer) → `{pairing_id, code:"XXXX-XXXX", expires_at,
-  qr_url:"<origin>/pair#code=XXXX-XXXX"}`. 40-bit Crockford code; only HMAC-SHA256(server
-  pepper, code) stored. A PC may have one open pairing session at a time (new start expires the old).
-- `POST /v1/pairing/claim` (session + CSRF, rate-limited 5 attempts / 15 min per account and per IP;
-  every failure writes a `pairing_failed` security event) body `{code, public_jwk, display_name,
-  requested_capabilities}` → validates the code belongs to a PC **in the same account**, is open and
-  unexpired; derives `kid`; enforces `plans.max_controllers` transactionally (new kid only);
-  stores claim; forwards `pairing_request` to the PC's live agent socket (if offline: 409
-  `PC_OFFLINE` and the session stays open) → `{pairing_id, pc_id, pc_name, expires_at}`. The phone
-  computes the verification code locally from `(pairing_id, pc_id, its own kid)`.
-- Agent replies `pairing_decision`. On approve with matching `kid`: upsert `controllers`
-  (account, kid), insert `grants` with `granted_capabilities ∩ requested_capabilities`, state
-  approved, security event `controller_paired`, push a fresh `grants_snapshot` to the agent.
-- `GET /v1/pairing/{pairing_id}` (session) → `{state, controller_id, grant_id, pc_id, pc_name, expires_at}`.
+- `POST /v1/pairing/start` (PC bearer) body `{code_hash}` → `{pairing_id, expires_at}`. The **PC**
+  generated the 20-symbol code and shows it/QR (`<origin>/pair#code=…`); the backend stores only
+  `code_hash` (unique while open) and never sees the code. One open session per PC (a new start
+  expires the old one). Expiry 5 min.
+- `POST /v1/pairing/claim` (session + CSRF, rate-limited 5 attempts / 15 min per account and per
+  IP; every failure writes a `pairing_failed` security event) body `{code_hash, public_jwk,
+  display_name, requested_capabilities}` → finds the open session by `code_hash` **within the same
+  account** (anything else is `PAIRING_CODE_INVALID`, indistinguishable from a wrong code), derives
+  `kid`, enforces `plans.max_controllers` transactionally (new kid only), stores the claim
+  (state `claimed`) and returns **202** `pairing_status_response`. If the agent is online the relay
+  sends `pairing_request{pairing_id, code_hash, display_name, public_jwk, kid, requested_capabilities,
+  expires_at}` now; otherwise it is delivered after `grants_snapshot` on the agent's next connect
+  (the relay re-sends every unexpired claimed session for that PC on each connect). The phone
+  computes the verification code locally with the code it holds and polls.
+- Agent replies `pairing_decision`. On approve with matching `kid`: upsert `controllers` (account,
+  kid), insert `grants` with `granted_capabilities ∩ requested_capabilities`, state `approved`,
+  security event `controller_paired`, push a fresh `grants_snapshot` to the agent.
+- `GET /v1/pairing/{pairing_id}` (session) → `pairing_status_response`.
 
 ## Inventory and revocation
 
@@ -124,38 +128,52 @@ Every inbound frame is validated with `schemas.validate_frame(direction, …)` b
 `Origin` must be absent. Sequence: `hello` → `hello_ack{pc_id}` → `grants_snapshot` → mark PC
 online, broadcast `pc_status(online)` to subscribers in the same account.
 
-`/ws/controller` — cookie session + exact `Origin`. Sequence: `hello` → `hello_ack{controller_id?}`.
-`subscribe{pc_ids}` → each id must be a PC in the session's account with a live grant for a
-controller of that account; otherwise `error GRANT_MISSING` for that id and no subscription.
-The server then sends `pc_status` for each subscribed PC.
+`/ws/controller` — cookie session + exact `Origin`. Sequence: `hello{kid}` → the relay resolves
+(session account, kid) → controller row; if found and not revoked the socket is **bound** to it and
+`hello_ack{controller_id}` says so; otherwise `hello_ack` without `controller_id` and the socket
+may not subscribe/command/confirm/cancel (`error GRANT_MISSING`). Every envelope on the socket must
+carry the socket's kid (else `UNKNOWN_KEY`, close 4003). `subscribe{pc_ids}` is idempotent and
+replaces the socket's set; each id must be a PC of the account on which **this controller** holds a
+live grant, else `error{GRANT_MISSING, ref_pc_id}`. For each accepted id the relay sends `pc_status`
+and then the cached last `state` frame of that PC (unchanged, original `at`) when one exists.
 
-Command routing (`relay/router.py`), in this order, each failure answered with an `error` frame
-carrying `ref_command_id` when known and recorded as a `command_rejected` security event:
-1. frame schema; 2. `kid` → controller in the session's account, not revoked, else `UNKNOWN_KEY`;
-3. `verify_and_parse_command` (signature, strict parse, schema, window, registry);
-4. `payload.account_id == session.account_id`, `payload.controller_id == controller.id`,
-   `payload.target_pc_id == frame.pc_id`; 5. PC exists in account and `enabled`;
-6. grant (controller, pc) exists and includes `spec.capability`; 7. per-controller token bucket
-   from `plans.manual_command_rate_limit`; 8. agent online else `PC_OFFLINE` (**never queued**);
-9. in-flight count for the PC < `per_pc_queue_depth` else `QUEUE_FULL`;
-10. insert `commands` row (state `created`), forward `{type:"command", envelope, relay:{received_at, connection_id}}` to the agent.
+Command routing (`relay/router.py`), in this order; each failure is answered with
+`result{origin:"relay", state:"failed", error}` (never an `error` frame — every command_id ends
+with exactly one `result`) and recorded as a `command_rejected` security event:
+1. frame schema; 2. envelope `kid == socket kid`, controller not revoked and `status == active`
+   (else `UNKNOWN_KEY` / `CONTROLLER_REVOKED` / `CONTROLLER_PLAN_DISABLED`);
+3. `verify_and_parse_command` with a `KeyRecord` resolver (signature, strict parse, schema,
+   controller/account binding, window, registry); 4. `payload.target_pc_id == frame.pc_id`;
+5. PC exists in account, not deleted, `enabled` (else `PC_PLAN_DISABLED`); 6. grant (controller, pc)
+   exists and includes `spec.capability`; 7. token bucket per controller — `manual_command_rate_limit`
+   for ordinary actions, `coalescable_command_rate_limit` for actions with `coalesce`;
+8. agent online else `PC_OFFLINE` (**never queued**); 9. in-flight count for the PC
+   (`created|accepted|executing|awaiting_confirmation`) < `per_pc_queue_depth` else `QUEUE_FULL`;
+10. insert `commands` row (state `created`, deadline per `rules.in_flight`), forward
+    `{type:"command", envelope, relay:{received_at, connection_id}}` to the agent.
 Agent frames `ack` / `confirmation_required` / `result` are matched by `command_id` to the
-originating controller connection (fallback: all subscribed controllers of the same account),
-update the `commands` row, and are forwarded verbatim. `state` frames go to all subscribers.
-`confirmation` and `cancel` frames from the controller are verified for ownership
-(controller owns the command) and forwarded. On agent disconnect: PC offline → `pc_status`; every
-in-flight command of that PC becomes `outcome_unknown` (if acked executing) or `failed
-PC_OFFLINE` (if not acked), and a `result` frame says so. A sweeper every 5 s expires
-`created` commands past `expires_at`.
+originating controller connection (fallback: all sockets bound to that controller), update the
+`commands` row, and are forwarded verbatim — `challenge_text` is validated with
+`schemas.validate_challenge_text` on a copy and the original string is forwarded untouched.
+`state` frames go to all subscribers and refresh the per-PC cache. `confirmation` and `cancel`
+frames are accepted only from the socket bound to the command's controller. On agent disconnect:
+PC offline → `pc_status`; every in-flight command becomes `result{origin:relay, outcome_unknown}`
+(if an `executing` ack was seen) or `result{origin:relay, failed, PC_OFFLINE}`. A sweeper every 5 s
+applies the `rules.in_flight` deadline. A late agent `result` for a command the relay closed as
+`outcome_unknown` is forwarded once as a correction (`rules.late_results`); anything else
+post-terminal is dropped and logged. `revoke_controller` from an agent revokes the grant exactly as
+the REST path does.
 
-Nothing in the relay executes an action, and nothing stores a payload body.
+Nothing in the relay executes an action, and nothing stores a payload body, result or title.
 
 ## Entitlements
 
 `plan` on the account (Phase A/B: `free`, settable only via the Phase C billing state machine).
-`entitlements.assertion(account, pc)` → compact JWS, `alg=EdDSA`, header `kid`, claims
-`{iss: DOME_PUBLIC_ORIGIN, sub: account_id, pc: pc_id, plan, limits:{…}, iat, exp: iat+3600}`.
-Public key at `GET /.well-known/dome-jwks.json`. Included in every `grants_snapshot` for Pro.
+`entitlements.assertion(account, pc)` → compact JWS per `schemas/entitlement.schema.json`
+(`alg=EdDSA`, header `kid`, `typ=dome-entitlement+jwt`, 1 h). Public key at
+`GET /.well-known/dome-jwks.json`. Returned by `POST /v1/agent/entitlement` (`agent_entitlement_response`)
+and included in every `grants_snapshot` for Pro; a fresh snapshot is pushed on plan change.
+`grants_snapshot.pc_enabled` and per-controller `status` carry the plan/account device state.
 
 ## Security headers and static serving
 
@@ -179,4 +197,4 @@ happy path, denial, expiry, limit; pairing happy path with a Python-signed contr
 wrong account, expired, reuse, rate limit; grants snapshot content; command routing acceptance
 and each rejection rule; two accounts cannot subscribe to or command each other's PC; revocation
 closes sockets and updates snapshots; agent disconnect → `outcome_unknown` / `PC_OFFLINE`;
-queue depth; frame size; entitlement assertion verifies against the JWKS.
+queue depth; in-flight deadline; frame size; entitlement assertion verifies against the JWKS; every REST response validates against `rest.schema.json`; pairing claim while the PC is offline is delivered on reconnect; hello without a known kid cannot subscribe.

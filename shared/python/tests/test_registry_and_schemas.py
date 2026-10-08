@@ -99,7 +99,22 @@ def test_schemas_load_and_direction_unions():
         schemas.validate_frame("agent_to_relay", {"type": "result", "command_id": PC, "state": "succeeded", "at": "2026-10-08T12:00:00.000Z", "duration_ms": 1})
     schemas.validate_frame("relay_to_controller", {"type": "result", "command_id": PC, "origin": "relay", "state": "failed", "at": "2026-10-08T12:00:00.000Z", "duration_ms": 0, "error": {"code": "PC_OFFLINE", "message": "x", "retryable": True}})
     # grants snapshot carries no keys and only known capabilities
-    snap = {"type": "grants_snapshot", "pc_id": PC, "account_id": ACCOUNT, "snapshot_id": PC, "controllers": [{"controller_id": CONTROLLER, "kid": "A" * 43, "capabilities": ["media"], "display_name": "Phone"}]}
+    snap = {"type": "grants_snapshot", "pc_id": PC, "account_id": ACCOUNT, "snapshot_id": PC, "pc_enabled": True, "controllers": [{"controller_id": CONTROLLER, "kid": "A" * 43, "capabilities": ["media"], "display_name": "Phone", "status": "active"}]}
+    schemas.validate_frame("controller_to_relay", {"type": "hello", "component": "controller", "kid": "A" * 43, "component_version": "0.1", "protocol_versions": ["1.0"], "registry_version": "1.0"})
+    schemas.validate_result("volume_result", {"value": 35, "muted": False})
+    with pytest.raises(ProtocolError):
+        schemas.validate_result("volume_result", {"value": 135, "muted": False})
+    load_registry().validate_result("system.ping", {"agent_time": "2026-10-08T12:00:00.000Z", "agent_version": "0.1.0", "protocol_version": "1.0"})
+    with pytest.raises(ProtocolError):
+        load_registry().validate_result("windows.lock", {"accepted": False})
+    schemas.validate_rest("agent_token_response", {"access_token": "A" * 43, "expires_in": 3600, "pc_id": PC, "account_id": ACCOUNT})
+    poll = {"pc_id": PC, "account_id": ACCOUNT, "pc_credential": "A" * 43, "relay_url": "wss://relay.example/ws/agent", "api_url": "https://api.example", "pc_name": "Office", "enabled": True}
+    schemas.validate_rest("agent_link_poll_response", poll)
+    with pytest.raises(ProtocolError):
+        schemas.validate_rest("agent_link_poll_response", dict(poll, api_url="not a url"))
+    with pytest.raises(ProtocolError):
+        schemas.validate_rest("agent_token_response", {"access_token": "A" * 43, "expires_in": 3600, "pc_id": PC})
+    schemas.validate_entitlement_claims({"iss": "https://dome.example", "sub": ACCOUNT, "pc": PC, "plan": "pro", "limits": {"max_enabled_pcs": 5, "max_controllers": 5, "routines": True, "routine_max_steps": 10, "routine_max_seconds": 60, "custom_layouts": True}, "iat": 1, "exp": 3601, "jti": PC})
     schemas.validate_frame("relay_to_agent", snap)
     snap["controllers"][0]["public_jwk"] = {"kty": "EC", "crv": "P-256", "x": "A" * 43, "y": "A" * 43}
     with pytest.raises(ProtocolError):

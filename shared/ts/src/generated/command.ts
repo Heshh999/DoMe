@@ -30,6 +30,14 @@ export interface DoMeSignedCommandPayload {
    * Validated against actions.json[action].target schema by the PC; null when the action takes no target
    */
   target: null | {};
+  /**
+   * Optional. Present when the command is one step of a Pro routine; the PC refuses steps whose action is not routine_allowed and applies the entitlement assertion. Absent for manual controls and typed commands.
+   */
+  origin?: {
+    kind: "routine";
+    routine_id: Uuid;
+    step: number;
+  };
   issued_at: Timestamp;
   expires_at: Timestamp;
   /**

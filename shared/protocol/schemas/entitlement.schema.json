@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dome.app/schemas/entitlement.schema.json",
+  "title": "DoMe entitlement assertion (JWS claims)",
+  "description": "Compact JWS, alg EdDSA (Ed25519), protected header {alg:'EdDSA', typ:'dome-entitlement+jwt', kid}. Public keys at `<api origin>/.well-known/dome-jwks.json`. Refresh rule: the agent calls POST /v1/agent/entitlement on every connect and at 80% of (exp-iat); a 200 {assertion:null} means Free immediately; the last verified assertion is honoured for at most agent_offline_assertion_grace_hours after exp ONLY when the refresh fails with a network error or 5xx. The relay also pushes a fresh grants_snapshot on plan change.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["iss", "sub", "pc", "plan", "limits", "iat", "exp", "jti"],
+  "properties": {
+    "iss": { "type": "string", "format": "uri" },
+    "sub": { "$ref": "command.schema.json#/$defs/uuid", "description": "account_id" },
+    "pc": { "$ref": "command.schema.json#/$defs/uuid", "description": "pc_id" },
+    "plan": { "type": "string", "enum": ["free", "pro"] },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_enabled_pcs", "max_controllers", "routines", "routine_max_steps", "routine_max_seconds", "custom_layouts"],
+      "properties": {
+        "max_enabled_pcs": { "type": "integer", "minimum": 0 },
+        "max_controllers": { "type": "integer", "minimum": 0 },
+        "routines": { "type": "boolean" },
+        "routine_max_steps": { "type": "integer", "minimum": 0 },
+        "routine_max_seconds": { "type": "integer", "minimum": 0 },
+        "custom_layouts": { "type": "boolean" }
+      }
+    },
+    "iat": { "type": "integer", "minimum": 0 },
+    "exp": { "type": "integer", "minimum": 0 },
+    "jti": { "$ref": "command.schema.json#/$defs/uuid" }
+  }
+}

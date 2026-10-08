@@ -12,6 +12,9 @@ import commandSchema from "../../protocol/schemas/command.schema.json" with { ty
 import confirmationSchema from "../../protocol/schemas/confirmation.schema.json" with { type: "json" };
 import relayFramesSchema from "../../protocol/schemas/relay-frames.schema.json" with { type: "json" };
 import bridgeSchema from "../../protocol/schemas/bridge.schema.json" with { type: "json" };
+import resultsSchema from "../../protocol/schemas/results.schema.json" with { type: "json" };
+import entitlementSchema from "../../protocol/schemas/entitlement.schema.json" with { type: "json" };
+import restSchema from "../../protocol/schemas/rest.schema.json" with { type: "json" };
 
 import { ProtocolError } from "./errors.ts";
 import { loadsStrict } from "./strictJson.ts";
@@ -28,6 +31,7 @@ export interface ActionSpec {
   summary: string;
   paramsSchema: Record<string, unknown>;
   targetName: string | null;
+  resultName: string;
   capability: Capability;
   risk: Risk;
   confirmation: Confirmation;
@@ -48,8 +52,10 @@ export const CAPABILITIES = actionsJson.capabilities as Record<string, string>;
 
 const BASE = "https://dome.app/schemas/";
 
-const ajv = new Ajv2020({ strict: true, allErrors: false, allowUnionTypes: true });
-for (const doc of [envelopeSchema, commandSchema, confirmationSchema, relayFramesSchema, bridgeSchema]) {
+// The only `format` the contract uses is `uri`; both languages check it with this same regex.
+export const URI_FORMAT = /^(?:https?|wss?):\/\/[^\s/?#]+[^\s]*$/;
+const ajv = new Ajv2020({ strict: true, allErrors: false, allowUnionTypes: true, formats: { uri: URI_FORMAT } });
+for (const doc of [envelopeSchema, commandSchema, confirmationSchema, relayFramesSchema, bridgeSchema, resultsSchema, entitlementSchema, restSchema]) {
   ajv.addSchema(doc as object);
 }
 
@@ -84,6 +90,7 @@ for (const [name, raw] of Object.entries(actionsJson.actions)) {
     summary: String(r.summary),
     paramsSchema: r.params as Record<string, unknown>,
     targetName: (r.target as string | null) ?? null,
+    resultName: String(r.result),
     capability: r.capability as Capability,
     risk: r.risk as Risk,
     confirmation: r.confirmation as Confirmation,
@@ -132,6 +139,13 @@ export const registry = {
     if (!v(target)) throwValidation(v, "INVALID_PARAMETERS", "target: ");
     return { ...(target as Record<string, unknown>) };
   },
+  validateResult(action: string, result: unknown): Record<string, unknown> {
+    const spec = registry.get(action);
+    if (typeof result !== "object" || result === null || Array.isArray(result)) throw new ProtocolError("MALFORMED_MESSAGE", "result must be an object");
+    const v = refValidator("results", `/$defs/${spec.resultName}`);
+    if (!v(result)) throwValidation(v, "MALFORMED_MESSAGE", "result: ");
+    return { ...(result as Record<string, unknown>) };
+  },
   errorDefaults(code: string): { retryable: boolean; user_message: string } {
     return ERRORS[code] ?? ERRORS.INTERNAL!;
   },
@@ -171,7 +185,15 @@ export const schemas = {
     if (!v(parsed)) throwValidation(v, "MALFORMED_MESSAGE", "challenge: ");
     return parsed as Record<string, unknown>;
   },
-  validateDef(doc: "relay-frames" | "bridge" | "command", def: string, value: unknown): void {
+  validateRest(bodyName: string, value: unknown): void {
+    const v = refValidator("rest", `/$defs/${bodyName}`);
+    if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE", `${bodyName}: `);
+  },
+  validateEntitlementClaims(claims: unknown): void {
+    const v = refValidator("entitlement", "");
+    if (!v(claims)) throwValidation(v, "ENTITLEMENT_REQUIRED");
+  },
+  validateDef(doc: "relay-frames" | "bridge" | "command" | "results" | "rest", def: string, value: unknown): void {
     const v = refValidator(doc, `/$defs/${def}`);
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
   },

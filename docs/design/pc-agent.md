@@ -58,29 +58,42 @@ logged warning.
 ## Authorization (`authz.py`), applied to every inbound command in this order
 
 1. Frame validated (`relay_to_agent`), envelope verified and parsed via
-   `verify_and_parse_command` with a resolver that returns a JWK **only** for a grant that is not
-   revoked (→ `UNKNOWN_KEY` / `CONTROLLER_REVOKED` when the kid is known but revoked).
-2. `payload.account_id == identity.account_id` else `ACCOUNT_MISMATCH`; `payload.target_pc_id ==
-   identity.pc_id` else `TARGET_PC_MISMATCH`; `payload.controller_id == grant.controller_id` else `GRANT_MISSING`.
-3. `remote_enabled` else `PC_REMOTE_DISABLED` (checked again right before execution).
-4. `spec.capability in grant.capabilities` else `GRANT_MISSING`.
-5. Journal: same `command_id` + same digest → re-send the stored `result` (or current `ack` if
-   still running); same id + different digest → `COMMAND_ID_REUSED`.
+   `verify_and_parse_command` with a `KeyRecord` resolver that returns a record **only** for a
+   locally approved grant that is not revoked and is present in the latest snapshot
+   (→ `UNKNOWN_KEY` / `CONTROLLER_REVOKED`); the library enforces `controller_id`/`account_id`
+   binding (`CONTROLLER_MISMATCH`/`ACCOUNT_MISMATCH`).
+2. `payload.target_pc_id == identity.pc_id` else `TARGET_PC_MISMATCH`. Mismatches are answered
+   with a `result{failed}`, **not journaled**, logged as a local security event; three within 60 s
+   → close socket and reconnect (`rules.mismatch_handling`). A command before this connection's
+   first `grants_snapshot` → `result{failed, PC_RECONNECTING}`, not journaled.
+3. `remote_enabled` else `PC_REMOTE_DISABLED` (checked again right before execution);
+   `pc_enabled` from the snapshot else `PC_PLAN_DISABLED`; controller `status == active` else
+   `CONTROLLER_PLAN_DISABLED`.
+4. `spec.capability in (local ∩ snapshot capabilities)` else `GRANT_MISSING`.
+5. Journal: same `command_id` + same `command_digest` (SHA-256 of the exact signed payload bytes)
+   → re-send the stored `result` (or current `ack` if still running); same id + different digest
+   → `COMMAND_ID_REUSED`.
 6. Availability conditions: `windows`, `extension_connected`, `session_unlocked`,
    `session_media_allowed` → `ACTION_UNAVAILABLE` / `EXTENSION_DISCONNECTED` / `PC_SESSION_LOCKED`.
-7. Target resolution (YouTube: browser instance + tab must currently exist → `TARGET_GONE`;
-   `expected_video_id` mismatch → `TARGET_CHANGED` before acting; apps: `app_id` approved → else `APP_NOT_APPROVED`).
+7. Target resolution (YouTube: browser instance + tab must currently exist and report
+   `script_attached` → `TARGET_GONE` / `TAB_NOT_CONTROLLABLE`; `tab_token` must equal the tab's
+   current token → `TARGET_CHANGED`; `expected_video_id` mismatch → `TARGET_CHANGED` before
+   acting; apps: `app_id` approved → else `APP_NOT_APPROVED`).
 8. Disruptive actions: issue a challenge (below) and answer `confirmation_required`; the command
    is journaled as `awaiting_confirmation` and is **not** queued for execution.
-9. Entitlement gates (Pro-only actions — none in v1.0 registry; routines later): verify the
-   latest assertion, with the 72 h grace rule.
+9. Routine steps (payload `origin.kind == "routine"`): the action must be `routine_allowed` and
+   the latest entitlement assertion (`schemas/entitlement.schema.json`, refreshed on connect and
+   at 80 % of lifetime, 72 h grace only on network error/5xx) must say `routines: true`, else
+   `ENTITLEMENT_REQUIRED`.
+10. Results are validated with `registry.validate_result(action, result)` before emission.
 Then `ack{accepted}` is sent and the command is queued.
 
 ## Execution (`queue.py`)
 
-One asyncio worker per PC (one per process). Queue depth 16. Coalescing: when a command with a
-`coalesce` key is enqueued and an earlier **queued, not yet executing** command has the same key,
-the earlier one finishes as `canceled` with warning "superseded by a newer value". Each command:
+One asyncio worker per PC (one per process). Queue depth 16. Coalescing group =
+(`coalesce` key, canonical target JSON or "" when null) per PC across all controllers: when a new
+command in a group is enqueued, earlier **queued, not yet executing** commands in the same group
+finish as `result{canceled, error: COMMAND_SUPERSEDED}` and are journaled as such. Each command:
 `ack{executing}` → handler with `asyncio.wait_for(timeout_ms)` → `result`. Timeout → `failed`
 with the handler's best-known error, or `outcome_unknown` for non-idempotent actions whose OS
 call was already issued. Before the OS call the journal row is set to `executing` (durable) so a
@@ -89,11 +102,12 @@ crash yields `outcome_unknown` at restart. Non-idempotent actions are never retr
 ## Confirmation transaction (`confirmations.py`)
 
 Challenge = `dumps_compact({challenge_id, command_id, controller_id, pc_id, action, params,
-target, target_state_digest, expires_at, display})`; the exact text is stored and sent inside
-`confirmation_required`. `target_state_digest` = SHA-256 of the current observable target state
+target, target_state_digest, issued_at, expires_at, display})`; the exact text is stored
+together with the command's envelope `kid` and sent as `confirmation_required.challenge_text`. `target_state_digest` = SHA-256 of the current observable target state
 (window title + handle for `app.close`; pending-power state for `power.*`). On a signed
-`confirmation`: verify with the same controller key; `challenge_id` exists, unconsumed,
-unexpired, `command_id` and `controller_id` match, `challenge_digest == challenge_digest(stored text)`;
+`confirmation`: `verify_and_parse_confirmation` with the same resolver; the envelope `kid` must
+equal the kid stored on the challenge; `challenge_id` exists, unconsumed, unexpired, `command_id`
+and `controller_id` match, `challenge_digest == challenge_digest(stored text)`;
 re-compute `target_state_digest` and compare (→ `TARGET_CHANGED`); then in ONE SQLite transaction
 mark consumed and move the command to `accepted`; a `decline` → `canceled` with
 `CONFIRMATION_DECLINED`. Expired → `CONFIRMATION_EXPIRED`, command `expired`.
@@ -102,13 +116,21 @@ mark consumed and move the command to `accepted`; a `decline` → `canceled` wit
 
 `wss://…/ws/agent` with `Authorization: Bearer <access token>` (refreshed via
 `POST /v1/agent/token` when a 401 occurs). Sequence: `hello` (component `agent`, versions,
-registry) → `hello_ack` → wait for `grants_snapshot`, apply it atomically (controllers absent from
-the snapshot are marked revoked; in-flight commands from revoked controllers are canceled) →
-only then process commands. Reconnect: exponential backoff 1 s → 60 s with full jitter; ping
+registry) → `hello_ack{pc_id}` (must equal the stored identity, else stop and show a re-link prompt) → wait
+for `grants_snapshot`, apply it atomically as an **intersection** over the local store (controllers
+absent from the snapshot are marked revoked; listed controllers the PC never approved locally are
+ignored and logged as a security event; capabilities = local ∩ snapshot; `pc_enabled`/`status`
+recorded; in-flight commands from revoked controllers are canceled) → send a `state` frame → only
+then process commands, then any re-delivered `pairing_request`s. `revoked{reason}` → stop
+reconnecting, discard the PC credential, show a local re-link prompt. Close code 4001 (superseded
+by another agent instance) → do not auto-reconnect; tray warning with manual Reconnect. Reconnect: exponential backoff 1 s → 60 s with full jitter; ping
 every 25 s; a stale queue is never replayed — all queued commands are failed with `PC_OFFLINE`
 on disconnect and the controller is told when the socket returns? No: they are failed
 immediately in the journal; the relay independently reports to the controller.
-`state` frames are sent after connect, on change (debounced 500 ms), and every 30 s.
+`state` frames are sent right after the snapshot is applied, on change (debounced 500 ms), and
+every 30 s. Results journaled while disconnected (finished after the last acknowledged frame) are
+re-sent once on reconnect (`rules.late_results`). The access token is validated only at upgrade;
+before any reconnect with < 5 min of token lifetime left the agent fetches a new one.
 
 ## Actions
 
@@ -128,9 +150,13 @@ The agent **never** accepts a path, argument, script or shell text over the wire
 
 `dome-native-host` (separate console-less entry point built by PyInstaller) speaks Chrome Native
 Messaging on stdio (4-byte little-endian length + UTF-8 JSON, max 64 KiB) and connects to the agent
-over a per-user IPC endpoint: Windows named pipe `\\.\pipe\DoMe.Agent.<sha256(user SID + session id)[:16]>`
-created with a DACL granting access only to the current user; Unix domain socket
-`<state dir>/bridge.sock` mode 0600 elsewhere. The host validates every frame against the
+over a per-user IPC endpoint. Windows: both processes derive the name from the SID of their **own**
+process token (`GetTokenInformation(TokenUser)`) and `ProcessIdToSessionId(GetCurrentProcessId())`
+→ `\\.\pipe\DoMe.Agent.<sha256(sid|session)[:16]>`; the agent creates it with
+`FILE_FLAG_FIRST_PIPE_INSTANCE | PIPE_REJECT_REMOTE_CLIENTS` and a DACL granting only that SID,
+and on each connection verifies via `GetNamedPipeClientProcessId` that the client's session id and
+token SID equal its own before sending `bridge_hello_ack` (mismatch: close silently, local security
+event). Elsewhere: Unix domain socket `<state dir>/bridge.sock` mode 0600. The host validates every frame against the
 bridge schema in both directions and forwards verbatim. Manifest registration
 (`install-native-host`): `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and
 `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.dome.agent` → manifest JSON with
@@ -140,10 +166,13 @@ tabs}` from `bridge_hello`/`bridge_event` and drops an instance when its host di
 
 ## Pairing on the PC
 
-`pair` → `POST /v1/pairing/start` → show code + QR (tray window via tkinter, or console) with
-"expires in 5:00". On `pairing_request`: compute `pairing_verification_code(pairing_id, pc_id,
-kid)` locally, show `display_name` + code + requested capabilities, Approve/Decline. Approve
-stores the grant (so the agent accepts commands even before the next snapshot) and sends
+`pair` → `generate_pairing_code()` locally → `POST /v1/pairing/start {code_hash}` → show the
+formatted code + QR (`<origin>/pair#code=…`) in a tray window (tkinter) or the console with
+"expires in 5:00". On `pairing_request`: ignore if `code_hash` ≠ the current session's; recompute
+`kid_from_jwk(public_jwk)` and refuse on mismatch; compute
+`pairing_verification_code(code, pairing_id, pc_id, kid)` locally; show `display_name` (untrusted
+text) + the 6 digits + requested capabilities; Approve/Decline. Approve stores the grant (so the
+agent accepts commands even before the next snapshot) and sends
 `pairing_decision{approve, kid, granted_capabilities}`.
 
 ## Tray

@@ -4,3 +4,6 @@ export type * as command from "./command.ts";
 export type * as confirmation from "./confirmation.ts";
 export type * as relayFrames from "./relayFrames.ts";
 export type * as bridge from "./bridge.ts";
+export type * as results from "./results.ts";
+export type * as entitlement from "./entitlement.ts";
+export type * as rest from "./rest.ts";

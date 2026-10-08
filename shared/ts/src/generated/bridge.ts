@@ -13,7 +13,7 @@ export type ExtensionToAgent = BridgeHello | BridgeResponse | BridgeEvent | Brid
 export type AgentToExtension = BridgeHelloAck | BridgeRequest | BridgeError;
 
 /**
- * Chrome Native Messaging frames between the extension service worker and `dome-native-host`, and the identical JSON forwarded over the host's protected local IPC to the tray agent. Native messaging frames are limited to 1 MiB by Chrome; DoMe limits them to 64 KiB. The agent treats every field originating from a web page (titles, video ids) as untrusted display data.
+ * Chrome Native Messaging frames between the extension service worker and `dome-native-host`, and the identical JSON forwarded over the host's protected local IPC to the tray agent. Native messaging frames are limited to 1 MiB by Chrome; DoMe limits them to 64 KiB. The agent treats every field originating from a web page (titles, video ids) as untrusted display data. IPC identity rule (Windows): the agent and dome-native-host each derive the endpoint name from the SID of their OWN process token (GetTokenInformation TokenUser) and ProcessIdToSessionId(GetCurrentProcessId()); the agent creates the pipe with FILE_FLAG_FIRST_PIPE_INSTANCE | PIPE_REJECT_REMOTE_CLIENTS and a DACL granting only that SID, and on each connection verifies via GetNamedPipeClientProcessId that the client's session id and token SID equal its own before sending bridge_hello_ack; a mismatch is closed silently and logged as a local security event. Per-op result shapes: list_tabs → results.schema.json#/$defs/tabs_result; every other op → results.schema.json#/$defs/youtube_state_result (next/previous include previous_video_id).
  */
 export interface DoMeBrowserBridgeFramesExtensionNativeHostAgent {
   [k: string]: unknown | undefined;
@@ -86,27 +86,17 @@ export interface BridgeResponse {
   type: "bridge_response";
   request_id: string;
   ok: boolean;
-  result?: {};
+  result?: TabsResult | YoutubeStateResult;
   error?: {
     code: string;
     message: string;
   };
 }
-/**
- * Extension → agent. `tabs_changed` is emitted on tab open/close/navigation AND on content-script attach/detach; `player_state` is debounced to at most 2 per second per tab.
- *
- * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
- * via the `definition` "bridge_event".
- */
-export interface BridgeEvent {
-  type: "bridge_event";
-  event: "tabs_changed" | "player_state";
-  at: string;
+export interface TabsResult {
   /**
    * @maxItems 32
    */
-  tabs?: YoutubeTab[];
-  tab?: YoutubeTab;
+  tabs: YoutubeTab[];
 }
 export interface YoutubeTab {
   browser_instance_id: string;
@@ -126,10 +116,41 @@ export interface YoutubeTab {
   volume?: number;
   position_seconds?: number;
   duration_seconds?: number;
-  context: "watch" | "shorts" | "music" | "live" | "ad" | "playlist" | "other";
+  /**
+   * Page kind. Orthogonal flags below refine it.
+   */
+  context: "watch" | "shorts" | "music" | "other";
+  ad_showing: boolean;
+  is_live: boolean;
+  in_playlist: boolean;
+  theater?: boolean;
+  fullscreen?: boolean;
   has_next?: boolean;
   has_previous?: boolean;
   active?: boolean;
+}
+/**
+ * Post-action player state. `previous_video_id` is present for next/previous so the UI can show the observed transition.
+ */
+export interface YoutubeStateResult {
+  tab: YoutubeTab;
+  previous_video_id?: string;
+}
+/**
+ * Extension → agent. `tabs_changed` is emitted on tab open/close/navigation AND on content-script attach/detach; `player_state` is debounced to at most 2 per second per tab.
+ *
+ * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
+ * via the `definition` "bridge_event".
+ */
+export interface BridgeEvent {
+  type: "bridge_event";
+  event: "tabs_changed" | "player_state";
+  at: string;
+  /**
+   * @maxItems 32
+   */
+  tabs?: YoutubeTab[];
+  tab?: YoutubeTab;
 }
 /**
  * Either direction. Protocol incompatibility on hello (carries both version lists in detail) or a request that could not be processed at all. Request-scoped failures use bridge_response{ok:false}.

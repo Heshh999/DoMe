@@ -26,8 +26,9 @@ App (session required, otherwise redirect to `/v1/auth/login?return_to=…`):
 
 - `api.ts`: fetch wrapper; adds `X-DoMe-CSRF` from `/v1/session`; `credentials:"include"`; maps
   error bodies to `ProtocolError`; never caches.
-- `relay.ts`: one WebSocket to `/ws/controller`; `hello` → `hello_ack` → `subscribe` to the
-  selected PC(s); reconnect with backoff; on `visibilitychange` to visible or `online`, reconnect
+- `relay.ts`: one WebSocket to `/ws/controller`; `hello{kid}` → `hello_ack{controller_id}` →
+  `subscribe` to the selected PC(s) (the relay answers with `pc_status` + the cached `state`);
+  reconnect with backoff; on `visibilitychange` to visible or `online`, reconnect
   and treat all state as stale until a fresh `pc_status`/`state` arrives. Frames are validated
   with `schemas.validateFrame("relay_to_controller", …)` before use. Media titles are rendered as
   text only.
@@ -36,11 +37,15 @@ App (session required, otherwise redirect to `/v1/auth/login?return_to=…`):
   → `executing` → terminal). "Sent" is shown as *sent*, `accepted` as *PC received*, terminal
   states with their real result. 30 s default lifetime; the UI also times out locally and shows
   "No answer from the PC" without claiming failure.
-- `confirmations.ts`: `confirmation_required` → modal showing `challenge.display.pc_name`,
-  `action_label`, `detail` verbatim (as text), plus a countdown to `expires_at`; Approve →
-  `buildConfirmationPayload` with the **raw challenge text as received** (the frame is kept as a
-  string for this purpose) → `signConfirmation` → `{type:"confirmation", pc_id, envelope}`.
-- Volume sliders: emit at most one `set_volume` per 150 ms and always the latest value on release.
+- `confirmations.ts`: `confirmation_required{challenge_text}` → `schemas.validateChallengeText`
+  on the string → modal whose primary line is rendered from `action`/`params`/`target` with the
+  app's own registry labels, the PC name from the device inventory matched by `pc_id`, and
+  `display.detail` as plain secondary text; countdown to `expires_at`; Approve →
+  `buildConfirmationPayload({challengeText})` (the string, verbatim) → `signConfirmation` →
+  `{type:"confirmation", pc_id, envelope}`.
+- Results are validated with `registry.validateResult(action, result)` before rendering.
+- Volume sliders: emit at most one `set_volume` per 250 ms plus the final value on release
+  (within `plans.coalescable_command_rate_limit`).
 
 ## Deterministic text commands (`src/lib/intents.ts`)
 
@@ -70,8 +75,11 @@ is `unknown`; a rule never matches inside a longer sentence that also contains a
 - **Routines**: Pro preview with example routines rendered as disabled cards and an honest
   "available with DoMe Pro at paid launch" note (no checkout until Phase C).
 - **Devices**: PCs (rename, enable/disable, unlink), controllers (this phone highlighted,
-  rename, revoke), grants per PC, pairing flow (camera QR scan via `BarcodeDetector` when
-  available, otherwise manual entry), verification code display, pending approval state.
+  rename, revoke), grants per PC, pairing flow: camera QR scan (`BarcodeDetector` when available, else a `getUserMedia` + jsQR
+  fallback) or manual entry of the 4×5-symbol code (normalised with `normalizePairingCode`);
+  the app sends `pairingCodeHandle(code)` + its public JWK, computes
+  `pairingVerificationCode(code, pairing_id, pc_id, kid)` locally and shows it, then polls
+  `GET /v1/pairing/{id}` (state `claimed` while the PC is offline or the user has not approved).
 - **Settings/Help**: connection check (`system.ping` round trip), privacy controls, install
   instructions (Add to Home Screen steps for iOS Safari), redacted diagnostics download,
   support link, sign out (clears IndexedDB **except** the key, closes socket).
@@ -100,6 +108,7 @@ labelled; focus-visible rings; contrast ≥ 4.5:1 for text.
 ## Tests
 
 `intents.test.ts` (full table + rejections + injection), `controllerKey.test.ts` (fake-indexeddb,
-non-extractable), `commands.test.ts` (lifecycle state machine with a fake socket),
+non-extractable), `pairing.test.ts` (code normalisation, handle, verification code against the
+shared fixtures), `commands.test.ts` (lifecycle state machine with a fake socket),
 `confirmations.test.ts` (raw challenge text preserved; digest matches), component tests for
 Dashboard offline/online/stale and the confirmation modal; `pnpm build` and `pnpm typecheck` pass.
