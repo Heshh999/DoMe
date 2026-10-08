@@ -13,7 +13,12 @@ export interface LogEntry {
   fields?: Record<string, unknown>;
 }
 
-const REDACT_KEY = /(token|code|secret|challenge|payload|^sig$|signature|title|artist|detail|email|csrf|jwk|cookie|password|display_name|user_code|nonce|url)/i;
+/**
+ * Keys whose values are never kept. `code` alone is NOT matched: it carries stable protocol error
+ * codes (api.error, command.result, invalid_frame_dropped) that diagnostics exist to show. Pairing
+ * material has explicit names.
+ */
+const REDACT_KEY = /(token|pairing_code|code_hash|user_code|verification|secret|challenge|payload|^sig$|signature|title|artist|detail|email|csrf|jwk|cookie|password|display_name|nonce|url)/i;
 const MAX_ENTRIES = 120;
 const MAX_STRING = 160;
 

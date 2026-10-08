@@ -1,6 +1,10 @@
 <!doctype html>
 <html lang="en">
-<head><title>Never Gonna Give You Up - YouTube</title></head>
+<head>
+<title>Never Gonna Give You Up - YouTube</title>
+<!-- Mirrors YouTube's player stylesheet: the live badge exists in every player and is only shown when the time display is marked live. -->
+<style>.ytp-time-display:not(.ytp-live) .ytp-live-badge { display: none; }</style>
+</head>
 <body>
 <ytd-app>
   <ytd-watch-flexy video-id="dQw4w9WgXcQ">
@@ -19,7 +23,7 @@
                 <button class="ytp-mute-button ytp-button" title="Mute (m)"></button>
                 <div class="ytp-volume-panel" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80" aria-valuetext="80% volume"></div>
               </span>
-              <div class="ytp-time-display notranslate"><span class="ytp-time-current">0:10</span><span class="ytp-time-separator"> / </span><span class="ytp-time-duration">3:33</span></div>
+              <div class="ytp-time-display notranslate"><span class="ytp-time-current">0:10</span><span class="ytp-time-separator"> / </span><span class="ytp-time-duration">3:33</span><button class="ytp-live-badge ytp-button" disabled="true">Live</button></div>
             </div>
             <div class="ytp-right-controls">
               <button class="ytp-size-button ytp-button" title="Theater mode (t)"></button>

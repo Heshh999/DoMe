@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { relayFrames } from "@dome/protocol";
 
-import { RelayClient, relayUrl, type RelayStatus, type WebSocketLike } from "../src/lib/relay.ts";
+import { NUDGE_DEADLINE_MS, RelayClient, relayUrl, type RelayStatus, type WebSocketLike } from "../src/lib/relay.ts";
 
 const KID = "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU";
 const CONTROLLER = "22222222-2222-4222-8222-222222222222";
@@ -208,10 +208,67 @@ describe("RelayClient", () => {
     sockets[3]!.open();
     sockets[3]!.receive(helloAck(CONTROLLER));
     expect(client.isOpen).toBe(true);
-    // nudge while open just pings
+    // nudge while open asks for state and pings; it does not reconnect by itself
     client.nudge();
     expect(sockets[3]!.frames().some((f) => f.type === "ping")).toBe(true);
     expect(sockets).toHaveLength(4);
+  });
+
+  it("a resume nudge on an open socket re-sends subscribe (relay replies with pc_status + cached state) and pings with t", async () => {
+    const { client, sockets, flush, ft } = await setup();
+    client.setSubscriptions([PC]);
+    client.connect();
+    await flush();
+    const s = sockets[0]!;
+    s.open();
+    s.receive(helloAck(CONTROLLER));
+    const before = s.frames().length;
+    client.nudge();
+    const after = s.frames().slice(before);
+    expect(after[0]).toEqual({ type: "subscribe", pc_ids: [PC] });
+    expect(after[1]).toMatchObject({ type: "ping" });
+    expect(typeof (after[1] as { t?: unknown }).t).toBe("string");
+    // the relay answers → socket alive, nothing else happens
+    s.receive({ type: "pong", t: (after[1] as { t: string }).t });
+    await ft.advance(NUDGE_DEADLINE_MS + 1);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    expect(client.isOpen).toBe(true);
+  });
+
+  it("a nudge with no inbound frame within the deadline tears the dead socket down and reconnects right away", async () => {
+    const { client, sockets, flush, ft, statuses } = await setup();
+    client.setSubscriptions([PC]);
+    client.connect();
+    await flush();
+    const s = sockets[0]!;
+    s.open();
+    s.receive(helloAck(CONTROLLER));
+    client.nudge();
+    await ft.advance(NUDGE_DEADLINE_MS - 1);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    await ft.advance(2);
+    await flush();
+    expect(s.closed?.code).toBe(4000);
+    expect(sockets).toHaveLength(2);
+    expect(statuses[statuses.length - 1]).toBe("reconnecting");
+    expect(client.isOpen).toBe(false);
+    sockets[1]!.open();
+    sockets[1]!.receive(helloAck(CONTROLLER));
+    expect(client.isOpen).toBe(true);
+    expect(sockets[1]!.frames()[1]).toEqual({ type: "subscribe", pc_ids: [PC] });
+  });
+
+  it("a nudge on an unbound open socket (no controller yet) only pings", async () => {
+    const { client, sockets, flush } = await setup();
+    client.setSubscriptions([PC]);
+    client.connect();
+    await flush();
+    sockets[0]!.open();
+    sockets[0]!.receive(helloAck());
+    client.nudge();
+    expect(sockets[0]!.frames().map((f) => f.type)).toEqual(["hello", "ping"]);
   });
 
   it("hello timeout and idle timeout tear the socket down and reconnect", async () => {

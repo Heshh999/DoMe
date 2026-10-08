@@ -42,6 +42,20 @@ export function takeCodeFromLocation(loc: { hash: string }, history: { replaceSt
   return code;
 }
 
+/**
+ * The signed-out deep-link path (`app/navigation.ts`) drops the pairing code and comes back with a
+ * non-secret `scan_again=1` marker. Read it once and remove it from the address bar.
+ */
+export function takeScanAgainHint(loc: { search: string; hash: string }, history: { replaceState(data: unknown, unused: string, url?: string | URL | null): void }, pathname: string, param = "scan_again"): boolean {
+  const params = new URLSearchParams(loc.search);
+  if (params.get(param) !== "1") return false;
+  params.delete(param);
+  const rest = params.toString();
+  // Keep a (non-code) fragment only if one is present; the code fragment is scrubbed by takeCodeFromLocation.
+  history.replaceState(null, "", `${pathname}${rest ? `?${rest}` : ""}${loc.hash && loc.hash !== "#" ? loc.hash : ""}`);
+  return true;
+}
+
 export function defaultControllerName(userAgent: string): string {
   if (/iPhone/.test(userAgent)) return "iPhone";
   if (/iPad|Macintosh.*Mobile/.test(userAgent)) return "iPad";

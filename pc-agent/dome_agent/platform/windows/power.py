@@ -6,6 +6,9 @@
   SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED)``. With ``bForceAppsClosed=FALSE`` Windows asks
   the user about unsaved work instead of discarding it (spec §10).
 
+* abort: ``advapi32!AbortSystemShutdownW(NULL)`` for ``power.cancel`` after a restart/shutdown was
+  initiated (only possible inside the OS grace period; see :meth:`WindowsPower.abort_shutdown`).
+
 The countdown itself lives in :mod:`dome_agent.actions.power`; this adapter issues the OS call once.
 """
 
@@ -20,6 +23,7 @@ SHTDN_REASON_MAJOR_OTHER = 0x00000000
 SHTDN_REASON_FLAG_PLANNED = 0x80000000
 ERROR_ACCESS_DENIED = 5
 ERROR_SHUTDOWN_IN_PROGRESS = 1115
+ERROR_NO_SHUTDOWN_IN_PROGRESS = 1116
 
 
 def _enable_shutdown_privilege() -> None:
@@ -69,3 +73,25 @@ class WindowsPower:
 
     def shutdown(self) -> None:
         self._initiate(reboot=False)
+
+    def abort_shutdown(self) -> bool:
+        """``AbortSystemShutdownW(NULL)``: True iff Windows aborted a pending shutdown/restart.
+
+        Windows can only abort during the ``dwTimeout`` grace period of ``InitiateSystemShutdownExW``;
+        this adapter issues the call with ``dwTimeout = 0`` (the cancellable countdown is the agent's
+        own), so in practice Windows answers ``ERROR_NO_SHUTDOWN_IN_PROGRESS`` → False, and the agent
+        reports ``canceled: false`` rather than pretending."""
+        try:
+            _enable_shutdown_privilege()
+        except Exception as exc:
+            raise ProtocolError("POWER_DENIED", "Could not obtain the shutdown privilege") from exc
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        fn = advapi32.AbortSystemShutdownW
+        fn.argtypes = [wintypes.LPWSTR]
+        fn.restype = wintypes.BOOL
+        if fn(None):
+            return True
+        err = ctypes.get_last_error()
+        if err in (ERROR_NO_SHUTDOWN_IN_PROGRESS, 0):
+            return False
+        raise _map_error(err, "abort")

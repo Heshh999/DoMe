@@ -8,7 +8,7 @@ import type { ContentReply, OpArgs, PlayerSnapshot, TabOp } from "../shared/mess
 import type { Timers } from "../shared/throttle.ts";
 import { realTimers } from "../shared/throttle.ts";
 import { TOKEN_RE } from "../shared/token.ts";
-import { buttonUsable, currentVideoId, findPlayer, isTheater, nextButton, prevButton, readSnapshot, type PlayerDom } from "./detect.ts";
+import { buttonUsable, currentVideoId, findPlayer, isTheater, nextButton, prevButton, readSnapshot, readTitle, type PlayerDom } from "./detect.ts";
 import { waitFor } from "./wait.ts";
 
 export interface AdapterDeps {
@@ -20,6 +20,10 @@ export interface AdapterDeps {
 
 const NAV_EVENTS = ["yt-navigate-finish", "yt-page-data-updated", "yt-navigate-start", "popstate"] as const;
 const VIDEO_SWAP_EVENTS = ["loadstart", "emptied", "loadedmetadata", "playing", "timeupdate", "durationchange"] as const;
+/** After the URL changed, YouTube still has to deliver the new page data (title, metadata, media). */
+const SETTLE_EVENTS = ["yt-navigate-finish", "yt-page-data-updated"] as const;
+const SETTLE_VIDEO_EVENTS = ["loadedmetadata", "durationchange"] as const;
+const SETTLE_MAX_MS = 1500;
 /** Ops allowed while an advertisement is showing (no ad bypass: nothing here skips the ad). */
 const AD_SAFE_OPS: ReadonlySet<TabOp> = new Set(["get_state", "set_paused", "set_muted", "set_volume"]);
 const SHORTS_UNSUPPORTED: ReadonlySet<TabOp> = new Set(["next", "previous", "set_theater"]);
@@ -87,8 +91,29 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
     if (!reached) throw new OpError("ACTION_UNAVAILABLE", paused ? "The player did not pause" : "The player did not start playing");
   }
 
-  async function transition(dom: PlayerDom, button: Element, deadlineMs: number, kind: "next" | "previous"): Promise<string | undefined> {
+  /**
+   * Click Next/Previous and wait for a new video_id (the transition itself). Then wait, bounded by
+   * the remaining deadline, for the page to settle (navigate-finish / page data / media metadata)
+   * so the reported title, duration and position describe the new video, not the previous one.
+   * Returns the previous video_id plus whether the snapshot can be trusted.
+   */
+  async function transition(dom: PlayerDom, button: Element, deadlineMs: number, kind: "next" | "previous"): Promise<{ previous: string | undefined; settled: boolean }> {
     const before = currentVideoId(win);
+    const titleBefore = readTitle(doc);
+    const startedAt = timers.now();
+    // Armed before the click so a settle event that fires during the transition wait is not missed.
+    let settleSeen = false;
+    const markSettled = (): void => {
+      settleSeen = true;
+    };
+    const settleTargets: Array<[EventTarget | null, readonly string[]]> = [
+      [doc, SETTLE_EVENTS],
+      [dom.video, SETTLE_VIDEO_EVENTS],
+    ];
+    for (const [target, events] of settleTargets) for (const ev of events) target?.addEventListener(ev, markSettled);
+    const unarm = (): void => {
+      for (const [target, events] of settleTargets) for (const ev of events) target?.removeEventListener(ev, markSettled);
+    };
     (button as HTMLElement).click();
     const changed = await waitFor({
       check: () => {
@@ -105,9 +130,34 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
       timers,
     });
     if (!changed) {
+      unarm();
       throw new OpError("OUTCOME_UNKNOWN", `${kind === "next" ? "Next" : "Previous"} was clicked but no video change was observed within ${deadlineMs} ms`);
     }
-    return before;
+    const remaining = Math.min(SETTLE_MAX_MS, deadlineMs - (timers.now() - startedAt));
+    const settled = await waitFor({
+      // The new page's title appearing in the DOM is as good a signal as the navigation events.
+      check: () => settleSeen || readTitle(doc) !== titleBefore,
+      listen: [
+        { target: doc, events: SETTLE_EVENTS },
+        { target: findPlayer(doc).video, events: SETTLE_VIDEO_EVENTS },
+      ],
+      observe: { node: doc.body, options: { childList: true, subtree: true, characterData: true } },
+      timeoutMs: Math.max(0, remaining),
+      timers,
+    });
+    unarm();
+    return { previous: before, settled };
+  }
+
+  /** Snapshot after an observed transition; without a settled page the fields that could still describe the previous video are omitted. */
+  function transitionSnapshot(settled: boolean): PlayerSnapshot {
+    const state = snapshot();
+    if (settled) return state;
+    const rest: PlayerSnapshot = { ...state };
+    delete rest.title;
+    delete rest.duration_seconds;
+    delete rest.position_seconds;
+    return rest;
   }
 
   async function seek(dom: PlayerDom, target: number): Promise<void> {
@@ -195,15 +245,15 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
         requireVideo(dom);
         const button = nextButton(dom, doc);
         if (!buttonUsable(button, win)) throw new OpError("NO_NEXT_VIDEO", "The player has no next video");
-        const previous = await transition(dom, button, deadlineMs, "next");
-        return ok(snapshot(), previous);
+        const { previous, settled } = await transition(dom, button, deadlineMs, "next");
+        return ok(transitionSnapshot(settled), previous);
       }
       case "previous": {
         requireVideo(dom);
         const button = prevButton(dom, doc);
         if (!buttonUsable(button, win)) throw new OpError("NO_PREVIOUS_VIDEO", "The player has no previous video");
-        const previous = await transition(dom, button, deadlineMs, "previous");
-        return ok(snapshot(), previous);
+        const { previous, settled } = await transition(dom, button, deadlineMs, "previous");
+        return ok(transitionSnapshot(settled), previous);
       }
       case "seek_relative": {
         if (typeof args.seconds !== "number" || !Number.isFinite(args.seconds)) throw new OpError("INVALID_PARAMETERS", "seconds must be a number");

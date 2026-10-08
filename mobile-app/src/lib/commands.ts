@@ -29,8 +29,14 @@ export interface PendingConfirmation {
   /** null = bound to this command; otherwise why Approve is not offered. */
   bindingProblem: string | null;
   receivedAt: number;
-  /** "approve"/"decline" once the customer answered; the result frame still decides the outcome. */
-  decision: "approve" | "decline" | null;
+  /**
+   * "approve"/"decline" once the customer answered (the result frame still decides the outcome);
+   * "dismissed" when the customer closed the modal locally — nothing was sent to the PC, which
+   * discards the challenge when it expires.
+   */
+  decision: "approve" | "decline" | "dismissed" | null;
+  /** The relay socket dropped while this was pending: the countdown is not a live promise any more. */
+  connectionLost: boolean;
 }
 
 export interface CommandRecord {
@@ -58,6 +64,8 @@ export interface Identity {
 
 export interface CommandServiceDeps {
   send(frame: relayFrames.ControllerToRelay): void;
+  /** Socket open? Checked before identity so a dropped connection reads as PC_RECONNECTING, never as "not paired". */
+  connected?(): boolean;
   identity(): Identity | null;
   keyPair(): Promise<CryptoKeyPair>;
   onChange(record: CommandRecord): void;
@@ -97,6 +105,7 @@ export class CommandService {
 
   /** Build, validate, sign and send. Throws (and records nothing) when it cannot be sent at all. */
   async send(input: SendInput): Promise<CommandRecord> {
+    this.requireConnection();
     const identity = this.deps.identity();
     if (!identity) throw new ProtocolError("UNKNOWN_KEY", "This phone is not paired yet.");
     const now = this.deps.now?.() ?? new Date();
@@ -165,6 +174,7 @@ export class CommandService {
     if (!record?.confirmation) throw new ProtocolError("CONFIRMATION_INVALID", "nothing to confirm");
     if (record.terminal) throw new ProtocolError("CONFIRMATION_EXPIRED", "the command already finished");
     if (decision === "approve" && record.confirmation.bindingProblem) throw new ProtocolError("CONFIRMATION_INVALID", record.confirmation.bindingProblem);
+    this.requireConnection();
     const identity = this.deps.identity();
     if (!identity) throw new ProtocolError("UNKNOWN_KEY", "This phone is not paired yet.");
     const keyPair = await this.deps.keyPair();
@@ -175,7 +185,37 @@ export class CommandService {
     log.info("confirmation.sent", { command_id: commandId, decision });
   }
 
-  /** Called when the socket drops: nothing in flight can be trusted to arrive; keep records, flag no answer on timers. */
+  /**
+   * Local escape hatch for the confirmation modal: closes it without answering the PC. No frame is
+   * sent; the PC's challenge simply expires and the relay's deadline rule terminates the command.
+   */
+  dismissConfirmation(commandId: string): void {
+    const record = this.records.get(commandId);
+    if (!record?.confirmation || record.confirmation.decision !== null) return;
+    record.confirmation = { ...record.confirmation, decision: "dismissed" };
+    this.store(record);
+    log.info("confirmation.dismissed", { command_id: commandId });
+  }
+
+  /** The relay socket left `open`: every pending confirmation's countdown is no longer backed by a live connection. */
+  markConnectionLost(): void {
+    this.setConnectionLost(true);
+  }
+
+  /** The socket is open again; a still-pending challenge can be answered. */
+  markConnectionRestored(): void {
+    this.setConnectionLost(false);
+  }
+
+  private setConnectionLost(lost: boolean): void {
+    for (const record of this.records.values()) {
+      if (!record.confirmation || record.terminal || record.confirmation.decision !== null || record.confirmation.connectionLost === lost) continue;
+      record.confirmation = { ...record.confirmation, connectionLost: lost };
+      this.store(record);
+    }
+  }
+
+  /** Called on sign-out: drop every record and timer. */
   reset(): void {
     for (const h of this.timers.values()) (this.deps.timers ?? globalTimers).clearTimeout(h);
     this.timers.clear();
@@ -211,7 +251,7 @@ export class CommandService {
     const bindingProblem = checkChallengeBinding(parsed.challenge, record, identity?.controllerId ?? null);
     if (bindingProblem) log.warn("confirmation.binding_mismatch", { command_id: record.commandId });
     record.state = "awaiting_confirmation";
-    record.confirmation = { parsed, bindingProblem, receivedAt: Date.now(), decision: null };
+    record.confirmation = { parsed, bindingProblem, receivedAt: Date.now(), decision: null, connectionLost: false };
     record.noAnswer = false;
     this.store(record);
     return true;
@@ -254,6 +294,10 @@ export class CommandService {
     this.store(record);
     log.info("command.result", { action: record.action, command_id: record.commandId, state: frame.state, origin: frame.origin, code: frame.error?.code });
     return true;
+  }
+
+  private requireConnection(): void {
+    if (this.deps.connected && !this.deps.connected()) throw new ProtocolError("PC_RECONNECTING", "not connected to DoMe", true);
   }
 
   private arm(commandId: string, ms: number): void {

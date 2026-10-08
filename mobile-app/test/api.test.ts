@@ -84,6 +84,15 @@ describe("REST client", () => {
     expect(calls[0]).toBe("/v1/pcs/a%2Fb%20c");
   });
 
+  it("loginUrl never forwards a fragment (the pairing deep link carries the code there)", () => {
+    const url = loginUrl("/app/devices/pair#code=ABCDE-FGHJK-MNPQR-STVWX");
+    expect(url).toBe("/v1/auth/login?return_to=%2Fapp%2Fdevices%2Fpair");
+    expect(url).not.toMatch(/code=/i);
+    expect(url).not.toMatch(/ABCDE|%23|#/);
+    expect(loginUrl("/app/remote?x=1#frag")).toBe("/v1/auth/login?return_to=%2Fapp%2Fremote%3Fx%3D1");
+    expect(loginUrl("#code=ABCDE-FGHJK-MNPQR-STVWX")).toBe("/v1/auth/login?return_to=%2Fapp");
+  });
+
   it("loginUrl only accepts same-origin relative return paths", () => {
     expect(loginUrl("/app/remote")).toBe("/v1/auth/login?return_to=%2Fapp%2Fremote");
     expect(loginUrl("//evil.example")).toBe("/v1/auth/login?return_to=%2Fapp");

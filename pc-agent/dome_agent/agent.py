@@ -4,10 +4,12 @@ Inbound frame handling (``relay_to_agent``):
 
 * ``hello_ack`` / connection → :class:`RelayClient` (identity check) → :meth:`on_connected`
 * ``grants_snapshot`` → identity check (``rules.agent_identity``), atomic intersection in the store,
-  cancel in-flight commands of revoked controllers, entitlement assertion, then a ``state`` frame and
-  the re-send of journaled late results; only now are commands accepted
+  cancel in-flight commands of revoked controllers, re-authorize every pending command against the
+  new intersection, re-send unacknowledged local revocations, entitlement assertion, then a ``state``
+  frame and the re-send of journaled late results; only now are commands accepted
 * ``command`` → :class:`Authorizer` → reject / replay duplicate / confirmation_required / ``ack{accepted}`` + queue
-* ``confirmation`` → verified with the same resolver, kid pinned to the challenge, atomic consume → queue
+* ``confirmation`` → verified with the same resolver, kid pinned to the challenge, atomic consume,
+  steps 3-4 re-checked (``Authorizer.recheck_grant``) → queue
 * ``cancel`` → queued / awaiting / armed-power commands end ``canceled``
 * ``pairing_request`` → :class:`PairingManager`
 * ``revoked`` → credential discarded, re-link prompt; ``error`` → logged
@@ -90,7 +92,7 @@ class Agent:
         )
         self.authz = Authorizer(self.services, self.confirmations, self.entitlement)
         self.emitter = Emitter(self.store, self._send)
-        self.executor = Executor(self.services, self.emitter, precheck=self.authz.check_availability)
+        self.executor = Executor(self.services, self.emitter, precheck=self._precheck)
         self.power.bind(self.executor.complete)
         self.api: ApiClient | None = None
         self.tokens: TokenManager | None = None
@@ -104,6 +106,7 @@ class Agent:
         self._link_watch: asyncio.Task[None] | None = None
         self.relink_required = False
         self.relink_reason = ""
+        self.configuration_error = ""
         self.status_notes: list[str] = list(self.platform.notes)
         self.started_at = time.time()
 
@@ -170,6 +173,7 @@ class Agent:
         self.pairing = PairingManager(self.store, self.identity, self.api, self.tokens, self._send, self.ui)
         self.relay = RelayClient(relay_url, self.tokens, self, expected_pc_id=lambda: self.identity.pc_id)
         self.relink_required = False
+        self.configuration_error = ""
         self.relay.start()
 
     async def _watch_for_link(self) -> None:
@@ -220,6 +224,15 @@ class Agent:
         self._update_ui()
 
     async def on_stopped(self, reason: StopReason) -> None:
+        if reason == "configuration_error":
+            # Local misconfiguration (invalid relay URL): the credential is untouched; no re-link needed.
+            self.configuration_error = (
+                "The relay URL is invalid. Check DOME_AGENT_RELAY_URL or re-run `dome-agent link`."
+            )
+            log.error("agent stopped connecting", reason=reason)
+            self.ui.notify("DoMe cannot connect", self.configuration_error)
+            self._update_ui()
+            return
         if reason in ("revoked", "credential_rejected", "unauthorized", "identity_mismatch"):
             self.relink_required = True
             self.relink_reason = reason
@@ -257,8 +270,10 @@ class Agent:
                 controller_id=controller_id, state="canceled", error=revoked_error
             )
             log.info("controller revoked by snapshot", controller_id=controller_id, canceled_commands=len(canceled))
+        await self._reauthorize_pending()
         first = not self._snapshot_received
         self._snapshot_received = True
+        await self._resend_local_revocations(result.still_listed_revoked)
         await self._apply_snapshot_entitlement(frame.get("entitlement_assertion"))
         await self.state.emit_now()
         if first:
@@ -267,6 +282,47 @@ class Agent:
                 self._refresh_entitlement_on_connect(), name="dome-entitlement-connect"
             )
         self._update_ui()
+
+    async def _reauthorize_pending(self) -> None:
+        """A new snapshot (or a local change) can narrow what a phone may do: every command that was
+        authorized but has not produced its side effect yet is re-checked (steps 3-4) and ended
+        ``canceled`` with the specific code when it no longer passes (``rules.grants_snapshot``)."""
+        for pending_id in self.confirmations.pending_command_ids():
+            pending = self.confirmations.pending_for(pending_id)
+            if pending is None:
+                continue
+            blocker = self.authz.recheck_grant(pending.command)
+            if blocker is not None:
+                self.store.consume_challenge(
+                    pending.challenge_id, new_command_state="canceled", error_code=blocker.code
+                )
+                self.confirmations.drop(pending_id)
+                await self.emitter.result(pending_id, "canceled", error=blocker)
+                log.info("pending confirmation canceled by snapshot", command_id=pending_id, code=blocker.code)
+        for vc in self.executor.queued_commands():
+            blocker = self.authz.recheck_grant(vc)
+            if blocker is not None:
+                await self.executor.cancel_queued(vc.command_id, blocker)
+                log.info("queued command canceled by snapshot", command_id=vc.command_id, code=blocker.code)
+        for vc in self.executor.deferred_commands():
+            blocker = self.authz.recheck_grant(vc)
+            if (
+                blocker is not None
+                and self.power.pending is not None
+                and self.power.pending.command_id == vc.command_id
+            ):
+                await self.power.cancel(reason="canceled because the phone's permission changed")
+
+    async def _resend_local_revocations(self, still_listed: tuple[tuple[str, str], ...]) -> None:
+        """Local revocations reach the relay only through ``revoke_controller``; a frame dropped while
+        offline is re-sent after every snapshot until the write succeeds (idempotent on the relay)."""
+        pending = {row.controller_id: row.kid for row in self.store.pending_revocations()}
+        for controller_id, kid in still_listed:
+            pending.setdefault(controller_id, kid)
+        for controller_id, kid in pending.items():
+            if await self._send(revoke_controller_frame(controller_id, kid)):
+                self.store.clear_pending_revocation(controller_id)
+                log.info("local revocation (re-)sent to the relay", controller_id=controller_id)
 
     async def _apply_snapshot_entitlement(self, assertion: Any) -> None:
         if assertion is None:
@@ -370,10 +426,12 @@ class Agent:
                 self._security_event("confirmation_unmatched", {"code": exc.code})
                 await self._send({"type": "error", "error": exc.to_frame_error()})
             return
-        if not self.store.remote_enabled:
-            await self.emitter.result(
-                pending.command.command_id, "failed", error=self.registry.make_error("PC_REMOTE_DISABLED")
-            )
+        # The command waited for up to 60 s: re-apply steps 3-4 (remote_enabled, plan state, grant,
+        # capability ∈ local ∩ snapshot) before anything is queued for execution.
+        blocker = self.authz.recheck_grant(pending.command)
+        if blocker is not None:
+            await self.emitter.result(pending.command.command_id, "failed", error=blocker)
+            log.info("confirmed command refused on re-check", command_id=pending.command.command_id, code=blocker.code)
             return
         await self._enqueue(pending.command)
 
@@ -450,16 +508,22 @@ class Agent:
         self._update_ui()
 
     async def revoke_controller_locally(self, controller_id: str) -> bool:
-        row = self.store.get_grant(controller_id)
+        row = self.store.revoke_grant_locally(controller_id, "local_revocation")
         if row is None:
             return False
-        self.store.revoke_grant(controller_id, "local_revocation")
         error = self.registry.make_error("CONTROLLER_REVOKED")
         await self.executor.cancel_for_controller(controller_id, error)
         await self._cancel_pending_confirmations(controller_id=controller_id, state="canceled", error=error)
         self._security_event("controller_revoked_locally", {"controller_id": controller_id})
         if not controller_id.startswith("pending-"):
-            await self._send(revoke_controller_frame(controller_id, row.kid))
+            # Journaled as pending first; cleared only once the frame was written. Offline → re-sent
+            # after the next grants_snapshot (_resend_local_revocations).
+            if await self._send(revoke_controller_frame(controller_id, row.kid)):
+                self.store.clear_pending_revocation(controller_id)
+            else:
+                log.warning(
+                    "relay offline; revoke_controller will be re-sent on reconnect", controller_id=controller_id
+                )
         self.state.request_update()
         return True
 
@@ -486,6 +550,8 @@ class Agent:
             "snapshot_received": self._snapshot_received,
             "relink_required": self.relink_required,
             "relink_reason": self.relink_reason,
+            "configuration_error": self.configuration_error,
+            "pending_revocations": [r.controller_id for r in self.store.pending_revocations()],
             "store": self.store.summary(),
             "grants": grants,
             "entitlement": self.entitlement.summary(),
@@ -627,6 +693,9 @@ class Agent:
         }
 
     # ----- plumbing ---------------------------------------------------------------------------------------------------------
+    async def _precheck(self, vc: Any) -> ProtocolError | None:
+        return await self.authz.precheck(vc)  # self.authz is rebuilt on (re-)link: resolve it late
+
     async def _send(self, frame: dict[str, Any]) -> bool:
         if self.relay is None:
             return False

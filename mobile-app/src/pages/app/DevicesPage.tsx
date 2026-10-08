@@ -14,7 +14,7 @@ import { capabilityLabel, errorMessage } from "../../lib/labels.ts";
 import { connectionOf } from "../../lib/connection.ts";
 import { Button, Card, EmptyState, inputClass, Notice, Pill } from "../../components/ui.tsx";
 import { useDevicesStore } from "../../store/devices.ts";
-import { useLiveStore } from "../../store/live.ts";
+import { useLivePcs } from "../../app/hooks.ts";
 import { useSessionStore } from "../../store/session.ts";
 
 function useThisKid(): { kid: string | null; problem: string | null } {
@@ -101,7 +101,7 @@ function ConfirmButton({ label, confirmLabel, onConfirm, variant = "danger" }: {
 
 export function DevicesPage() {
   const { pcs, controllers, grantsByPc, loaded, loading, error, refresh, loadGrants, selectedPcId, select } = useDevicesStore();
-  const livePcs = useLiveStore((s) => s.pcs);
+  const livePcs = useLivePcs();
   const limits = useSessionStore((s) => s.session?.limits);
   const { kid, problem } = useThisKid();
   const [actionError, setActionError] = useState<ApiError | null>(null);

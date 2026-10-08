@@ -1,7 +1,8 @@
 /**
  * Bottom sheet / modal dialog (native `<dialog>` for focus trapping and Escape handling). Used for
  * the confirmation transaction and pickers; `dismissible={false}` keeps a confirmation from being
- * closed by accident — Decline is the only way out.
+ * closed by accident (Escape/backdrop) — the content decides which buttons lead out (Approve/Decline,
+ * or Close once the challenge expired or the connection is down).
  */
 import { useEffect, useRef, type ReactNode } from "react";
 

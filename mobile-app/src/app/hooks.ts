@@ -6,18 +6,33 @@ import type { JsonValue } from "@dome/protocol";
 import type { CommandRecord } from "../lib/commands.ts";
 import type { LabelContext } from "../lib/labels.ts";
 import { useDevicesStore } from "../store/devices.ts";
-import { EMPTY_LIVE_PC, isFresh, useLiveStore, type LivePc } from "../store/live.ts";
+import { EMPTY_LIVE_PC, isFresh, useLiveStore, withTimeStaleness, type LivePc } from "../store/live.ts";
 import { describeSendError, getRuntime } from "./runtime.ts";
 
 export function useSelectedPc() {
   const pcs = useDevicesStore((s) => s.pcs);
   const selectedPcId = useDevicesStore((s) => s.selectedPcId);
-  const live = useLiveStore((s) => (selectedPcId ? s.pcs[selectedPcId] : undefined));
+  const rawLive = useLiveStore((s) => (selectedPcId ? s.pcs[selectedPcId] : undefined));
+  // The store clock advances every few seconds (Runtime.start) so the 75 s rule is re-evaluated even
+  // when no frame arrives; `Math.max` keeps a state frame received after the last tick fresh.
+  const now = useLiveStore((s) => s.now);
+  const clock = Math.max(now, rawLive?.stateReceivedAt ?? 0);
   const pc = pcs.find((p) => p.id === selectedPcId);
-  const livePc: LivePc = live ?? EMPTY_LIVE_PC;
-  const fresh = isFresh(live);
+  const livePc: LivePc = rawLive ? withTimeStaleness(rawLive, clock) : EMPTY_LIVE_PC;
+  const fresh = isFresh(rawLive, clock);
   const canControl = fresh && pc?.enabled === true && livePc.state?.remote_enabled !== false;
   return { pc, pcId: pc?.id ?? null, pcName: pc?.name ?? null, live: livePc, fresh, canControl };
+}
+
+/** Every PC's live view with the 75 s rule applied (for lists and pickers). */
+export function useLivePcs(): Record<string, LivePc> {
+  const pcs = useLiveStore((s) => s.pcs);
+  const now = useLiveStore((s) => s.now);
+  return useMemo(() => {
+    const out: Record<string, LivePc> = {};
+    for (const [id, pc] of Object.entries(pcs)) out[id] = withTimeStaleness(pc, Math.max(now, pc.stateReceivedAt ?? 0));
+    return out;
+  }, [pcs, now]);
 }
 
 export function useLabels(pcId: string | null): LabelContext {

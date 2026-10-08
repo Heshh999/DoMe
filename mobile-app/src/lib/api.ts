@@ -52,9 +52,16 @@ export function apiUrl(path: string): string {
   return `${API_ORIGIN}${path}`;
 }
 
-/** Where the browser must navigate to sign in; cloud-api redirects to the OIDC provider. */
+/**
+ * Where the browser must navigate to sign in; cloud-api redirects to the OIDC provider. The
+ * `return_to` value is a relative path + query only: any fragment is dropped here as a last line of
+ * defence, because the pairing deep link carries the pairing code in its fragment and the backend
+ * must never receive it (version.json rules.pairing_secret). Callers scrub the fragment themselves
+ * before calling this (see `app/navigation.ts`).
+ */
 export function loginUrl(returnTo: string): string {
-  const safe = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/app";
+  const withoutFragment = returnTo.split("#", 1)[0] ?? "";
+  const safe = withoutFragment.startsWith("/") && !withoutFragment.startsWith("//") ? withoutFragment : "/app";
   return apiUrl(`/v1/auth/login?return_to=${encodeURIComponent(safe)}`);
 }
 

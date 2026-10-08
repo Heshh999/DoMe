@@ -16,6 +16,8 @@ export const NATIVE_HOST_NAME = "com.dome.agent";
 export const RECONNECT_ALARM = "dome-reconnect";
 const BACKOFF_SECONDS = [1, 2, 4, 8, 16, 32, 60] as const;
 const INCOMPATIBLE_RETRY_SECONDS = 300;
+/** A host that opens the port but never acknowledges hello is treated as a failed connection after this long. */
+export const HELLO_ACK_TIMEOUT_MS = 10_000;
 /** Chrome's minimum alarm delay (30 s since Chrome 120; shorter delays are rounded up). */
 const MIN_ALARM_MINUTES = 0.5;
 
@@ -34,6 +36,7 @@ export class NativeConnection {
   private acked = false;
   private attempt = 0;
   private reconnectTimer: unknown = null;
+  private ackTimer: unknown = null;
   private state: ConnectionState = { state: "disconnected", since: new Date().toISOString(), attempt: 0 };
   private readonly timers: Timers;
   private readonly hostName: string;
@@ -74,7 +77,30 @@ export class NativeConnection {
     this.acked = false;
     port.onMessage.addListener((message) => this.handleMessage(port, message));
     port.onDisconnect.addListener(() => this.handleDisconnect(port));
+    this.armAckTimer(port);
     await this.sendHello();
+  }
+
+  /**
+   * Without an ack the open port would keep the worker alive and connect() a no-op forever
+   * (host blocked on its pipe, ack dropped by the host's schema check, stalled agent IPC). The
+   * reconnect alarm is the termination-safe net; this timer is the in-process one.
+   */
+  private armAckTimer(port: NativePort): void {
+    this.clearAckTimer();
+    this.ackTimer = this.timers.setTimeout(() => {
+      this.ackTimer = null;
+      if (port !== this.port || this.acked) return;
+      log.warn("no bridge_hello_ack from the native host", { timeout_ms: HELLO_ACK_TIMEOUT_MS, attempt: this.attempt });
+      this.disconnect();
+      this.setState("disconnected", "The DoMe agent did not answer the extension's hello");
+      this.scheduleReconnect();
+    }, HELLO_ACK_TIMEOUT_MS);
+  }
+
+  private clearAckTimer(): void {
+    if (this.ackTimer !== null) this.timers.clearTimeout(this.ackTimer);
+    this.ackTimer = null;
   }
 
   async sendHello(): Promise<void> {
@@ -109,6 +135,7 @@ export class NativeConnection {
     const port = this.port;
     this.port = null;
     this.acked = false;
+    this.clearAckTimer();
     try {
       port?.disconnect();
     } catch {
@@ -143,6 +170,7 @@ export class NativeConnection {
         }
         this.acked = true;
         this.attempt = 0;
+        this.clearAckTimer();
         this.setState("connected", undefined, { agent_version: frame.agent_version, protocol_version: frame.protocol_version });
         log.info("connected to agent", { agent_version: frame.agent_version, protocol_version: frame.protocol_version });
         this.deps.onConnected();
@@ -172,6 +200,7 @@ export class NativeConnection {
     this.port = null;
     const wasAcked = this.acked;
     this.acked = false;
+    this.clearAckTimer();
     const classified = classifyDisconnect(reason, this.state.state);
     log.info("native port disconnected", { reason: classified, acked: wasAcked });
     if (this.state.state !== "incompatible") this.setState(classified, reason || undefined);

@@ -7,6 +7,7 @@ reports ``platform: "development"`` in state frames.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +29,8 @@ class FakeState:
     refuse_focus: bool = False
     refuse_close: bool = False
     power_fail: str | None = None  # error code to raise from power calls
+    power_block_seconds: float = 0.0  # make sleep/restart/shutdown block (like a real SetSuspendState)
+    abort_shutdown_ok: bool = True  # what the fake OS answers to AbortSystemShutdown
     start_at_login: bool = False
     next_pid: int = 1000
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
@@ -190,6 +193,8 @@ class FakePower:
         self.st.record(what)
         if self.st.power_fail:
             raise ProtocolError(self.st.power_fail, f"fake platform refused {what}")
+        if self.st.power_block_seconds:
+            time.sleep(self.st.power_block_seconds)
 
     def sleep(self) -> None:
         self._do("power_sleep")
@@ -199,6 +204,10 @@ class FakePower:
 
     def shutdown(self) -> None:
         self._do("power_shutdown")
+
+    def abort_shutdown(self) -> bool:
+        self.st.record("power_abort_shutdown")
+        return self.st.abort_shutdown_ok
 
 
 class FakeStartup:

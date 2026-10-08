@@ -1,7 +1,7 @@
 /**
  * Service-worker composition root. Listener registration happens synchronously in createBackground()
  * (required by MV3); start() performs the asynchronous boot: load/create browser_instance_id,
- * connect the native port, probe YouTube tabs, then announce them once the agent acknowledged hello.
+ * probe YouTube tabs, connect the native port, then announce the tabs once the agent acknowledged hello.
  */
 import { log } from "../shared/log.ts";
 import { isContentToBackground, isPopupToBackground, type ConnectionState, type StatusReport } from "../shared/messages.ts";
@@ -166,8 +166,12 @@ export function createBackground(api: ExtensionApi, options: BackgroundOptions =
     async start() {
       const id = await storage.browserInstanceId();
       log.info("worker started", { browser_instance_id: id, browser, version: extensionVersion });
-      await Promise.all([connection.connect(), registry.rebuild()]);
-      await sendTabsChanged();
+      // Probing is local and fast; doing it before the port opens means the tabs_changed sent on
+      // the ack is built from a complete cache. rebuild() also triggers a (debounced) tabs_changed
+      // itself, which corrects an earlier announcement when connect() was started independently
+      // (onStartup/onInstalled/alarm) and acknowledged while probes were still outstanding.
+      await registry.rebuild();
+      await connection.connect();
     },
   };
 }

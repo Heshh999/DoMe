@@ -157,14 +157,25 @@ export class FakeChrome implements ExtensionApi {
     this.tabs.onRemoved.dispatch(tabId);
   }
 
+  /**
+   * tabs.onUpdated as Chrome fires it. Note that Chrome reports status "loading"/"complete" for
+   * history.pushState navigations too, during which the content script survives; use reloadTab()
+   * for a full (re)load that kills it.
+   */
   updateTab(tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo): void {
     const tab = this.tabList.find((t) => t.id === tabId);
     if (!tab) throw new Error(`no tab ${tabId}`);
     if (changeInfo.url !== undefined) tab.url = changeInfo.url;
     if (changeInfo.title !== undefined) tab.title = changeInfo.title;
     if (changeInfo.discarded !== undefined) tab.discarded = changeInfo.discarded;
-    if (changeInfo.status === "loading") this.contentHandlers.delete(tabId);
+    if (changeInfo.discarded === true) this.contentHandlers.delete(tabId);
     this.tabs.onUpdated.dispatch(tabId, changeInfo, { ...tab });
+  }
+
+  /** A full page (re)load: the old content script is gone before Chrome reports status "loading". */
+  reloadTab(tabId: number, url?: string): void {
+    this.contentHandlers.delete(tabId);
+    this.updateTab(tabId, url === undefined ? { status: "loading" } : { status: "loading", url });
   }
 
   fireAlarm(name: string): void {

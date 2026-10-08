@@ -125,6 +125,10 @@ class PowerAdapter(Protocol):
 
     def shutdown(self) -> None: ...
 
+    def abort_shutdown(self) -> bool:
+        """Ask the OS to abort a restart/shutdown it already accepted; True iff it was aborted."""
+        ...
+
 
 class StartupAdapter(Protocol):
     def get_start_at_login(self) -> bool: ...

@@ -182,3 +182,71 @@ async def test_app_close_happy_and_refused(harness: AgentHarness, controller: Co
     assert res["state"] == "failed" and res["error"]["code"] == "CLOSE_REFUSED" and res["result"]["closed"] is False
     assert "4243" in harness.fake.windows
     await asyncio.sleep(0)
+
+
+# ----- re-authorization between confirmation_required and execution (review finding) ---------------------
+
+
+async def test_snapshot_narrowing_cancels_awaiting_confirmation(harness: AgentHarness, controller: Controller) -> None:
+    """The account removes `power` from the phone while the challenge is pending: the command ends at
+    the snapshot, and the later (otherwise valid) confirmation cannot revive it."""
+    cid, text = await start_confirmation(harness, controller)
+    harness.relay.controllers[0] = controller.snapshot_entry(capabilities=("status",))
+    await harness.relay.send_snapshot()
+    res = await harness.result(cid)
+    assert res["state"] == "canceled" and res["error"]["code"] == "GRANT_MISSING"
+    await harness.send_confirmation(controller.confirmation(cid, text))
+    err = await harness.relay.expect("error")
+    assert err["error"]["code"] == "CONFIRMATION_INVALID"
+    assert harness.fake.count("power_sleep") == 0
+    assert harness.agent.store.journal_get(cid).state == "canceled"  # type: ignore[union-attr]
+    assert harness.agent.store.get_open_challenge_for_command(cid) is None
+
+
+async def test_snapshot_pc_disabled_cancels_awaiting_confirmation(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    cid, text = await start_confirmation(harness, controller)
+    harness.relay.pc_enabled = False
+    await harness.relay.send_snapshot()
+    res = await harness.result(cid)
+    assert res["state"] == "canceled" and res["error"]["code"] == "PC_PLAN_DISABLED"
+    await harness.send_confirmation(controller.confirmation(cid, text))
+    assert (await harness.relay.expect("error"))["error"]["code"] == "CONFIRMATION_INVALID"
+    assert harness.fake.count("power_sleep") == 0
+
+
+async def test_snapshot_controller_plan_disabled_cancels_awaiting_confirmation(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    cid, _text = await start_confirmation(harness, controller)
+    harness.relay.controllers[0] = controller.snapshot_entry(status="plan_disabled")
+    await harness.relay.send_snapshot()
+    res = await harness.result(cid)
+    assert res["state"] == "canceled" and res["error"]["code"] == "CONTROLLER_PLAN_DISABLED"
+    assert harness.fake.count("power_sleep") == 0
+
+
+async def test_confirmation_rechecks_grant_before_queueing(harness: AgentHarness, controller: Controller) -> None:
+    """Defence in depth: even if the snapshot hook missed it, the confirmation path re-applies steps 3-4.
+    The store is narrowed directly (bypassing the agent's snapshot handler)."""
+    import uuid
+
+    cid, text = await start_confirmation(harness, controller)
+    harness.agent.store.apply_snapshot(str(uuid.uuid4()), True, [controller.snapshot_entry(capabilities=("status",))])
+    await harness.send_confirmation(controller.confirmation(cid, text))
+    res = await harness.result(cid)
+    assert res["state"] == "failed" and res["error"]["code"] == "GRANT_MISSING"
+    assert harness.fake.count("power_sleep") == 0
+    assert harness.agent.store.journal_get(cid).state == "failed"  # type: ignore[union-attr]
+
+
+async def test_confirmation_rechecks_pc_plan_before_queueing(harness: AgentHarness, controller: Controller) -> None:
+    import uuid
+
+    cid, text = await start_confirmation(harness, controller)
+    harness.agent.store.apply_snapshot(str(uuid.uuid4()), False, [controller.snapshot_entry()])
+    await harness.send_confirmation(controller.confirmation(cid, text))
+    res = await harness.result(cid)
+    assert res["state"] == "failed" and res["error"]["code"] == "PC_PLAN_DISABLED"
+    assert harness.fake.count("power_sleep") == 0

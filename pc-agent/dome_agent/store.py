@@ -10,6 +10,8 @@ Tables (see docs/design/pc-agent.md → "Local state"):
 * ``challenges``     confirmation challenges (exact challenge_text, pinned kid, single-use)
 * ``approved_apps``  app_id → validated executable identity (never editable remotely)
 * ``pending_power``  at most one armed power countdown
+* ``pending_revocations`` local revocations the relay has not acknowledged receiving yet
+                     (``revoke_controller`` is re-sent after every ``grants_snapshot`` until it is written)
 * ``security_events`` bounded local security log for diagnostics
 
 All methods are synchronous and protected by one re-entrant lock; every call is an indexed point
@@ -103,6 +105,12 @@ CREATE TABLE IF NOT EXISTS pending_power (
     action     TEXT NOT NULL,
     fires_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_revocations (
+    controller_id TEXT PRIMARY KEY,
+    kid           TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS security_events (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     at     TEXT NOT NULL,
@@ -185,11 +193,21 @@ class PendingPowerRow:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingRevocationRow:
+    controller_id: str
+    kid: str
+    reason: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class SnapshotApplyResult:
     snapshot_id: str
     revoked_controller_ids: tuple[str, ...]
     unknown_controllers: tuple[tuple[str, str], ...]  # (controller_id, kid) listed but never approved locally
     active_controller_ids: tuple[str, ...]
+    # (controller_id, kid) revoked locally but still listed by the relay: it has not learned yet
+    still_listed_revoked: tuple[tuple[str, str], ...] = ()
 
 
 class Store:
@@ -319,6 +337,33 @@ class Store:
             )
         return cur.rowcount > 0
 
+    def revoke_grant_locally(self, controller_id: str, reason: str = "local_revocation") -> GrantRow | None:
+        """A revocation decided on this PC: revoke the grant AND journal that the relay must be told.
+
+        Returns the grant row (None when unknown). Provisional controllers (never named by the relay)
+        need no notification. Idempotent: an already revoked grant is re-journaled only if unsent."""
+        with self._tx():
+            row = self.get_grant(controller_id)
+            if row is None:
+                return None
+            self.revoke_grant(controller_id, reason)
+            if not controller_id.startswith(PROVISIONAL_PREFIX):
+                self._conn.execute(
+                    "INSERT INTO pending_revocations(controller_id, kid, reason, created_at) VALUES (?,?,?,?) "
+                    "ON CONFLICT(controller_id) DO NOTHING",
+                    (controller_id, row.kid, reason, format_rfc3339(now_utc())),
+                )
+        return row
+
+    def pending_revocations(self) -> list[PendingRevocationRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM pending_revocations ORDER BY created_at").fetchall()
+        return [PendingRevocationRow(r["controller_id"], r["kid"], r["reason"], r["created_at"]) for r in rows]
+
+    def clear_pending_revocation(self, controller_id: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pending_revocations WHERE controller_id = ?", (controller_id,))
+
     def current_snapshot_id(self) -> str | None:
         return self.get_setting(SETTING_LAST_SNAPSHOT_ID)
 
@@ -333,12 +378,14 @@ class Store:
         * local, non-revoked controllers absent from the snapshot → revoked (``snapshot_revocation``)
         * listed controllers never approved locally → ignored, reported for a security event
         * listed + local → snapshot capabilities/status recorded (effective = local ∩ snapshot)
-        A snapshot can never add a controller or widen a grant.
+        * listed but revoked locally → left revoked, reported in ``still_listed_revoked``
+        A snapshot can never add a controller, widen a grant or un-revoke one.
         """
         listed_by_controller = {c["controller_id"]: c for c in controllers}
         revoked: list[str] = []
         unknown: list[tuple[str, str]] = []
         active: list[str] = []
+        still_listed: list[tuple[str, str]] = []
         now = format_rfc3339(now_utc())
         with self._tx():
             local = {r.controller_id: r for r in self.list_grants(include_revoked=True)}
@@ -361,7 +408,11 @@ class Store:
                     unknown.append((cid, entry["kid"]))
                     continue
                 if row.revoked:
-                    continue  # locally revoked wins; the relay will learn via revoke_controller
+                    # Locally revoked wins. The relay still routes to this phone: report it so the agent
+                    # (re-)sends revoke_controller (snapshots carry no agent→relay information).
+                    if row.revoked_reason != "snapshot_revocation":
+                        still_listed.append((cid, row.kid))
+                    continue
                 self._conn.execute(
                     "UPDATE grants SET snapshot_id = ?, snapshot_capabilities = ?, snapshot_status = ? WHERE controller_id = ?",
                     (snapshot_id, json.dumps(list(entry["capabilities"])), entry["status"], cid),
@@ -378,7 +429,7 @@ class Store:
                 revoked.append(cid)
             self.set_setting(SETTING_LAST_SNAPSHOT_ID, snapshot_id)
             self.set_bool(SETTING_PC_ENABLED, pc_enabled)
-        return SnapshotApplyResult(snapshot_id, tuple(revoked), tuple(unknown), tuple(active))
+        return SnapshotApplyResult(snapshot_id, tuple(revoked), tuple(unknown), tuple(active), tuple(still_listed))
 
     # ----- journal -----------------------------------------------------------------------------
     def journal_get(self, command_id: str) -> JournalRow | None:

@@ -145,3 +145,32 @@ def test_security_events_bounded(store: Store) -> None:
     for i in range(520):
         store.add_security_event("x", i=i)
     assert len(store.list_security_events(1000)) == 500
+
+
+def test_local_revocation_is_journaled_until_relay_told(store: Store) -> None:
+    account, pc = str(uuid.uuid4()), str(uuid.uuid4())
+    a = Controller(account, pc)
+    a.grant_locally(store)
+    snap = str(uuid.uuid4())
+    store.apply_snapshot(snap, True, [a.snapshot_entry()])
+    row = store.revoke_grant_locally(a.controller_id)
+    assert row is not None and row.kid == a.kid
+    assert store.get_grant(a.controller_id).revoked  # type: ignore[union-attr]
+    assert [(r.controller_id, r.kid, r.reason) for r in store.pending_revocations()] == [
+        (a.controller_id, a.kid, "local_revocation")
+    ]
+    # the relay has not learned yet: it still lists the phone → reported, never un-revoked
+    result = store.apply_snapshot(str(uuid.uuid4()), True, [a.snapshot_entry()])
+    assert result.still_listed_revoked == ((a.controller_id, a.kid),)
+    assert result.active_controller_ids == () and store.get_grant(a.controller_id).revoked  # type: ignore[union-attr]
+    store.clear_pending_revocation(a.controller_id)
+    assert store.pending_revocations() == []
+    # once the relay dropped it, nothing is reported any more
+    result = store.apply_snapshot(str(uuid.uuid4()), True, [])
+    assert result.still_listed_revoked == () and result.revoked_controller_ids == ()
+    assert store.revoke_grant_locally(str(uuid.uuid4())) is None
+    # provisional (never named by the relay) grants need no notification
+    b = Controller(account, pc)
+    store.add_grant(controller_id=None, kid=b.kid, public_jwk=b.jwk, capabilities=("status",), display_name="b")
+    assert store.revoke_grant_locally("pending-" + b.kid) is not None
+    assert store.pending_revocations() == []

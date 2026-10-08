@@ -176,3 +176,25 @@ async def test_send_validates_frames(client: Any) -> None:
     with pytest.raises(ProtocolError):
         await rc.send({"type": "ack", "command_id": "nope"})
     assert await rc.send({"type": "ping"}) is False  # not connected yet
+
+
+async def test_invalid_relay_url_is_configuration_error_not_credential_rejected(fake_api: FakeApi) -> None:
+    cred = fake_api.issue_credential()
+    api = ApiClient(fake_api.url)
+    handler = RecordingHandler()
+    rc = RelayClient(
+        "http://[not-a-valid-uri/ws/agent",
+        TokenManager(api, lambda: cred),
+        handler,
+        expected_pc_id=lambda: fake_api.pc_id,
+        backoff_base=0.05,
+    )
+    rc.start()
+    for _ in range(100):
+        if handler.stopped:
+            break
+        await asyncio.sleep(0.05)
+    assert handler.stopped == ["configuration_error"] and rc.state == "stopped"
+    assert cred in fake_api.credentials  # the credential was never touched
+    await rc.stop()
+    await api.close()

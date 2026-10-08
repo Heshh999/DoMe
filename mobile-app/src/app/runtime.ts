@@ -25,16 +25,32 @@ export interface SendOptions {
 
 export interface RuntimeOptions {
   relay?: Partial<RelayClientOptions>;
+  /** Testing: override the store clock interval (ms). */
+  clockIntervalMs?: number;
 }
+
+/** How often the live store's clock advances so the 75 s freshness rule is re-evaluated without a frame. */
+export const CLOCK_INTERVAL_MS = 5_000;
 
 export class Runtime {
   readonly relay: RelayClient;
   readonly commands: CommandService;
   private started = false;
   private detach: Array<() => void> = [];
+  private readonly clockIntervalMs: number;
 
   constructor(options: RuntimeOptions = {}) {
     const live = useLiveStore.getState();
+    this.clockIntervalMs = options.clockIntervalMs ?? CLOCK_INTERVAL_MS;
+    // A 401 on any REST call means the cookie session is gone: drop the session so RequireSession
+    // redirects to sign-in on the next render, and stop the socket (its session is gone too).
+    configureApi({
+      onUnauthenticated: () => {
+        if (useSessionStore.getState().status !== "signed_out") log.info("session.expired");
+        useSessionStore.getState().clear();
+        this.relay.close();
+      },
+    });
     this.relay = new RelayClient({
       url: relayUrl(API_ORIGIN, window.location),
       kid: async () => (await getControllerIdentity()).kid,
@@ -43,6 +59,7 @@ export class Runtime {
     });
     this.commands = new CommandService({
       send: (frame) => this.relay.send(frame),
+      connected: () => this.relay.isOpen,
       identity: () => {
         const accountId = useSessionStore.getState().session?.account.id ?? null;
         const controllerId = this.relay.controllerId;
@@ -53,7 +70,14 @@ export class Runtime {
     });
     this.relay.on("status", (status, detail) => {
       live.setRelay(status, detail?.error ?? null);
-      if (status !== "open") useLiveStore.getState().markAllStale();
+      if (status !== "open") {
+        useLiveStore.getState().markAllStale();
+        // A pending confirmation's countdown is not backed by a live connection any more; the modal
+        // says so and offers Close instead of pretending Approve/Decline will reach the PC.
+        this.commands.markConnectionLost();
+      } else {
+        this.commands.markConnectionRestored();
+      }
       if (status === "unauthenticated") useSessionStore.getState().clear();
     });
     this.relay.on("controller", (id) => {
@@ -82,7 +106,8 @@ export class Runtime {
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
-    this.detach.push(() => document.removeEventListener("visibilitychange", onVisible), () => window.removeEventListener("online", onOnline), () => window.removeEventListener("offline", onOffline));
+    const clock = setInterval(() => useLiveStore.getState().tick(), this.clockIntervalMs);
+    this.detach.push(() => document.removeEventListener("visibilitychange", onVisible), () => window.removeEventListener("online", onOnline), () => window.removeEventListener("offline", onOffline), () => clearInterval(clock));
     this.relay.connect();
   }
 
@@ -105,6 +130,11 @@ export class Runtime {
 
   respond(commandId: string, decision: "approve" | "decline"): Promise<void> {
     return this.commands.respondToChallenge(commandId, decision);
+  }
+
+  /** Close the confirmation modal locally (expired or disconnected). Sends nothing. */
+  dismissConfirmation(commandId: string): void {
+    this.commands.dismissConfirmation(commandId);
   }
 
   /** Sign out: server session, socket, account state (the installation key is kept). */

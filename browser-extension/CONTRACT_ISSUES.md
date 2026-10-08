@@ -54,3 +54,18 @@ extension cannot apply `loadsStrict` (duplicate keys, depth) to inbound frames; 
 already-parsed value against the schema and relies on `dome-native-host`, which does strict-parse
 both directions. Outbound frames are size-checked against `limits.max_frame_bytes` (64 KiB) before
 posting.
+
+## 5. `bridge_request.timeout_ms` minimum (100 ms) is below any workable budget
+
+**Problem.** The bridge schema allows `timeout_ms` from 100 to 60000. A tab op needs a content-script
+deadline strictly shorter than the background's wait, which in turn must end before the agent's own
+timer, and the bridge round trip plus a `tabs.sendMessage` exchange costs real milliseconds. Below
+roughly 1 s the margins invert: the background would give up before the content script has run and
+a healthy tab would be reported `OUTCOME_UNKNOWN` (mutating ops) or `TAB_NOT_CONTROLLABLE`.
+
+**Workaround.** The extension floors the budget to 1000 ms (`computeBudget` in
+`src/background/requests.ts`): background wait = budget − 200 ms, content deadline = budget − 700 ms.
+Smaller values are accepted and silently widened rather than rejected with `INVALID_PARAMETERS`, so
+an agent that sends e.g. 500 ms gets an honest answer ~800 ms later instead of an instant error. The
+agent currently sends 8000/10000 ms (actions.json), so this is latent. A schema minimum of 1000 for
+`timeout_ms` would make the invariant explicit.

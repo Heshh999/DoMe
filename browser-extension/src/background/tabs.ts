@@ -68,8 +68,16 @@ export class TabRegistry {
     tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       const relevant = this.attachments.has(tabId) || isYoutubeUrl(tab.url) || isYoutubeUrl(changeInfo.url);
       if (!relevant) return;
-      // A full (re)load or discard kills the content script; a new attach message will follow if it comes back.
-      if (changeInfo.status === "loading" || changeInfo.discarded === true) this.attachments.delete(tabId);
+      if (changeInfo.discarded === true) {
+        // A discard kills the content script; a new attach message will follow if the tab comes back.
+        this.attachments.delete(tabId);
+      } else if ((changeInfo.status === "loading" || changeInfo.status === "complete") && this.attachments.has(tabId)) {
+        // Chrome reports status "loading" for history.pushState too, i.e. for every in-site YouTube
+        // navigation, during which the content script stays alive with the same tab_token. The
+        // content script is the authority (attached/detached messages); here we only verify with a
+        // cheap probe and drop the attachment when nobody answers any more (full reload, lost detach).
+        void this.verify(tabId);
+      }
       this.deps.onChanged();
     });
     tabs.onActivated.addListener(() => this.deps.onChanged());
@@ -83,13 +91,14 @@ export class TabRegistry {
     return this.attachments.get(tabId);
   }
 
-  /** Record what the content script reported; returns false when the payload was unusable. */
-  record(tabId: number, token: unknown, rawSnapshot: unknown): boolean {
-    if (typeof token !== "string" || !TOKEN_RE.test(token)) return false;
+  /** Record what the content script reported; returns the attachment, or null when the payload was unusable. */
+  record(tabId: number, token: unknown, rawSnapshot: unknown): Attachment | null {
+    if (typeof token !== "string" || !TOKEN_RE.test(token)) return null;
     const snapshot = sanitizeSnapshot(rawSnapshot);
-    if (!snapshot) return false;
-    this.attachments.set(tabId, { token, snapshot, updatedAt: this.timers.now() });
-    return true;
+    if (!snapshot) return null;
+    const attachment: Attachment = { token, snapshot, updatedAt: this.timers.now() };
+    this.attachments.set(tabId, attachment);
+    return attachment;
   }
 
   detach(tabId: number, token?: unknown): boolean {
@@ -119,7 +128,7 @@ export class TabRegistry {
   async probe(tabId: number): Promise<Attachment | null> {
     try {
       const reply = await this.sendToTab(tabId, { kind: BG_KIND, type: "probe" }, this.probeTimeoutMs);
-      if (reply.ok && this.record(tabId, reply.token, reply.state)) return this.attachments.get(tabId) ?? null;
+      if (reply.ok) return this.record(tabId, reply.token, reply.state);
       return null;
     } catch (err) {
       if (err instanceof NoReceiverError || err instanceof TabTimeoutError) {
@@ -130,12 +139,26 @@ export class TabRegistry {
     }
   }
 
+  /** Re-probe a tab after a navigation event and announce a change only when the attachment actually changed. */
+  private async verify(tabId: number): Promise<void> {
+    const before = this.attachments.get(tabId);
+    const after = await this.probe(tabId).catch(() => this.attachments.get(tabId) ?? null);
+    if (before?.token !== after?.token) {
+      log.info("tab attachment changed after navigation", { tab_id: tabId, attached: after !== null });
+      this.deps.onChanged();
+    }
+  }
+
   async youtubeTabs(): Promise<chrome.tabs.Tab[]> {
     const tabs = await this.deps.api.tabs.query({ url: YT_URL_PATTERN });
     return tabs.filter((t) => typeof t.id === "number" && isYoutubeUrl(t.url)).slice(0, 32);
   }
 
-  /** Probe every YouTube tab (worker start) so the cache reflects reality before anything is reported. */
+  /**
+   * Probe every YouTube tab (worker start) so the cache reflects reality before anything is reported.
+   * Announces a change when done so a tabs_changed built from a partially rebuilt cache (the agent
+   * acknowledged hello while probes were still outstanding) is corrected.
+   */
   async rebuild(): Promise<void> {
     const tabs = await this.youtubeTabs();
     const live = new Set<number>();
@@ -146,6 +169,7 @@ export class TabRegistry {
       }),
     );
     for (const id of [...this.attachments.keys()]) if (!live.has(id)) this.attachments.delete(id);
+    this.deps.onChanged();
   }
 
   /** Compose the contract's youtube_tab for one browser tab from tab metadata plus the attachment. */
@@ -200,7 +224,12 @@ export class TabRegistry {
     return out;
   }
 
-  async composeById(tabId: number): Promise<YoutubeTab | null> {
+  /**
+   * Compose one tab from current tab metadata. `attachment` lets a caller use the attachment it just
+   * recorded from a reply instead of re-reading the cache after an await (a concurrent tab event
+   * must never turn an observed success into TARGET_GONE).
+   */
+  async composeById(tabId: number, attachment?: Attachment): Promise<YoutubeTab | null> {
     let tab: chrome.tabs.Tab;
     try {
       tab = await this.deps.api.tabs.get(tabId);
@@ -208,6 +237,6 @@ export class TabRegistry {
       return null;
     }
     if (!isYoutubeUrl(tab.url)) return null;
-    return this.compose(tab, this.attachments.get(tabId));
+    return this.compose(tab, attachment ?? this.attachments.get(tabId));
   }
 }

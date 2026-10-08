@@ -3,6 +3,11 @@
  * action/params/target with the app's own labels; the PC name comes from the device inventory
  * matched by pc_id; `display.detail` is shown as plain secondary text and clearly marked as coming
  * from the PC. Approve is only offered when the challenge is bound to the command this phone sent.
+ *
+ * The sheet cannot be swiped away by accident, but it never traps the app: once the challenge has
+ * expired, or while the relay connection is down (Approve/Decline could not reach the PC anyway), a
+ * Close button dismisses it locally without sending anything — the PC discards an unanswered
+ * challenge when it expires.
  */
 import { useEffect, useState } from "react";
 
@@ -17,11 +22,15 @@ export interface ConfirmationModalProps {
   record: CommandRecord;
   pcName: string | null;
   labels?: LabelContext;
+  /** Relay socket currently open. When false the countdown is not a live promise and Close is offered. */
+  connected?: boolean;
   onRespond: (decision: "approve" | "decline") => Promise<void>;
+  /** Local dismissal (no frame is sent). Required for the escape hatch; when absent, Close is not shown. */
+  onDismiss?: () => void;
   now?: () => Date;
 }
 
-export function ConfirmationModal({ record, pcName, labels, onRespond, now = () => new Date() }: ConfirmationModalProps) {
+export function ConfirmationModal({ record, pcName, labels, connected = true, onRespond, onDismiss, now = () => new Date() }: ConfirmationModalProps) {
   const pending = record.confirmation;
   const [busy, setBusy] = useState<"approve" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +48,8 @@ export function ConfirmationModal({ record, pcName, labels, onRespond, now = () 
   const desc = describeChallenge(pending.parsed.challenge, pcName, labels);
   const expired = remaining <= 0;
   const bound = pending.bindingProblem === null;
+  const offline = !connected || pending.connectionLost;
+  const canClose = onDismiss !== undefined && (expired || offline);
 
   const respond = async (decision: "approve" | "decline") => {
     setBusy(decision);
@@ -79,6 +90,12 @@ export function ConfirmationModal({ record, pcName, labels, onRespond, now = () 
         <div className="mt-3">
           <Notice tone="warning">The confirmation timed out. Send the action again if you still want it.</Notice>
         </div>
+      ) : offline ? (
+        <div className="mt-3">
+          <Notice tone="warning" title="Connection to DoMe lost">
+            <p>Your answer cannot reach the PC right now. The PC discards this request when it expires{remaining > 0 ? ` (in about ${remaining}s)` : ""}; nothing happens unless you approve.</p>
+          </Notice>
+        </div>
       ) : (
         <p className="mt-3 text-sm text-text-muted" aria-live="polite">
           Expires in <span className="font-mono tabular-nums">{remaining}s</span>. Nothing happens until you approve.
@@ -90,13 +107,18 @@ export function ConfirmationModal({ record, pcName, labels, onRespond, now = () 
         </div>
       ) : null}
       <div className="mt-5 grid grid-cols-2 gap-3">
-        <Button size="lg" variant="secondary" onClick={() => void respond("decline")} busy={busy === "decline"} disabled={busy !== null}>
+        <Button size="lg" variant="secondary" onClick={() => void respond("decline")} busy={busy === "decline"} disabled={busy !== null || expired}>
           Decline
         </Button>
-        <Button size="lg" variant={bound ? "danger" : "secondary"} onClick={() => void respond("approve")} busy={busy === "approve"} disabled={!bound || expired || busy !== null}>
+        <Button size="lg" variant={bound ? "danger" : "secondary"} onClick={() => void respond("approve")} busy={busy === "approve"} disabled={!bound || expired || offline || busy !== null}>
           Approve
         </Button>
       </div>
+      {canClose ? (
+        <Button size="lg" variant="ghost" full className="mt-3" onClick={onDismiss} disabled={busy !== null}>
+          Close
+        </Button>
+      ) : null}
     </Sheet>
   );
 }

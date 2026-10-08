@@ -129,13 +129,35 @@ export function wireTheaterButton(): void {
   });
 }
 
-/** Make a next/previous button perform a YouTube-style SPA navigation to `newVideoId`. */
-export function wireNavigation(selector: string, newUrl: string, options: { navigate?: boolean } = {}): void {
+export interface NavigationOptions {
+  /** false: the click does nothing (a dead button). */
+  navigate?: boolean;
+  /** Title of the new video, written into the heading and document.title when the navigation finishes. */
+  newTitle?: string;
+  /** Delay between the URL change and `yt-navigate-finish` (YouTube fetches the page data in between). Default 80 ms. */
+  finishDelayMs?: number;
+  /** false: the navigation never finishes (no finish event, heading unchanged). */
+  finish?: boolean;
+}
+
+/**
+ * Make a next/previous button perform a YouTube-style SPA navigation: pushState + `yt-navigate-start`
+ * synchronously, then (asynchronously, like the real site) the title update and `yt-navigate-finish`.
+ */
+export function wireNavigation(selector: string, newUrl: string, options: NavigationOptions = {}): void {
   document.querySelector(selector)?.addEventListener("click", () => {
     if (options.navigate === false) return;
     window.history.pushState({}, "", newUrl);
     document.dispatchEvent(new Event("yt-navigate-start"));
-    document.dispatchEvent(new Event("yt-navigate-finish"));
+    if (options.finish === false) return;
+    setTimeout(() => {
+      if (options.newTitle !== undefined) {
+        const heading = document.querySelector("h1.ytd-watch-metadata yt-formatted-string") ?? document.querySelector("h1.ytd-watch-metadata");
+        if (heading) heading.textContent = options.newTitle;
+        document.title = `${options.newTitle} - YouTube`;
+      }
+      document.dispatchEvent(new Event("yt-navigate-finish"));
+    }, options.finishDelayMs ?? 80);
   });
 }
 

@@ -389,3 +389,61 @@ async def test_crash_recovery_reports_outcome_unknown_once(
         assert fake_state.calls == []
     finally:
         await agent.stop()
+
+
+async def test_local_revocation_while_offline_reaches_relay_on_reconnect(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    await harness.relay.close(1012, "deploy")
+    for _ in range(200):
+        if harness.agent.relay is not None and not harness.agent.relay.connected:
+            break
+        await asyncio.sleep(0.01)
+    assert await harness.agent.revoke_controller_locally(controller.controller_id)
+    assert harness.agent.status()["pending_revocations"] == [controller.controller_id]
+    assert not any(f["type"] == "revoke_controller" for f in harness.relay.drain())
+    await harness.relay.wait_connected(timeout=15)
+    frame = await harness.relay.expect("revoke_controller", timeout=15)
+    assert frame["controller_id"] == controller.controller_id and frame["kid"] == controller.kid
+    await harness.wait_snapshot_applied()
+    assert harness.agent.status()["pending_revocations"] == []
+    grant = harness.agent.store.get_grant(controller.controller_id)
+    assert grant is not None and grant.revoked and grant.revoked_reason == "local_revocation"
+    env = controller.command("system.ping")
+    await harness.send_command(env)
+    assert (await harness.result(payload_of(env)["command_id"]))["error"]["code"] == "CONTROLLER_REVOKED"
+
+
+async def test_snapshot_narrowing_cancels_queued_command(harness: AgentHarness, controller: Controller) -> None:
+    harness.fake.add_session("slow#0")
+    original = harness.agent.services.platform.media.set_paused
+
+    def slow(session_id: str, paused: bool) -> Any:
+        import time
+
+        time.sleep(1.0)
+        return original(session_id, paused)
+
+    harness.agent.services.platform.media.set_paused = slow  # type: ignore[method-assign]
+    running = controller.command("media.set_paused", {"paused": True}, {"session_id": "slow#0"})
+    queued = controller.command("windows.set_volume", {"value": 5})
+    await harness.send_command(running)
+    await harness.send_command(queued)
+    await harness.ack(payload_of(running)["command_id"], state="executing")
+    await harness.ack(payload_of(queued)["command_id"], state="accepted")
+    harness.relay.controllers[0] = controller.snapshot_entry(capabilities=("status", "media"))
+    await harness.relay.send_snapshot()
+    r_queued = await harness.result(payload_of(queued)["command_id"])
+    assert r_queued["state"] == "canceled" and r_queued["error"]["code"] == "GRANT_MISSING"
+    r_running = await harness.result(payload_of(running)["command_id"])
+    assert r_running["state"] == "succeeded"  # media is still granted; an executing command is not interrupted
+    assert harness.fake.count("set_volume") == 0
+
+
+async def test_invalid_relay_url_keeps_credential(harness: AgentHarness) -> None:
+    credential = harness.agent.identity.read_credential()
+    assert credential
+    await harness.agent.on_stopped("configuration_error")
+    assert harness.agent.identity.read_credential() == credential
+    assert not harness.agent.relink_required
+    assert "relay URL" in harness.agent.status()["configuration_error"]

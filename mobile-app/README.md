@@ -48,6 +48,16 @@ scripts/         gen-validators.ts, make-icons.mjs
 - **Identity**: one non-extractable ECDSA P-256 key per installation in IndexedDB; `kid` sent in the
   socket `hello`; the relay's `hello_ack.controller_id` binds the socket. No tokens in URLs or
   localStorage. Sign-out keeps the key; "Forget this installation" deletes it.
+- **Pairing code stays on the phone**: the `/pair#code=…` QR deep link keeps the code in the URL
+  fragment only. When the phone is not signed in yet, `RequireSession` scrubs the fragment from the
+  address bar and sends `return_to=/app/devices/pair?scan_again=1` (no code) to cloud-api; the code is
+  not kept in any storage, and the pairing page asks the customer to scan again after sign-in
+  (`src/app/navigation.ts`, `loginUrl` also strips any fragment). The backend only ever sees SHA-256
+  of the code.
+- **Nothing is claimed that is not known**: a REST 401 mid-session signs the user out at once; a power
+  request noted by the relay after the PC disconnected reads "requested … DoMe cannot tell whether it
+  ran" unless this phone saw an `executing` ack / agent success; a confirmation modal over a dead socket
+  says so and can be closed locally; state older than 75 s disables controls even without any new frame.
 - **Trust boundary**: every REST body is strict-parsed and validated with `schemas.validateRest`,
   every frame with `schemas.validateFrame`, every result with `registry.validateResult`, every
   challenge with `schemas.validateChallengeText` (raw text preserved and hashed verbatim). Media titles

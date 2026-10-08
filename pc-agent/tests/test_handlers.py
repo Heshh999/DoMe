@@ -210,3 +210,43 @@ async def test_windows_actions_unsupported_on_this_platform(harness: AgentHarnes
         {"browser_instance_id": ext.browser_instance_id, "tab_id": 3, "tab_token": tab.tab_token},
     )
     assert res["state"] == "succeeded"
+
+
+async def test_youtube_next_lost_response_is_outcome_unknown(harness: AgentHarness, controller: Controller) -> None:
+    """The op reached the browser but the answer is late/lost: never a clean retryable failure (spec §8)."""
+    tab = FakeTab(tab_id=21)
+    ext = await harness.connect_extension(tab, op_delay=2.0)  # answers long after the bridge timeout
+    yt = {"browser_instance_id": ext.browser_instance_id, "tab_id": 21, "tab_token": tab.tab_token}
+    spec = load_registry().get("youtube.next")
+    object.__setattr__(spec, "timeout_ms", 1500)  # bridge timeout = 1000 ms
+    try:
+        res = await run(harness, controller, "youtube.next", {}, yt)
+    finally:
+        object.__setattr__(spec, "timeout_ms", 10000)
+    assert res["state"] == "outcome_unknown"
+    assert res["error"]["code"] == "OUTCOME_UNKNOWN" and res["error"]["retryable"] is False
+    assert res["warning"]
+    import asyncio
+
+    for _ in range(100):
+        if any(r["op"] == "next" for r in ext.requests):
+            break
+        await asyncio.sleep(0.05)
+    assert [r["op"] for r in ext.requests] == ["next"]  # exactly one skip reached the browser, no retry
+    assert harness.agent.store.journal_get(payload_of(controller.command("system.ping"))["command_id"]) is None
+
+
+async def test_youtube_idempotent_lost_response_stays_retryable_failure(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    tab = FakeTab(tab_id=22)
+    ext = await harness.connect_extension(tab, op_delay=2.0)
+    yt = {"browser_instance_id": ext.browser_instance_id, "tab_id": 22, "tab_token": tab.tab_token}
+    spec = load_registry().get("youtube.set_paused")
+    object.__setattr__(spec, "timeout_ms", 1500)
+    try:
+        res = await run(harness, controller, "youtube.set_paused", {"paused": True}, yt)
+    finally:
+        object.__setattr__(spec, "timeout_ms", 8000)
+    assert res["state"] == "failed" and res["error"]["code"] == "EXTENSION_DISCONNECTED"
+    assert res["error"]["retryable"] is True

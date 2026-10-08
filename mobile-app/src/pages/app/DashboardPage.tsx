@@ -12,6 +12,7 @@ import { VolumeSlider } from "../../components/VolumeSlider.tsx";
 import { useLabels, useLastCommandFor, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { relativeTime } from "../../lib/format.ts";
+import { powerRequestEvidence, powerRequestNotice } from "../../lib/power.ts";
 import { resolveMediaTarget, resolveYoutubeTarget } from "../../lib/targets.ts";
 import { useLiveStore } from "../../store/live.ts";
 import { Steps } from "../../components/ui.tsx";
@@ -23,6 +24,7 @@ export function DashboardPage() {
   const labels = useLabels(pcId);
   const selectedTab = useLiveStore((s) => (pcId ? s.selectedTab[pcId] : undefined));
   const selectedSession = useLiveStore((s) => (pcId ? s.selectedSession[pcId] : undefined));
+  const commands = useLiveStore((s) => s.commands);
   const state = live.state;
   const yt = resolveYoutubeTarget(state, selectedTab);
   const media = resolveMediaTarget(state, selectedSession);
@@ -55,9 +57,11 @@ export function DashboardPage() {
           </Button>
         </Notice>
       ) : null}
-      {live.lastPowerRequest && live.connection !== "online" ? (
-        <Notice tone="info">
-          A {live.lastPowerRequest.action.replace("power.", "")} request was accepted by Windows {relativeTime(live.lastPowerRequest.at)}; the PC then disconnected. DoMe cannot confirm whether it completed.
+      {pcId && live.lastPowerRequest && live.connection !== "online" ? (
+        // The relay notes the request when it forwards it (state `created`); only this phone's own
+        // command record can show that Windows actually accepted it. Never claim more than is known.
+        <Notice tone="info" title="Power request">
+          <p>{powerRequestNotice(live.lastPowerRequest, powerRequestEvidence(commands, pcId, live.lastPowerRequest))}</p>
         </Notice>
       ) : null}
 

@@ -16,6 +16,7 @@ import { useDevicesStore } from "../store/devices.ts";
 import { pendingConfirmation, useLiveStore } from "../store/live.ts";
 import { useSessionStore } from "../store/session.ts";
 import { useLabels } from "./hooks.ts";
+import { navigation, signInRedirect } from "./navigation.ts";
 import { getRuntime } from "./runtime.ts";
 
 const TABS: Array<{ to: string; label: string; icon: string; end?: boolean }> = [
@@ -35,7 +36,14 @@ export function RequireSession({ children }: { children: React.ReactNode }) {
     if (status === "unknown") void load();
   }, [status, load]);
   useEffect(() => {
-    if (status === "signed_out") window.location.assign(loginUrl(location.pathname + location.search + location.hash));
+    if (status !== "signed_out") return;
+    // Never forward the fragment: on `/app/devices/pair#code=…` it is the pairing code, which must not
+    // reach cloud-api (query string, oidc_flows.return_to) nor be kept on the phone. Scrub it from the
+    // address bar first, then leave; the pairing page asks for the code again after sign-in.
+    const target = signInRedirect(location);
+    const nav = navigation();
+    if (target.scrubTo !== null) nav.replaceState(target.scrubTo);
+    nav.assign(loginUrl(target.returnTo));
   }, [status, location]);
   if (status === "signed_in") return <>{children}</>;
   if (status === "error") {
@@ -103,12 +111,13 @@ function RelayBanner() {
 
 function GlobalConfirmation() {
   const commands = useLiveStore((s) => s.commands);
+  const relayStatus = useLiveStore((s) => s.relayStatus);
   const pcs = useDevicesStore((s) => s.pcs);
   const pending = pendingConfirmation(commands);
   const labels = useLabels(pending?.pcId ?? null);
   if (!pending) return null;
   const pcName = pcs.find((p) => p.id === pending.pcId)?.name ?? null;
-  return <ConfirmationModal record={pending} pcName={pcName} labels={labels} onRespond={(decision) => getRuntime().respond(pending.commandId, decision)} />;
+  return <ConfirmationModal record={pending} pcName={pcName} labels={labels} connected={relayStatus === "open"} onRespond={(decision) => getRuntime().respond(pending.commandId, decision)} onDismiss={() => getRuntime().dismissConfirmation(pending.commandId)} />;
 }
 
 function AppRuntime() {

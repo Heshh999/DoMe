@@ -86,6 +86,9 @@ class UnsupportedPower:
     def shutdown(self) -> None:
         raise _unsupported("power control")
 
+    def abort_shutdown(self) -> bool:
+        raise _unsupported("power control")
+
 
 class UnsupportedStartup:
     def get_start_at_login(self) -> bool:

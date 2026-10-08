@@ -57,3 +57,39 @@
     soon as the link exists.
 15. **Store calls stay synchronous on the event loop**: every call is an indexed point operation on a
     local WAL database (sub-millisecond); only OS adapters run in threads.
+16. **Authorization steps 3-4 are re-applied at every later transition** (`Authorizer.recheck_grant`):
+    when a confirmation arrives (the command may have waited 60 s), as the executor precheck right
+    before the handler runs, and for every pending confirmation / queued command / armed power
+    countdown whenever a new `grants_snapshot` lands. A narrowed capability, `pc_enabled=false` or a
+    `plan_disabled` controller therefore takes effect before the side effect, not only before
+    acceptance (`rules.grants_snapshot`, `rules.plan_state`). Snapshot-triggered terminations are
+    `canceled` with the specific code (`GRANT_MISSING` / `PC_PLAN_DISABLED` /
+    `CONTROLLER_PLAN_DISABLED`); a confirmation that fails the re-check ends `failed` with that code.
+    An *executing* command is never interrupted by a narrowing (only by revocation), because the OS
+    call may already be under way.
+17. **Lost browser answers for non-idempotent ops are `outcome_unknown`.** `BridgeServer.request`
+    takes `non_idempotent`; once the `bridge_request` frame has been written, a timeout or a native-host
+    disconnect raises `OUTCOME_UNKNOWN` (non-retryable) instead of `EXTENSION_DISCONNECTED`
+    (retryable), and the executor turns that into `result{outcome_unknown}` + warning. Failures before
+    the frame was written stay `EXTENSION_DISCONNECTED`, because the op cannot have run. The bridge, not
+    the executor, decides, because only the bridge knows whether the frame left the process.
+18. **Power countdown has an `issuing` phase that cancel cannot interrupt.** Once the countdown sets
+    `issuing` and calls the adapter in a worker thread, `PowerManager.cancel()` returns
+    `{canceled:false, action, command_id}` (the `power.cancel` command fails `ACTION_UNAVAILABLE` with
+    that result) and the countdown's own completion reports what Windows did. Cancelling the awaiting
+    coroutine would not stop the thread, so reporting `canceled` there would be a lie. For a
+    restart/shutdown Windows already accepted, `power.cancel` calls `AbortSystemShutdownW` and reports
+    `canceled:true` only when it returned TRUE. The adapter keeps `dwTimeout = 0` (the cancellable
+    countdown is the agent's; `bForceAppsClosed=FALSE` lets Windows prompt about unsaved work), so on
+    real Windows the abort window is effectively nil and the honest answer is `canceled:false` — see
+    KNOWN_ISSUES.md.
+19. **Local revocations are journaled until the relay has them.** `Store.revoke_grant_locally` revokes
+    and inserts a `pending_revocations` row; `revoke_controller` is sent at once and, if the write
+    failed (offline), re-sent after every `grants_snapshot` until it succeeds. `apply_snapshot` also
+    reports locally revoked controllers the relay still lists (`still_listed_revoked`) and those are
+    re-sent too (idempotent on the relay). The CLI's offline fallback says plainly that the service has
+    not been told yet.
+20. **An invalid relay URL is `configuration_error`, not a rejected credential.** Only `POST
+    /v1/agent/token` → 401/403 is `credential_rejected` (credential discarded, re-link). A malformed
+    `DOME_AGENT_RELAY_URL` / `relay_url` stops connecting, keeps the credential and surfaces
+    "relay URL is invalid" in the tray notification and `dome-agent status`.

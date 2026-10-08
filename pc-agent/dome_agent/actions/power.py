@@ -6,6 +6,13 @@ call has been issued — the result then reports what Windows actually accepted.
 (or local Disable remote control) ends the pending command as ``canceled`` / ``POWER_CANCELED``.
 Sleep (``SetSuspendState``) blocks until resume, so it runs in a worker thread and is reported as
 accepted if it has not failed within a short grace period.
+
+Honesty rule for the most dangerous action: once the countdown has moved into its *issuing* phase
+(the OS call is being made in a worker thread) a cancel can no longer stop it — cancelling the
+awaiting coroutine would not stop the thread — so ``cancel()`` refuses (``canceled: false``) and the
+countdown's own completion reports the real OS outcome. For a restart/shutdown that Windows already
+accepted, ``power.cancel`` asks Windows to abort it (``AbortSystemShutdownW``) and reports
+``canceled: true`` only when Windows said yes.
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from dome_protocol import ProtocolError, format_rfc3339, now_utc, parse_rfc3339
 
 from ..logsetup import get_logger
 from . import handler
-from .context import DEFERRED, Deferred, ExecutionContext
+from .context import DEFERRED, ActionFailed, Deferred, ExecutionContext
 
 if TYPE_CHECKING:
     from ..platform.protocol import PlatformSet
@@ -32,6 +39,7 @@ log = get_logger(__name__)
 
 Completer = Callable[[str, str, dict[str, Any] | None, ProtocolError | None], Awaitable[None]]
 SLEEP_GRACE_SECONDS = 2.0
+ABORTABLE_ACTIONS = frozenset({"power.restart", "power.shutdown"})
 
 
 @dataclass(slots=True)
@@ -41,6 +49,15 @@ class _Armed:
     countdown_seconds: int
     fires_at: str
     task: asyncio.Task[None]
+    issuing: bool = False  # the OS call is being made: too late to cancel
+
+
+@dataclass(slots=True)
+class _Issued:
+    """A restart/shutdown Windows accepted; ``power.cancel`` may still abort it through the OS."""
+
+    command_id: str
+    action: str
 
 
 class PowerManager:
@@ -50,6 +67,7 @@ class PowerManager:
         self._state = state
         self._complete: Completer | None = None
         self._armed: _Armed | None = None
+        self._issued: _Issued | None = None
         self._lock = asyncio.Lock()
 
     def bind(self, complete: Completer) -> None:
@@ -68,6 +86,7 @@ class PowerManager:
             countdown = int(ctx.params.get("countdown_seconds", 10))
             fires_at = format_rfc3339(now_utc() + timedelta(seconds=countdown))
             self._store.set_pending_power(ctx.command.command_id, ctx.action, fires_at)
+            self._issued = None
             task = asyncio.get_running_loop().create_task(
                 self._countdown(ctx.command.command_id, ctx.action, countdown, fires_at),
                 name=f"dome-power-{ctx.action}",
@@ -90,6 +109,11 @@ class PowerManager:
                     ProtocolError("POWER_CANCELED", "Remote control was disabled on the PC before the countdown ended"),
                 )
                 return
+            armed = self._armed
+            if armed is not None and armed.command_id == command_id:
+                # From here on a cancel is too late: the flag is set and the OS call starts without any
+                # intervening suspension point, so cancel() sees issuing=True or a finished countdown.
+                armed.issuing = True
             try:
                 await self._issue(action)
             except ProtocolError as exc:
@@ -99,6 +123,8 @@ class PowerManager:
                 log.error("power adapter raised", action=action, error=exc.__class__.__name__)
                 await self._finish(command_id, "failed", None, ProtocolError("OS_ERROR", "Windows reported an error"))
                 return
+            if action in ABORTABLE_ACTIONS:
+                self._issued = _Issued(command_id, action)
             await self._finish(
                 command_id, "succeeded", {"accepted": True, "countdown_seconds": countdown, "fires_at": fires_at}, None
             )
@@ -134,28 +160,62 @@ class PowerManager:
             await self._complete(command_id, state, result, error)
 
     async def cancel(self, *, reason: str = "canceled from the phone") -> dict[str, Any]:
-        """Cancel the pending countdown (if any). Returns the ``power_cancel_result``."""
+        """Cancel the pending countdown (if any). Returns the ``power_cancel_result``.
+
+        * countdown still running → task canceled, command ends ``canceled``/``POWER_CANCELED``
+        * OS call in progress (``issuing``) → ``{"canceled": false, action, command_id}``; the countdown's
+          own completion reports what Windows did
+        * restart/shutdown already accepted by Windows → ``AbortSystemShutdownW``; ``canceled`` is True
+          only when Windows aborted it
+        * nothing pending → ``{"canceled": false}``
+        """
         armed = self._armed
         if armed is None:
             row = self._store.clear_pending_power()  # stale row without a task (should not happen after recovery)
-            if row is None:
-                return {"canceled": False}
-            self._state.request_update()
-            return {"canceled": True, "action": row.action, "command_id": row.command_id}
-        if not armed.task.done():
-            armed.task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await armed.task
+            if row is not None:
+                self._state.request_update()
+                return {"canceled": True, "action": row.action, "command_id": row.command_id}
+            return await self._abort_issued()
+        if armed.issuing or armed.task.done():
+            log.info("power cancel too late: the OS call is already being issued", action=armed.action)
+            return {"canceled": False, "action": armed.action, "command_id": armed.command_id}
+        armed.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await armed.task
         await self._finish(
             armed.command_id, "canceled", None, ProtocolError("POWER_CANCELED", f"The power action was {reason}")
         )
         log.info("power countdown canceled", action=armed.action)
         return {"canceled": True, "action": armed.action, "command_id": armed.command_id}
 
+    async def _abort_issued(self) -> dict[str, Any]:
+        issued = self._issued
+        if issued is None:
+            return {"canceled": False}
+        try:
+            aborted = await asyncio.to_thread(self._platform.power.abort_shutdown)
+        except ProtocolError as exc:
+            log.info("abort of an initiated shutdown refused", action=issued.action, code=exc.code)
+            aborted = False
+        except Exception as exc:  # noqa: BLE001 - adapter bug must not crash the command
+            log.error("power adapter raised on abort", error=exc.__class__.__name__)
+            aborted = False
+        if not aborted:
+            return {"canceled": False}
+        self._issued = None
+        log.info("initiated power action aborted by Windows", action=issued.action)
+        return {"canceled": True, "action": issued.action, "command_id": issued.command_id}
+
     async def shutdown(self) -> None:
         """Agent is stopping: an armed countdown must not fire from a dead process."""
-        if self._armed is not None:
-            await self.cancel(reason="canceled because the agent stopped")
+        armed = self._armed
+        if armed is None:
+            return
+        outcome = await self.cancel(reason="canceled because the agent stopped")
+        if not outcome["canceled"] and not armed.task.done():
+            # Too late to cancel: let the OS call finish so the journal records the real outcome.
+            with contextlib.suppress(BaseException):
+                await armed.task
 
 
 @handler("power.sleep")
@@ -167,4 +227,12 @@ async def power_action(ctx: ExecutionContext) -> Deferred:
 
 @handler("power.cancel")
 async def power_cancel(ctx: ExecutionContext) -> dict[str, Any]:
-    return await ctx.services.power.cancel()
+    outcome = await ctx.services.power.cancel()
+    if not outcome["canceled"] and "command_id" in outcome:
+        # Something was pending but could not be stopped: the OS call is already under way.
+        raise ActionFailed(
+            "ACTION_UNAVAILABLE",
+            "Too late to cancel: the PC is already carrying out the power action.",
+            result=outcome,
+        )
+    return outcome

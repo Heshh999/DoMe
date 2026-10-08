@@ -34,8 +34,16 @@ export function isAdShowing(player: Element | null): boolean {
   return player !== null && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"));
 }
 
-export function isLive(player: Element | null, video: HTMLVideoElement | null): boolean {
-  if (player?.querySelector(".ytp-live, .ytp-live-badge")) return true;
+/**
+ * Live detection. YouTube keeps a `<button class="ytp-live-badge">` inside `.ytp-time-display` on
+ * every watch page and only shows it (CSS) when the time display carries `.ytp-live`; the badge's
+ * mere presence therefore says nothing. Live means: the time display is marked live, or the badge
+ * is actually rendered, or the media has no finite duration.
+ */
+export function isLive(player: Element | null, video: HTMLVideoElement | null, win: Window): boolean {
+  if (player?.querySelector(".ytp-time-display.ytp-live")) return true;
+  const badge = player?.querySelector(".ytp-live-badge") ?? null;
+  if (badge && buttonUsable(badge, win)) return true;
   return video !== null && video.duration === Infinity;
 }
 
@@ -77,7 +85,7 @@ export function readSnapshot(doc: Document, win: Window, dom: PlayerDom = findPl
   const snapshot: PlayerSnapshot = {
     context: url.context,
     ad_showing: isAdShowing(player),
-    is_live: isLive(player, video),
+    is_live: isLive(player, video, win),
     in_playlist: url.in_playlist,
   };
   if (url.video_id) snapshot.video_id = url.video_id;

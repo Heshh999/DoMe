@@ -1,12 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { rest } from "@dome/protocol";
 
+import type { CommandRecord } from "../../src/lib/commands.ts";
 import { DashboardPage } from "../../src/pages/app/DashboardPage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
-import { EMPTY_LIVE_PC, useLiveStore } from "../../src/store/live.ts";
+import { EMPTY_LIVE_PC, STATE_FRESH_MS, useLiveStore } from "../../src/store/live.ts";
 
 const PC = "33333333-3333-4333-8333-333333333333";
 const TS = "2026-10-08T12:00:00.000Z";
@@ -83,6 +84,44 @@ describe("Dashboard", () => {
     expect(screen.getAllByText(/Remote control is switched off on the PC/).length).toBeGreaterThan(0);
     expect(screen.getByText(/switch remote control back on/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Lock Windows" })).toBeDisabled();
+  });
+
+  it("state older than 75 s with the socket still open: 'Online · refreshing' and controls disabled, re-evaluated by the store clock", () => {
+    const live = useLiveStore.getState();
+    live.onPcStatus({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS });
+    live.onState({ type: "state", pc_id: PC, at: TS, state: { remote_enabled: true, session_locked: false, extension_connected: true, volume: { value: 42, muted: false } } });
+    const received = useLiveStore.getState().pcs[PC]!.stateReceivedAt!;
+    renderDashboard();
+    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lock Windows" })).toBeEnabled();
+    // only the clock moves: no frame, no other store change
+    act(() => useLiveStore.getState().tick(received + STATE_FRESH_MS + 1));
+    expect(screen.getByRole("button", { name: "Lock Windows" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sleep…" })).toBeDisabled();
+    expect(screen.getByRole("slider")).toBeDisabled();
+    expect(screen.getByText("Online · refreshing")).toBeInTheDocument();
+    // a new state frame makes it fresh again even though the clock has not ticked since
+    act(() => useLiveStore.getState().onState({ type: "state", pc_id: PC, at: TS, state: { remote_enabled: true, session_locked: false, extension_connected: true, volume: { value: 42, muted: false } } }));
+    expect(screen.getByRole("button", { name: "Lock Windows" })).toBeEnabled();
+    expect(screen.getByText("Online")).toBeInTheDocument();
+  });
+
+  it("power request followed by a disconnect: says 'requested', never 'accepted', without evidence from this phone", () => {
+    const at = new Date(Date.now() - 2 * 60_000).toISOString();
+    useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: at, last_power_request: { action: "power.shutdown", at } });
+    renderDashboard();
+    const notice = screen.getByText(/A shutdown was requested 2 min ago\./);
+    expect(notice).toHaveTextContent("The PC has since disconnected; DoMe cannot tell whether it ran.");
+    expect(screen.queryByText(/accepted/i)).toBeNull();
+  });
+
+  it("power request followed by a disconnect: 'accepted by Windows' only when this phone saw an executing ack for it", () => {
+    const at = new Date(Date.now() - 2 * 60_000).toISOString();
+    useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: at, last_power_request: { action: "power.shutdown", at } });
+    const record: CommandRecord = { commandId: "c-1", pcId: PC, action: "power.shutdown", params: {}, target: null, createdAt: Date.parse(at) + 500, expiresAt: at, state: "executing", ackAt: at, confirmation: null, terminal: null, noAnswer: false, source: "button" };
+    useLiveStore.getState().upsertCommand(record);
+    renderDashboard();
+    expect(screen.getByText(/Windows accepted the shutdown request 2 min ago; the PC then disconnected\./)).toBeInTheDocument();
   });
 
   it("no PC linked: explains the first steps instead of showing controls as usable", () => {

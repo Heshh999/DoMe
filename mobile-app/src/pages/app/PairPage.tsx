@@ -16,7 +16,7 @@ import { getControllerIdentity, KeyStorageError, setStoredControllerId } from ".
 import { secondsUntil } from "../../lib/format.ts";
 import { capabilityLabel, errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { errorSummary, log } from "../../lib/log.ts";
-import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation } from "../../lib/pairing.ts";
+import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation, takeScanAgainHint } from "../../lib/pairing.ts";
 import { CameraError, detectQrSupport, startQrScanner, type QrScanner } from "../../lib/qr.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
@@ -27,6 +27,7 @@ const POLL_MS = 2000;
 export function PairPage() {
   const navigate = useNavigate();
   const refreshDevices = useDevicesStore((s) => s.refresh);
+  const [scanAgain] = useState(() => takeScanAgainHint(window.location, window.history, "/app/devices/pair"));
   const [step, setStep] = useState<Step>(() => {
     const code = takeCodeFromLocation(window.location, window.history, "/app/devices/pair");
     return code ? { kind: "details", code } : { kind: "enter", mode: detectQrSupport() === "unsupported" ? "type" : "scan" };
@@ -155,6 +156,11 @@ export function PairPage() {
 
       {step.kind === "enter" ? (
         <>
+          {scanAgain ? (
+            <Notice tone="warning" title="Scan the code again">
+              <p>You are signed in now. For your security the code from the QR link was not kept while you signed in — point the camera at the PC’s QR code again, or type the code. If it has expired, choose Pair a phone on the PC once more.</p>
+            </Notice>
+          ) : null}
           <Notice tone="info">
             <p>
               On the PC, open the DoMe tray menu and choose <strong>Pair a phone</strong>. It shows a QR code and a 20-character code that work for 5 minutes.

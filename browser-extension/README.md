@@ -7,7 +7,7 @@ this browser: a background service worker talks to the agent over Native Messagi
 network access of its own, no remote code, no page UI, and only `nativeMessaging`, `storage`,
 `alarms` plus the single YouTube host permission. Spec: `docs/spec/MASTER_PROMPT.md` §9 and §15;
 design: `docs/design/browser-extension.md`; decisions: `DECISIONS.md`; contract notes:
-`CONTRACT_ISSUES.md`.
+`CONTRACT_ISSUES.md`; residual risks: `KNOWN_ISSUES.md`.
 
 ```
 public/manifest.json          exactly the designed manifest (+ alarms, + explicit CSP)
@@ -37,9 +37,9 @@ pnpm build              # → dist/{manifest.json,background.js,content.js,popup
 pnpm gen:validators     # only after shared/protocol/schemas changed (test/generated.test.ts enforces it)
 ```
 
-Last run here (Linux, Node 22.22): `tsc` clean for `src` and `test`, `eslint` clean, **79 tests passed
-in 7 files**, build produced the six `dist/` files (`background.js` 314 KB unminified, `content.js`
-23 KB classic script). A smoke run of the built `dist/background.js` under a minimal `chrome` stub
+Last run here (Linux, Node 22.22): `tsc` clean for `src` and `test`, `eslint` clean, **90 tests passed
+in 7 files**, build produced the six `dist/` files (`background.js` 317 KB unminified, `content.js`
+25 KB classic script). A smoke run of the built `dist/background.js` under a minimal `chrome` stub
 with `eval` and `Function` disabled sent a valid `bridge_hello`, answered a `set_paused` request and
 rejected a malformed request — the bundle works under the MV3 CSP.
 
@@ -79,16 +79,23 @@ rejected a malformed request — the bundle works under the MV3 CSP.
 - **Connection.** `connectNative("com.dome.agent")` → `bridge_hello` → `bridge_hello_ack`
   (versions negotiated both ways; `PROTOCOL_INCOMPATIBLE` carries both lists). While the port is
   open, Chrome ≥ 116 keeps the worker alive. On disconnect: backoff 1→60 s with `setTimeout` plus a
-  `chrome.alarms` safety net that survives worker termination; `connect()` is idempotent.
+  `chrome.alarms` safety net that survives worker termination; `connect()` is idempotent. A host that
+  opens the port but never acknowledges hello is dropped after 10 s and retried with the same backoff.
 - **Requests.** `list_tabs` probes every YouTube tab for fresh state. Tab ops: `tabs.get` →
   `TARGET_GONE`; not on YouTube → `TARGET_GONE`; discarded or no content script →
   `TAB_NOT_CONTROLLABLE`; otherwise the op goes to the content script with a deadline shorter than
-  the agent's `timeout_ms`. `next`/`previous` succeed only when a new `video_id` is observed and
-  return `previous_video_id`; a click without an observed transition is `OUTCOME_UNKNOWN` (never
-  retried by the extension). Ads: only pause/mute/volume; Shorts: no next/previous/theater; live: no
+  the agent's `timeout_ms` (budget floored to 1 s so the deadline always precedes the background's
+  wait). `next`/`previous` succeed only when a new `video_id` is observed and return
+  `previous_video_id`; the result snapshot is taken once the new page settled (≤ 1.5 s), otherwise
+  `title`/`duration_seconds`/`position_seconds` are omitted rather than describing the previous
+  video; a click without an observed transition is `OUTCOME_UNKNOWN` (never retried by the
+  extension). The result is composed from the state the content script just reported, so a tab
+  event fired by the navigation itself cannot turn an observed success into `TARGET_GONE`. Ads: only pause/mute/volume; Shorts: no next/previous/theater; live: no
   seeking; fullscreen without a user gesture: `ACTIVATION_REQUIRED`.
 - **Events.** `tabs_changed` (full list, debounced 300 ms) on open/close/navigation/attach/detach;
-  `player_state` at most 2/s per tab.
+  `player_state` at most 2/s per tab. In-site (SPA) navigations keep the attachment and token:
+  `tabs.onUpdated(status:"loading")` only triggers a verification probe, and the attachment is
+  dropped only when no content script answers any more (full reload, discard, tab closed).
 - **Validation.** Every inbound frame is validated against `bridge.schema.json#agent_to_extension`
   (bad frames get `bridge_error{MALFORMED_MESSAGE}`), every outbound frame against
   `extension_to_agent` plus the 64 KiB limit, every composed `youtube_tab` against the relay schema.
@@ -105,8 +112,8 @@ Evidence tags follow spec §17.
 | --- | --- |
 | Manifest permissions/CSP exactly as designed | **unit-tested** (`test/manifest.test.ts`) |
 | Every emitted frame type validates against the frozen contract; generated validators agree with `@dome/protocol` on good and bad frames; `protocolCompatible` parity | **unit-tested** (`test/frames.test.ts`) |
-| Worker: storage-backed id survives restart, hello, ack, request routing, `TARGET_GONE`/`TAB_NOT_CONTROLLABLE`/`TARGET_CHANGED`/`OUTCOME_UNKNOWN`/`INVALID_PARAMETERS`, timeouts, malformed frames, backoff + alarms, host missing/forbidden/not running, incompatible agent, event debounce/throttle, sender checks, sanitization, popup messages | **unit-tested** with a chrome API stub (`test/background.test.ts`) |
-| Player adapter: every op's success path and failure code on the six DOM fixtures (watch, ad, live, shorts, no-next, no player), token/expected_video_id guards, transition observation, timeouts | **unit-tested** in jsdom against a scriptable `<video>` (`test/player-adapter.test.ts`) |
+| Worker: storage-backed id survives restart, hello, ack, hello-ack deadline, request routing, `TARGET_GONE`/`TAB_NOT_CONTROLLABLE`/`TARGET_CHANGED`/`OUTCOME_UNKNOWN`/`INVALID_PARAMETERS`, timeouts and the time-budget invariant down to `timeout_ms: 100`, SPA navigation during `next` (no `TARGET_GONE`, no `script_attached:false` flicker), result composed from the recorded reply, startup race (early ack corrected after a slow probe), malformed frames, backoff + alarms, host missing/forbidden/not running, incompatible agent, event debounce/throttle, sender checks, sanitization, popup messages | **unit-tested** with a chrome API stub (`test/background.test.ts`) |
+| Player adapter: every op's success path and failure code on the six DOM fixtures (watch, ad, live, shorts, no-next, no player), token/expected_video_id guards, transition observation plus post-transition settle (new title reported; fields omitted when the page never settles; bounded by the deadline), hidden live badge on VOD is not live / DVR live stays live, timeouts | **unit-tested** in jsdom against a scriptable `<video>` (`test/player-adapter.test.ts`) |
 | Content entry: attach message, probe, op routing, sender checks, ≤ 2/s emission, SPA re-acquire, detach | **unit-tested** (`test/content-entry.test.ts`) |
 | Built bundle runs with `eval`/`new Function` disabled | **smoke-tested** (Node, built `dist/background.js`) |
 | Real Chrome/Edge: Native Messaging handshake with `dome-native-host`, real YouTube DOM selectors, background-tab behaviour, worker termination, fullscreen activation rules, Edge brand detection | **not yet verified** — no browser session, Windows agent or native host here. The selectors come from YouTube's current DOM (`video.html5-main-video`, `.ytp-next-button`, `ytd-watch-flexy[theater]`, …); the fixtures mirror them but are not copies of youtube.com. |
@@ -119,17 +126,24 @@ Record results in `docs/ACCEPTANCE.md` with the tag *Windows-device-tested*.
    `extension: True`; `youtube.list_tabs` from the phone lists this browser's YouTube tabs with the
    popup's `Browser id`. Quit the agent → popup turns to *agent is not running* within a minute and
    reconnects by itself (≤ 60 s) after the agent restarts. Wrong `DOME_AGENT_DEV_EXTENSION_ID` →
-   *not registered*.
+   *not registered*. Suspend the agent process (e.g. freeze it in a debugger) while the native host
+   is up → the popup must leave *Connecting…* within ~10 s, show *disconnected*, and reconnect on its
+   own once the agent resumes (hello-ack deadline, DECISIONS D20).
 2. **Next while the browser is in the background.** Play a video, focus another application
    (Explorer, a game), send Next from the phone: the tab advances, the result shows
-   `previous_video_id` and the new title; audio continues. Repeat with the browser window minimized.
+   `previous_video_id` and the **new** video's title and duration (never the previous video's; if the
+   result has no title at all, the settle events in `src/content/adapter.ts` need re-checking against
+   the current site). The tab must stay listed as attached with the same `tab_token` through the
+   navigation (no *reload needed* flicker). Audio continues. Repeat with the browser window minimized.
 3. **Multiple tabs.** Two watch pages playing: the phone must be asked to choose
    (`TARGET_AMBIGUOUS` from the agent); pick each tab and confirm Pause/Play affect only that tab.
    Close the selected tab → the next command fails with `TARGET_GONE`, nothing else changes.
 4. **Ad / live / Shorts.** During a pre-roll ad: Next → *not available for the current page*
-   (`UNSUPPORTED_CONTEXT`), Pause and Mute still work, the ad is never skipped. Live stream: seek →
-   `UNSUPPORTED_CONTEXT`, `is_live` shown, pause works. Shorts: Next/Previous →
-   `UNSUPPORTED_CONTEXT`, pause/mute/volume work, `context: shorts` shown.
+   (`UNSUPPORTED_CONTEXT`), Pause and Mute still work, the ad is never skipped. **Ordinary VOD page:
+   `is_live` must be `false` and ±10 s seek must work** (YouTube keeps a hidden `.ytp-live-badge` in
+   every player; see DECISIONS D24). Live stream: seek → `UNSUPPORTED_CONTEXT`, `is_live` shown,
+   pause works; a live stream with DVR (finite duration shown) must still report `is_live:true`.
+   Shorts: Next/Previous → `UNSUPPORTED_CONTEXT`, pause/mute/volume work, `context: shorts` shown.
 5. **Playlist end and Previous.** Last video of a playlist: Next → `NO_NEXT_VIDEO`; Previous
    works and reports the transition. On a plain watch page (no playlist): Previous →
    `NO_PREVIOUS_VIDEO`.

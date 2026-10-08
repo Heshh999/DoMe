@@ -83,8 +83,8 @@ class AgentHarness:
         self.settings = settings
         self.extension: FakeExtension | None = None
 
-    async def connect_extension(self, *tabs: FakeTab) -> FakeExtension:
-        ext = FakeExtension(self.settings.state_dir)
+    async def connect_extension(self, *tabs: FakeTab, op_delay: float = 0.0) -> FakeExtension:
+        ext = FakeExtension(self.settings.state_dir, op_delay=op_delay)
         for t in tabs:
             ext.add_tab(t)
         await asyncio.to_thread(ext.connect)

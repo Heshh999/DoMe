@@ -9,7 +9,8 @@ socket silent for two ping periods is closed and re-opened.
 
 Reconnect: exponential backoff 1 s → 60 s with full jitter. Close code 4001 (superseded by another
 agent instance) stops automatic reconnects until the user asks (tray "Reconnect"); 4003 and a
-rejected credential stop reconnecting and require re-linking; 4008 refreshes the token first.
+rejected credential (``POST /v1/agent/token`` → 401/403) stop reconnecting and require re-linking; an
+invalid relay URL stops with ``configuration_error`` (credential kept); 4008 refreshes the token first.
 Every outbound frame is validated against ``agent_to_relay`` before it is written; every inbound
 frame is strict-parsed and validated against ``relay_to_agent`` before it is used.
 """
@@ -51,7 +52,15 @@ CLOSE_REVOKED = 4003
 CLOSE_AUTH_REQUIRED = 4008
 
 ConnectionState = Literal["offline", "connecting", "connected", "reconnecting", "superseded", "stopped"]
-StopReason = Literal["identity_mismatch", "credential_rejected", "revoked", "unauthorized", "superseded", "requested"]
+StopReason = Literal[
+    "identity_mismatch",
+    "credential_rejected",  # POST /v1/agent/token answered 401/403: the service no longer knows this PC
+    "revoked",
+    "unauthorized",
+    "superseded",
+    "configuration_error",  # the relay URL itself is invalid: a local problem, the credential stays
+    "requested",
+]
 
 
 class RelayHandler(Protocol):
@@ -205,7 +214,13 @@ class RelayClient:
             outcome = await self._session()
             if self._stop.is_set():
                 break
-            if outcome in ("identity_mismatch", "credential_rejected", "revoked", "unauthorized"):
+            if outcome in (
+                "identity_mismatch",
+                "credential_rejected",
+                "revoked",
+                "unauthorized",
+                "configuration_error",
+            ):
                 self._set_state("stopped")
                 await self._handler.on_stopped(outcome)
                 return
@@ -258,8 +273,10 @@ class RelayClient:
                 log.warning("relay upgrade failed", status=status)
             return "retry"
         except (InvalidURI, ValueError) as exc:
-            log.error("relay URL is invalid", error=str(exc))
-            return "credential_rejected"
+            # A malformed relay URL (override or identity.json) is a local configuration error, never a
+            # verdict on the credential: nothing is discarded, the user is told to fix the URL.
+            log.error("relay URL is invalid; not connecting", error=exc.__class__.__name__)
+            return "configuration_error"
         except (OSError, websockets.exceptions.WebSocketException, TimeoutError) as exc:
             log.warning("relay connection failed", error=exc.__class__.__name__)
             return "retry"

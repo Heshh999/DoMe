@@ -244,3 +244,19 @@ async def test_second_hello_for_same_instance_replaces_connection(settings: Sett
     finally:
         first.close()
         second.close()
+
+
+async def test_request_timeout_non_idempotent_is_outcome_unknown(settings: Settings, bridge: Any) -> None:
+    server, _events, _changes = bridge
+    ext = await connect(settings, op_delay=1.0)
+    try:
+        ext.add_tab(FakeTab(tab_id=1))
+        with pytest.raises(ProtocolError) as ei:
+            await server.request(ext.browser_instance_id, "next", {"tab_id": 1}, timeout_ms=200, non_idempotent=True)
+        assert ei.value.code == "OUTCOME_UNKNOWN" and ei.value.retryable is False
+        # before anything was written the op cannot have run: still EXTENSION_DISCONNECTED
+        with pytest.raises(ProtocolError) as ei2:
+            await server.request("bi_unknown01", "next", {"tab_id": 1}, timeout_ms=200, non_idempotent=True)
+        assert ei2.value.code == "EXTENSION_DISCONNECTED"
+    finally:
+        ext.close()

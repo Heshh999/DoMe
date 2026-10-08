@@ -73,6 +73,27 @@ describe("get_state on each fixture", () => {
     expect(r.state.video_id).toBe("5qap5aO4i9A");
   });
 
+  it("the always-present but hidden live badge on a VOD page is not live; seeking works there", async () => {
+    loadFixture("watch-playing", WATCH_URL);
+    expect(document.querySelector(".ytp-live-badge")).not.toBeNull(); // the fixture carries the badge like youtube.com
+    expect(getComputedStyle(document.querySelector(".ytp-live-badge")!).display).toBe("none");
+    installFakeVideo(video(), { duration: 213 });
+    const a = adapter();
+    const r = await run(a, "get_state");
+    expect(r.ok && r.state.is_live).toBe(false);
+    const seek = await run(a, "seek_relative", { seconds: 10 });
+    expect(seek.ok && seek.state.position_seconds).toBe(20);
+  });
+
+  it("live stream with a finite (DVR) duration is still live because the time display is marked live", async () => {
+    loadFixture("live", "/watch?v=5qap5aO4i9A");
+    installFakeVideo(video(), { duration: 3600 });
+    const r = await run(adapter(), "get_state");
+    expect(r.ok && r.state.is_live).toBe(true);
+    const seek = await run(adapter(), "seek_to", { position_seconds: 5 });
+    expect(!seek.ok && seek.code).toBe("UNSUPPORTED_CONTEXT");
+  });
+
   it("shorts: context shorts, no next/previous", async () => {
     loadFixture("shorts", "/shorts/aBcDeFgHiJk");
     installFakeVideo(video());
@@ -228,6 +249,46 @@ describe("next / previous", () => {
     if (!r.ok) return;
     expect(r.previous_video_id).toBe("dQw4w9WgXcQ");
     expect(r.state.video_id).toBe("9bZkp7q19f0");
+  });
+
+  it("next reports the new video's title once the navigation finished, within the deadline", async () => {
+    loadFixture("watch-playing", WATCH_URL);
+    installFakeVideo(video());
+    wireNavigation(".ytp-next-button", "/watch?v=9bZkp7q19f0", { newTitle: "Gangnam Style", finishDelayMs: 400 });
+    const r = await run(adapter(), "next", { expected_video_id: "dQw4w9WgXcQ" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.previous_video_id).toBe("dQw4w9WgXcQ");
+    expect(r.state.video_id).toBe("9bZkp7q19f0");
+    expect(r.state.title).toBe("Gangnam Style");
+    expect(r.state.duration_seconds).toBe(213);
+  });
+
+  it("next whose page never settles is still ok but omits title/duration/position instead of reporting the previous video's", async () => {
+    loadFixture("watch-playing", WATCH_URL);
+    installFakeVideo(video());
+    wireNavigation(".ytp-next-button", "/watch?v=9bZkp7q19f0", { finish: false });
+    const started = Date.now();
+    const r = await run(adapter(), "next", { expected_video_id: "dQw4w9WgXcQ" });
+    expect(Date.now() - started).toBeLessThanOrEqual(1600); // bounded settle wait
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.previous_video_id).toBe("dQw4w9WgXcQ");
+    expect(r.state.video_id).toBe("9bZkp7q19f0");
+    expect(r.state.title).toBeUndefined();
+    expect(r.state.duration_seconds).toBeUndefined();
+    expect(r.state.position_seconds).toBeUndefined();
+    expect(r.state.paused).toBe(false);
+  });
+
+  it("the settle wait never exceeds the remaining deadline", async () => {
+    loadFixture("watch-playing", WATCH_URL);
+    installFakeVideo(video());
+    wireNavigation(".ytp-next-button", "/watch?v=9bZkp7q19f0", { finish: false });
+    const started = Date.now();
+    const r = await run(adapter(), "next", {}, 400);
+    expect(Date.now() - started).toBeLessThanOrEqual(500);
+    expect(r.ok).toBe(true);
   });
 
   it("next with a click that produces no transition is OUTCOME_UNKNOWN at the deadline (never retried)", async () => {

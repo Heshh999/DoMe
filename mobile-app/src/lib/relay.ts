@@ -59,6 +59,8 @@ const defaultTimers: RelayTimers = {
 const HELLO_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
 const IDLE_LIMIT_MS = 75_000;
+/** After a resume nudge on an apparently open socket, this long without any inbound frame means it is dead. */
+export const NUDGE_DEADLINE_MS = 5_000;
 const WS_OPEN = 1;
 
 export function relayUrl(apiOrigin: string, loc: { protocol: string; host: string }): string {
@@ -81,7 +83,10 @@ export class RelayClient {
   private helloTimer: unknown = null;
   private reconnectTimer: unknown = null;
   private pingTimer: unknown = null;
+  private nudgeTimer: unknown = null;
   private lastInbound = 0;
+  /** Counts inbound frames; the nudge liveness check compares this, not wall-clock ms (ties within one ms). */
+  private inboundSeq = 0;
   private listeners: { [K in keyof RelayEvents]: Set<RelayEvents[K]> } = { status: new Set(), frame: new Set(), controller: new Set() };
 
   constructor(options: RelayClientOptions) {
@@ -129,15 +134,41 @@ export class RelayClient {
     this.emitStatus("closed");
   }
 
-  /** Visibility/online change: if we are not open, reconnect right now. */
+  /**
+   * Visibility/online change. Not open → reconnect right now. Apparently open → ask the relay for
+   * fresh state immediately (a re-sent `subscribe` replies with `pc_status` + the cached `state` of
+   * every PC), ping, and give the socket NUDGE_DEADLINE_MS to show any sign of life; a suspended
+   * PWA's socket often still reports open although it is dead, and waiting for the 75 s idle rule
+   * would leave the controls disabled for over a minute.
+   */
   nudge(): void {
     if (!this.wantOpen) return;
     if (this.isOpen) {
-      this.sendRaw({ type: "ping" });
+      const before = this.inboundSeq;
+      try {
+        if (this.subscriptions.length > 0 && this._controllerId) this.sendRaw({ type: "subscribe", pc_ids: this.subscriptions as [string] });
+        this.sendRaw({ type: "ping", t: new Date().toISOString() });
+      } catch (e) {
+        log.warn("relay.nudge_send_failed", errorSummary(e));
+        this.reconnectNow("nudge send failed");
+        return;
+      }
+      this.clearNudgeTimer();
+      this.nudgeTimer = this.timers.setTimeout(() => {
+        this.nudgeTimer = null;
+        if (!this.wantOpen || !this.socket) return;
+        if (this.inboundSeq > before) return; // something arrived: the socket is alive
+        log.warn("relay.nudge_timeout");
+        this.reconnectNow("no answer after resume");
+      }, NUDGE_DEADLINE_MS);
       return;
     }
+    this.reconnectNow("stale socket");
+  }
+
+  private reconnectNow(reason: string): void {
     this.clearReconnect();
-    this.teardownSocket(4000, "stale socket");
+    this.teardownSocket(4000, reason);
     this.emitStatus("reconnecting");
     void this.open();
   }
@@ -218,6 +249,7 @@ export class RelayClient {
       if (this.socket !== ws) return;
       this.socket = null;
       this.clearHelloTimer();
+      this.clearNudgeTimer();
       this.stopPing();
       this.setController(null);
       this.onClosed(ev.code);
@@ -242,6 +274,7 @@ export class RelayClient {
 
   private onMessage(data: unknown): void {
     this.lastInbound = Date.now();
+    this.inboundSeq += 1;
     if (typeof data !== "string") {
       log.warn("relay.binary_frame_dropped");
       return;
@@ -331,10 +364,16 @@ export class RelayClient {
     this.reconnectTimer = null;
   }
 
+  private clearNudgeTimer(): void {
+    if (this.nudgeTimer !== null) this.timers.clearTimeout(this.nudgeTimer);
+    this.nudgeTimer = null;
+  }
+
   private teardownSocket(code: number, reason: string): void {
     const ws = this.socket;
     this.socket = null;
     this.clearHelloTimer();
+    this.clearNudgeTimer();
     this.stopPing();
     if (ws) {
       ws.onclose = null;

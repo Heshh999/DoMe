@@ -338,6 +338,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  entitlement: {status.get('entitlement', {}).get('effective_plan')}")
         if status.get("relink_required"):
             print(f"  RE-LINK REQUIRED ({status.get('relink_reason')}): run `dome-agent link`")
+        if status.get("configuration_error"):
+            print(f"  CONFIGURATION ERROR: {status['configuration_error']}")
+        if status.get("pending_revocations"):
+            print(f"  revocations not yet delivered to the service: {len(status['pending_revocations'])}")
     print(f"  remote control: {'ENABLED' if status['store'].get('remote_enabled') else 'disabled'}")
     print(f"  paired phones: {len([g for g in status.get('grants', []) if not g.get('revoked_at')])}")
     for g in status.get("grants", []):
@@ -435,11 +439,14 @@ def cmd_revoke(args: argparse.Namespace) -> int:
 
         store = Store(settings.db_path)
         try:
-            ok = store.revoke_grant(args.controller_id, "local_revocation")
+            ok = store.revoke_grant_locally(args.controller_id, "local_revocation") is not None
         finally:
             store.close()
         if ok:
-            print("Revoked locally. The relay will be told when the agent next connects (via its grants snapshot).")
+            print(
+                "Revoked locally; this PC refuses the phone from now on. The agent is not running, so the DoMe "
+                "service has NOT been told yet: it will send revoke_controller the next time it connects."
+            )
             return 0
     print("Revoked." if ok else "No such controller.")
     return 0 if ok else 1

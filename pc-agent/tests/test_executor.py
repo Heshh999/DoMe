@@ -46,7 +46,7 @@ async def executor(harness: AgentHarness):
     all_handlers()  # load the real handlers before tests monkeypatch individual entries
     capture = Capture()
     emitter = Emitter(harness.agent.store, capture.send)
-    ex = Executor(harness.agent.services, emitter, precheck=harness.agent.authz.check_availability)
+    ex = Executor(harness.agent.services, emitter, precheck=harness.agent.authz.precheck)
     harness.agent.power.bind(ex.complete)
     ex.start()
     yield ex, capture
@@ -298,3 +298,110 @@ async def test_cancel_for_controller_cancels_running(
     r2 = await cap.wait_result(v2.command_id)
     assert r1["state"] == "canceled" and r2["state"] == "canceled"
     assert payload_of(controller.command("system.ping"))["action"] == "system.ping"
+
+
+# ----- review findings: re-check before execution, honest power cancel, lost browser answers -----------------
+
+
+async def test_precheck_refuses_capability_narrowed_after_authorization(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
+    import uuid
+
+    ex, cap = executor
+    vc = verified(harness, controller, "windows.set_volume", {"value": 10})
+    # the account narrows the phone to status-only between authorization and execution
+    harness.agent.store.apply_snapshot(str(uuid.uuid4()), True, [controller.snapshot_entry(capabilities=("status",))])
+    await ex.enqueue(vc)
+    res = await cap.wait_result(vc.command_id)
+    assert res["state"] == "failed" and res["error"]["code"] == "GRANT_MISSING"
+    assert harness.fake.count("set_volume") == 0
+
+
+async def test_precheck_refuses_controller_plan_disabled_after_authorization(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
+    import uuid
+
+    ex, cap = executor
+    vc = verified(harness, controller, "system.ping")
+    harness.agent.store.apply_snapshot(str(uuid.uuid4()), True, [controller.snapshot_entry(status="plan_disabled")])
+    await ex.enqueue(vc)
+    res = await cap.wait_result(vc.command_id)
+    assert res["state"] == "failed" and res["error"]["code"] == "CONTROLLER_PLAN_DISABLED"
+
+
+async def test_power_cancel_during_os_call_is_refused_not_faked(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
+    """Cancel arrives while SetSuspendState is blocking in its worker thread: the thread cannot be
+    stopped, so the agent must not report `canceled` for either command."""
+    ex, cap = executor
+    harness.fake.power_block_seconds = 1.0  # a real SetSuspendState blocks; the fake blocks for 1 s
+    vc = verified(harness, controller, "power.sleep", {"countdown_seconds": 0}, lifetime=90)
+    await ex.enqueue(vc)
+    for _ in range(100):  # wait until the countdown is in its issuing phase
+        armed = harness.agent.power.pending
+        if armed is not None and armed.issuing:
+            break
+        await asyncio.sleep(0.01)
+    assert harness.agent.power.pending is not None and harness.agent.power.pending.issuing
+    cancel = verified(harness, controller, "power.cancel")
+    await ex.enqueue(cancel)
+    rc = await cap.wait_result(cancel.command_id)
+    assert rc["state"] == "failed" and rc["error"]["code"] == "ACTION_UNAVAILABLE"
+    assert rc["result"] == {"canceled": False, "action": "power.sleep", "command_id": vc.command_id}
+    rs = await cap.wait_result(vc.command_id)
+    assert rs["state"] == "succeeded" and rs["result"]["accepted"] is True
+    assert harness.fake.count("power_sleep") == 1
+    assert all(f["state"] != "canceled" for f in cap.results(vc.command_id))
+    assert harness.agent.store.journal_get(vc.command_id).state == "succeeded"  # type: ignore[union-attr]
+
+
+async def test_power_cancel_aborts_initiated_restart_only_when_windows_agrees(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
+    ex, cap = executor
+    vc = verified(harness, controller, "power.restart", {"countdown_seconds": 0}, lifetime=90)
+    await ex.enqueue(vc)
+    rs = await cap.wait_result(vc.command_id)
+    assert rs["state"] == "succeeded" and harness.fake.count("power_restart") == 1
+    # Windows refuses the abort (e.g. no grace period left): honest `canceled: false`
+    harness.fake.abort_shutdown_ok = False
+    c1 = verified(harness, controller, "power.cancel")
+    await ex.enqueue(c1)
+    r1 = await cap.wait_result(c1.command_id)
+    assert r1["state"] == "succeeded" and r1["result"] == {"canceled": False}
+    assert harness.fake.count("power_abort_shutdown") == 1
+    # Windows aborts it: reported against the restart's command_id, and only once
+    harness.fake.abort_shutdown_ok = True
+    c2 = verified(harness, controller, "power.cancel")
+    await ex.enqueue(c2)
+    r2 = await cap.wait_result(c2.command_id)
+    assert r2["result"] == {"canceled": True, "action": "power.restart", "command_id": vc.command_id}
+    c3 = verified(harness, controller, "power.cancel")
+    await ex.enqueue(c3)
+    assert (await cap.wait_result(c3.command_id))["result"] == {"canceled": False}
+    assert harness.fake.count("power_abort_shutdown") == 2
+
+
+async def test_power_cancel_too_late_from_relay_cancel_frame_keeps_real_outcome(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    """Same race through the real frame path: relay `cancel` during the OS call → no `canceled` result."""
+    harness.fake.power_block_seconds = 1.0
+    env = controller.command("power.sleep", {"countdown_seconds": 0}, lifetime=90)
+    cid = payload_of(env)["command_id"]
+    await harness.send_command(env)
+    req = await harness.relay.expect("confirmation_required", command_id=cid)
+    await harness.send_confirmation(controller.confirmation(cid, req["challenge_text"]))
+    await harness.ack(cid, state="executing")
+    for _ in range(200):
+        armed = harness.agent.power.pending
+        if armed is not None and armed.issuing:
+            break
+        await asyncio.sleep(0.01)
+    await harness.relay.send({"type": "cancel", "command_id": cid, "controller_id": controller.controller_id})
+    res = await harness.result(cid)
+    assert res["state"] == "succeeded" and res["result"]["accepted"] is True
+    assert harness.fake.count("power_sleep") == 1

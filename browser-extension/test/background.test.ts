@@ -4,8 +4,9 @@ import { resolve } from "node:path";
 import { schemas } from "@dome/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NATIVE_HOST_NAME, RECONNECT_ALARM } from "../src/background/connection.ts";
+import { HELLO_ACK_TIMEOUT_MS, NATIVE_HOST_NAME, RECONNECT_ALARM } from "../src/background/connection.ts";
 import type { BridgeEvent, BridgeHello, BridgeResponse } from "../src/background/frames.ts";
+import { computeBudget, MIN_BUDGET_MS } from "../src/background/requests.ts";
 import { createBackground, type Background } from "../src/background/service.ts";
 import { KEY_INSTANCE_ID } from "../src/background/storage.ts";
 import { BG_KIND, CS_KIND, POPUP_KIND, type ContentReply, type PlayerSnapshot, type StatusReport } from "../src/shared/messages.ts";
@@ -136,6 +137,7 @@ describe("request routing", () => {
     const before = port.framesOfType<BridgeResponse>("bridge_response").length;
     port.receive({ type: "bridge_request", request_id: REQ, ...frame });
     await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 20 && port.framesOfType("bridge_response").length === before; i++) await vi.advanceTimersByTimeAsync(50);
     const responses = port.framesOfType<BridgeResponse>("bridge_response");
     expect(responses.length).toBe(before + 1);
     schemas.validateBridgeFrame("extension_to_agent", responses[before]);
@@ -243,6 +245,79 @@ describe("request routing", () => {
     expect(seenDeadline).toBeGreaterThanOrEqual(5000);
   });
 
+  it("a tabs.onUpdated(loading) caused by next (SPA navigation) does not turn the observed success into TARGET_GONE", async () => {
+    const chrome = new FakeChrome();
+    const NEW_URL = "https://www.youtube.com/watch?v=9bZkp7q19f0";
+    setupTabs(chrome, {
+      next: () =>
+        new Promise<ContentReply>((resolve) => {
+          // The URL change of the navigation is reported by Chrome while the content script is still
+          // alive and before it has replied (it waits for the transition and the page to settle).
+          chrome.updateTab(11, { status: "loading", url: NEW_URL });
+          setTimeout(() => resolve({ ok: true, token: TOKENS[11]!, state: { ...snapshotFor(FIXTURE.tabs[0]!), video_id: "9bZkp7q19f0" }, previous_video_id: "dQw4w9WgXcQ" }), 450);
+        }),
+    });
+    const bg = await boot(chrome);
+    const port = chrome.lastPort;
+    const flickers = () => port.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed" && e.tabs!.some((t) => t.tab_id === 11 && !t.script_attached)).length;
+    const n0 = flickers();
+    const r = await request(chrome, { op: "next", args: { tab_id: 11, tab_token: TOKENS[11], expected_video_id: "dQw4w9WgXcQ" }, timeout_ms: 10000 });
+    expect(r.ok).toBe(true);
+    const result = r.result as { tab: { video_id: string; script_attached: boolean; tab_token: string }; previous_video_id: string };
+    expect(result.previous_video_id).toBe("dQw4w9WgXcQ");
+    expect(result.tab.video_id).toBe("9bZkp7q19f0");
+    expect(result.tab.script_attached).toBe(true);
+    expect(result.tab.tab_token).toBe(TOKENS[11]);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(flickers()).toBe(n0); // no "reload needed" announcement for an in-site navigation
+    expect(bg.registry.get(11)?.token).toBe(TOKENS[11]);
+    chrome.updateTab(11, { status: "complete" });
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(flickers()).toBe(n0);
+    validateAllSent(chrome);
+  });
+
+  it("composes the result from the attachment recorded from the reply even if the cache entry vanished meanwhile", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    const bg = await boot(chrome);
+    const realGet = chrome.tabs.get;
+    let calls = 0;
+    chrome.tabs.get = async (tabId: number) => {
+      const tab = await realGet(tabId);
+      // The first tabs.get is the pre-op check; the second is composeById after the reply was recorded.
+      if (tabId === 11 && ++calls === 2) bg.registry.detach(11); // concurrent deletion between record() and compose()
+      return tab;
+    };
+    const r = await request(chrome, { op: "set_paused", args: { tab_id: 11, tab_token: TOKENS[11], paused: true }, timeout_ms: 8000 });
+    expect(r.ok).toBe(true);
+    expect((r.result as { tab: { paused: boolean } }).tab.paused).toBe(true);
+  });
+
+  it("the time budget keeps the content deadline strictly shorter than the background wait for every schema value", async () => {
+    for (const t of [100, 250, 699, 900, 999, 1000, 1500, 8000, 10000, 60000, 90000, undefined]) {
+      const b = computeBudget(t);
+      expect(b.deadlineMs, String(t)).toBeLessThan(b.bgWaitMs);
+      expect(b.deadlineMs, String(t)).toBeGreaterThanOrEqual(MIN_BUDGET_MS - 700);
+      expect(b.bgWaitMs, String(t)).toBeLessThanOrEqual(60000);
+    }
+    expect(computeBudget(100)).toEqual({ bgWaitMs: 800, deadlineMs: 300 });
+    expect(computeBudget(8000)).toEqual({ bgWaitMs: 7800, deadlineMs: 7300 });
+    const chrome = new FakeChrome();
+    let seenDeadline = 0;
+    setupTabs(chrome, {
+      set_paused: (msg) => {
+        seenDeadline = msg.deadline_ms;
+        return { ok: true, token: TOKENS[11]!, state: { ...snapshotFor(FIXTURE.tabs[0]!), paused: true } };
+      },
+    });
+    await boot(chrome);
+    const r = await request(chrome, { op: "set_paused", args: { tab_id: 11, tab_token: TOKENS[11], paused: true }, timeout_ms: 100 });
+    expect(r.ok).toBe(true); // a prompt reply is never reported as OUTCOME_UNKNOWN
+    expect(seenDeadline).toBe(300);
+    expect(seenDeadline).toBeLessThan(computeBudget(100).bgWaitMs);
+  });
+
   it("missing tab_id is INVALID_PARAMETERS", async () => {
     const chrome = new FakeChrome();
     setupTabs(chrome);
@@ -298,7 +373,7 @@ describe("events", () => {
     const count = () => port.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed").length;
     const n0 = count();
     chrome.removeTab(12);
-    chrome.updateTab(11, { status: "loading" });
+    chrome.reloadTab(11);
     chrome.tabs.onActivated.dispatch({ tabId: 13, windowId: 1 });
     await vi.advanceTimersByTimeAsync(100);
     expect(count()).toBe(n0); // still debouncing
@@ -320,6 +395,57 @@ describe("events", () => {
     await vi.advanceTimersByTimeAsync(400);
     tabs = port.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed").pop()!.tabs!;
     expect(tabs[0]!.script_attached).toBe(false);
+    validateAllSent(chrome);
+  });
+
+  it("an in-site (SPA) URL change keeps the attachment: no script_attached:false, same token", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    const bg = await boot(chrome);
+    const port = chrome.lastPort;
+    const changed = () => port.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed");
+    const n0 = changed().length;
+    chrome.updateTab(11, { status: "loading", url: "https://www.youtube.com/watch?v=9bZkp7q19f0" });
+    chrome.updateTab(11, { status: "complete" });
+    await vi.advanceTimersByTimeAsync(400);
+    const events = changed().slice(n0);
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    for (const e of events) {
+      const t11 = e.tabs!.find((t) => t.tab_id === 11)!;
+      expect(t11.script_attached).toBe(true);
+      expect(t11.tab_token).toBe(TOKENS[11]);
+    }
+    expect(bg.registry.get(11)?.token).toBe(TOKENS[11]);
+    // A full reload (content script gone, detached message lost) is still detected by the probe.
+    chrome.reloadTab(11);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(bg.registry.get(11)).toBeUndefined();
+    expect(changed().pop()!.tabs!.find((t) => t.tab_id === 11)!.script_attached).toBe(false);
+    validateAllSent(chrome);
+  });
+
+  it("a tabs_changed sent on an early ack is corrected once the slow probe finishes", async () => {
+    const chrome = new FakeChrome();
+    const slow = scriptedContent(FIXTURE.tabs[0]!);
+    chrome.addTab({ id: 11, url: FIXTURE.tabs[0]!.url, title: FIXTURE.tabs[0]!.title, active: true }, (msg) => new Promise((resolve) => setTimeout(() => resolve(slow(msg)), 1000)));
+    chrome.addTab({ id: 12, url: FIXTURE.tabs[1]!.url, title: FIXTURE.tabs[1]!.title }, scriptedContent(FIXTURE.tabs[1]!));
+    const bg = createBackground(chrome, { browser: "chrome" });
+    const started = bg.start();
+    // Chrome's onStartup opens the port independently of start(), so the ack can land mid-rebuild.
+    chrome.runtime.onStartup.dispatch();
+    await vi.advanceTimersByTimeAsync(0);
+    chrome.lastPort.receive(ACK);
+    await vi.advanceTimersByTimeAsync(0);
+    const port = chrome.lastPort;
+    const changed = () => port.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed");
+    expect(changed().length).toBe(1);
+    expect(changed()[0]!.tabs!.find((t) => t.tab_id === 11)!.script_attached).toBe(false); // honest at that moment
+    await vi.advanceTimersByTimeAsync(1500);
+    await started;
+    const last = changed().pop()!;
+    expect(changed().length).toBeGreaterThanOrEqual(2);
+    expect(last.tabs!.find((t) => t.tab_id === 11)!.script_attached).toBe(true);
+    expect(last.tabs!.find((t) => t.tab_id === 11)!.tab_token).toBe(TOKENS[11]);
     validateAllSent(chrome);
   });
 
@@ -382,6 +508,30 @@ describe("reconnect and version negotiation", () => {
     chrome.fireAlarm(RECONNECT_ALARM);
     await vi.advanceTimersByTimeAsync(0);
     expect(chrome.ports).toHaveLength(4);
+  });
+
+  it("a host that never acknowledges hello is disconnected after the ack deadline and retried with backoff", async () => {
+    const chrome = new FakeChrome();
+    const bg = await boot(chrome, { ack: false });
+    const first = chrome.lastPort;
+    await vi.advanceTimersByTimeAsync(HELLO_ACK_TIMEOUT_MS - 1);
+    expect(first.disconnected).toBe(false);
+    expect(bg.connection.current().state).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(2);
+    expect(first.disconnected).toBe(true);
+    expect(bg.connection.current().state).toBe("disconnected");
+    expect(bg.connection.connected).toBe(false);
+    expect(chrome.ports).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1000); // first backoff step
+    expect(chrome.ports).toHaveLength(2);
+    expect(chrome.lastPort.framesOfType("bridge_hello")).toHaveLength(1);
+    chrome.lastPort.receive(ACK);
+    expect(bg.connection.connected).toBe(true);
+    // Once acked, the ack timer must not fire later.
+    await vi.advanceTimersByTimeAsync(HELLO_ACK_TIMEOUT_MS + 1000);
+    expect(bg.connection.connected).toBe(true);
+    expect(chrome.ports).toHaveLength(2);
+    validateAllSent(chrome);
   });
 
   it("forbidden host (extension id not registered) is reported as host_forbidden", async () => {

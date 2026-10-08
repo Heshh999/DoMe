@@ -220,6 +220,66 @@ describe("confirmation transaction through the service", () => {
     await expect(keyed.respondToChallenge(rec2.commandId, "approve")).rejects.toThrow(/CONFIRMATION_EXPIRED/);
   });
 
+  it("with a `connected` dependency a dead socket reads as PC_RECONNECTING, never as 'not paired' (identity is null while disconnected)", async () => {
+    const h = await harness();
+    let open = true;
+    const svc = new CommandService({
+      send: (f) => h.sent.push(f),
+      connected: () => open,
+      identity: () => (open ? { accountId: ACCOUNT, controllerId: CONTROLLER } : null),
+      keyPair: async () => h.keyPair,
+      onChange: () => undefined,
+      timers: h.ft.timers,
+      now: () => new Date("2026-10-08T12:00:00.000Z"),
+    });
+    const rec = await svc.send({ pcId: PC, action: "power.shutdown" });
+    svc.handleFrame({ type: "confirmation_required", command_id: rec.commandId, challenge_text: fixture.digests.challenge_text });
+    open = false;
+    await expect(svc.send({ pcId: PC, action: "windows.lock" })).rejects.toThrow(/PC_RECONNECTING/);
+    await expect(svc.respondToChallenge(rec.commandId, "decline")).rejects.toThrow(/PC_RECONNECTING/);
+    expect(svc.get(rec.commandId)!.confirmation!.decision).toBeNull();
+  });
+
+  it("dismissing a pending confirmation locally sends nothing, hides it, and a later result still applies", async () => {
+    const h = await harness();
+    const rec = await h.service.send({ pcId: PC, action: "power.shutdown" });
+    h.service.handleFrame({ type: "confirmation_required", command_id: rec.commandId, challenge_text: fixture.digests.challenge_text });
+    expect(h.service.get(rec.commandId)!.confirmation!.decision).toBeNull();
+    expect(h.service.get(rec.commandId)!.confirmation!.connectionLost).toBe(false);
+    const sent = h.sent.length;
+    h.service.dismissConfirmation(rec.commandId);
+    expect(h.sent).toHaveLength(sent);
+    expect(h.service.get(rec.commandId)!.confirmation!.decision).toBe("dismissed");
+    expect(h.service.get(rec.commandId)!.state).toBe("awaiting_confirmation");
+    // idempotent and never overrides a real answer
+    h.service.dismissConfirmation(rec.commandId);
+    expect(h.service.get(rec.commandId)!.confirmation!.decision).toBe("dismissed");
+    h.service.dismissConfirmation("not-a-command");
+    // the relay's deadline result lands on the record regardless
+    h.service.handleFrame({ type: "result", command_id: rec.commandId, origin: "relay", state: "failed", at: TS, duration_ms: 5, error: { code: "COMMAND_EXPIRED", message: "", retryable: false } });
+    expect(h.service.get(rec.commandId)!.terminal?.state).toBe("failed");
+    expect(h.service.get(rec.commandId)!.terminal?.error?.code).toBe("COMMAND_EXPIRED");
+  });
+
+  it("connection lost/restored is flagged on pending confirmations only", async () => {
+    const h = await harness();
+    const a = await h.service.send({ pcId: PC, action: "power.shutdown" });
+    const b = await h.service.send({ pcId: PC, action: "app.close", target: { app_id: "notepad" } });
+    h.service.handleFrame({ type: "confirmation_required", command_id: a.commandId, challenge_text: fixture.digests.challenge_text });
+    h.service.handleFrame({ type: "confirmation_required", command_id: b.commandId, challenge_text: fixture.digests.challenge_text });
+    await h.service.respondToChallenge(b.commandId, "decline");
+    const changes = h.changes.length;
+    h.service.markConnectionLost();
+    expect(h.service.get(a.commandId)!.confirmation!.connectionLost).toBe(true);
+    expect(h.service.get(b.commandId)!.confirmation!.connectionLost).toBe(false); // already answered
+    expect(h.changes.length).toBe(changes + 1);
+    h.service.markConnectionLost(); // no churn
+    expect(h.changes.length).toBe(changes + 1);
+    h.service.markConnectionRestored();
+    expect(h.service.get(a.commandId)!.confirmation!.connectionLost).toBe(false);
+    expect(h.changes.length).toBe(changes + 2);
+  });
+
   it("an unparseable challenge is ignored (no Approve ever offered)", async () => {
     const h = await harness();
     const rec = await h.service.send({ pcId: PC, action: "power.shutdown" });

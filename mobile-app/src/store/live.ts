@@ -41,6 +41,8 @@ export const EMPTY_LIVE_PC: LivePc = { connection: "unknown", lastSeen: null, en
 export const STATE_FRESH_MS = 75_000;
 
 export interface LiveState {
+  /** Wall-clock ms, advanced by `Runtime` every few seconds so time-based freshness is re-evaluated. */
+  now: number;
   relayStatus: RelayStatus;
   relayError: relayFrames.Error | null;
   controllerId: string | null;
@@ -58,6 +60,7 @@ export interface LiveState {
   onState(frame: relayFrames.AgentState): void;
   onSubscribeRefused(pcId: string, code: string): void;
   markAllStale(): void;
+  tick(now?: number): void;
   upsertCommand(record: CommandRecord): void;
   setCommands(records: CommandRecord[]): void;
   selectTab(pcId: string, key: string | null): void;
@@ -66,6 +69,7 @@ export interface LiveState {
 }
 
 export const useLiveStore = create<LiveState>()((set) => ({
+  now: Date.now(),
   relayStatus: "idle",
   relayError: null,
   controllerId: null,
@@ -120,6 +124,9 @@ export const useLiveStore = create<LiveState>()((set) => ({
       return { pcs };
     });
   },
+  tick(now = Date.now()) {
+    set({ now });
+  },
   upsertCommand(record) {
     set((s) => {
       const rest = s.commands.filter((c) => c.commandId !== record.commandId);
@@ -146,9 +153,22 @@ export const useLiveStore = create<LiveState>()((set) => ({
     });
   },
   reset() {
-    set({ relayStatus: "idle", relayError: null, controllerId: null, pcs: {}, commands: [], selectedTab: {}, selectedSession: {}, appsByPc: {} });
+    set({ now: Date.now(), relayStatus: "idle", relayError: null, controllerId: null, pcs: {}, commands: [], selectedTab: {}, selectedSession: {}, appsByPc: {} });
   },
 }));
+
+/** True when the last `state` frame is older than STATE_FRESH_MS (the agent re-sends every 30 s). */
+export function stateExpired(pc: LivePc | undefined, now = Date.now()): boolean {
+  return !!pc && pc.state !== null && pc.stateReceivedAt !== null && now - pc.stateReceivedAt > STATE_FRESH_MS;
+}
+
+/**
+ * The PC as the UI should see it at `now`: an online PC whose state has gone quiet for over 75 s is
+ * shown exactly like one that just reconnected ("Online · refreshing", controls disabled).
+ */
+export function withTimeStaleness(pc: LivePc, now = Date.now()): LivePc {
+  return !pc.stale && stateExpired(pc, now) ? { ...pc, stale: true } : pc;
+}
 
 /** True when the PC's state can be trusted for consequential controls. */
 export function isFresh(pc: LivePc | undefined, now = Date.now()): boolean {
@@ -157,6 +177,7 @@ export function isFresh(pc: LivePc | undefined, now = Date.now()): boolean {
   return true;
 }
 
+/** The confirmation the modal must show: unanswered, not dismissed locally, command not finished. */
 export function pendingConfirmation(commands: CommandRecord[]): CommandRecord | null {
   return commands.find((c) => c.confirmation && c.confirmation.decision === null && !c.terminal) ?? null;
 }

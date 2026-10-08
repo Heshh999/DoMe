@@ -5,7 +5,8 @@ import { Link } from "react-router";
 import type { rest } from "@dome/protocol";
 
 import { useDevicesStore } from "../store/devices.ts";
-import { useLiveStore, type LivePc } from "../store/live.ts";
+import { useLivePcs } from "../app/hooks.ts";
+import type { LivePc } from "../store/live.ts";
 import { connectionOf } from "../lib/connection.ts";
 import { Pill } from "./ui.tsx";
 
@@ -13,7 +14,7 @@ export function PcSwitcher({ pc, live }: { pc: rest.Pc | undefined; live: LivePc
   const pcs = useDevicesStore((s) => s.pcs);
   const select = useDevicesStore((s) => s.select);
   const loaded = useDevicesStore((s) => s.loaded);
-  const livePcs = useLiveStore((s) => s.pcs);
+  const livePcs = useLivePcs();
   const id = useId();
   if (loaded && pcs.length === 0) {
     return (

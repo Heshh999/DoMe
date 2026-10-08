@@ -36,7 +36,7 @@ function record(text: string, bindingProblem: string | null): CommandRecord {
     expiresAt: "2026-10-08T12:01:30.000Z",
     state: "awaiting_confirmation",
     ackAt: null,
-    confirmation: { parsed, bindingProblem, receivedAt: Date.now(), decision: null },
+    confirmation: { parsed, bindingProblem, receivedAt: Date.now(), decision: null, connectionLost: false },
     terminal: null,
     noAnswer: false,
     source: "button",
@@ -73,9 +73,46 @@ describe("ConfirmationModal", () => {
     expect(onRespond).toHaveBeenCalledWith("decline");
   });
 
-  it("disables Approve once the challenge expired", () => {
-    render(<ConfirmationModal record={record(fixture.digests.challenge_text, null)} pcName="Office PC" onRespond={async () => undefined} now={() => new Date("2026-10-08T12:02:00.000Z")} />);
+  it("disables Approve once the challenge expired and offers Close (local only)", async () => {
+    const onDismiss = vi.fn();
+    const onRespond = vi.fn(async () => undefined);
+    render(<ConfirmationModal record={record(fixture.digests.challenge_text, null)} pcName="Office PC" onRespond={onRespond} onDismiss={onDismiss} now={() => new Date("2026-10-08T12:02:00.000Z")} />);
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
     expect(screen.getByText(/timed out/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it("while connected and pending there is no Close: only Approve/Decline answer the PC", () => {
+    render(<ConfirmationModal record={record(fixture.digests.challenge_text, null)} pcName="Office PC" connected onRespond={async () => undefined} onDismiss={() => undefined} now={NOW} />);
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    expect(screen.getByText(/Expires in/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+  });
+
+  it("socket down: Decline fails honestly, the countdown is replaced by a connection-lost notice and Close is available", async () => {
+    const onDismiss = vi.fn();
+    const onRespond = vi.fn(async () => {
+      throw new Error("PC_RECONNECTING: not connected to DoMe");
+    });
+    render(<ConfirmationModal record={record(fixture.digests.challenge_text, null)} pcName="Office PC" connected={false} onRespond={onRespond} onDismiss={onDismiss} now={NOW} />);
+    expect(screen.getByText("Connection to DoMe lost")).toBeInTheDocument();
+    expect(screen.getByText(/The PC discards this request when it expires \(in about 50s\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Expires in/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Decline" }));
+    expect(onRespond).toHaveBeenCalledWith("decline");
+    expect(screen.getByText("not connected to DoMe")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("a record flagged connectionLost by the runtime shows the same escape hatch even if the prop says connected", () => {
+    const rec = record(fixture.digests.challenge_text, null);
+    rec.confirmation = { ...rec.confirmation!, connectionLost: true };
+    render(<ConfirmationModal record={rec} pcName="Office PC" connected onRespond={async () => undefined} onDismiss={() => undefined} now={NOW} />);
+    expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+    expect(screen.getByText("Connection to DoMe lost")).toBeInTheDocument();
   });
 });
