@@ -306,7 +306,7 @@ class Store:
         return _grant(row) if row else None
 
     def list_grants(self, *, include_revoked: bool = False) -> list[GrantRow]:
-        sql = "SELECT * FROM grants" + ("" if include_revoked else " WHERE revoked_at IS NULL") + " ORDER BY granted_at"
+        sql = "SELECT * FROM grants" + ("" if include_revoked else " WHERE revoked_at IS NULL") + " ORDER BY granted_at"  # noqa: S608 - fixed literal fragments
         with self._lock:
             rows = self._conn.execute(sql).fetchall()
         return [_grant(r) for r in rows]

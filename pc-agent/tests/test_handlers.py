@@ -112,7 +112,7 @@ async def test_handler_success_result_validates(harness: AgentHarness, controlle
 async def test_youtube_request_fullscreen_reports_activation_required(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
     res = await run(harness, controller, "youtube.request_fullscreen", {}, setup["yt"])
     assert res["state"] == "failed" and res["error"]["code"] == "ACTIVATION_REQUIRED"
-    assert "result" in res and res["result"]["tab"]["fullscreen"] is False
+    assert setup["tab"].fullscreen is False  # nothing was faked into success
     setup["tab"].fullscreen_allowed = True
     res = await run(harness, controller, "youtube.request_fullscreen", {}, setup["yt"])
     assert res["state"] == "succeeded" and res["result"]["tab"]["fullscreen"] is True

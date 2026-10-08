@@ -108,7 +108,8 @@ class ConfirmationManager:
     def issue(self, vc: VerifiedCommand, target_state_digest: str, detail: str) -> PendingConfirmation:
         now = self._clock()
         challenge_id = str(uuid.uuid4())
-        challenge = {
+        expires_text = format_rfc3339(now + timedelta(seconds=self._lifetime))
+        challenge: dict[str, Any] = {
             "challenge_id": challenge_id,
             "command_id": vc.command_id,
             "controller_id": vc.controller_id,
@@ -118,7 +119,7 @@ class ConfirmationManager:
             "target": vc.target,
             "target_state_digest": target_state_digest,
             "issued_at": format_rfc3339(now),
-            "expires_at": format_rfc3339(now + timedelta(seconds=self._lifetime)),
+            "expires_at": expires_text,
             "display": {
                 "pc_name": self._pc_name()[:64],
                 "action_label": action_label(vc.spec.name)[:80],
@@ -136,7 +137,7 @@ class ConfirmationManager:
                 challenge_text=text,
                 digest=challenge_digest(text),
                 target_state_digest=target_state_digest,
-                expires_at=challenge["expires_at"],
+                expires_at=expires_text,
                 consumed_at=None,
             )
         )
