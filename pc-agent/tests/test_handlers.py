@@ -22,7 +22,15 @@ def test_every_registry_action_has_exactly_one_handler() -> None:
     assert set(handlers) == set(registry.actions)
 
 
-async def run(h: AgentHarness, controller: Controller, action: str, params: dict[str, Any] | None = None, target: dict[str, Any] | None = None, *, confirm: bool = False) -> dict[str, Any]:
+async def run(
+    h: AgentHarness,
+    controller: Controller,
+    action: str,
+    params: dict[str, Any] | None = None,
+    target: dict[str, Any] | None = None,
+    *,
+    confirm: bool = False,
+) -> dict[str, Any]:
     env = controller.command(action, params, target, lifetime=90 if confirm else 30)
     cid = payload_of(env)["command_id"]
     await h.send_command(env)
@@ -84,7 +92,14 @@ CASES: list[tuple[str, dict[str, Any], str | None]] = [
 
 
 @pytest.mark.parametrize(("action", "params", "target_kind"), CASES, ids=[c[0] for c in CASES])
-async def test_handler_success_result_validates(harness: AgentHarness, controller: Controller, setup: dict[str, Any], action: str, params: dict[str, Any], target_kind: str | None) -> None:
+async def test_handler_success_result_validates(
+    harness: AgentHarness,
+    controller: Controller,
+    setup: dict[str, Any],
+    action: str,
+    params: dict[str, Any],
+    target_kind: str | None,
+) -> None:
     registry = load_registry()
     spec = registry.get(action)
     target: dict[str, Any] | None = None
@@ -109,7 +124,9 @@ async def test_handler_success_result_validates(harness: AgentHarness, controlle
         assert res["result"] == {"value": 25, "muted": False}
 
 
-async def test_youtube_request_fullscreen_reports_activation_required(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
+async def test_youtube_request_fullscreen_reports_activation_required(
+    harness: AgentHarness, controller: Controller, setup: dict[str, Any]
+) -> None:
     res = await run(harness, controller, "youtube.request_fullscreen", {}, setup["yt"])
     assert res["state"] == "failed" and res["error"]["code"] == "ACTIVATION_REQUIRED"
     assert setup["tab"].fullscreen is False  # nothing was faked into success
@@ -118,7 +135,9 @@ async def test_youtube_request_fullscreen_reports_activation_required(harness: A
     assert res["state"] == "succeeded" and res["result"]["tab"]["fullscreen"] is True
 
 
-async def test_youtube_next_without_next_video(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
+async def test_youtube_next_without_next_video(
+    harness: AgentHarness, controller: Controller, setup: dict[str, Any]
+) -> None:
     setup["tab"].next_videos = []
     res = await run(harness, controller, "youtube.next", {}, setup["yt"])
     assert res["state"] == "failed" and res["error"]["code"] == "NO_NEXT_VIDEO"
@@ -128,13 +147,17 @@ async def test_youtube_next_without_next_video(harness: AgentHarness, controller
     assert res["state"] == "failed" and res["error"]["code"] == "UNSUPPORTED_CONTEXT"
 
 
-async def test_youtube_expected_video_mismatch_is_target_changed(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
+async def test_youtube_expected_video_mismatch_is_target_changed(
+    harness: AgentHarness, controller: Controller, setup: dict[str, Any]
+) -> None:
     res = await run(harness, controller, "youtube.next", {}, {**setup["yt"], "expected_video_id": "someOther11"})
     assert res["state"] == "failed" and res["error"]["code"] == "TARGET_CHANGED"
     assert setup["tab"].video_id == "dQw4w9WgXcQ"  # nothing happened
 
 
-async def test_focus_denied_and_app_not_running(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
+async def test_focus_denied_and_app_not_running(
+    harness: AgentHarness, controller: Controller, setup: dict[str, Any]
+) -> None:
     harness.fake.refuse_focus = True
     res = await run(harness, controller, "app.focus", {}, {"app_id": "note"})
     assert res["state"] == "failed" and res["error"]["code"] == "FOCUS_DENIED" and res["result"]["focused"] is False
@@ -145,14 +168,18 @@ async def test_focus_denied_and_app_not_running(harness: AgentHarness, controlle
     assert res["state"] == "succeeded" and res["result"]["apps"][0]["running"] is False
 
 
-async def test_launch_refuses_changed_executable(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
+async def test_launch_refuses_changed_executable(
+    harness: AgentHarness, controller: Controller, setup: dict[str, Any]
+) -> None:
     Path(setup["exe"]).write_bytes(b"MZ tampered")
     res = await run(harness, controller, "app.launch", {"app_id": "note"})
     assert res["state"] == "failed" and res["error"]["code"] == "APP_NOT_APPROVED"
     assert harness.fake.count("launch") == 0
 
 
-async def test_media_session_gone_and_unsupported_control(harness: AgentHarness, controller: Controller, setup: dict[str, Any]) -> None:
+async def test_media_session_gone_and_unsupported_control(
+    harness: AgentHarness, controller: Controller, setup: dict[str, Any]
+) -> None:
     res = await run(harness, controller, "media.set_paused", {"paused": True}, {"session_id": "nope#9"})
     assert res["state"] == "failed" and res["error"]["code"] == "MEDIA_SESSION_GONE"
     harness.fake.add_session("Radio#0", controls=("play", "pause"))
@@ -164,11 +191,22 @@ async def test_windows_actions_unsupported_on_this_platform(harness: AgentHarnes
     from dome_agent.platform.unsupported import build_unsupported_platform
 
     harness.agent.services.platform = build_unsupported_platform()
-    for action, params in (("windows.get_volume", {}), ("media.get_sessions", {}), ("app.list", {}), ("windows.lock", {})):
+    for action, params in (
+        ("windows.get_volume", {}),
+        ("media.get_sessions", {}),
+        ("app.list", {}),
+        ("windows.lock", {}),
+    ):
         res = await run(harness, controller, action, params)
         assert res["state"] == "failed" and res["error"]["code"] == "PLATFORM_UNSUPPORTED", action
     # YouTube still works without Windows adapters
     tab = FakeTab(tab_id=3)
     ext = await harness.connect_extension(tab)
-    res = await run(harness, controller, "youtube.set_paused", {"paused": True}, {"browser_instance_id": ext.browser_instance_id, "tab_id": 3, "tab_token": tab.tab_token})
+    res = await run(
+        harness,
+        controller,
+        "youtube.set_paused",
+        {"paused": True},
+        {"browser_instance_id": ext.browser_instance_id, "tab_id": 3, "tab_token": tab.tab_token},
+    )
     assert res["state"] == "succeeded"

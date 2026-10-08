@@ -75,7 +75,9 @@ class EntitlementResponse:
 class ApiClient:
     def __init__(self, api_url: str, *, client: httpx.AsyncClient | None = None) -> None:
         self._base = api_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, headers={"User-Agent": f"DoMe-agent/{__version__}"}, follow_redirects=False)
+        self._client = client or httpx.AsyncClient(
+            timeout=DEFAULT_TIMEOUT, headers={"User-Agent": f"DoMe-agent/{__version__}"}, follow_redirects=False
+        )
         self._owned = client is None
         self._schemas = load_schemas()
 
@@ -88,14 +90,24 @@ class ApiClient:
             await self._client.aclose()
 
     # ----- plumbing ---------------------------------------------------------------------------------------
-    async def _request(self, method: str, path: str, *, json_body: dict[str, Any] | None = None, bearer: str | None = None, expect: tuple[int, ...] = (200,)) -> tuple[int, dict[str, Any]]:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        bearer: str | None = None,
+        expect: tuple[int, ...] = (200,),
+    ) -> tuple[int, dict[str, Any]]:
         headers: dict[str, str] = {"Accept": "application/json"}
         if bearer is not None:
             headers["Authorization"] = f"Bearer {bearer}"
         try:
             response = await self._client.request(method, self._base + path, json=json_body, headers=headers)
         except httpx.HTTPError as exc:
-            raise ApiError(0, "NETWORK", f"{exc.__class__.__name__} talking to the DoMe service", retryable=True) from exc
+            raise ApiError(
+                0, "NETWORK", f"{exc.__class__.__name__} talking to the DoMe service", retryable=True
+            ) from exc
         if len(response.content) > MAX_BODY_BYTES:
             raise ApiError(response.status_code, "PAYLOAD_TOO_LARGE", "response too large")
         body: dict[str, Any] = {}
@@ -104,7 +116,9 @@ class ApiClient:
                 parsed = loads_strict(response.content, max_bytes=MAX_BODY_BYTES, require_object=True)
                 body = parsed if isinstance(parsed, dict) else {}
             except ProtocolError as exc:
-                raise ApiError(response.status_code, "MALFORMED_MESSAGE", f"invalid JSON from the service ({exc.message})") from None
+                raise ApiError(
+                    response.status_code, "MALFORMED_MESSAGE", f"invalid JSON from the service ({exc.message})"
+                ) from None
         if response.status_code in expect:
             return response.status_code, body
         code, message = "HTTP_ERROR", f"unexpected status {response.status_code}"
@@ -124,23 +138,41 @@ class ApiClient:
         return body
 
     # ----- device link ------------------------------------------------------------------------------------
-    async def link_start(self, pc_public_jwk: dict[str, str], platform: str, pc_name_hint: str | None = None) -> LinkStart:
+    async def link_start(
+        self, pc_public_jwk: dict[str, str], platform: str, pc_name_hint: str | None = None
+    ) -> LinkStart:
         body: dict[str, Any] = {"pc_public_jwk": pc_public_jwk, "agent_version": __version__, "platform": platform}
         if pc_name_hint:
             body["pc_name_hint"] = pc_name_hint[:64]
         self._schemas.validate_rest("agent_link_start_request", body)
         _status, out = await self._request("POST", "/v1/agent-link/start", json_body=body)
         out = self._validated("agent_link_start_response", out)
-        return LinkStart(out["device_code"], out["user_code"], out["verification_uri_complete"], int(out["expires_in"]), int(out["interval"]))
+        return LinkStart(
+            out["device_code"],
+            out["user_code"],
+            out["verification_uri_complete"],
+            int(out["expires_in"]),
+            int(out["interval"]),
+        )
 
     async def link_poll(self, device_code: str) -> LinkResult | str:
         """Returns a LinkResult on 200, or the pending status string ('authorization_pending' | 'slow_down') on 428."""
-        status, out = await self._request("POST", "/v1/agent-link/poll", json_body={"device_code": device_code}, expect=(200, 428))
+        status, out = await self._request(
+            "POST", "/v1/agent-link/poll", json_body={"device_code": device_code}, expect=(200, 428)
+        )
         if status == 428:
             out = self._validated("agent_link_poll_pending", out)
             return str(out["status"])
         out = self._validated("agent_link_poll_response", out)
-        return LinkResult(out["pc_id"], out["account_id"], out["pc_credential"], out["relay_url"], out["api_url"], out["pc_name"], bool(out["enabled"]))
+        return LinkResult(
+            out["pc_id"],
+            out["account_id"],
+            out["pc_credential"],
+            out["relay_url"],
+            out["api_url"],
+            out["pc_name"],
+            bool(out["enabled"]),
+        )
 
     # ----- PC bearer --------------------------------------------------------------------------------------
     async def token(self, pc_credential: str) -> AccessToken:
@@ -164,6 +196,8 @@ class ApiClient:
         """→ (pairing_id, expires_at)."""
         body = {"code_hash": code_hash}
         self._schemas.validate_rest("pairing_start_request", body)
-        _status, out = await self._request("POST", "/v1/pairing/start", json_body=body, bearer=access_token, expect=(200, 201))
+        _status, out = await self._request(
+            "POST", "/v1/pairing/start", json_body=body, bearer=access_token, expect=(200, 201)
+        )
         out = self._validated("pairing_start_response", out)
         return str(out["pairing_id"]), str(out["expires_at"])

@@ -79,7 +79,11 @@ def _verify(action: str, params: dict[str, Any], result: dict[str, Any], before_
     if action == "youtube.set_theater" and tab.get("theater") is not None and tab["theater"] != params["enabled"]:
         raise ActionFailed("UNSUPPORTED_CONTEXT", "Theater mode is not available on this page", result=result)
     if action == "youtube.request_fullscreen" and not tab.get("fullscreen"):
-        raise ActionFailed("ACTIVATION_REQUIRED", "Fullscreen must be started on the PC itself; the browser blocks remote fullscreen", result=result)
+        raise ActionFailed(
+            "ACTIVATION_REQUIRED",
+            "Fullscreen must be started on the PC itself; the browser blocks remote fullscreen",
+            result=result,
+        )
     if action in ("youtube.next", "youtube.previous"):
         previous = result.get("previous_video_id", before_video_id)
         if tab.get("video_id") is None or (previous is not None and tab.get("video_id") == previous):
@@ -97,18 +101,24 @@ async def _run(ctx: ExecutionContext) -> dict[str, Any]:
     if ctx.target is None:
         instances = bridge.instances()
         if not instances:
-            raise ProtocolError("EXTENSION_DISCONNECTED", "DoMe's browser extension is not connected on the PC", retryable=True)
+            raise ProtocolError(
+                "EXTENSION_DISCONNECTED", "DoMe's browser extension is not connected on the PC", retryable=True
+            )
         # list_tabs: ask every connected browser instance and merge
         tabs: list[dict[str, Any]] = []
         for inst in instances:
-            response = await bridge.request(inst.browser_instance_id, op, {}, timeout_ms=ctx.command.spec.timeout_ms - 500)
+            response = await bridge.request(
+                inst.browser_instance_id, op, {}, timeout_ms=ctx.command.spec.timeout_ms - 500
+            )
             tabs.extend(t for t in response.get("tabs", []) if isinstance(t, dict))
         return {"tabs": tabs[:32]}
     tab = resolve_youtube_target(bridge, ctx.target)
     before_video_id = tab.get("video_id")
     if ctx.command.spec.verification == "observe_video_transition" or not ctx.command.spec.idempotent:
         ctx.mark_side_effect()
-    result = await bridge.request(str(ctx.target["browser_instance_id"]), op, _args(ctx), timeout_ms=ctx.command.spec.timeout_ms - 500)
+    result = await bridge.request(
+        str(ctx.target["browser_instance_id"]), op, _args(ctx), timeout_ms=ctx.command.spec.timeout_ms - 500
+    )
     if op != "get_state":
         _verify(action, ctx.params, result, before_video_id)
     ctx.services.state.request_update()

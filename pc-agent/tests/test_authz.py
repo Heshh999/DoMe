@@ -113,7 +113,18 @@ async def test_duplicate_and_id_reuse(harness: AgentHarness, controller: Control
     # while still running: duplicate re-emits the current ack
     dup = await authorize(harness, env)
     assert dup.kind == "duplicate" and dup.frames[0]["type"] == "ack"
-    harness.agent.store.journal_set_state(cid, "succeeded", frame={"type": "result", "command_id": cid, "origin": "agent", "state": "succeeded", "at": "2026-01-01T00:00:00.000Z", "duration_ms": 1})
+    harness.agent.store.journal_set_state(
+        cid,
+        "succeeded",
+        frame={
+            "type": "result",
+            "command_id": cid,
+            "origin": "agent",
+            "state": "succeeded",
+            "at": "2026-01-01T00:00:00.000Z",
+            "duration_ms": 1,
+        },
+    )
     dup = await authorize(harness, env)
     assert dup.kind == "duplicate" and dup.frames[0]["type"] == "result" and dup.frames[0]["state"] == "succeeded"
     other = controller.command("system.ping", command_id=cid)  # same id, different bytes
@@ -158,13 +169,24 @@ async def test_youtube_target_resolution(harness: AgentHarness, controller: Cont
     assert d.kind == "execute"
     d = await authorize(harness, controller.command("youtube.get_state", {}, {**good, "tab_id": 99}))
     assert d.error.code == "TARGET_GONE"
-    d = await authorize(harness, controller.command("youtube.get_state", {}, {**good, "browser_instance_id": "bi_other001"}))
+    d = await authorize(
+        harness, controller.command("youtube.get_state", {}, {**good, "browser_instance_id": "bi_other001"})
+    )
     assert d.error.code == "TARGET_GONE"
     d = await authorize(harness, controller.command("youtube.get_state", {}, {**good, "tab_token": "B" * 22}))
     assert d.error.code == "TARGET_CHANGED"
-    d = await authorize(harness, controller.command("youtube.get_state", {}, {**good, "expected_video_id": "otherVideo1"}))
+    d = await authorize(
+        harness, controller.command("youtube.get_state", {}, {**good, "expected_video_id": "otherVideo1"})
+    )
     assert d.error.code == "TARGET_CHANGED"
-    d = await authorize(harness, controller.command("youtube.get_state", {}, {"browser_instance_id": ext.browser_instance_id, "tab_id": 8, "tab_token": "B" * 22}))
+    d = await authorize(
+        harness,
+        controller.command(
+            "youtube.get_state",
+            {},
+            {"browser_instance_id": ext.browser_instance_id, "tab_id": 8, "tab_token": "B" * 22},
+        ),
+    )
     assert d.error.code == "TAB_NOT_CONTROLLABLE"
     d = await authorize(harness, controller.command("youtube.get_state", {}, None))
     assert d.error.code == "TARGET_REQUIRED"
@@ -190,7 +212,15 @@ async def test_routine_step_requires_entitlement(harness: AgentHarness, controll
     origin = {"kind": "routine", "routine_id": str(uuid.uuid4()), "step": 0}
     d = await authorize(harness, controller.command("windows.set_volume", {"value": 10}, origin=origin))
     assert d.kind == "rejected" and d.error.code == "ENTITLEMENT_REQUIRED"
-    d = await authorize(harness, controller.command("youtube.next", {}, {"browser_instance_id": "bi_fake0001", "tab_id": 1, "tab_token": "A" * 22}, origin=origin))
+    d = await authorize(
+        harness,
+        controller.command(
+            "youtube.next",
+            {},
+            {"browser_instance_id": "bi_fake0001", "tab_id": 1, "tab_token": "A" * 22},
+            origin=origin,
+        ),
+    )
     assert d.error.code in ("ENTITLEMENT_REQUIRED", "EXTENSION_DISCONNECTED")
     harness.agent.entitlement._jwks = harness.api.jwks()  # noqa: SLF001
     harness.agent.entitlement.apply_assertion(harness.api.make_assertion(plan="pro"))
@@ -212,7 +242,9 @@ async def test_disruptive_action_yields_confirmation(harness: AgentHarness, cont
 
 
 @pytest.mark.parametrize("state", ["created", "accepted"])
-async def test_duplicate_while_queued_replays_accepted_ack(harness: AgentHarness, controller: Controller, state: str) -> None:
+async def test_duplicate_while_queued_replays_accepted_ack(
+    harness: AgentHarness, controller: Controller, state: str
+) -> None:
     env = controller.command("system.ping")
     cid = payload_of(env)["command_id"]
     await authorize(harness, env)

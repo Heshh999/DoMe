@@ -111,7 +111,16 @@ class FakeApi:
         public["kid"] = key.thumbprint()
         return {"keys": [public]}
 
-    def make_assertion(self, *, plan: str = "pro", lifetime: int = 3600, pc_id: str | None = None, account_id: str | None = None, routines: bool = True, iat: int | None = None) -> str:
+    def make_assertion(
+        self,
+        *,
+        plan: str = "pro",
+        lifetime: int = 3600,
+        pc_id: str | None = None,
+        account_id: str | None = None,
+        routines: bool = True,
+        iat: int | None = None,
+    ) -> str:
         from joserfc import jwt
 
         key = self.signing_key()
@@ -121,12 +130,21 @@ class FakeApi:
             "sub": account_id or self.account_id,
             "pc": pc_id or self.pc_id,
             "plan": plan,
-            "limits": {"max_enabled_pcs": 5, "max_controllers": 5, "routines": routines, "routine_max_steps": 10, "routine_max_seconds": 60, "custom_layouts": True},
+            "limits": {
+                "max_enabled_pcs": 5,
+                "max_controllers": 5,
+                "routines": routines,
+                "routine_max_steps": 10,
+                "routine_max_seconds": 60,
+                "custom_layouts": True,
+            },
             "iat": now,
             "exp": now + lifetime,
             "jti": str(uuid.uuid4()),
         }
-        return jwt.encode({"alg": "EdDSA", "typ": "dome-entitlement+jwt", "kid": key.thumbprint()}, claims, key, algorithms=["EdDSA"])
+        return jwt.encode(
+            {"alg": "EdDSA", "typ": "dome-entitlement+jwt", "kid": key.thumbprint()}, claims, key, algorithms=["EdDSA"]
+        )
 
     # -- HTTP --
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -149,8 +167,20 @@ class FakeApi:
             self.requests.append((method, path))
             status, payload = self._route(method, path, headers, body)
             data = json.dumps(payload).encode("utf-8")
-            reason = {200: "OK", 201: "Created", 401: "Unauthorized", 404: "Not Found", 428: "Precondition Required", 503: "Service Unavailable", 400: "Bad Request", 403: "Forbidden"}.get(status, "OK")
-            writer.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data)
+            reason = {
+                200: "OK",
+                201: "Created",
+                401: "Unauthorized",
+                404: "Not Found",
+                428: "Precondition Required",
+                503: "Service Unavailable",
+                400: "Bad Request",
+                403: "Forbidden",
+            }.get(status, "OK")
+            writer.write(
+                f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode()
+                + data
+            )
             await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionError, TimeoutError, ValueError):
             pass
@@ -178,9 +208,18 @@ class FakeApi:
             return 200, self.jwks()
         if method == "POST" and path == "/v1/agent-link/start":
             schemas.validate_rest("agent_link_start_request", data)
-            link = LinkState(device_code=_b64url_token(), user_code=f"{secrets.choice('ABCDEFGHJKMNPQRSTVWXYZ0123456789')}BCD-EFG{secrets.choice('0123456789')}")
+            link = LinkState(
+                device_code=_b64url_token(),
+                user_code=f"{secrets.choice('ABCDEFGHJKMNPQRSTVWXYZ0123456789')}BCD-EFG{secrets.choice('0123456789')}",
+            )
             self.links[link.device_code] = link
-            out = {"device_code": link.device_code, "user_code": link.user_code, "verification_uri_complete": f"{self.url}/link?user_code={link.user_code}", "expires_in": 600, "interval": 1}
+            out = {
+                "device_code": link.device_code,
+                "user_code": link.user_code,
+                "verification_uri_complete": f"{self.url}/link?user_code={link.user_code}",
+                "expires_in": 600,
+                "interval": 1,
+            }
             schemas.validate_rest("agent_link_start_response", out)
             return 200, out
         if method == "POST" and path == "/v1/agent-link/poll":
@@ -203,7 +242,12 @@ class FakeApi:
                 return self._error(401, "UNKNOWN_KEY", "unknown credential")
             token = _b64url_token()
             self.tokens[token] = time.time() + self.token_lifetime
-            out = {"access_token": token, "expires_in": self.token_lifetime, "pc_id": self.pc_id, "account_id": self.account_id}
+            out = {
+                "access_token": token,
+                "expires_in": self.token_lifetime,
+                "pc_id": self.pc_id,
+                "account_id": self.account_id,
+            }
             schemas.validate_rest("agent_token_response", out)
             return 200, out
         if method == "POST" and path == "/v1/agent/entitlement":
@@ -221,7 +265,10 @@ class FakeApi:
             self.pairing_starts.append(data["code_hash"])
             from datetime import timedelta
 
-            out = {"pairing_id": str(uuid.uuid4()), "expires_at": format_rfc3339(now_utc() + timedelta(seconds=self.pairing_expiry_seconds))}
+            out = {
+                "pairing_id": str(uuid.uuid4()),
+                "expires_at": format_rfc3339(now_utc() + timedelta(seconds=self.pairing_expiry_seconds)),
+            }
             schemas.validate_rest("pairing_start_response", out)
             return 200, out
         return self._error(404, "NOT_FOUND", path)
@@ -261,7 +308,9 @@ class FakeRelay:
         return f"ws://127.0.0.1:{self.port}/ws/agent"
 
     async def start(self) -> None:
-        self._server = await serve(self._handler, "127.0.0.1", 0, process_request=self._process_request, max_size=65536, ping_interval=None)
+        self._server = await serve(
+            self._handler, "127.0.0.1", 0, process_request=self._process_request, max_size=65536, ping_interval=None
+        )
         self.port = self._server.sockets[0].getsockname()[1]
         self.api.relay_url = self.url
 
@@ -319,7 +368,13 @@ class FakeRelay:
             self.schemas.validate_frame("agent_to_relay", hello)
             assert hello["type"] == "hello", hello
             conn.hello = hello
-            ack = {"type": "hello_ack", "protocol_version": "1.0", "server_time": format_rfc3339(now_utc()), "connection_id": conn.connection_id, "pc_id": self.hello_ack_pc_id or self.api.pc_id}
+            ack = {
+                "type": "hello_ack",
+                "protocol_version": "1.0",
+                "server_time": format_rfc3339(now_utc()),
+                "connection_id": conn.connection_id,
+                "pc_id": self.hello_ack_pc_id or self.api.pc_id,
+            }
             await self._send_to(conn, ack)
             if self.auto_snapshot:
                 await self._send_to(conn, self.snapshot_frame())
@@ -355,7 +410,14 @@ class FakeRelay:
             await conn.ws.close(code=code, reason=reason)
             await conn.closed.wait()
 
-    async def expect(self, frame_type: str, *, command_id: str | None = None, timeout: float = 10.0, state: str | None = None) -> dict[str, Any]:  # noqa: ASYNC109
+    async def expect(
+        self,
+        frame_type: str,
+        *,
+        command_id: str | None = None,
+        timeout: float = 10.0,  # noqa: ASYNC109 - test helper
+        state: str | None = None,
+    ) -> dict[str, Any]:
         """Pull inbound frames until one matches; unrelated frames are kept in ``skipped``."""
         deadline = asyncio.get_running_loop().time() + timeout
         skipped: list[dict[str, Any]] = []
@@ -363,9 +425,15 @@ class FakeRelay:
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
-                    raise TimeoutError(f"no {frame_type} frame (command_id={command_id}, state={state}); saw {[f['type'] for f in skipped]}")
+                    raise TimeoutError(
+                        f"no {frame_type} frame (command_id={command_id}, state={state}); saw {[f['type'] for f in skipped]}"
+                    )
                 frame = await asyncio.wait_for(self.inbound.get(), remaining)
-                if frame["type"] != frame_type or (command_id is not None and frame.get("command_id") != command_id) or (state is not None and frame.get("state") != state):
+                if (
+                    frame["type"] != frame_type
+                    or (command_id is not None and frame.get("command_id") != command_id)
+                    or (state is not None and frame.get("state") != state)
+                ):
                     skipped.append(frame)
                     continue
                 return frame

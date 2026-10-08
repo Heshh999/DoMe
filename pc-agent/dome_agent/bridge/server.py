@@ -107,7 +107,9 @@ class BridgeServer:
         connection = _Connection(conn, peer)
         with self._lock:
             self._connections.add(connection)
-        threading.Thread(target=self._reader, args=(connection,), name=f"dome-bridge-reader-{peer.pid}", daemon=True).start()
+        threading.Thread(
+            target=self._reader, args=(connection,), name=f"dome-bridge-reader-{peer.pid}", daemon=True
+        ).start()
 
     def _reader(self, connection: _Connection) -> None:
         assert self._loop is not None
@@ -209,9 +211,18 @@ class BridgeServer:
         )
         connection.instance = instance
         self._instances[instance_id] = instance
-        ack = {"type": "bridge_hello_ack", "protocol_version": load_registry().protocol_version, "agent_version": __version__}
+        ack = {
+            "type": "bridge_hello_ack",
+            "protocol_version": load_registry().protocol_version,
+            "agent_version": __version__,
+        }
         if await self._send(connection, ack):
-            log.info("browser instance connected", browser_instance_id=instance_id, browser=instance.browser, extension_version=instance.extension_version)
+            log.info(
+                "browser instance connected",
+                browser_instance_id=instance_id,
+                browser=instance.browser,
+                extension_version=instance.extension_version,
+            )
             self._on_change()
 
     def _response(self, frame: dict[str, Any]) -> None:
@@ -229,7 +240,9 @@ class BridgeServer:
         if frame["event"] == "tabs_changed":
             tabs = frame.get("tabs")
             if tabs is not None:
-                instance.tabs = {int(t["tab_id"]): t for t in tabs if t.get("browser_instance_id") == instance.browser_instance_id}
+                instance.tabs = {
+                    int(t["tab_id"]): t for t in tabs if t.get("browser_instance_id") == instance.browser_instance_id
+                }
         elif frame["event"] == "player_state":
             tab = frame.get("tab")
             if tab is not None and tab.get("browser_instance_id") == instance.browser_instance_id:
@@ -246,7 +259,9 @@ class BridgeServer:
             log.info("browser instance disconnected", browser_instance_id=instance.browser_instance_id)
             for rid, fut in list(self._pending.items()):
                 if getattr(fut, "_dome_instance", None) == instance.browser_instance_id and not fut.done():
-                    fut.set_exception(ProtocolError("EXTENSION_DISCONNECTED", "The browser extension disconnected", retryable=True))
+                    fut.set_exception(
+                        ProtocolError("EXTENSION_DISCONNECTED", "The browser extension disconnected", retryable=True)
+                    )
                     self._pending.pop(rid, None)
             self._on_change()
 
@@ -273,14 +288,22 @@ class BridgeServer:
             return None
         return inst.tabs.get(int(tab_id))
 
-    async def request(self, browser_instance_id: str, op: str, args: dict[str, Any], timeout_ms: int = DEFAULT_REQUEST_TIMEOUT_MS) -> dict[str, Any]:
+    async def request(
+        self, browser_instance_id: str, op: str, args: dict[str, Any], timeout_ms: int = DEFAULT_REQUEST_TIMEOUT_MS
+    ) -> dict[str, Any]:
         instance = self._instances.get(browser_instance_id)
         if instance is None:
             raise ProtocolError("EXTENSION_DISCONNECTED", "That browser is not connected", retryable=True)
         assert self._loop is not None
         request_id = str(uuid.uuid4())
         timeout_ms = max(100, min(60000, int(timeout_ms)))
-        frame = {"type": "bridge_request", "request_id": request_id, "op": op, "args": dict(args), "timeout_ms": timeout_ms}
+        frame = {
+            "type": "bridge_request",
+            "request_id": request_id,
+            "op": op,
+            "args": dict(args),
+            "timeout_ms": timeout_ms,
+        }
         fut: asyncio.Future[dict[str, Any]] = self._loop.create_future()
         fut._dome_instance = browser_instance_id  # type: ignore[attr-defined]
         self._pending[request_id] = fut
@@ -292,4 +315,6 @@ class BridgeServer:
             return await asyncio.wait_for(fut, timeout_ms / 1000)
         except TimeoutError:
             self._pending.pop(request_id, None)
-            raise ProtocolError("EXTENSION_DISCONNECTED", "The browser extension did not respond in time", retryable=True) from None
+            raise ProtocolError(
+                "EXTENSION_DISCONNECTED", "The browser extension did not respond in time", retryable=True
+            ) from None

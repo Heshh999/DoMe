@@ -173,7 +173,9 @@ class TrayUI:
         win = tk.Toplevel(root)
         win.title("Pair a phone with DoMe")
         win.resizable(False, False)
-        tk.Label(win, text="On your phone, open DoMe and scan this code or type it in.", font=("Segoe UI", 11)).pack(padx=16, pady=(16, 8))
+        tk.Label(win, text="On your phone, open DoMe and scan this code or type it in.", font=("Segoe UI", 11)).pack(
+            padx=16, pady=(16, 8)
+        )
         qr = qrcode.QRCode(border=1, box_size=6)
         qr.add_data(display.qr_url)
         qr.make(fit=True)
@@ -215,11 +217,17 @@ class TrayUI:
         win = tk.Toplevel(root)
         win.title("Approve this phone?")
         win.resizable(False, False)
-        tk.Label(win, text="A phone wants to control this PC", font=("Segoe UI", 12, "bold")).pack(padx=16, pady=(16, 4))
-        tk.Label(win, text=f"Name shown by the phone: {approval.controller_display_name}", font=("Segoe UI", 10)).pack(padx=16, pady=2)
+        tk.Label(win, text="A phone wants to control this PC", font=("Segoe UI", 12, "bold")).pack(
+            padx=16, pady=(16, 4)
+        )
+        tk.Label(win, text=f"Name shown by the phone: {approval.controller_display_name}", font=("Segoe UI", 10)).pack(
+            padx=16, pady=2
+        )
         tk.Label(win, text="Check that the phone shows this code:", font=("Segoe UI", 10)).pack(padx=16, pady=(12, 2))
         tk.Label(win, text=approval.verification_code, font=("Consolas", 26, "bold")).pack(padx=16, pady=2)
-        tk.Label(win, text="Requested permissions: " + ", ".join(approval.requested_capabilities), font=("Segoe UI", 10)).pack(padx=16, pady=(8, 12))
+        tk.Label(
+            win, text="Requested permissions: " + ", ".join(approval.requested_capabilities), font=("Segoe UI", 10)
+        ).pack(padx=16, pady=(8, 12))
         buttons = tk.Frame(win)
         buttons.pack(padx=16, pady=(0, 16))
 
@@ -258,7 +266,14 @@ class TrayUI:
             return "Re-link required"
         if not s.remote_enabled:
             return "Remote control OFF"
-        return {"connected": "Connected", "connecting": "Connecting…", "reconnecting": "Reconnecting…", "superseded": "Replaced by another agent", "stopped": "Stopped", "offline": "Offline"}.get(s.connection, s.connection)
+        return {
+            "connected": "Connected",
+            "connecting": "Connecting…",
+            "reconnecting": "Reconnecting…",
+            "superseded": "Replaced by another agent",
+            "stopped": "Stopped",
+            "offline": "Offline",
+        }.get(s.connection, s.connection)
 
     def _menu(self) -> Any:
         import pystray
@@ -283,7 +298,9 @@ class TrayUI:
             if self.agent is None:
                 return
             rows = self.agent.apps.list()
-            text = "Approved applications (add with: dome-agent approve-app <app_id> <path to .exe>)\n\n" + "\n".join(f"{r.app_id:20} {r.display_name:24} {r.exe_path}" for r in rows)
+            text = "Approved applications (add with: dome-agent approve-app <app_id> <path to .exe>)\n\n" + "\n".join(
+                f"{r.app_id:20} {r.display_name:24} {r.exe_path}" for r in rows
+            )
             self._tk.post(lambda: self._show_text_window("Approved apps", text))
 
         def startup_checked(_: Any) -> bool:

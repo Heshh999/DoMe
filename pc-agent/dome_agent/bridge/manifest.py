@@ -21,7 +21,9 @@ EXTENSION_ID_RE = re.compile(r"\A[a-p]{32}\Z")
 PRODUCTION_EXTENSION_IDS: tuple[str, ...] = ()
 
 
-def allowed_origins(dev_extension_id: str = "", production_ids: tuple[str, ...] = PRODUCTION_EXTENSION_IDS) -> list[str]:
+def allowed_origins(
+    dev_extension_id: str = "", production_ids: tuple[str, ...] = PRODUCTION_EXTENSION_IDS
+) -> list[str]:
     ids: list[str] = [i for i in production_ids if EXTENSION_ID_RE.match(i)]
     if dev_extension_id:
         if not EXTENSION_ID_RE.match(dev_extension_id):

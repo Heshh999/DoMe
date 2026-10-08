@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>DoMe</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>DoMe for YouTube</h1>
+      <section class="status">
+        <span id="indicator" class="dot" aria-hidden="true"></span>
+        <div>
+          <div id="state-title" class="title">Checking...</div>
+          <div id="state-detail" class="detail"></div>
+        </div>
+      </section>
+      <section class="hint" id="hint"></section>
+      <section class="fields">
+        <label for="profile-label">Profile label (shown on your phone)</label>
+        <div class="row">
+          <input id="profile-label" type="text" maxlength="64" autocomplete="off" placeholder="e.g. Work Chrome" />
+          <button id="save-label" type="button">Save</button>
+        </div>
+        <dl>
+          <dt>Browser id</dt>
+          <dd id="instance-id" class="mono"></dd>
+          <dt>Extension id</dt>
+          <dd id="extension-id" class="mono"></dd>
+          <dt>Agent</dt>
+          <dd id="agent-version"></dd>
+          <dt>YouTube tabs ready</dt>
+          <dd id="tabs-count"></dd>
+        </dl>
+      </section>
+      <section class="actions">
+        <button id="reconnect" type="button">Retry connection</button>
+      </section>
+      <footer>Playback is controlled from your phone; this page only shows status.</footer>
+    </main>
+    <script type="module" src="./popup.ts"></script>
+  </body>
+</html>

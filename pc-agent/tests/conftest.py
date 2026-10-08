@@ -20,7 +20,13 @@ from .helpers import Controller, link_identity
 
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    for var in ("DOME_AGENT_PLATFORM", "DOME_AGENT_API_URL", "DOME_AGENT_RELAY_URL", "DOME_AGENT_HEADLESS", "DOME_AGENT_DEV_EXTENSION_ID"):
+    for var in (
+        "DOME_AGENT_PLATFORM",
+        "DOME_AGENT_API_URL",
+        "DOME_AGENT_RELAY_URL",
+        "DOME_AGENT_HEADLESS",
+        "DOME_AGENT_DEV_EXTENSION_ID",
+    ):
         monkeypatch.delenv(var, raising=False)
     # Unix socket paths are limited to ~104 bytes: keep the state dir short.
     monkeypatch.setenv("DOME_AGENT_STATE_DIR", str(tmp_path / "s"))
@@ -93,7 +99,9 @@ class AgentHarness:
     async def send_command(self, envelope: dict[str, Any]) -> None:
         from .helpers import relay_command_frame
 
-        await self.relay.send(relay_command_frame(envelope, self.agent.relay.connection_id if self.agent.relay else None))
+        await self.relay.send(
+            relay_command_frame(envelope, self.agent.relay.connection_id if self.agent.relay else None)
+        )
 
     async def send_confirmation(self, envelope: dict[str, Any]) -> None:
         from .helpers import relay_confirmation_frame
@@ -115,9 +123,18 @@ class AgentHarness:
 
 
 @pytest.fixture
-async def harness(settings: Settings, fake_api: FakeApi, fake_relay: FakeRelay, fake_state: FakeState, controller: Controller) -> AsyncIterator[AgentHarness]:
+async def harness(
+    settings: Settings, fake_api: FakeApi, fake_relay: FakeRelay, fake_state: FakeState, controller: Controller
+) -> AsyncIterator[AgentHarness]:
     credential = fake_api.issue_credential()
-    link_identity(settings.state_dir, fake_api.pc_id, fake_api.account_id, credential=credential, api_url=fake_api.url, relay_url=fake_relay.url)
+    link_identity(
+        settings.state_dir,
+        fake_api.pc_id,
+        fake_api.account_id,
+        credential=credential,
+        api_url=fake_api.url,
+        relay_url=fake_relay.url,
+    )
     store = Store(settings.db_path)
     store.set_remote_enabled(True)
     controller.grant_locally(store)

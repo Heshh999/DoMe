@@ -76,7 +76,15 @@ class FakeTab:
 
 
 class FakeExtension:
-    def __init__(self, state_dir: Path, *, browser_instance_id: str = "bi_fake0001", browser: str = "chrome", protocol_versions: tuple[str, ...] = ("1.0",), op_delay: float = 0.0) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        *,
+        browser_instance_id: str = "bi_fake0001",
+        browser: str = "chrome",
+        protocol_versions: tuple[str, ...] = ("1.0",),
+        op_delay: float = 0.0,
+    ) -> None:
         self.state_dir = state_dir
         self.browser_instance_id = browser_instance_id
         self.browser = browser
@@ -95,7 +103,14 @@ class FakeExtension:
     # ----- lifecycle --
     def connect(self, timeout: float = 5.0) -> None:
         self._conn = ipc.connect(self.state_dir, timeout=timeout, kind="bridge")
-        hello = {"type": "bridge_hello", "browser_instance_id": self.browser_instance_id, "browser": self.browser, "extension_version": "0.0.0-test", "protocol_versions": list(self.protocol_versions), "profile_label": "Test profile"}
+        hello = {
+            "type": "bridge_hello",
+            "browser_instance_id": self.browser_instance_id,
+            "browser": self.browser,
+            "extension_version": "0.0.0-test",
+            "protocol_versions": list(self.protocol_versions),
+            "profile_label": "Test profile",
+        }
         self._write(hello)
         self._thread = threading.Thread(target=self._reader, name="fake-extension", daemon=True)
         self._thread.start()
@@ -116,10 +131,24 @@ class FakeExtension:
         return tab
 
     def publish_tabs(self) -> None:
-        self._write({"type": "bridge_event", "event": "tabs_changed", "at": format_rfc3339(now_utc()), "tabs": [t.as_frame(self.browser_instance_id) for t in self.tabs.values()]})
+        self._write(
+            {
+                "type": "bridge_event",
+                "event": "tabs_changed",
+                "at": format_rfc3339(now_utc()),
+                "tabs": [t.as_frame(self.browser_instance_id) for t in self.tabs.values()],
+            }
+        )
 
     def publish_player_state(self, tab_id: int) -> None:
-        self._write({"type": "bridge_event", "event": "player_state", "at": format_rfc3339(now_utc()), "tab": self.tabs[tab_id].as_frame(self.browser_instance_id)})
+        self._write(
+            {
+                "type": "bridge_event",
+                "event": "player_state",
+                "at": format_rfc3339(now_utc()),
+                "tab": self.tabs[tab_id].as_frame(self.browser_instance_id),
+            }
+        )
 
     def send_raw(self, frame: dict[str, Any]) -> None:
         """Send without validation (for schema-rejection tests)."""
@@ -161,14 +190,24 @@ class FakeExtension:
             self._closed.set()
 
     def _fail(self, request_id: str, code: str, message: str) -> dict[str, Any]:
-        return {"type": "bridge_response", "request_id": request_id, "ok": False, "error": {"code": code, "message": message}}
+        return {
+            "type": "bridge_response",
+            "request_id": request_id,
+            "ok": False,
+            "error": {"code": code, "message": message},
+        }
 
     def _answer(self, frame: dict[str, Any]) -> dict[str, Any]:
         rid = frame["request_id"]
         op = frame["op"]
         args = frame["args"]
         if op == "list_tabs":
-            return {"type": "bridge_response", "request_id": rid, "ok": True, "result": {"tabs": [t.as_frame(self.browser_instance_id) for t in self.tabs.values()]}}
+            return {
+                "type": "bridge_response",
+                "request_id": rid,
+                "ok": True,
+                "result": {"tabs": [t.as_frame(self.browser_instance_id) for t in self.tabs.values()]},
+            }
         tab = self.tabs.get(int(args.get("tab_id", -1)))
         if tab is None:
             return self._fail(rid, "TARGET_GONE", "tab closed")

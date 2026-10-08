@@ -1,0 +1,9 @@
+{
+  "$comment": "Browser tabs for test/background.test.ts. `attached` tabs get a scripted content script; the others simulate a tab whose content script is not running (reload needed) or a non-YouTube tab.",
+  "tabs": [
+    { "id": 11, "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Never Gonna Give You Up - YouTube", "active": true, "attached": true, "video_id": "dQw4w9WgXcQ", "paused": false },
+    { "id": 12, "url": "https://www.youtube.com/watch?v=kJQP7kiw5Fk&list=PL123", "title": "Despacito - YouTube", "active": false, "attached": true, "video_id": "kJQP7kiw5Fk", "paused": true },
+    { "id": 13, "url": "https://www.youtube.com/watch?v=9bZkp7q19f0", "title": "PSY - GANGNAM STYLE - YouTube", "active": false, "attached": false, "video_id": "9bZkp7q19f0" },
+    { "id": 20, "url": "https://example.com/", "title": "Example Domain", "active": false, "attached": false }
+  ]
+}

@@ -113,5 +113,7 @@ def build_unsupported_platform() -> PlatformSet:
         power=UnsupportedPower(),
         startup=UnsupportedStartup(),
         native_host=UnsupportedNativeHost(),
-        notes=["Non-Windows host: Windows-only actions answer PLATFORM_UNSUPPORTED; YouTube control via the browser bridge works."],
+        notes=[
+            "Non-Windows host: Windows-only actions answer PLATFORM_UNSUPPORTED; YouTube control via the browser bridge works."
+        ],
     )

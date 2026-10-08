@@ -11,7 +11,13 @@ from .conftest import AgentHarness
 from .helpers import Controller, payload_of
 
 
-async def start_confirmation(h: AgentHarness, controller: Controller, action: str = "power.sleep", params: dict[str, Any] | None = None, target: dict[str, Any] | None = None) -> tuple[str, str]:
+async def start_confirmation(
+    h: AgentHarness,
+    controller: Controller,
+    action: str = "power.sleep",
+    params: dict[str, Any] | None = None,
+    target: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     env = controller.command(action, params if params is not None else {"countdown_seconds": 0}, target, lifetime=90)
     cid = payload_of(env)["command_id"]
     await h.send_command(env)
@@ -101,7 +107,9 @@ async def test_wrong_kid(harness: AgentHarness, controller: Controller, fake_api
     assert harness.fake.count("power_sleep") == 0
 
 
-async def test_unverifiable_confirmation_does_not_terminate(harness: AgentHarness, controller: Controller, fake_api: Any) -> None:
+async def test_unverifiable_confirmation_does_not_terminate(
+    harness: AgentHarness, controller: Controller, fake_api: Any
+) -> None:
     stranger = Controller(fake_api.account_id, fake_api.pc_id)
     cid, text = await start_confirmation(harness, controller)
     env = controller.confirmation(cid, text)
@@ -126,7 +134,10 @@ async def test_target_changed_before_approval(harness: AgentHarness, controller:
     harness.fake.add_window(500, "4242", "Untitled - Notepad")
     cid, text = await start_confirmation(harness, controller, "app.close", {}, {"app_id": "note", "window_id": "4242"})
     challenge = loads_strict(text)
-    assert challenge["target"] == {"app_id": "note", "window_id": "4242"} and challenge["display"]["detail"] == "Close note"
+    assert (
+        challenge["target"] == {"app_id": "note", "window_id": "4242"}
+        and challenge["display"]["detail"] == "Close note"
+    )
     # the window title changes (e.g. the document was edited) before the user approves
     harness.fake.add_window(500, "4242", "*Untitled - Notepad")
     await harness.send_confirmation(controller.confirmation(cid, text))

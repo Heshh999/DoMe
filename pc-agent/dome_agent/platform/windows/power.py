@@ -27,7 +27,9 @@ def _enable_shutdown_privilege() -> None:
     import win32con
     import win32security
 
-    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_ADJUST_PRIVILEGES | win32con.TOKEN_QUERY)
+    token = win32security.OpenProcessToken(
+        win32api.GetCurrentProcess(), win32con.TOKEN_ADJUST_PRIVILEGES | win32con.TOKEN_QUERY
+    )
     luid = win32security.LookupPrivilegeValue(None, win32security.SE_SHUTDOWN_NAME)
     win32security.AdjustTokenPrivileges(token, 0, [(luid, win32con.SE_PRIVILEGE_ENABLED)])
 

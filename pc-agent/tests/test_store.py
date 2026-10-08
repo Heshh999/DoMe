@@ -39,7 +39,12 @@ def test_recover_after_restart_marks_executing_outcome_unknown(store: Store) -> 
     queued = str(uuid.uuid4())
     awaiting = str(uuid.uuid4())
     done = str(uuid.uuid4())
-    for cid, state in ((executing, "executing"), (queued, "accepted"), (awaiting, "awaiting_confirmation"), (done, "succeeded")):
+    for cid, state in (
+        (executing, "executing"),
+        (queued, "accepted"),
+        (awaiting, "awaiting_confirmation"),
+        (done, "succeeded"),
+    ):
         store.journal_insert(command_id=cid, digest="d", action="youtube.next", controller_id="c", state=state)
     store.set_pending_power(executing, "power.sleep", "2026-01-01T00:00:00.000Z")
     out = store.recover_after_restart()
@@ -47,7 +52,9 @@ def test_recover_after_restart_marks_executing_outcome_unknown(store: Store) -> 
     assert out["failed_offline"] == [queued]
     assert out["expired_confirmation"] == [awaiting]
     row = store.journal_get(executing)
-    assert row is not None and row.state == "outcome_unknown" and row.error_code == "OUTCOME_UNKNOWN" and row.sent is False
+    assert (
+        row is not None and row.state == "outcome_unknown" and row.error_code == "OUTCOME_UNKNOWN" and row.sent is False
+    )
     assert row.frame is not None and row.frame["state"] == "outcome_unknown"
     assert store.journal_get(queued).state == "failed"  # type: ignore[union-attr]
     assert store.journal_get(done).state == "succeeded"  # type: ignore[union-attr]
@@ -64,7 +71,9 @@ def test_apply_snapshot_intersection(store: Store) -> None:
     a.grant_locally(store)
     b.grant_locally(store, capabilities=("status", "media"))
     snap = str(uuid.uuid4())
-    result = store.apply_snapshot(snap, True, [a.snapshot_entry(capabilities=("status", "media", "volume")), c.snapshot_entry()])
+    result = store.apply_snapshot(
+        snap, True, [a.snapshot_entry(capabilities=("status", "media", "volume")), c.snapshot_entry()]
+    )
     assert result.snapshot_id == snap
     assert result.revoked_controller_ids == (b.controller_id,)
     assert result.unknown_controllers == ((c.controller_id, c.kid),)
@@ -103,8 +112,20 @@ def test_challenge_consume_is_single_use(store: Store) -> None:
     from dome_agent.store import ChallengeRow
 
     cid = str(uuid.uuid4())
-    store.journal_insert(command_id=cid, digest="d", action="power.sleep", controller_id="c", state="awaiting_confirmation")
-    row = ChallengeRow(challenge_id=str(uuid.uuid4()), command_id=cid, controller_id="c", kid="k" * 43, challenge_text="{}", digest="x", target_state_digest="y", expires_at="2030-01-01T00:00:00.000Z", consumed_at=None)
+    store.journal_insert(
+        command_id=cid, digest="d", action="power.sleep", controller_id="c", state="awaiting_confirmation"
+    )
+    row = ChallengeRow(
+        challenge_id=str(uuid.uuid4()),
+        command_id=cid,
+        controller_id="c",
+        kid="k" * 43,
+        challenge_text="{}",
+        digest="x",
+        target_state_digest="y",
+        expires_at="2030-01-01T00:00:00.000Z",
+        consumed_at=None,
+    )
     store.insert_challenge(row)
     assert store.consume_challenge(row.challenge_id, new_command_state="accepted")
     assert not store.consume_challenge(row.challenge_id, new_command_state="accepted")

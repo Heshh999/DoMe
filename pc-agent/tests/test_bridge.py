@@ -26,7 +26,13 @@ def reader_for(data: bytes) -> Any:
 
 
 def test_encode_and_read_roundtrip() -> None:
-    frame = {"type": "bridge_hello", "browser_instance_id": "bi_test0001", "browser": "chrome", "extension_version": "1.0.0", "protocol_versions": ["1.0"]}
+    frame = {
+        "type": "bridge_hello",
+        "browser_instance_id": "bi_test0001",
+        "browser": "chrome",
+        "extension_version": "1.0.0",
+        "protocol_versions": ["1.0"],
+    }
     data = encode_frame(frame)
     assert struct.unpack("<I", data[:4])[0] == len(data) - 4
     body = read_frame(reader_for(data))
@@ -38,7 +44,24 @@ def test_oversize_frame_rejected_both_ways() -> None:
     with pytest.raises(ProtocolError) as ei:
         read_frame(reader_for(header + b"x"))
     assert ei.value.code == "PAYLOAD_TOO_LARGE"
-    big = {"type": "bridge_event", "event": "tabs_changed", "at": "t", "tabs": [{"browser_instance_id": "b", "tab_id": 1, "script_attached": True, "context": "watch", "ad_showing": False, "is_live": False, "in_playlist": False, "title": "x" * 200}] * 32}
+    big = {
+        "type": "bridge_event",
+        "event": "tabs_changed",
+        "at": "t",
+        "tabs": [
+            {
+                "browser_instance_id": "b",
+                "tab_id": 1,
+                "script_attached": True,
+                "context": "watch",
+                "ad_showing": False,
+                "is_live": False,
+                "in_playlist": False,
+                "title": "x" * 200,
+            }
+        ]
+        * 32,
+    }
     big["extra"] = "y" * (MAX_FRAME_BYTES)
     with pytest.raises(ProtocolError) as ei:
         encode_frame(big)
@@ -58,9 +81,28 @@ def test_truncated_and_empty_frames() -> None:
 @pytest.mark.parametrize(
     "frame",
     [
-        {"type": "bridge_hello", "browser_instance_id": "short", "browser": "chrome", "extension_version": "1", "protocol_versions": ["1.0"]},
-        {"type": "bridge_hello", "browser_instance_id": "bi_test0001", "browser": "safari", "extension_version": "1", "protocol_versions": ["1.0"]},
-        {"type": "bridge_hello", "browser_instance_id": "bi_test0001", "browser": "chrome", "extension_version": "1", "protocol_versions": ["1.0"], "evil": 1},
+        {
+            "type": "bridge_hello",
+            "browser_instance_id": "short",
+            "browser": "chrome",
+            "extension_version": "1",
+            "protocol_versions": ["1.0"],
+        },
+        {
+            "type": "bridge_hello",
+            "browser_instance_id": "bi_test0001",
+            "browser": "safari",
+            "extension_version": "1",
+            "protocol_versions": ["1.0"],
+        },
+        {
+            "type": "bridge_hello",
+            "browser_instance_id": "bi_test0001",
+            "browser": "chrome",
+            "extension_version": "1",
+            "protocol_versions": ["1.0"],
+            "evil": 1,
+        },
         {"type": "bridge_request", "request_id": "x", "op": "list_tabs", "args": {}},  # wrong direction
         {"type": "bridge_response", "request_id": "r", "ok": True, "result": {"bogus": 1}},
         {"type": "nope"},
@@ -92,7 +134,9 @@ def test_manifest_origins() -> None:
 async def bridge(settings: Settings):
     events: list[tuple[str, dict[str, Any]]] = []
     changes: list[int] = []
-    server = BridgeServer(settings.state_dir, on_change=lambda: changes.append(1), on_security_event=lambda k, d: events.append((k, d)))
+    server = BridgeServer(
+        settings.state_dir, on_change=lambda: changes.append(1), on_security_event=lambda k, d: events.append((k, d))
+    )
     await server.start()
     yield server, events, changes
     await server.stop()
@@ -118,10 +162,20 @@ async def test_hello_tabs_and_request(settings: Settings, bridge: Any) -> None:
             await asyncio.sleep(0.01)
         found = server.find_tab(ext.browser_instance_id, 4)
         assert found is not None and found["tab_token"] == tab.tab_token
-        result = await server.request(ext.browser_instance_id, "set_paused", {"tab_id": 4, "tab_token": tab.tab_token, "paused": True}, timeout_ms=2000)
+        result = await server.request(
+            ext.browser_instance_id,
+            "set_paused",
+            {"tab_id": 4, "tab_token": tab.tab_token, "paused": True},
+            timeout_ms=2000,
+        )
         assert result["tab"]["paused"] is True
         with pytest.raises(ProtocolError) as ei:
-            await server.request(ext.browser_instance_id, "set_paused", {"tab_id": 4, "tab_token": "Z" * 22, "paused": True}, timeout_ms=2000)
+            await server.request(
+                ext.browser_instance_id,
+                "set_paused",
+                {"tab_id": 4, "tab_token": "Z" * 22, "paused": True},
+                timeout_ms=2000,
+            )
         assert ei.value.code == "TARGET_CHANGED"
         assert changes
     finally:

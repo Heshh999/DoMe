@@ -57,7 +57,9 @@ class WindowsApps:
                 stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
-            raise ProtocolError("APP_LAUNCH_FAILED", f"Windows could not start the application ({exc.__class__.__name__})") from exc
+            raise ProtocolError(
+                "APP_LAUNCH_FAILED", f"Windows could not start the application ({exc.__class__.__name__})"
+            ) from exc
         return proc.pid
 
     def list_windows(self, pids: list[int]) -> list[AppWindow]:

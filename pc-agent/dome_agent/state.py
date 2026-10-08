@@ -29,7 +29,15 @@ Emitter = Callable[[dict[str, Any]], Awaitable[bool]]
 
 
 class StateAggregator:
-    def __init__(self, store: Store, platform: PlatformSet, bridge: BridgeServer, *, debounce: float = DEBOUNCE_SECONDS, periodic: float = PERIODIC_SECONDS) -> None:
+    def __init__(
+        self,
+        store: Store,
+        platform: PlatformSet,
+        bridge: BridgeServer,
+        *,
+        debounce: float = DEBOUNCE_SECONDS,
+        periodic: float = PERIODIC_SECONDS,
+    ) -> None:
         self._store = store
         self._platform = platform
         self._bridge = bridge
@@ -46,7 +54,9 @@ class StateAggregator:
     def start(self, emit: Emitter) -> None:
         self._emit = emit
         if self._periodic_task is None or self._periodic_task.done():
-            self._periodic_task = asyncio.get_running_loop().create_task(self._periodic_loop(), name="dome-state-periodic")
+            self._periodic_task = asyncio.get_running_loop().create_task(
+                self._periodic_loop(), name="dome-state-periodic"
+            )
 
     async def stop(self) -> None:
         for task in (self._debounce_task, self._periodic_task):
@@ -94,7 +104,9 @@ class StateAggregator:
         state["youtube_tabs"] = self._bridge.all_tabs()
         pending = self._store.get_pending_power()
         state["pending_power_action"] = (
-            {"action": pending.action, "command_id": pending.command_id, "fires_at": pending.fires_at} if pending else None
+            {"action": pending.action, "command_id": pending.command_id, "fires_at": pending.fires_at}
+            if pending
+            else None
         )
         load_schemas().validate_def("relay-frames", "pc_state", state)
         self._last = state

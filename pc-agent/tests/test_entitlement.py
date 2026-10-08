@@ -24,11 +24,18 @@ def test_verify_rejects_wrong_binding_and_key(api: FakeApi) -> None:
     with pytest.raises(EntitlementError):
         verify_assertion(api.make_assertion(pc_id=other.pc_id), api.jwks(), account_id=api.account_id, pc_id=api.pc_id)
     with pytest.raises(EntitlementError):
-        verify_assertion(api.make_assertion(account_id=other.account_id), api.jwks(), account_id=api.account_id, pc_id=api.pc_id)
+        verify_assertion(
+            api.make_assertion(account_id=other.account_id), api.jwks(), account_id=api.account_id, pc_id=api.pc_id
+        )
     with pytest.raises(EntitlementError):
         verify_assertion(api.make_assertion(), other.jwks(), account_id=api.account_id, pc_id=api.pc_id)
     with pytest.raises(EntitlementError):
-        verify_assertion(api.make_assertion(iat=int(time.time()) - 7200, lifetime=3600), api.jwks(), account_id=api.account_id, pc_id=api.pc_id)
+        verify_assertion(
+            api.make_assertion(iat=int(time.time()) - 7200, lifetime=3600),
+            api.jwks(),
+            account_id=api.account_id,
+            pc_id=api.pc_id,
+        )
     with pytest.raises(EntitlementError):
         verify_assertion("not.a.jws", api.jwks(), account_id=api.account_id, pc_id=api.pc_id)
     token = api.make_assertion()
@@ -41,7 +48,23 @@ def test_wrong_typ_or_alg_rejected(api: FakeApi) -> None:
     from joserfc import jwt
 
     key = api.signing_key()
-    claims = {"iss": api.url, "sub": api.account_id, "pc": api.pc_id, "plan": "pro", "limits": {"max_enabled_pcs": 5, "max_controllers": 5, "routines": True, "routine_max_steps": 10, "routine_max_seconds": 60, "custom_layouts": True}, "iat": int(time.time()), "exp": int(time.time()) + 100, "jti": "11111111-1111-4111-8111-111111111111"}
+    claims = {
+        "iss": api.url,
+        "sub": api.account_id,
+        "pc": api.pc_id,
+        "plan": "pro",
+        "limits": {
+            "max_enabled_pcs": 5,
+            "max_controllers": 5,
+            "routines": True,
+            "routine_max_steps": 10,
+            "routine_max_seconds": 60,
+            "custom_layouts": True,
+        },
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 100,
+        "jti": "11111111-1111-4111-8111-111111111111",
+    }
     bad_typ = jwt.encode({"alg": "EdDSA", "typ": "JWT", "kid": key.thumbprint()}, claims, key, algorithms=["EdDSA"])
     with pytest.raises(EntitlementError):
         verify_assertion(bad_typ, api.jwks(), account_id=api.account_id, pc_id=api.pc_id)

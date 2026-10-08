@@ -193,7 +193,14 @@ OnIdentityMismatch = Callable[[PeerInfo], None]
 class IpcServer:
     """Accepts bridge connections in a background thread and verifies the peer identity."""
 
-    def __init__(self, state_dir: Path, on_connection: OnConnection, on_identity_mismatch: OnIdentityMismatch, *, kind: EndpointKind = "bridge") -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        on_connection: OnConnection,
+        on_identity_mismatch: OnIdentityMismatch,
+        *,
+        kind: EndpointKind = "bridge",
+    ) -> None:
         self._state_dir = state_dir
         self._on_connection = on_connection
         self._on_mismatch = on_identity_mismatch
@@ -326,7 +333,12 @@ class IpcServer:
         open_mode = win32pipe.PIPE_ACCESS_DUPLEX
         if first_instance:
             open_mode |= win32con.FILE_FLAG_FIRST_PIPE_INSTANCE
-        pipe_mode = win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | win32pipe.PIPE_REJECT_REMOTE_CLIENTS
+        pipe_mode = (
+            win32pipe.PIPE_TYPE_BYTE
+            | win32pipe.PIPE_READMODE_BYTE
+            | win32pipe.PIPE_WAIT
+            | win32pipe.PIPE_REJECT_REMOTE_CLIENTS
+        )
         return win32pipe.CreateNamedPipe(
             self.address,
             open_mode,

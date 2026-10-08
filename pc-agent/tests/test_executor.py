@@ -27,7 +27,9 @@ class Capture:
         return True
 
     def results(self, command_id: str | None = None) -> list[dict[str, Any]]:
-        return [f for f in self.frames if f["type"] == "result" and (command_id is None or f["command_id"] == command_id)]
+        return [
+            f for f in self.frames if f["type"] == "result" and (command_id is None or f["command_id"] == command_id)
+        ]
 
     async def wait_result(self, command_id: str, timeout: float = 5.0) -> dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + timeout
@@ -51,14 +53,25 @@ async def executor(harness: AgentHarness):
     await ex.stop()
 
 
-def verified(harness: AgentHarness, controller: Controller, action: str, params: dict[str, Any] | None = None, target: dict[str, Any] | None = None, **kw: Any) -> Any:
+def verified(
+    harness: AgentHarness,
+    controller: Controller,
+    action: str,
+    params: dict[str, Any] | None = None,
+    target: dict[str, Any] | None = None,
+    **kw: Any,
+) -> Any:
     env = controller.command(action, params, target, **kw)
     vc = verify_and_parse_command(env, harness.agent.authz.resolve_key)
-    harness.agent.store.journal_insert(command_id=vc.command_id, digest=vc.digest, action=action, controller_id=vc.controller_id)
+    harness.agent.store.journal_insert(
+        command_id=vc.command_id, digest=vc.digest, action=action, controller_id=vc.controller_id
+    )
     return vc
 
 
-async def test_coalescing_supersedes_within_group_not_across_targets(harness: AgentHarness, controller: Controller, executor: Any) -> None:
+async def test_coalescing_supersedes_within_group_not_across_targets(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
     ex, cap = executor
     # block the worker with a slow command first so later ones queue up
     slow = verified(harness, controller, "media.set_paused", {"paused": True}, {"session_id": "slow#0"})
@@ -83,7 +96,13 @@ async def test_coalescing_supersedes_within_group_not_across_targets(harness: Ag
     tab = ext.add_tab(FakeTab(tab_id=1))
     ext.publish_tabs()
     await asyncio.sleep(0.05)
-    yt = verified(harness, controller, "youtube.set_volume", {"value": 40}, {"browser_instance_id": ext.browser_instance_id, "tab_id": 1, "tab_token": tab.tab_token})
+    yt = verified(
+        harness,
+        controller,
+        "youtube.set_volume",
+        {"value": 40},
+        {"browser_instance_id": ext.browser_instance_id, "tab_id": 1, "tab_token": tab.tab_token},
+    )
     await ex.enqueue(v1)
     await ex.enqueue(yt)
     await ex.enqueue(v2)
@@ -124,7 +143,9 @@ async def test_executing_ack_and_success(harness: AgentHarness, controller: Cont
     assert row is not None and row.state == "succeeded" and row.sent
 
 
-async def test_timeout_idempotent_is_failed_non_idempotent_is_outcome_unknown(harness: AgentHarness, controller: Controller, executor: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_timeout_idempotent_is_failed_non_idempotent_is_outcome_unknown(
+    harness: AgentHarness, controller: Controller, executor: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ex, cap = executor
     registry = load_registry()
     # shrink timeouts for the test
@@ -162,7 +183,9 @@ async def test_timeout_idempotent_is_failed_non_idempotent_is_outcome_unknown(ha
     assert handler_for("system.ping") is slow_ping
 
 
-async def test_invalid_handler_result_is_reported_internal(harness: AgentHarness, controller: Controller, executor: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invalid_handler_result_is_reported_internal(
+    harness: AgentHarness, controller: Controller, executor: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ex, cap = executor
 
     async def bad(ctx: Any) -> dict[str, Any]:
@@ -177,7 +200,9 @@ async def test_invalid_handler_result_is_reported_internal(harness: AgentHarness
     assert res["state"] == "failed" and res["error"]["code"] == "INTERNAL"
 
 
-async def test_precheck_runs_right_before_execution(harness: AgentHarness, controller: Controller, executor: Any) -> None:
+async def test_precheck_runs_right_before_execution(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
     ex, cap = executor
     vc = verified(harness, controller, "system.ping")
     harness.agent.store.set_remote_enabled(False)  # disabled after authorization, before execution
@@ -202,7 +227,9 @@ async def test_deferred_power_completion(harness: AgentHarness, controller: Cont
     assert handler_for("power.shutdown") is not None and DEFERRED is DEFERRED
 
 
-async def test_power_cancel_terminates_pending_command(harness: AgentHarness, controller: Controller, executor: Any) -> None:
+async def test_power_cancel_terminates_pending_command(
+    harness: AgentHarness, controller: Controller, executor: Any
+) -> None:
     ex, cap = executor
     vc = verified(harness, controller, "power.sleep", {"countdown_seconds": 30}, lifetime=90)
     await ex.enqueue(vc)
@@ -210,7 +237,11 @@ async def test_power_cancel_terminates_pending_command(harness: AgentHarness, co
     cancel = verified(harness, controller, "power.cancel")
     await ex.enqueue(cancel)
     rc = await cap.wait_result(cancel.command_id)
-    assert rc["state"] == "succeeded" and rc["result"] == {"canceled": True, "action": "power.sleep", "command_id": vc.command_id}
+    assert rc["state"] == "succeeded" and rc["result"] == {
+        "canceled": True,
+        "action": "power.sleep",
+        "command_id": vc.command_id,
+    }
     rs = await cap.wait_result(vc.command_id)
     assert rs["state"] == "canceled" and rs["error"]["code"] == "POWER_CANCELED"
     assert harness.fake.count("power_sleep") == 0
@@ -242,7 +273,9 @@ async def test_fail_queued_offline_does_not_send(harness: AgentHarness, controll
     assert row is not None and row.state == "failed" and row.error_code == "PC_OFFLINE" and row.sent
 
 
-async def test_cancel_for_controller_cancels_running(harness: AgentHarness, controller: Controller, executor: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancel_for_controller_cancels_running(
+    harness: AgentHarness, controller: Controller, executor: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ex, cap = executor
 
     async def slow(ctx: Any) -> dict[str, Any]:
@@ -257,7 +290,9 @@ async def test_cancel_for_controller_cancels_running(harness: AgentHarness, cont
     await ex.enqueue(v1)
     await ex.enqueue(v2)
     await asyncio.sleep(0.1)
-    canceled = await ex.cancel_for_controller(controller.controller_id, load_registry().make_error("CONTROLLER_REVOKED"))
+    canceled = await ex.cancel_for_controller(
+        controller.controller_id, load_registry().make_error("CONTROLLER_REVOKED")
+    )
     assert set(canceled) == {v1.command_id, v2.command_id}
     r1 = await cap.wait_result(v1.command_id)
     r2 = await cap.wait_result(v2.command_id)

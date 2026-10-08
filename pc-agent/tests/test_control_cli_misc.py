@@ -72,8 +72,16 @@ def test_redaction() -> None:
         "code": "UNKNOWN_KEY",
     }
     out = redact_event(None, "info", dict(event))
-    assert out["access_token"] == "[redacted]" and out["pc_credential"] == "[redacted]" and out["challenge_text"] == "[redacted]"
-    assert out["title"] == "[redacted]" and out["nested"]["jwk"] == "[redacted]" and out["nested"]["payload"] == "[redacted]"
+    assert (
+        out["access_token"] == "[redacted]"
+        and out["pc_credential"] == "[redacted]"
+        and out["challenge_text"] == "[redacted]"
+    )
+    assert (
+        out["title"] == "[redacted]"
+        and out["nested"]["jwk"] == "[redacted]"
+        and out["nested"]["payload"] == "[redacted]"
+    )
     assert out["nested"]["ok"] == "fine" and out["command_id"] == event["command_id"] and out["code"] == "UNKNOWN_KEY"
     assert "Bearer [redacted]" in out["event"] and "abcdefghijklmnop1234" not in out["event"]
     assert out["kid"] == "[redacted]"  # 43-char tokens are masked wholesale
@@ -123,7 +131,9 @@ def test_cli_approve_app_without_agent(settings: Settings, tmp_path: Path, capsy
     exe = tmp_path / "bin" / "tool.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"MZ")
-    assert cli.main(["--state-dir", str(settings.state_dir), "approve-app", "tool", str(exe)]) == 1  # under the pytest tmp dir → temp folder
+    assert (
+        cli.main(["--state-dir", str(settings.state_dir), "approve-app", "tool", str(exe)]) == 1
+    )  # under the pytest tmp dir → temp folder
     assert "temporary" in capsys.readouterr().err
     assert cli.main(["--state-dir", str(settings.state_dir), "approve-app", "tool", "tool.exe --arg"]) == 1
 

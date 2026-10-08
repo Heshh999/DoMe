@@ -325,7 +325,9 @@ class Store:
     def snapshot_pc_enabled(self) -> bool:
         return self.get_bool(SETTING_PC_ENABLED, True)
 
-    def apply_snapshot(self, snapshot_id: str, pc_enabled: bool, controllers: list[dict[str, Any]]) -> SnapshotApplyResult:
+    def apply_snapshot(
+        self, snapshot_id: str, pc_enabled: bool, controllers: list[dict[str, Any]]
+    ) -> SnapshotApplyResult:
         """Intersect the local store with a ``grants_snapshot`` atomically.
 
         * local, non-revoked controllers absent from the snapshot → revoked (``snapshot_revocation``)
@@ -346,9 +348,14 @@ class Store:
                 if row is None:
                     provisional = by_kid.get(entry["kid"])
                     if provisional is not None and provisional.controller_id.startswith(PROVISIONAL_PREFIX):
-                        self._conn.execute("UPDATE grants SET controller_id = ? WHERE controller_id = ?", (cid, provisional.controller_id))
+                        self._conn.execute(
+                            "UPDATE grants SET controller_id = ? WHERE controller_id = ?",
+                            (cid, provisional.controller_id),
+                        )
                         del local[provisional.controller_id]
-                        row = _grant(self._conn.execute("SELECT * FROM grants WHERE controller_id = ?", (cid,)).fetchone())
+                        row = _grant(
+                            self._conn.execute("SELECT * FROM grants WHERE controller_id = ?", (cid,)).fetchone()
+                        )
                         local[cid] = row
                 if row is None or row.kid != entry["kid"]:
                     unknown.append((cid, entry["kid"]))
@@ -379,7 +386,9 @@ class Store:
             row = self._conn.execute("SELECT * FROM journal WHERE command_id = ?", (command_id,)).fetchone()
         return _journal(row) if row else None
 
-    def journal_insert(self, *, command_id: str, digest: str, action: str, controller_id: str, state: str = "created") -> bool:
+    def journal_insert(
+        self, *, command_id: str, digest: str, action: str, controller_id: str, state: str = "created"
+    ) -> bool:
         """Insert a new row; returns False when the command_id already exists."""
         with self._tx():
             try:
@@ -439,7 +448,10 @@ class Store:
             return []
         placeholders = ",".join("?" for _ in states)
         with self._lock:
-            rows = self._conn.execute(f"SELECT * FROM journal WHERE state IN ({placeholders}) ORDER BY seq", states).fetchall()  # noqa: S608
+            rows = self._conn.execute(
+                f"SELECT * FROM journal WHERE state IN ({placeholders}) ORDER BY seq",  # noqa: S608 - placeholders only
+                states,
+            ).fetchall()
         return [_journal(r) for r in rows]
 
     def journal_count(self) -> int:
@@ -498,7 +510,9 @@ class Store:
             )
             if cur.rowcount != 1:
                 return False
-            row = self._conn.execute("SELECT command_id FROM challenges WHERE challenge_id = ?", (challenge_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT command_id FROM challenges WHERE challenge_id = ?", (challenge_id,)
+            ).fetchone()
             finished = now if new_command_state in TERMINAL_STATES else None
             self._conn.execute(
                 "UPDATE journal SET state = ?, error_code = COALESCE(?, error_code), finished_at = COALESCE(?, finished_at) WHERE command_id = ?",
@@ -532,12 +546,18 @@ class Store:
     def get_approved_app(self, app_id: str) -> ApprovedAppRow | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM approved_apps WHERE app_id = ?", (app_id,)).fetchone()
-        return ApprovedAppRow(row["app_id"], row["display_name"], row["exe_path"], row["exe_sha256"], row["added_at"]) if row else None
+        return (
+            ApprovedAppRow(row["app_id"], row["display_name"], row["exe_path"], row["exe_sha256"], row["added_at"])
+            if row
+            else None
+        )
 
     def list_approved_apps(self) -> list[ApprovedAppRow]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM approved_apps ORDER BY app_id").fetchall()
-        return [ApprovedAppRow(r["app_id"], r["display_name"], r["exe_path"], r["exe_sha256"], r["added_at"]) for r in rows]
+        return [
+            ApprovedAppRow(r["app_id"], r["display_name"], r["exe_path"], r["exe_sha256"], r["added_at"]) for r in rows
+        ]
 
     # ----- pending power -----------------------------------------------------------------------
     def set_pending_power(self, command_id: str, action: str, fires_at: str) -> None:
@@ -599,17 +619,25 @@ class Store:
                     error=("OUTCOME_UNKNOWN", "The PC restarted while running this. It may or may not have happened."),
                     warning="The agent restarted during execution; check the PC's current state before retrying.",
                 )
-                self.journal_set_state(row.command_id, "outcome_unknown", frame=frame, error_code="OUTCOME_UNKNOWN", sent=False)
+                self.journal_set_state(
+                    row.command_id, "outcome_unknown", frame=frame, error_code="OUTCOME_UNKNOWN", sent=False
+                )
                 out["outcome_unknown"].append(row.command_id)
             for row in self.journal_rows_in_states(["created", "accepted"]):
-                frame = result_frame(row.command_id, "failed", error=("PC_OFFLINE", "The PC restarted before running this."))
+                frame = result_frame(
+                    row.command_id, "failed", error=("PC_OFFLINE", "The PC restarted before running this.")
+                )
                 self.journal_set_state(row.command_id, "failed", frame=frame, error_code="PC_OFFLINE", sent=True)
                 out["failed_offline"].append(row.command_id)
             for row in self.journal_rows_in_states(["awaiting_confirmation"]):
                 frame = result_frame(
-                    row.command_id, "expired", error=("CONFIRMATION_EXPIRED", "The PC restarted before this was confirmed.")
+                    row.command_id,
+                    "expired",
+                    error=("CONFIRMATION_EXPIRED", "The PC restarted before this was confirmed."),
                 )
-                self.journal_set_state(row.command_id, "expired", frame=frame, error_code="CONFIRMATION_EXPIRED", sent=False)
+                self.journal_set_state(
+                    row.command_id, "expired", frame=frame, error_code="CONFIRMATION_EXPIRED", sent=False
+                )
                 self._conn.execute(
                     "UPDATE challenges SET consumed_at = ? WHERE command_id = ? AND consumed_at IS NULL",
                     (format_rfc3339(now_utc()), row.command_id),
@@ -623,7 +651,9 @@ class Store:
     def summary(self) -> dict[str, Any]:
         with self._lock:
             grants = self._conn.execute("SELECT COUNT(*) AS n FROM grants WHERE revoked_at IS NULL").fetchone()["n"]
-            revoked = self._conn.execute("SELECT COUNT(*) AS n FROM grants WHERE revoked_at IS NOT NULL").fetchone()["n"]
+            revoked = self._conn.execute("SELECT COUNT(*) AS n FROM grants WHERE revoked_at IS NOT NULL").fetchone()[
+                "n"
+            ]
             journal = self._conn.execute("SELECT COUNT(*) AS n FROM journal").fetchone()["n"]
             apps = self._conn.execute("SELECT COUNT(*) AS n FROM approved_apps").fetchone()["n"]
         return {

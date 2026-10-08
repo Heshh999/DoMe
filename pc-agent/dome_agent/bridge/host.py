@@ -145,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     settings.ensure_dirs()
     configure_logging(settings.log_level, settings.log_dir / "native-host.log")
-    logging.getLogger().handlers = [h for h in logging.getLogger().handlers if not isinstance(h, logging.StreamHandler) or isinstance(h, logging.FileHandler)]
+    logging.getLogger().handlers = [
+        h
+        for h in logging.getLogger().handlers
+        if not isinstance(h, logging.StreamHandler) or isinstance(h, logging.FileHandler)
+    ]
     origin = next((a for a in argv if a.startswith("chrome-extension://")), "")
     log.info("native host started", version=__version__, origin=origin)
     stdin, stdout = _binary_stdio()

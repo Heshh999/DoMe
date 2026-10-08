@@ -69,7 +69,9 @@ class Emitter:
     ) -> dict[str, Any]:
         frame = result_frame(command_id, state, result=result, error=error, warning=warning, duration_ms=duration_ms)
         if journal:
-            self._store.journal_set_state(command_id, state, frame=frame, error_code=error.code if error else None, sent=not send)
+            self._store.journal_set_state(
+                command_id, state, frame=frame, error_code=error.code if error else None, sent=not send
+            )
         if send:
             ok = await self._send(frame)
             if journal and ok:
@@ -101,7 +103,9 @@ def coalescing_group(vc: VerifiedCommand) -> tuple[str, str] | None:
 
 
 class Executor:
-    def __init__(self, services: AgentServices, emitter: Emitter, *, precheck: Precheck | None = None, depth: int = QUEUE_DEPTH) -> None:
+    def __init__(
+        self, services: AgentServices, emitter: Emitter, *, precheck: Precheck | None = None, depth: int = QUEUE_DEPTH
+    ) -> None:
         self._s = services
         self._emit = emitter
         self._precheck = precheck
@@ -178,10 +182,17 @@ class Executor:
         for entry in list(self._queue):
             if entry.command.controller_id == controller_id:
                 self._queue.remove(entry)
-                await self._emit.result(entry.command.command_id, "canceled", error=error, duration_ms=_ms_since(entry.enqueued_at))
+                await self._emit.result(
+                    entry.command.command_id, "canceled", error=error, duration_ms=_ms_since(entry.enqueued_at)
+                )
                 canceled.append(entry.command.command_id)
         running = self._running
-        if running is not None and running.command.controller_id == controller_id and running.task is not None and not running.task.done():
+        if (
+            running is not None
+            and running.command.controller_id == controller_id
+            and running.task is not None
+            and not running.task.done()
+        ):
             running.task.cancel()
             canceled.append(running.command.command_id)
         for command_id, vc in list(self._deferred.items()):
@@ -201,7 +212,9 @@ class Executor:
         return failed
 
     # ----- deferred completion (power countdowns) -----------------------------------------------------
-    async def complete(self, command_id: str, state: str, result: dict[str, Any] | None, error: ProtocolError | None) -> None:
+    async def complete(
+        self, command_id: str, state: str, result: dict[str, Any] | None, error: ProtocolError | None
+    ) -> None:
         vc = self._deferred.pop(command_id, None)
         if vc is None:
             log.warning("completion for a command that is not deferred; dropped", command_id=command_id, state=state)
@@ -218,7 +231,11 @@ class Executor:
                 result = self._registry.validate_result(vc.spec.name, result)
             except ProtocolError as exc:
                 log.error("deferred result failed schema validation", action=vc.spec.name, message=exc.message)
-                state, result, error = "failed", None, self._registry.make_error("INTERNAL", "The PC produced an invalid result.")
+                state, result, error = (
+                    "failed",
+                    None,
+                    self._registry.make_error("INTERNAL", "The PC produced an invalid result."),
+                )
         await self._emit.result(command_id, state, result=result, error=error, duration_ms=duration)
 
     # ----- worker ------------------------------------------------------------------------------------------
@@ -240,11 +257,15 @@ class Executor:
             if self._precheck is not None:
                 blocker = await self._precheck(vc)
                 if blocker is not None:
-                    await self._emit.result(vc.command_id, "failed", error=blocker, duration_ms=_ms_since(entry.enqueued_at))
+                    await self._emit.result(
+                        vc.command_id, "failed", error=blocker, duration_ms=_ms_since(entry.enqueued_at)
+                    )
                     return
             await self._emit.ack(vc.command_id, "executing")  # durable before the OS call
             handler = handler_for(vc.spec.name)
-            task: asyncio.Task[Any] = asyncio.get_running_loop().create_task(handler(ctx), name=f"dome-action-{vc.spec.name}")
+            task: asyncio.Task[Any] = asyncio.get_running_loop().create_task(
+                handler(ctx), name=f"dome-action-{vc.spec.name}"
+            )
             running.task = task
             try:
                 outcome = await asyncio.wait_for(asyncio.shield(task), vc.spec.timeout_ms / 1000)
@@ -268,7 +289,12 @@ class Executor:
                         duration_ms=_ms_since(entry.enqueued_at),
                     )
                 else:
-                    await self._emit.result(vc.command_id, "canceled", error=self._registry.make_error("CONTROLLER_REVOKED"), duration_ms=_ms_since(entry.enqueued_at))
+                    await self._emit.result(
+                        vc.command_id,
+                        "canceled",
+                        error=self._registry.make_error("CONTROLLER_REVOKED"),
+                        duration_ms=_ms_since(entry.enqueued_at),
+                    )
                 return
             if isinstance(outcome, Deferred):
                 self._deferred[vc.command_id] = vc
@@ -276,19 +302,41 @@ class Executor:
             try:
                 validated = self._registry.validate_result(vc.spec.name, outcome)
             except ProtocolError as exc:
-                log.error("handler result failed schema validation; reported as INTERNAL", action=vc.spec.name, message=exc.message)
-                await self._emit.result(vc.command_id, "failed", error=self._registry.make_error("INTERNAL", "The PC produced an invalid result."), duration_ms=_ms_since(entry.enqueued_at))
+                log.error(
+                    "handler result failed schema validation; reported as INTERNAL",
+                    action=vc.spec.name,
+                    message=exc.message,
+                )
+                await self._emit.result(
+                    vc.command_id,
+                    "failed",
+                    error=self._registry.make_error("INTERNAL", "The PC produced an invalid result."),
+                    duration_ms=_ms_since(entry.enqueued_at),
+                )
                 return
-            await self._emit.result(vc.command_id, "succeeded", result=validated, duration_ms=_ms_since(entry.enqueued_at))
+            await self._emit.result(
+                vc.command_id, "succeeded", result=validated, duration_ms=_ms_since(entry.enqueued_at)
+            )
         except ActionFailed as exc:
-            await self._emit.result(vc.command_id, "failed", result=_safe_result(self._registry, vc, exc.result), error=exc, duration_ms=_ms_since(entry.enqueued_at))
+            await self._emit.result(
+                vc.command_id,
+                "failed",
+                result=_safe_result(self._registry, vc, exc.result),
+                error=exc,
+                duration_ms=_ms_since(entry.enqueued_at),
+            )
         except ProtocolError as exc:
             await self._emit.result(vc.command_id, "failed", error=exc, duration_ms=_ms_since(entry.enqueued_at))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a bug in a handler must still terminate the command
             log.exception("handler crashed", action=vc.spec.name, error=exc.__class__.__name__)
-            await self._emit.result(vc.command_id, "failed", error=self._registry.make_error("INTERNAL", "The PC hit an internal error running this."), duration_ms=_ms_since(entry.enqueued_at))
+            await self._emit.result(
+                vc.command_id,
+                "failed",
+                error=self._registry.make_error("INTERNAL", "The PC hit an internal error running this."),
+                duration_ms=_ms_since(entry.enqueued_at),
+            )
         finally:
             if self._running is running:
                 self._running = None
@@ -299,12 +347,17 @@ class Executor:
             await self._emit.result(
                 vc.command_id,
                 "outcome_unknown",
-                error=self._registry.make_error("OUTCOME_UNKNOWN", f"The PC issued the action but could not confirm the outcome within {seconds:g} s."),
+                error=self._registry.make_error(
+                    "OUTCOME_UNKNOWN",
+                    f"The PC issued the action but could not confirm the outcome within {seconds:g} s.",
+                ),
                 warning="The action may have executed. Check the PC's current state before retrying.",
                 duration_ms=_ms_since(entry.enqueued_at),
             )
             return
-        error = ctx.best_known_error or self._registry.make_error("ACTION_UNAVAILABLE", f"The action did not complete within {seconds:g} s.", retryable=vc.spec.idempotent)
+        error = ctx.best_known_error or self._registry.make_error(
+            "ACTION_UNAVAILABLE", f"The action did not complete within {seconds:g} s.", retryable=vc.spec.idempotent
+        )
         await self._emit.result(vc.command_id, "failed", error=error, duration_ms=_ms_since(entry.enqueued_at))
 
 

@@ -34,7 +34,9 @@ def nonce() -> str:
 class Controller:
     """A paired phone as the tests see it: a P-256 key, kid, controller_id and signing helpers."""
 
-    def __init__(self, account_id: str, pc_id: str, *, display_name: str = "Test phone", capabilities: tuple[str, ...] = ALL_CAPS) -> None:
+    def __init__(
+        self, account_id: str, pc_id: str, *, display_name: str = "Test phone", capabilities: tuple[str, ...] = ALL_CAPS
+    ) -> None:
         self.key = generate_private_key()
         self.jwk = jwk_from_public_key(self.key.public_key())
         self.kid = kid_from_jwk(self.jwk)
@@ -45,7 +47,9 @@ class Controller:
         self.capabilities = capabilities
 
     # ----- store / snapshot --
-    def grant_locally(self, store: Store, snapshot_id: str | None = None, capabilities: tuple[str, ...] | None = None) -> None:
+    def grant_locally(
+        self, store: Store, snapshot_id: str | None = None, capabilities: tuple[str, ...] | None = None
+    ) -> None:
         store.add_grant(
             controller_id=self.controller_id,
             kid=self.kid,
@@ -106,11 +110,23 @@ class Controller:
     def sign_text(self, text: str) -> dict[str, Any]:
         return sign_payload(self.key, text).to_dict()
 
-    def command(self, action: str, params: dict[str, Any] | None = None, target: dict[str, Any] | None = None, **kw: Any) -> dict[str, Any]:
+    def command(
+        self, action: str, params: dict[str, Any] | None = None, target: dict[str, Any] | None = None, **kw: Any
+    ) -> dict[str, Any]:
         """Signed envelope for a command."""
         return self.sign(self.command_payload(action, params, target, **kw))
 
-    def confirmation(self, command_id: str, challenge_text: str, *, decision: str = "approve", challenge_id: str | None = None, digest: str | None = None, lifetime: int = 60, key: Any = None) -> dict[str, Any]:
+    def confirmation(
+        self,
+        command_id: str,
+        challenge_text: str,
+        *,
+        decision: str = "approve",
+        challenge_id: str | None = None,
+        digest: str | None = None,
+        lifetime: int = 60,
+        key: Any = None,
+    ) -> dict[str, Any]:
         from dome_protocol import loads_strict
 
         challenge = loads_strict(challenge_text)
@@ -132,18 +148,43 @@ class Controller:
 
 
 def relay_command_frame(envelope: dict[str, Any], connection_id: str | None = None) -> dict[str, Any]:
-    return {"type": "command", "envelope": envelope, "relay": {"received_at": format_rfc3339(now_utc()), "connection_id": connection_id or str(uuid.uuid4())}}
+    return {
+        "type": "command",
+        "envelope": envelope,
+        "relay": {"received_at": format_rfc3339(now_utc()), "connection_id": connection_id or str(uuid.uuid4())},
+    }
 
 
 def relay_confirmation_frame(envelope: dict[str, Any], connection_id: str | None = None) -> dict[str, Any]:
-    return {"type": "confirmation", "envelope": envelope, "relay": {"received_at": format_rfc3339(now_utc()), "connection_id": connection_id or str(uuid.uuid4())}}
+    return {
+        "type": "confirmation",
+        "envelope": envelope,
+        "relay": {"received_at": format_rfc3339(now_utc()), "connection_id": connection_id or str(uuid.uuid4())},
+    }
 
 
-def link_identity(state_dir: Path, pc_id: str, account_id: str, *, credential: str, api_url: str = "http://127.0.0.1:1", relay_url: str = "ws://127.0.0.1:1/ws/agent", pc_name: str = "Test PC") -> Identity:
+def link_identity(
+    state_dir: Path,
+    pc_id: str,
+    account_id: str,
+    *,
+    credential: str,
+    api_url: str = "http://127.0.0.1:1",
+    relay_url: str = "ws://127.0.0.1:1/ws/agent",
+    pc_name: str = "Test PC",
+) -> Identity:
     identity = Identity(state_dir)
     identity.ensure_key()
     identity.store_link(
-        LinkRecord(pc_id=pc_id, account_id=account_id, pc_name=pc_name, relay_url=relay_url, api_url=api_url, enabled=True, linked_at=format_rfc3339(now_utc())),
+        LinkRecord(
+            pc_id=pc_id,
+            account_id=account_id,
+            pc_name=pc_name,
+            relay_url=relay_url,
+            api_url=api_url,
+            enabled=True,
+            linked_at=format_rfc3339(now_utc()),
+        ),
         credential,
     )
     return identity

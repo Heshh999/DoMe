@@ -34,7 +34,7 @@ from .store import ApprovedAppRow, Store
 log = get_logger(__name__)
 
 APP_ID_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
-_FORBIDDEN_CHARS = set('"\'&|<>^%;`$*?')
+_FORBIDDEN_CHARS = set("\"'&|<>^%;`$*?")
 _ARGUMENT_RE = re.compile(r"\s[-/]")  # whitespace followed by an option marker
 _HASH_CHUNK = 1024 * 1024
 
@@ -94,7 +94,9 @@ def sha256_file(path: Path) -> str:
 
 def validate_app_id(app_id: str) -> str:
     if not isinstance(app_id, str) or not APP_ID_RE.match(app_id):
-        raise ApprovalError("app_id must be 1-64 characters: lowercase letters, digits, '_' or '-', starting with a letter or digit")
+        raise ApprovalError(
+            "app_id must be 1-64 characters: lowercase letters, digits, '_' or '-', starting with a letter or digit"
+        )
     return app_id
 
 
@@ -105,7 +107,9 @@ def validate_executable_path(raw: str, *, temp_dirs: Iterable[Path] | None = Non
         raise ApprovalError("the path may not contain control characters")
     text = raw.strip(" ")
     if any(ch in _FORBIDDEN_CHARS for ch in text) or _ARGUMENT_RE.search(text):
-        raise ApprovalError("the path may not contain arguments, quotes or shell characters; approve the executable file only")
+        raise ApprovalError(
+            "the path may not contain arguments, quotes or shell characters; approve the executable file only"
+        )
     path = Path(text)
     if not path.is_absolute():
         raise ApprovalError("the executable path must be absolute")
@@ -163,10 +167,14 @@ class ApprovedApps:
         """Return the approval only if the executable on disk still matches the approved identity."""
         row = self.get(app_id)
         if row is None:
-            raise ProtocolError("APP_NOT_APPROVED", "That app is not approved for remote control. Approve it on the PC first.")
+            raise ProtocolError(
+                "APP_NOT_APPROVED", "That app is not approved for remote control. Approve it on the PC first."
+            )
         path = Path(row.exe_path)
         if not path.is_file():
-            raise ProtocolError("APP_NOT_APPROVED", "The approved executable no longer exists. Approve it again on the PC.")
+            raise ProtocolError(
+                "APP_NOT_APPROVED", "The approved executable no longer exists. Approve it again on the PC."
+            )
         try:
             current = sha256_file(path)
         except OSError as exc:

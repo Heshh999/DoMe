@@ -46,7 +46,9 @@ async def set_paused(ctx: ExecutionContext) -> dict[str, Any]:
         return {"session": current.as_result()}
     control = "pause" if paused else "play"
     if control not in current.controls:
-        raise ActionFailed("ACTION_UNAVAILABLE", f"This media player does not offer {control}", result={"session": current.as_result()})
+        raise ActionFailed(
+            "ACTION_UNAVAILABLE", f"This media player does not offer {control}", result={"session": current.as_result()}
+        )
     session = await asyncio.to_thread(ctx.services.platform.media.set_paused, session_id, paused)
     for _ in range(_READ_BACK_ATTEMPTS):
         if session.status in wanted:
@@ -55,7 +57,11 @@ async def set_paused(ctx: ExecutionContext) -> dict[str, Any]:
         session = await _get(ctx, session_id)
     ctx.services.state.request_update()
     if session.status not in wanted:
-        raise ActionFailed("ACTION_UNAVAILABLE", "The media player did not change its playback state", result={"session": session.as_result()})
+        raise ActionFailed(
+            "ACTION_UNAVAILABLE",
+            "The media player did not change its playback state",
+            result={"session": session.as_result()},
+        )
     return {"session": session.as_result()}
 
 
@@ -63,7 +69,9 @@ async def _skip(ctx: ExecutionContext, control: str) -> dict[str, Any]:
     session_id = _session_id(ctx)
     current = await _get(ctx, session_id)
     if control not in current.controls:
-        raise ActionFailed("ACTION_UNAVAILABLE", f"This media player does not offer {control}", result={"session": current.as_result()})
+        raise ActionFailed(
+            "ACTION_UNAVAILABLE", f"This media player does not offer {control}", result={"session": current.as_result()}
+        )
     ctx.mark_side_effect()
     fn = ctx.services.platform.media.next if control == "next" else ctx.services.platform.media.previous
     session = await asyncio.to_thread(fn, session_id)

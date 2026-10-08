@@ -55,7 +55,14 @@ class PendingPairing:
     expires_at: str
 
     def approval(self) -> PairingApproval:
-        return PairingApproval(self.pairing_id, self.display_name, self.verification_code, self.requested_capabilities, self.kid, self.expires_at)
+        return PairingApproval(
+            self.pairing_id,
+            self.display_name,
+            self.verification_code,
+            self.requested_capabilities,
+            self.kid,
+            self.expires_at,
+        )
 
 
 @dataclass(slots=True)
@@ -80,7 +87,12 @@ class PairingSession:
             "pairing_id": self.pairing_id,
             "expires_at": self.expires_at,
             "pending_requests": [
-                {"pairing_id": r.pairing_id, "display_name": r.display_name, "requested_capabilities": list(r.requested_capabilities), "expires_at": r.expires_at}
+                {
+                    "pairing_id": r.pairing_id,
+                    "display_name": r.display_name,
+                    "requested_capabilities": list(r.requested_capabilities),
+                    "expires_at": r.expires_at,
+                }
                 for r in self.requests.values()
             ],
         }
@@ -92,7 +104,9 @@ def app_origin(api_url: str) -> str:
 
 
 class PairingManager:
-    def __init__(self, store: Store, identity: Identity, api: ApiClient, tokens: TokenManager, send: Sender, ui: AgentUI) -> None:
+    def __init__(
+        self, store: Store, identity: Identity, api: ApiClient, tokens: TokenManager, send: Sender, ui: AgentUI
+    ) -> None:
         self._store = store
         self._identity = identity
         self._api = api
@@ -117,7 +131,9 @@ class PairingManager:
         token = await self._tokens.get()
         pairing_id, expires_at = await self._api.pairing_start(token, code_hash)
         qr_url = f"{app_origin(self._api.base_url)}/pair#code={format_pairing_code(code)}"
-        self._session = PairingSession(code=code, code_hash=code_hash, pairing_id=pairing_id, expires_at=expires_at, qr_url=qr_url)
+        self._session = PairingSession(
+            code=code, code_hash=code_hash, pairing_id=pairing_id, expires_at=expires_at, qr_url=qr_url
+        )
         log.info("pairing session started", pairing_id=pairing_id, expires_at=expires_at)
         self._ui.show_pairing_code(self._session.display())
         return self._session
@@ -184,9 +200,15 @@ class PairingManager:
         pending = self.pending(pairing_id)
         if pending is None:
             raise ProtocolError("PAIRING_CODE_INVALID", "No pending pairing request with that id (expired?)")
-        caps = tuple(c for c in (granted if granted is not None else pending.requested_capabilities) if c in pending.requested_capabilities)
+        caps = tuple(
+            c
+            for c in (granted if granted is not None else pending.requested_capabilities)
+            if c in pending.requested_capabilities
+        )
         if not caps:
-            raise ProtocolError("INVALID_PARAMETERS", "At least one requested capability must be granted; decline instead")
+            raise ProtocolError(
+                "INVALID_PARAMETERS", "At least one requested capability must be granted; decline instead"
+            )
         self._store.add_grant(
             controller_id=None,
             kid=pending.kid,
@@ -198,7 +220,9 @@ class PairingManager:
         self._store.add_security_event("controller_paired_locally", pairing_id=pairing_id, capabilities=list(caps))
         sent = await self._send(pairing_decision_frame(pairing_id, "approve", pending.kid, list(caps)))
         if not sent:
-            log.warning("pairing_decision could not be sent (offline); the relay will not create the controller until it is")
+            log.warning(
+                "pairing_decision could not be sent (offline); the relay will not create the controller until it is"
+            )
         session = self.session
         if session is not None:
             session.requests.pop(pairing_id, None)

@@ -62,11 +62,16 @@ class PowerManager:
     async def arm(self, ctx: ExecutionContext) -> Deferred:
         async with self._lock:
             if self._armed is not None or self._store.get_pending_power() is not None:
-                raise ProtocolError("ACTION_UNAVAILABLE", "Another power action is already pending on this PC. Cancel it first.")
+                raise ProtocolError(
+                    "ACTION_UNAVAILABLE", "Another power action is already pending on this PC. Cancel it first."
+                )
             countdown = int(ctx.params.get("countdown_seconds", 10))
             fires_at = format_rfc3339(now_utc() + timedelta(seconds=countdown))
             self._store.set_pending_power(ctx.command.command_id, ctx.action, fires_at)
-            task = asyncio.get_running_loop().create_task(self._countdown(ctx.command.command_id, ctx.action, countdown, fires_at), name=f"dome-power-{ctx.action}")
+            task = asyncio.get_running_loop().create_task(
+                self._countdown(ctx.command.command_id, ctx.action, countdown, fires_at),
+                name=f"dome-power-{ctx.action}",
+            )
             self._armed = _Armed(ctx.command.command_id, ctx.action, countdown, fires_at, task)
         log.info("power countdown armed", action=ctx.action, countdown_seconds=countdown)
         self._state.request_update()
@@ -78,7 +83,12 @@ class PowerManager:
             if delay > 0:
                 await asyncio.sleep(delay)
             if not self._store.remote_enabled:
-                await self._finish(command_id, "canceled", None, ProtocolError("POWER_CANCELED", "Remote control was disabled on the PC before the countdown ended"))
+                await self._finish(
+                    command_id,
+                    "canceled",
+                    None,
+                    ProtocolError("POWER_CANCELED", "Remote control was disabled on the PC before the countdown ended"),
+                )
                 return
             try:
                 await self._issue(action)
@@ -89,7 +99,9 @@ class PowerManager:
                 log.error("power adapter raised", action=action, error=exc.__class__.__name__)
                 await self._finish(command_id, "failed", None, ProtocolError("OS_ERROR", "Windows reported an error"))
                 return
-            await self._finish(command_id, "succeeded", {"accepted": True, "countdown_seconds": countdown, "fires_at": fires_at}, None)
+            await self._finish(
+                command_id, "succeeded", {"accepted": True, "countdown_seconds": countdown, "fires_at": fires_at}, None
+            )
         except asyncio.CancelledError:
             raise
 
@@ -110,7 +122,9 @@ class PowerManager:
             return
         raise ProtocolError("UNKNOWN_ACTION", f"unknown power action {action}")
 
-    async def _finish(self, command_id: str, state: str, result: dict[str, Any] | None, error: ProtocolError | None) -> None:
+    async def _finish(
+        self, command_id: str, state: str, result: dict[str, Any] | None, error: ProtocolError | None
+    ) -> None:
         async with self._lock:
             if self._armed is not None and self._armed.command_id == command_id:
                 self._armed = None
@@ -132,7 +146,9 @@ class PowerManager:
             armed.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await armed.task
-        await self._finish(armed.command_id, "canceled", None, ProtocolError("POWER_CANCELED", f"The power action was {reason}"))
+        await self._finish(
+            armed.command_id, "canceled", None, ProtocolError("POWER_CANCELED", f"The power action was {reason}")
+        )
         log.info("power countdown canceled", action=armed.action)
         return {"canceled": True, "action": armed.action, "command_id": armed.command_id}
 

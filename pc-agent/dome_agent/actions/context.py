@@ -75,7 +75,9 @@ DEFERRED = Deferred()
 class ActionFailed(ProtocolError):  # noqa: N818 - matches ProtocolError's naming
     """A failure that also carries the best-known post-failure state (same shape as the result)."""
 
-    def __init__(self, code: str, message: str, *, result: dict[str, Any] | None = None, retryable: bool | None = None) -> None:
+    def __init__(
+        self, code: str, message: str, *, result: dict[str, Any] | None = None, retryable: bool | None = None
+    ) -> None:
         from dome_protocol import load_registry
 
         defaults = load_registry().error_defaults(code)

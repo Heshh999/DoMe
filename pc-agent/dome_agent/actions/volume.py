@@ -26,7 +26,9 @@ async def set_volume(ctx: ExecutionContext) -> dict[str, Any]:
     state = await asyncio.to_thread(ctx.services.platform.volume.set_volume, wanted)
     ctx.services.state.request_update()
     if abs(state.value - wanted) > READ_BACK_TOLERANCE:
-        raise ActionFailed("OS_ERROR", f"Windows reports volume {state.value} after setting {wanted}", result=state.as_result())
+        raise ActionFailed(
+            "OS_ERROR", f"Windows reports volume {state.value} after setting {wanted}", result=state.as_result()
+        )
     return state.as_result()
 
 

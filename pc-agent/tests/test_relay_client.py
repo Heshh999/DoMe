@@ -44,7 +44,16 @@ async def client(fake_api: FakeApi, fake_relay: FakeRelay):
     api = ApiClient(fake_api.url)
     tokens = TokenManager(api, lambda: cred)
     handler = RecordingHandler()
-    rc = RelayClient(fake_relay.url, tokens, handler, expected_pc_id=lambda: fake_api.pc_id, backoff_base=0.05, backoff_cap=0.3, ping_interval=0.3, rng=random.Random(1))
+    rc = RelayClient(
+        fake_relay.url,
+        tokens,
+        handler,
+        expected_pc_id=lambda: fake_api.pc_id,
+        backoff_base=0.05,
+        backoff_cap=0.3,
+        ping_interval=0.3,
+        rng=random.Random(1),
+    )
     yield rc, handler, tokens, api
     await rc.stop()
     await api.close()
@@ -92,7 +101,15 @@ async def test_reconnects_with_backoff_after_close(client: Any, fake_relay: Fake
 
 
 async def test_backoff_grows_and_is_jittered() -> None:
-    rc = RelayClient("ws://127.0.0.1:1/ws/agent", None, RecordingHandler(), expected_pc_id=lambda: None, backoff_base=1.0, backoff_cap=60.0, rng=random.Random(7))  # type: ignore[arg-type]
+    rc = RelayClient(
+        "ws://127.0.0.1:1/ws/agent",
+        None,
+        RecordingHandler(),
+        expected_pc_id=lambda: None,
+        backoff_base=1.0,
+        backoff_cap=60.0,
+        rng=random.Random(7),
+    )  # type: ignore[arg-type]
     delays = [rc._next_delay() for _ in range(8)]  # noqa: SLF001
     caps = [1, 2, 4, 8, 16, 32, 60, 60]
     for d, cap in zip(delays, caps, strict=True):
@@ -113,7 +130,13 @@ async def test_credential_rejected_stops(fake_api: FakeApi, fake_relay: FakeRela
     fake_api.token_status = 401
     api = ApiClient(fake_api.url)
     handler = RecordingHandler()
-    rc = RelayClient(fake_relay.url, TokenManager(api, lambda: "B" * 43), handler, expected_pc_id=lambda: fake_api.pc_id, backoff_base=0.05)
+    rc = RelayClient(
+        fake_relay.url,
+        TokenManager(api, lambda: "B" * 43),
+        handler,
+        expected_pc_id=lambda: fake_api.pc_id,
+        backoff_base=0.05,
+    )
     rc.start()
     for _ in range(100):
         if handler.stopped:

@@ -55,7 +55,9 @@ class Decision:
 
 
 class Authorizer:
-    def __init__(self, services: AgentServices, confirmations: ConfirmationManager, entitlement: EntitlementManager) -> None:
+    def __init__(
+        self, services: AgentServices, confirmations: ConfirmationManager, entitlement: EntitlementManager
+    ) -> None:
         self._s = services
         self._confirmations = confirmations
         self._entitlement = entitlement
@@ -68,7 +70,9 @@ class Authorizer:
         if row is None:
             return None
         if row.revoked:
-            raise ProtocolError("CONTROLLER_REVOKED", "Access for this phone was revoked. Pair again from the PC to restore it.")
+            raise ProtocolError(
+                "CONTROLLER_REVOKED", "Access for this phone was revoked. Pair again from the PC to restore it."
+            )
         account_id = self._s.identity.account_id
         if account_id is None:
             return None
@@ -84,7 +88,9 @@ class Authorizer:
         now = now or now_utc()
         # step 1
         try:
-            vc = verify_and_parse_command(envelope, self.resolve_key, now=now, registry=self._registry, schemas=self._schemas)
+            vc = verify_and_parse_command(
+                envelope, self.resolve_key, now=now, registry=self._registry, schemas=self._schemas
+            )
         except ProtocolError as exc:
             command_id = _peek_command_id(envelope)
             if exc.code in MISMATCH_CODES:
@@ -95,8 +101,12 @@ class Authorizer:
             return Decision("rejected", error=exc, command_id=command_id)
         # step 2
         if vc.target_pc_id != self._s.identity.pc_id:
-            self._s.store.add_security_event("command_identity_mismatch", code="TARGET_PC_MISMATCH", controller_id=vc.controller_id)
-            return Decision("rejected", command=vc, command_id=vc.command_id, mismatch=True, error=self._err("TARGET_PC_MISMATCH"))
+            self._s.store.add_security_event(
+                "command_identity_mismatch", code="TARGET_PC_MISMATCH", controller_id=vc.controller_id
+            )
+            return Decision(
+                "rejected", command=vc, command_id=vc.command_id, mismatch=True, error=self._err("TARGET_PC_MISMATCH")
+            )
         if not snapshot_received:
             return Decision("rejected", command=vc, command_id=vc.command_id, error=self._err("PC_RECONNECTING"))
         # step 3
@@ -112,15 +122,25 @@ class Authorizer:
             return self._reject(vc, "CONTROLLER_PLAN_DISABLED")
         # step 4
         if vc.spec.capability not in vc.key.capabilities:
-            return self._reject(vc, "GRANT_MISSING", f"This phone does not have the '{vc.spec.capability}' permission on this PC.")
+            return self._reject(
+                vc, "GRANT_MISSING", f"This phone does not have the '{vc.spec.capability}' permission on this PC."
+            )
         # step 5
         existing = store.journal_get(vc.command_id)
         if existing is not None:
             if existing.digest != vc.digest:
                 store.add_security_event("command_id_reused", controller_id=vc.controller_id)
                 return self._reject(vc, "COMMAND_ID_REUSED")
-            return Decision("duplicate", command=vc, command_id=vc.command_id, journaled=True, frames=self._replay_frames(existing.state, existing.frame, vc))
-        if not store.journal_insert(command_id=vc.command_id, digest=vc.digest, action=vc.spec.name, controller_id=vc.controller_id):
+            return Decision(
+                "duplicate",
+                command=vc,
+                command_id=vc.command_id,
+                journaled=True,
+                frames=self._replay_frames(existing.state, existing.frame, vc),
+            )
+        if not store.journal_insert(
+            command_id=vc.command_id, digest=vc.digest, action=vc.spec.name, controller_id=vc.controller_id
+        ):
             return self._reject(vc, "COMMAND_ID_REUSED")  # lost a race with an identical id
         # step 6
         unavailable = await self.check_availability(vc)
@@ -135,7 +155,9 @@ class Authorizer:
         origin = vc.payload.get("origin")
         if isinstance(origin, dict) and origin.get("kind") == "routine":
             if not vc.spec.routine_allowed:
-                return self._reject(vc, "ENTITLEMENT_REQUIRED", "This action cannot run as a routine step.", journaled=True)
+                return self._reject(
+                    vc, "ENTITLEMENT_REQUIRED", "This action cannot run as a routine step.", journaled=True
+                )
             if not self._entitlement.routines_allowed():
                 return self._reject(vc, "ENTITLEMENT_REQUIRED", journaled=True)
         # step 9
@@ -171,7 +193,9 @@ class Authorizer:
                 if locked is None:
                     locked = await self._s.state.session_locked()
                 if locked:
-                    return self._err("PC_SESSION_LOCKED_MEDIA_ONLY" if self._s.store.media_while_locked else "PC_SESSION_LOCKED")
+                    return self._err(
+                        "PC_SESSION_LOCKED_MEDIA_ONLY" if self._s.store.media_while_locked else "PC_SESSION_LOCKED"
+                    )
             elif condition == "session_media_allowed":
                 if locked is None:
                     locked = await self._s.state.session_locked()
@@ -218,7 +242,9 @@ class Authorizer:
     def _err(self, code: str, message: str | None = None) -> ProtocolError:
         return self._registry.make_error(code, message)
 
-    def _reject(self, vc: VerifiedCommand, error: str | ProtocolError, message: str | None = None, *, journaled: bool = False) -> Decision:
+    def _reject(
+        self, vc: VerifiedCommand, error: str | ProtocolError, message: str | None = None, *, journaled: bool = False
+    ) -> Decision:
         err = error if isinstance(error, ProtocolError) else self._err(error, message)
         return Decision("rejected", command=vc, command_id=vc.command_id, error=err, journaled=journaled)
 

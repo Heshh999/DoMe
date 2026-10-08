@@ -44,7 +44,9 @@ class ControlError(Exception):
 
 
 class ControlServer:
-    def __init__(self, state_dir: Path, ops: dict[str, Op], on_security_event: Callable[[str, dict[str, Any]], None]) -> None:
+    def __init__(
+        self, state_dir: Path, ops: dict[str, Op], on_security_event: Callable[[str, dict[str, Any]], None]
+    ) -> None:
         self._state_dir = state_dir
         self._ops = ops
         self._on_security_event = on_security_event
@@ -68,7 +70,11 @@ class ControlServer:
 
     def _mismatch(self, peer: ipc.PeerInfo) -> None:
         assert self._loop is not None
-        self._loop.call_soon_threadsafe(self._on_security_event, "control_ipc_identity_mismatch", {"peer_pid": peer.pid, "peer_identity": peer.identity, "peer_session": peer.session})
+        self._loop.call_soon_threadsafe(
+            self._on_security_event,
+            "control_ipc_identity_mismatch",
+            {"peer_pid": peer.pid, "peer_identity": peer.identity, "peer_session": peer.session},
+        )
 
     def _accepted(self, conn: ipc.FrameConnection, peer: ipc.PeerInfo) -> None:
         threading.Thread(target=self._serve, args=(conn,), name=f"dome-control-{peer.pid}", daemon=True).start()
@@ -128,7 +134,9 @@ class ControlClient:
         try:
             conn = ipc.connect(self._state_dir, timeout=self._timeout, kind="control")
         except (OSError, ConnectionRefusedError) as exc:
-            raise ControlError("AGENT_NOT_RUNNING", "The DoMe agent is not running (start it with `dome-agent run`).") from exc
+            raise ControlError(
+                "AGENT_NOT_RUNNING", "The DoMe agent is not running (start it with `dome-agent run`)."
+            ) from exc
         try:
             conn.write_frame(encode_frame({"op": op, "args": args}))
             raw = conn.read_frame()

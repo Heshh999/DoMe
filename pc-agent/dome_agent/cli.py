@@ -66,7 +66,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     settings = _settings(args)
     configure_logging(settings.log_level, settings.log_path)
     headless = settings.headless or bool(args.headless)
-    log.info("dome-agent starting", version=__version__, headless=headless, platform=sys.platform, fake_platform=settings.use_fake_platform)
+    log.info(
+        "dome-agent starting",
+        version=__version__,
+        headless=headless,
+        platform=sys.platform,
+        fake_platform=settings.use_fake_platform,
+    )
     from .agent import Agent
 
     if headless:
@@ -307,7 +313,15 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "agent_version": __version__,
                 "identity": Identity(settings.state_dir).status_summary(),
                 "store": store.summary(),
-                "grants": [{"controller_id": g.controller_id, "display_name": g.display_name, "capabilities": list(g.capabilities), "revoked_at": g.revoked_at} for g in store.list_grants(include_revoked=True)],
+                "grants": [
+                    {
+                        "controller_id": g.controller_id,
+                        "display_name": g.display_name,
+                        "capabilities": list(g.capabilities),
+                        "revoked_at": g.revoked_at,
+                    }
+                    for g in store.list_grants(include_revoked=True)
+                ],
             }
         finally:
             store.close()
@@ -318,7 +332,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"DoMe agent {status.get('agent_version')} — {'running' if status['agent_running'] else 'not running'}")
     print(f"  linked: {ident.get('linked')}  pc_id: {ident.get('pc_id')}  name: {ident.get('pc_name')}")
     if status["agent_running"]:
-        print(f"  connection: {status.get('connection')}  snapshot: {status.get('snapshot_received')}  extension: {status.get('extension_connected')}")
+        print(
+            f"  connection: {status.get('connection')}  snapshot: {status.get('snapshot_received')}  extension: {status.get('extension_connected')}"
+        )
         print(f"  entitlement: {status.get('entitlement', {}).get('effective_plan')}")
         if status.get("relink_required"):
             print(f"  RE-LINK REQUIRED ({status.get('relink_reason')}): run `dome-agent link`")
@@ -326,7 +342,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"  paired phones: {len([g for g in status.get('grants', []) if not g.get('revoked_at')])}")
     for g in status.get("grants", []):
         flag = "revoked" if g.get("revoked_at") else "active"
-        print(f"    - {g.get('display_name')!r} [{flag}] caps={','.join(g.get('capabilities', []))} id={g.get('controller_id')}")
+        print(
+            f"    - {g.get('display_name')!r} [{flag}] caps={','.join(g.get('capabilities', []))} id={g.get('controller_id')}"
+        )
     return 0
 
 
@@ -372,7 +390,12 @@ def cmd_approve_app(args: argparse.Namespace) -> int:
         store = Store(settings.db_path)
         try:
             r = ApprovedApps(store).approve(args.app_id, args.exe_path, args.name)
-            row = {"app_id": r.app_id, "display_name": r.display_name, "exe_path": r.exe_path, "exe_sha256": r.exe_sha256}
+            row = {
+                "app_id": r.app_id,
+                "display_name": r.display_name,
+                "exe_path": r.exe_path,
+                "exe_sha256": r.exe_sha256,
+            }
         except ApprovalError as exc2:
             print(f"error: {exc2}", file=sys.stderr)
             return 1
@@ -448,7 +471,12 @@ def cmd_diagnostics(args: argparse.Namespace) -> int:
 
         store = Store(settings.db_path)
         try:
-            status = {"agent_running": False, "identity": Identity(settings.state_dir).status_summary(), "store": store.summary(), "security_events": store.list_security_events(50)}
+            status = {
+                "agent_running": False,
+                "identity": Identity(settings.state_dir).status_summary(),
+                "store": store.summary(),
+                "security_events": store.list_security_events(50),
+            }
         finally:
             store.close()
         path = str(write_bundle(settings, status))
@@ -502,7 +530,9 @@ def cmd_uninstall_native_host(args: argparse.Namespace) -> int:
 def cmd_version(args: argparse.Namespace) -> int:
     from dome_protocol import load_registry
 
-    print(f"dome-agent {__version__} (protocol {load_registry().protocol_version}, registry {load_registry().registry_version})")
+    print(
+        f"dome-agent {__version__} (protocol {load_registry().protocol_version}, registry {load_registry().registry_version})"
+    )
     return 0
 
 
@@ -511,7 +541,9 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dome-agent", description="DoMe Windows agent")
-    parser.add_argument("--state-dir", help="override the state directory (default: %%LOCALAPPDATA%%\\DoMe or ~/.local/state/dome)")
+    parser.add_argument(
+        "--state-dir", help="override the state directory (default: %%LOCALAPPDATA%%\\DoMe or ~/.local/state/dome)"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("run", help="run the agent")
@@ -528,7 +560,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("unlink", help="forget the account link").set_defaults(fn=cmd_unlink)
 
     p = sub.add_parser("pair", help="pair a phone")
-    p.add_argument("--print-code", action="store_true", help="print the code on one line instead of the QR (scripts/tests)")
+    p.add_argument(
+        "--print-code", action="store_true", help="print the code on one line instead of the QR (scripts/tests)"
+    )
     p.add_argument("--no-wait", action="store_true", help="exit after showing the code")
     p.add_argument("--yes", action="store_true", help="approve without asking (tests only)")
     p.add_argument("--timeout", type=int, default=300)

@@ -19,7 +19,9 @@ _POLL_INTERVAL = 0.25
 def _approved(ctx: ExecutionContext, app_id: str) -> ApprovedAppRow:
     row = ctx.services.apps.get(app_id)
     if row is None:
-        raise ProtocolError("APP_NOT_APPROVED", "That app is not approved for remote control. Approve it on the PC first.")
+        raise ProtocolError(
+            "APP_NOT_APPROVED", "That app is not approved for remote control. Approve it on the PC first."
+        )
     return row
 
 
@@ -81,7 +83,9 @@ async def launch(ctx: ExecutionContext) -> dict[str, Any]:
     except ProtocolError as exc:
         if exc.code in ("APP_LAUNCH_FAILED", "PLATFORM_UNSUPPORTED"):
             raise
-        raise ActionFailed("APP_LAUNCH_FAILED", exc.message, result={"app_id": app_id, "launched": False, "running": False}) from exc
+        raise ActionFailed(
+            "APP_LAUNCH_FAILED", exc.message, result={"app_id": app_id, "launched": False, "running": False}
+        ) from exc
     deadline = asyncio.get_running_loop().time() + max(1.0, ctx.command.spec.timeout_ms / 1000 - 1.0)
     running = False
     while True:
@@ -94,7 +98,11 @@ async def launch(ctx: ExecutionContext) -> dict[str, Any]:
         await asyncio.sleep(_POLL_INTERVAL)
     ctx.services.state.request_update()
     if not running:
-        raise ActionFailed("APP_LAUNCH_FAILED", "The app was started but no matching process was observed", result={"app_id": app_id, "launched": True, "running": False})
+        raise ActionFailed(
+            "APP_LAUNCH_FAILED",
+            "The app was started but no matching process was observed",
+            result={"app_id": app_id, "launched": True, "running": False},
+        )
     return {"app_id": app_id, "launched": True, "running": True}
 
 

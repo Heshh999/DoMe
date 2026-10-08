@@ -59,7 +59,9 @@ class VerifiedEntitlement:
         return bool(self.claims["limits"]["routines"])
 
 
-def verify_assertion(assertion: str, jwks: dict[str, Any], *, account_id: str, pc_id: str, now: float | None = None) -> VerifiedEntitlement:
+def verify_assertion(
+    assertion: str, jwks: dict[str, Any], *, account_id: str, pc_id: str, now: float | None = None
+) -> VerifiedEntitlement:
     """Verify signature (EdDSA, JWKS by kid), header ``typ``, schema, binding and time window."""
     from joserfc import jwt
     from joserfc.errors import JoseError
@@ -113,7 +115,9 @@ class EntitlementManager:
             return
         try:
             data = json.loads(raw)
-            self._current = VerifiedEntitlement(plan=str(data["plan"]), claims=dict(data["claims"]), verified_at=float(data["verified_at"]))
+            self._current = VerifiedEntitlement(
+                plan=str(data["plan"]), claims=dict(data["claims"]), verified_at=float(data["verified_at"])
+            )
         except (ValueError, KeyError, TypeError):
             self._store.delete_setting(SETTING_ENTITLEMENT)
 
@@ -121,7 +125,16 @@ class EntitlementManager:
         if self._current is None:
             self._store.delete_setting(SETTING_ENTITLEMENT)
         else:
-            self._store.set_setting(SETTING_ENTITLEMENT, json.dumps({"plan": self._current.plan, "claims": self._current.claims, "verified_at": self._current.verified_at}))
+            self._store.set_setting(
+                SETTING_ENTITLEMENT,
+                json.dumps(
+                    {
+                        "plan": self._current.plan,
+                        "claims": self._current.claims,
+                        "verified_at": self._current.verified_at,
+                    }
+                ),
+            )
 
     # ----- queries -----------------------------------------------------------------------------------------
     @property
@@ -177,6 +190,11 @@ class EntitlementManager:
         log.info("entitlement assertion verified", plan=verified.plan, exp=verified.exp)
         return verified
 
+    async def ensure_jwks(self, api: ApiClient) -> None:
+        """Fetch the JWKS once (lazily, before the first snapshot assertion is verified)."""
+        if self._jwks is None:
+            self._jwks = await api.jwks()
+
     def note_refresh_failure(self, *, soft: bool) -> None:
         """soft = network error or 5xx → grace may apply; hard (4xx) → Free."""
         if soft:
@@ -225,7 +243,9 @@ class EntitlementManager:
         lifetime = max(60, cur.exp - cur.iat)
         due = cur.iat + REFRESH_FRACTION * lifetime
         delay = max(5.0, due - time.time())
-        self._refresh_task = asyncio.get_running_loop().create_task(self._refresh_later(delay), name="dome-entitlement-refresh")
+        self._refresh_task = asyncio.get_running_loop().create_task(
+            self._refresh_later(delay), name="dome-entitlement-refresh"
+        )
 
     async def _refresh_later(self, delay: float) -> None:
         await asyncio.sleep(delay)

@@ -23,7 +23,16 @@ async def test_hello_snapshot_command_ack_result(harness: AgentHarness, controll
     # a state frame followed the snapshot (rules.state_cache)
     tab = FakeTab(tab_id=5)
     ext = await harness.connect_extension(tab)
-    env = controller.command("youtube.next", {}, {"browser_instance_id": ext.browser_instance_id, "tab_id": 5, "tab_token": tab.tab_token, "expected_video_id": tab.video_id})
+    env = controller.command(
+        "youtube.next",
+        {},
+        {
+            "browser_instance_id": ext.browser_instance_id,
+            "tab_id": 5,
+            "tab_token": tab.tab_token,
+            "expected_video_id": tab.video_id,
+        },
+    )
     cid = payload_of(env)["command_id"]
     await harness.send_command(env)
     ack1 = await harness.ack(cid)
@@ -119,7 +128,10 @@ async def test_snapshot_unknown_controller_is_ignored_and_logged(harness: AgentH
     await harness.relay.send_snapshot()
     await harness.relay.expect("state")
     assert harness.agent.store.get_grant(ghost.controller_id) is None
-    assert any(e["kind"] == "snapshot_unknown_controller" and e["detail"]["controller_id"] == ghost.controller_id for e in harness.agent.store.list_security_events())
+    assert any(
+        e["kind"] == "snapshot_unknown_controller" and e["detail"]["controller_id"] == ghost.controller_id
+        for e in harness.agent.store.list_security_events()
+    )
     env = ghost.command("system.ping")
     await harness.send_command(env)
     res = await harness.result(payload_of(env)["command_id"])
@@ -158,7 +170,9 @@ async def test_mismatch_handling_three_strikes_reconnects(harness: AgentHarness,
     await harness.wait_snapshot_applied()
 
 
-async def test_command_before_snapshot_is_pc_reconnecting(settings: Any, fake_api: Any, fake_relay: Any, fake_state: Any, controller: Controller) -> None:
+async def test_command_before_snapshot_is_pc_reconnecting(
+    settings: Any, fake_api: Any, fake_relay: Any, fake_state: Any, controller: Controller
+) -> None:
     from dome_agent.agent import Agent
     from dome_agent.store import Store
     from dome_agent.testing.fake_platform import build_fake_platform
@@ -166,7 +180,14 @@ async def test_command_before_snapshot_is_pc_reconnecting(settings: Any, fake_ap
     from .helpers import link_identity
 
     cred = fake_api.issue_credential()
-    link_identity(settings.state_dir, fake_api.pc_id, fake_api.account_id, credential=cred, api_url=fake_api.url, relay_url=fake_relay.url)
+    link_identity(
+        settings.state_dir,
+        fake_api.pc_id,
+        fake_api.account_id,
+        credential=cred,
+        api_url=fake_api.url,
+        relay_url=fake_relay.url,
+    )
     st = Store(settings.db_path)
     st.set_remote_enabled(True)
     controller.grant_locally(st)
@@ -280,7 +301,11 @@ async def test_local_disable_wins_over_remote(harness: AgentHarness, controller:
 async def test_local_revocation_sends_revoke_controller(harness: AgentHarness, controller: Controller) -> None:
     assert await harness.agent.revoke_controller_locally(controller.controller_id)
     frame = await harness.relay.expect("revoke_controller")
-    assert frame["controller_id"] == controller.controller_id and frame["kid"] == controller.kid and frame["reason"] == "local_revocation"
+    assert (
+        frame["controller_id"] == controller.controller_id
+        and frame["kid"] == controller.kid
+        and frame["reason"] == "local_revocation"
+    )
     env = controller.command("system.ping")
     await harness.send_command(env)
     assert (await harness.result(payload_of(env)["command_id"]))["error"]["code"] == "CONTROLLER_REVOKED"
@@ -326,7 +351,9 @@ async def test_identity_mismatch_in_snapshot_stops(harness: AgentHarness) -> Non
     assert harness.agent.identity.read_credential() is not None  # not discarded: the relay misbehaved, not the account
 
 
-async def test_crash_recovery_reports_outcome_unknown_once(settings: Any, fake_api: Any, fake_relay: Any, fake_state: Any, controller: Controller) -> None:
+async def test_crash_recovery_reports_outcome_unknown_once(
+    settings: Any, fake_api: Any, fake_relay: Any, fake_state: Any, controller: Controller
+) -> None:
     """Simulated crash: a journal row is left in `executing`; the restarted agent re-sends outcome_unknown
     as a late correction and never re-executes."""
     from dome_agent.agent import Agent
@@ -336,12 +363,21 @@ async def test_crash_recovery_reports_outcome_unknown_once(settings: Any, fake_a
     from .helpers import link_identity
 
     cred = fake_api.issue_credential()
-    link_identity(settings.state_dir, fake_api.pc_id, fake_api.account_id, credential=cred, api_url=fake_api.url, relay_url=fake_relay.url)
+    link_identity(
+        settings.state_dir,
+        fake_api.pc_id,
+        fake_api.account_id,
+        credential=cred,
+        api_url=fake_api.url,
+        relay_url=fake_relay.url,
+    )
     st = Store(settings.db_path)
     st.set_remote_enabled(True)
     controller.grant_locally(st)
     crashed = str(uuid.uuid4())
-    st.journal_insert(command_id=crashed, digest="d", action="youtube.next", controller_id=controller.controller_id, state="executing")
+    st.journal_insert(
+        command_id=crashed, digest="d", action="youtube.next", controller_id=controller.controller_id, state="executing"
+    )
     st.close()
     fake_relay.controllers.append(controller.snapshot_entry())
     agent = Agent(settings, platform=build_fake_platform(fake_state))

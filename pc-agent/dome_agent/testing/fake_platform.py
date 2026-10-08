@@ -38,8 +38,20 @@ class FakeState:
     def count(self, name: str) -> int:
         return sum(1 for n, _ in self.calls if n == name)
 
-    def add_session(self, session_id: str, status: MediaStatus = "playing", controls: tuple[MediaControl, ...] = ("play", "pause", "next", "previous"), title: str = "Untitled") -> None:
-        self.sessions[session_id] = MediaSession(session_id=session_id, status=status, controls=controls, app_label=session_id.split("#")[0][:64], title=title)
+    def add_session(
+        self,
+        session_id: str,
+        status: MediaStatus = "playing",
+        controls: tuple[MediaControl, ...] = ("play", "pause", "next", "previous"),
+        title: str = "Untitled",
+    ) -> None:
+        self.sessions[session_id] = MediaSession(
+            session_id=session_id,
+            status=status,
+            controls=controls,
+            app_label=session_id.split("#")[0][:64],
+            title=title,
+        )
 
     def add_window(self, pid: int, window_id: str, title: str, minimized: bool = False) -> None:
         self.windows[window_id] = AppWindow(window_id=window_id, title=title, pid=pid, minimized=minimized)

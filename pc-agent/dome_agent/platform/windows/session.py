@@ -74,7 +74,13 @@ class WindowsSession:
             free.argtypes = [ctypes.c_void_p]
             buffer = ctypes.c_void_p()
             size = wintypes.DWORD(0)
-            ok = query(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSION_INFO_EX, ctypes.byref(buffer), ctypes.byref(size))
+            ok = query(
+                WTS_CURRENT_SERVER_HANDLE,
+                WTS_CURRENT_SESSION,
+                WTS_SESSION_INFO_EX,
+                ctypes.byref(buffer),
+                ctypes.byref(size),
+            )
             if not ok or not buffer.value or size.value < ctypes.sizeof(_WtsInfoEx):
                 return None
             try:

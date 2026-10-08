@@ -68,12 +68,16 @@ class Agent:
         self.platform = platform or build_platform(settings)
         self.registry = load_registry()
         self.schemas = load_schemas()
-        self.bridge = BridgeServer(settings.state_dir, on_change=self._on_bridge_change, on_security_event=self._security_event)
+        self.bridge = BridgeServer(
+            settings.state_dir, on_change=self._on_bridge_change, on_security_event=self._security_event
+        )
         self.state = StateAggregator(self.store, self.platform, self.bridge)
         self.power = PowerManager(self.store, self.platform, self.state)
         self.apps = ApprovedApps(self.store)
         self.confirmations = ConfirmationManager(self.store, pc_name=lambda: self.identity.pc_name)
-        self.entitlement = EntitlementManager(self.store, account_id=self.identity.account_id, pc_id=self.identity.pc_id)
+        self.entitlement = EntitlementManager(
+            self.store, account_id=self.identity.account_id, pc_id=self.identity.pc_id
+        )
         self.services = AgentServices(
             registry=self.registry,
             store=self.store,
@@ -113,7 +117,9 @@ class Agent:
         self.state.start(self._emit_state)
         self.executor.start()
         await self.control.start()
-        self._sweeper = asyncio.get_running_loop().create_task(self._sweep_confirmations(), name="dome-confirmation-sweeper")
+        self._sweeper = asyncio.get_running_loop().create_task(
+            self._sweep_confirmations(), name="dome-confirmation-sweeper"
+        )
         if self.identity.is_linked:
             self._start_relay()
         else:
@@ -156,7 +162,9 @@ class Agent:
         relay_url = self.settings.relay_url or link.relay_url
         self.api = ApiClient(api_url)
         self.tokens = TokenManager(self.api, self.identity.read_credential)
-        self.entitlement = EntitlementManager(self.store, account_id=self.identity.account_id, pc_id=self.identity.pc_id)
+        self.entitlement = EntitlementManager(
+            self.store, account_id=self.identity.account_id, pc_id=self.identity.pc_id
+        )
         self.entitlement.bind(self.api, self.tokens.get)
         self.authz = Authorizer(self.services, self.confirmations, self.entitlement)
         self.pairing = PairingManager(self.store, self.identity, self.api, self.tokens, self._send, self.ui)
@@ -217,9 +225,14 @@ class Agent:
             self.relink_reason = reason
             if reason != "identity_mismatch":
                 self.identity.discard_credential()
-            self.ui.notify("DoMe needs to be re-linked", "This PC's connection to your DoMe account ended. Open DoMe on the PC and link it again.")
+            self.ui.notify(
+                "DoMe needs to be re-linked",
+                "This PC's connection to your DoMe account ended. Open DoMe on the PC and link it again.",
+            )
         elif reason == "superseded":
-            self.ui.notify("DoMe is running elsewhere", "Another DoMe agent connected for this PC. Use Reconnect to take over.")
+            self.ui.notify(
+                "DoMe is running elsewhere", "Another DoMe agent connected for this PC. Use Reconnect to take over."
+            )
         self._update_ui()
 
     def on_state_change(self, state: ConnectionState) -> None:
@@ -240,7 +253,9 @@ class Agent:
         revoked_error = self.registry.make_error("CONTROLLER_REVOKED")
         for controller_id in result.revoked_controller_ids:
             canceled = await self.executor.cancel_for_controller(controller_id, revoked_error)
-            canceled += await self._cancel_pending_confirmations(controller_id=controller_id, state="canceled", error=revoked_error)
+            canceled += await self._cancel_pending_confirmations(
+                controller_id=controller_id, state="canceled", error=revoked_error
+            )
             log.info("controller revoked by snapshot", controller_id=controller_id, canceled_commands=len(canceled))
         first = not self._snapshot_received
         self._snapshot_received = True
@@ -248,7 +263,9 @@ class Agent:
         await self.state.emit_now()
         if first:
             await self._resend_late_results()
-            asyncio.get_running_loop().create_task(self._refresh_entitlement_on_connect(), name="dome-entitlement-connect")
+            asyncio.get_running_loop().create_task(
+                self._refresh_entitlement_on_connect(), name="dome-entitlement-connect"
+            )
         self._update_ui()
 
     async def _apply_snapshot_entitlement(self, assertion: Any) -> None:
@@ -258,8 +275,7 @@ class Agent:
         if self.api is None:
             return
         try:
-            if self.entitlement._jwks is None:  # noqa: SLF001 - lazy JWKS load on first assertion
-                self.entitlement._jwks = await self.api.jwks()  # noqa: SLF001
+            await self.entitlement.ensure_jwks(self.api)
             self.entitlement.apply_assertion(str(assertion))
             self.entitlement.schedule_refresh()
         except EntitlementError as exc:
@@ -288,7 +304,9 @@ class Agent:
         if decision.kind == "rejected":
             assert decision.error is not None
             if decision.command_id is not None:
-                await self.emitter.result(decision.command_id, "failed", error=decision.error, journal=decision.journaled)
+                await self.emitter.result(
+                    decision.command_id, "failed", error=decision.error, journal=decision.journaled
+                )
             else:
                 await self._send({"type": "error", "error": decision.error.to_frame_error()})
             if decision.mismatch:
@@ -321,7 +339,9 @@ class Agent:
     # ----- confirmations -------------------------------------------------------------------------------------------------
     async def _on_confirmation(self, frame: dict[str, Any]) -> None:
         try:
-            vconf = verify_and_parse_confirmation(frame["envelope"], self.authz.resolve_key, registry=self.registry, schemas=self.schemas)
+            vconf = verify_and_parse_confirmation(
+                frame["envelope"], self.authz.resolve_key, registry=self.registry, schemas=self.schemas
+            )
         except ProtocolError as exc:
             # Unverifiable confirmation: never terminate a command on the strength of an unverified payload.
             self._security_event("confirmation_rejected", {"code": exc.code})
@@ -331,14 +351,18 @@ class Agent:
             return
         if vconf.payload["target_pc_id"] != self.identity.pc_id:
             self._security_event("confirmation_identity_mismatch", {"code": "TARGET_PC_MISMATCH"})
-            await self._send({"type": "error", "error": self.registry.make_error("TARGET_PC_MISMATCH").to_frame_error()})
+            await self._send(
+                {"type": "error", "error": self.registry.make_error("TARGET_PC_MISMATCH").to_frame_error()}
+            )
             await self._count_mismatch()
             return
         if not self._snapshot_received:
             await self._send({"type": "error", "error": self.registry.make_error("PC_RECONNECTING").to_frame_error()})
             return
         try:
-            pending = await self.confirmations.consume(vconf, recompute_target_digest=lambda vc: compute_target_state_digest(self.services, vc))
+            pending = await self.confirmations.consume(
+                vconf, recompute_target_digest=lambda vc: compute_target_state_digest(self.services, vc)
+            )
         except ConfirmationError as exc:
             if exc.terminated:
                 await self.emitter.result(vconf.command_id, exc.result_state, error=exc)
@@ -347,7 +371,9 @@ class Agent:
                 await self._send({"type": "error", "error": exc.to_frame_error()})
             return
         if not self.store.remote_enabled:
-            await self.emitter.result(pending.command.command_id, "failed", error=self.registry.make_error("PC_REMOTE_DISABLED"))
+            await self.emitter.result(
+                pending.command.command_id, "failed", error=self.registry.make_error("PC_REMOTE_DISABLED")
+            )
             return
         await self._enqueue(pending.command)
 
@@ -356,17 +382,26 @@ class Agent:
             await asyncio.sleep(CONFIRMATION_SWEEP_SECONDS)
             try:
                 for pending in self.confirmations.expire_stale():
-                    await self.emitter.result(pending.command.command_id, "expired", error=self.registry.make_error("CONFIRMATION_EXPIRED"), send=self._snapshot_received)
+                    await self.emitter.result(
+                        pending.command.command_id,
+                        "expired",
+                        error=self.registry.make_error("CONFIRMATION_EXPIRED"),
+                        send=self._snapshot_received,
+                    )
             except Exception as exc:  # noqa: BLE001
                 log.warning("confirmation sweep failed", error=exc.__class__.__name__)
 
-    async def _cancel_pending_confirmations(self, *, controller_id: str | None, state: str, error: ProtocolError | None) -> list[str]:
+    async def _cancel_pending_confirmations(
+        self, *, controller_id: str | None, state: str, error: ProtocolError | None
+    ) -> list[str]:
         canceled: list[str] = []
         for command_id in self.confirmations.pending_command_ids():
             pending = self.confirmations.pending_for(command_id)
             if pending is None or (controller_id is not None and pending.command.controller_id != controller_id):
                 continue
-            self.store.consume_challenge(pending.challenge_id, new_command_state=state, error_code=error.code if error else None)
+            self.store.consume_challenge(
+                pending.challenge_id, new_command_state=state, error_code=error.code if error else None
+            )
             self.confirmations.drop(command_id)
             await self.emitter.result(command_id, state, error=error)
             canceled.append(command_id)
@@ -483,11 +518,18 @@ class Agent:
             if self.pairing is None:
                 raise ControlError("NOT_LINKED", "This PC is not linked yet. Run `dome-agent link` first.")
             if self.relay is None or not self.relay.connected:
-                raise ControlError("OFFLINE", "The agent is not connected to the DoMe service; pairing needs a connection.")
+                raise ControlError(
+                    "OFFLINE", "The agent is not connected to the DoMe service; pairing needs a connection."
+                )
             session = await self.pairing.start()
             d = session.display()
             # The code goes ONLY to the local caller over the authenticated control channel.
-            return {"pairing_id": d.pairing_id, "code": d.code_formatted, "qr_url": d.qr_url, "expires_at": d.expires_at}
+            return {
+                "pairing_id": d.pairing_id,
+                "code": d.code_formatted,
+                "qr_url": d.qr_url,
+                "expires_at": d.expires_at,
+            }
 
         async def pair_status(_: dict[str, Any]) -> dict[str, Any]:
             if self.pairing is None or self.pairing.session is None:
@@ -512,7 +554,9 @@ class Agent:
             if self.pairing is None:
                 raise ControlError("NOT_LINKED", "This PC is not linked yet.")
             granted = args.get("capabilities")
-            pending = await self.pairing.approve(str(args["pairing_id"]), list(granted) if isinstance(granted, list) else None)
+            pending = await self.pairing.approve(
+                str(args["pairing_id"]), list(granted) if isinstance(granted, list) else None
+            )
             return {"pairing_id": pending.pairing_id, "kid": pending.kid, "display_name": pending.display_name}
 
         async def pair_decline(args: dict[str, Any]) -> dict[str, Any]:
@@ -536,7 +580,12 @@ class Agent:
             except ValueError as exc:
                 raise ControlError("INVALID_APP", str(exc)) from exc
             self.state.request_update()
-            return {"app_id": row.app_id, "display_name": row.display_name, "exe_path": row.exe_path, "exe_sha256": row.exe_sha256}
+            return {
+                "app_id": row.app_id,
+                "display_name": row.display_name,
+                "exe_path": row.exe_path,
+                "exe_sha256": row.exe_sha256,
+            }
 
         async def remove_app(args: dict[str, Any]) -> dict[str, Any]:
             return {"removed": self.apps.remove(str(args["app_id"]))}
@@ -584,7 +633,9 @@ class Agent:
         try:
             return await self.relay.send(frame)
         except ProtocolError as exc:
-            log.error("outbound frame failed contract validation; not sent", type=frame.get("type"), message=exc.message)
+            log.error(
+                "outbound frame failed contract validation; not sent", type=frame.get("type"), message=exc.message
+            )
             return False
 
     async def _emit_state(self, state: dict[str, Any]) -> bool:

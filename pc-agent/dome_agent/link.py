@@ -74,7 +74,9 @@ async def link_pc(
             outcome = await api.link_poll(start.device_code)
         except ApiError as exc:
             if exc.status in (400, 404, 410):
-                raise LinkError(f"The link request was rejected or expired ({exc.code}). Run `dome-agent link` again.") from exc
+                raise LinkError(
+                    f"The link request was rejected or expired ({exc.code}). Run `dome-agent link` again."
+                ) from exc
             if exc.status == 403:
                 raise LinkError("Linking was denied in the browser.") from exc
             if exc.is_network_or_server_error:

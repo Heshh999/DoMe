@@ -14,7 +14,11 @@ from .context import ExecutionContext
 
 @handler("system.ping")
 async def ping(ctx: ExecutionContext) -> dict[str, Any]:
-    return {"agent_time": now_text(), "agent_version": __version__, "protocol_version": load_registry().protocol_version}
+    return {
+        "agent_time": now_text(),
+        "agent_version": __version__,
+        "protocol_version": load_registry().protocol_version,
+    }
 
 
 @handler("system.get_status")
