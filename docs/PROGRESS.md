@@ -2,6 +2,58 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-08 — Cross-component integration suite (`tests/`)
+
+- What runs: the real `dome-agent` process (`DOME_AGENT_PLATFORM=fake`, headless) linked by device
+  code through a real OIDC login (`tools/dev-idp`), paired from the PC side (PC-generated code, HMAC
+  verification code checked on both ends), connected to `cloud-api` under uvicorn with a fresh
+  PostgreSQL database, driven by an ES256-signing controller simulator, with a `FakeExtension` on
+  the agent's bridge socket. Only the Windows adapters and the browser are doubles.
+- Scenarios (20 tests, spec §17): Next in a background tab with an observed transition and
+  lifecycle-only relay rows; `NO_NEXT_VIDEO` / `UNSUPPORTED_CONTEXT` / `ACTIVATION_REQUIRED`;
+  pause, seek, player volume vs Windows volume, two tabs need an explicit target, theater;
+  `TARGET_CHANGED` / `TARGET_GONE` / `TAB_NOT_CONTROLLABLE` / extension disconnected; cross-account
+  isolation including a forged `controller_id` and a foreign pairing code; pairing needs PC approval,
+  single use, subset grants, `GRANT_MISSING`, expiry, decline, delivery of a claim made while the PC
+  was offline; account-side and PC-side revocation; replay, `COMMAND_ID_REUSED`, `COMMAND_EXPIRED`,
+  `INVALID_PARAMETERS`, `CONFIRMATION_INVALID`; Free limits (`origin: routine` →
+  `ENTITLEMENT_REQUIRED`, second PC → `PC_PLAN_DISABLED`); SIGKILL between side effect and result →
+  `outcome_unknown` in the relay and the journal with no re-execution; offline PC → immediate
+  `PC_OFFLINE`, never queued; 20-step volume burst → only `COMMAND_SUPERSEDED` besides success and
+  the final value; confirmed power countdown, `power.cancel`, decline; supersession (4001) and
+  reconnect keep grants.
+- Load smoke: 40 simulated agents + 40 controllers, 400 `system.ping`: 13.47 s = 30 commands/s,
+  round trip p50 1314 ms / p95 1629 ms, RSS 215 → 218 MiB (loopback, every endpoint in the test
+  process, shared 4-CPU machine). Numbers from one run, not a promise.
+- Result: `cd tests && uv run pytest -q` → 20 passed in 214 s. No product code changed; the harness
+  itself was adjusted (wait for the right `state` frame, simulate supersession instead of restarting
+  the process for the offline-claim scenario, one account per pair because Free limits are real).
+- **Evidence tag: integration-tested (Linux, fake platform, fake extension); load-tested (small).**
+  Not Windows-device-tested, not iPhone-tested.
+- Next: documentation, deploy and CI from the real state; handoff.
+
+## 2026-10-08 — Component builds, reviews and fixes
+
+- `cloud-api`, `pc-agent`, `browser-extension` and `mobile-app` were each built from their design
+  document, reviewed by an independent skeptical reviewer (code read, tests re-run), and fixed; a
+  second review/fix round ran before the documentation pass. Every blocker/major finding was fixed;
+  deferred minors are in each component's `KNOWN_ISSUES.md`, contract gaps in `CONTRACT_ISSUES.md`
+  (the contract stayed frozen).
+- Notable outcomes of the reviews: pairing claim/approval ordering and plan-limit enforcement
+  hardened in `cloud-api`; approved-app validation, crash recovery and the confirmation transaction
+  tightened in `pc-agent`; the extension moved to build-time precompiled validators because MV3 CSP
+  forbids Ajv's `new Function`; the PWA fixed its sign-out ordering (session store enters
+  `signing_out` before the key is deleted), binds the confirmation header to the challenge's `pc_id`,
+  removed a `g`-flag `lastIndex` bug in the intent parser, and closes sockets with 1000 instead of the
+  protocol-error code 4000.
+- Tests run after the fixes: `cloud-api` 86 (real PostgreSQL + dev-idp; ruff + mypy on source and
+  tests), `pc-agent` 194 (fake platform; ruff + mypy), `browser-extension` 90 (jsdom fixtures; Vite
+  build), `mobile-app` 205 (fake socket + fake IndexedDB; typecheck, lint, production
+  build). **Evidence tag: unit-tested; cloud-api integration-tested against PostgreSQL.**
+- Not verified: anything on a Windows device, a real browser session against youtube.com, or an
+  iPhone.
+- Next: end-to-end integration suite, docs, deploy, CI.
+
 ## 2026-10-08 — Contract review and hardening (before component builds)
 
 - Four independent adversarial reviews of the contract (security/crypto, cross-language

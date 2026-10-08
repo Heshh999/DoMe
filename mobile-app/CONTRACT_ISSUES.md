@@ -10,7 +10,9 @@ modified; each item records the workaround used here.
    but `verifyAndParseCommand` would reject that payload with `INVALID_PARAMETERS`, so the fixture
    cannot double as an end-to-end "valid command" sample. **Workaround:** the PWA's own tests use
    22-character tokens; the fixture is used only for the challenge/pairing digests.
-   Suggested fix: regenerate the fixture with a 22-character token.
+   Suggested fix: regenerate the fixture with a 22-character token. **Resolved after the build:** both
+   fixture generators now use 22-character tokens and the fixtures were regenerated; the fixture
+   command payloads validate as commands.
 
 2. **`hello_ack` without `controller_id` is a legal, long-lived state** (unpaired installation). The
    contract says such a socket may only be used for REST pairing status. The PWA keeps the socket open

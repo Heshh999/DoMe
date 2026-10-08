@@ -9,15 +9,27 @@ import type { rest } from "@dome/protocol";
 import { api, ApiError, configureApi } from "../lib/api.ts";
 import { errorSummary, log } from "../lib/log.ts";
 
-export type SessionStatus = "unknown" | "loading" | "signed_in" | "signed_out" | "error";
+/**
+ * `signed_out` is the server's verdict (401 / relay 4008): the shell redirects to sign-in at once.
+ * `signing_out` is the customer's own Sign out / Forget this installation: the shell shows a plain
+ * "signing out" screen and leaves the single navigation to the page that started it, so the
+ * sign-in redirect can never race the local clean-up (key deletion) or bounce the customer straight
+ * back to the identity provider.
+ */
+export type SessionStatus = "unknown" | "loading" | "signed_in" | "signed_out" | "signing_out" | "error";
 
 export interface SessionState {
   status: SessionStatus;
   session: rest.SessionResponse | null;
   error: ApiError | null;
   load(): Promise<rest.SessionResponse | null>;
-  /** The server said 401 (or we signed out): drop everything account-specific held here. */
+  /**
+   * The server said 401: drop everything account-specific held here. While a manual sign-out is in
+   * progress (`signing_out`) the status is left alone — that flow owns the navigation.
+   */
   clear(): void;
+  /** The customer pressed Sign out / Forget: no automatic sign-in redirect from here on. */
+  beginSignOut(): void;
 }
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
@@ -45,7 +57,14 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
   clear() {
     configureApi({ csrfToken: null });
+    if (get().status === "signing_out") {
+      set({ session: null, error: null });
+      return;
+    }
     set({ status: "signed_out", session: null, error: null });
+  },
+  beginSignOut() {
+    set({ status: "signing_out", session: null, error: null });
   },
 }));
 

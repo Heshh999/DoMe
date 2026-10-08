@@ -120,4 +120,6 @@ tests on Linux cover the logic around each adapter with `fake_platform`.
 | IPC identity | A process running as another local user cannot connect to `\\.\pipe\DoMe.Agent.*` (DACL) and a same-user process from another session is closed silently with a `bridge_ipc_identity_mismatch` security event. |
 | Start at login | Tray toggle writes `HKCU\...\Run\DoMe`; agent starts after sign-in. |
 | Tray | Icon colour: green connected, amber reconnecting, red disabled/superseded, grey offline; Disable remote control makes the phone fail with `PC_REMOTE_DISABLED`. |
+| Relay URL error | Set `DOME_AGENT_RELAY_URL=not-a-url` and start the agent: tray notification "DoMe cannot connect", `dome-agent status` prints `CONFIGURATION ERROR: The relay URL is invalid...`, `secrets\pc_credential.bin` is unchanged and no re-link is requested; unset the variable and the agent connects again without `link`. |
+| Offline revocation | Disconnect the network, `dome-agent revoke <controller_id>` (agent running or not), reconnect: the relay receives exactly one `revoke_controller` for that controller after the next `grants_snapshot`, `status` shows `pending_revocations: []`, and the account's device list no longer shows the phone as active. |
 | Packaging | Both PyInstaller specs build; `DoMe.exe status` works from a console; `dome-native-host.exe` is console-less. |

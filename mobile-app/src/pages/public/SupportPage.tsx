@@ -40,7 +40,7 @@ export function SupportPage() {
           <p className="text-sm text-text-muted">A support contact has not been set up for this deployment yet. When it is, you will find it here and under Settings & help in the app.</p>
         )}
         <p className="text-sm text-text-muted">
-          When you write in, attach the redacted diagnostics file from <Link to="/app/settings" className="text-accent font-semibold">Settings & help</Link>. It contains versions and connection states, never your commands’ content or media titles.
+          When you write in, attach the redacted diagnostics file from <Link to="/app/settings" className="text-accent font-semibold">Settings & help</Link>. It contains versions, connection states and command outcomes (action names and ids), never your commands’ parameters or media titles.
         </p>
       </section>
     </div>

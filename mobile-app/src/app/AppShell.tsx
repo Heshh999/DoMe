@@ -36,6 +36,8 @@ export function RequireSession({ children }: { children: React.ReactNode }) {
     if (status === "unknown") void load();
   }, [status, load]);
   useEffect(() => {
+    // Only the server's verdict (401 / relay 4008 → `signed_out`) redirects to sign-in. A sign-out the
+    // customer started (`signing_out`) must not: that flow deletes local state first and navigates once.
     if (status !== "signed_out") return;
     // Never forward the fragment: on `/app/devices/pair#code=…` it is the pairing code, which must not
     // reach cloud-api (query string, oidc_flows.return_to) nor be kept on the phone. Scrub it from the
@@ -46,6 +48,13 @@ export function RequireSession({ children }: { children: React.ReactNode }) {
     nav.assign(loginUrl(target.returnTo));
   }, [status, location]);
   if (status === "signed_in") return <>{children}</>;
+  if (status === "signing_out") {
+    return (
+      <main className="min-h-dvh flex items-center justify-center bg-bg text-text">
+        <Spinner label="Signing out" />
+      </main>
+    );
+  }
   if (status === "error") {
     return (
       <main className="min-h-dvh flex items-center justify-center px-6 bg-bg text-text">
@@ -109,14 +118,19 @@ function RelayBanner() {
   return null;
 }
 
-function GlobalConfirmation() {
+/**
+ * The one confirmation modal of the app. The PC named in the header is the device-inventory entry
+ * matched by the *challenge's* `pc_id` (ADR-0001 D7), not the command record's: when the two differ
+ * the binding check withholds Approve and the header must agree with that warning.
+ */
+export function GlobalConfirmation() {
   const commands = useLiveStore((s) => s.commands);
   const relayStatus = useLiveStore((s) => s.relayStatus);
   const pcs = useDevicesStore((s) => s.pcs);
   const pending = pendingConfirmation(commands);
   const labels = useLabels(pending?.pcId ?? null);
-  if (!pending) return null;
-  const pcName = pcs.find((p) => p.id === pending.pcId)?.name ?? null;
+  if (!pending?.confirmation) return null;
+  const pcName = pcs.find((p) => p.id === pending.confirmation!.parsed.challenge.pc_id)?.name ?? null;
   return <ConfirmationModal record={pending} pcName={pcName} labels={labels} connected={relayStatus === "open"} onRespond={(decision) => getRuntime().respond(pending.commandId, decision)} onDismiss={() => getRuntime().dismissConfirmation(pending.commandId)} />;
 }
 

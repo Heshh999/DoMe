@@ -39,7 +39,8 @@ src/
   components/    ui primitives, Sheet, ConfirmationModal, CommandOutcome, VolumeSlider, PcSwitcher, PcStatus, OfflineScreen
   pages/app/     Dashboard, Remote, Command, Apps, Routines (Pro preview), Devices, Pair, Settings, Billing, Link, More
   pages/public/  Landing, Pricing, FAQ, Download, Support, Privacy (DRAFT), Terms (DRAFT), NotFound
-test/            vitest (jsdom, fake-indexeddb, fake sockets/timers); test/components for UI
+test/            vitest (jsdom, fake-indexeddb, fake sockets/timers); test/components for UI,
+                 test/helpers/harness.ts (fake socket + Runtime factory shared by component tests)
 scripts/         gen-validators.ts, make-icons.mjs
 ```
 
@@ -47,7 +48,10 @@ scripts/         gen-validators.ts, make-icons.mjs
 
 - **Identity**: one non-extractable ECDSA P-256 key per installation in IndexedDB; `kid` sent in the
   socket `hello`; the relay's `hello_ack.controller_id` binds the socket. No tokens in URLs or
-  localStorage. Sign-out keeps the key; "Forget this installation" deletes it.
+  localStorage. Sign-out keeps the key; "Forget this installation" deletes it — and awaits the
+  deletion before the single navigation to `/`. A customer-started sign-out puts the session store in
+  `signing_out`, which the shell shows as a neutral screen; only the server's verdict (`signed_out`:
+  REST 401 / relay 4008) triggers the automatic sign-in redirect.
 - **Pairing code stays on the phone**: the `/pair#code=…` QR deep link keeps the code in the URL
   fragment only. When the phone is not signed in yet, `RequireSession` scrubs the fragment from the
   address bar and sends `return_to=/app/devices/pair?scan_again=1` (no code) to cloud-api; the code is
@@ -78,12 +82,20 @@ scripts/         gen-validators.ts, make-icons.mjs
 
 ## Tests
 
-`pnpm test` — 13 files / 143 tests: protocol facade parity, intents (spec table + rejections +
-injection), controllerKey (fake-indexeddb, non-extractable), pairing (shared fixtures), commands
+`pnpm test` — 21 files / 205 tests, all passing (jsdom, fake-indexeddb, fake sockets/timers; no
+network): protocol facade parity, intents (spec table + rejections + injection + the multi-verb
+guard), controllerKey (fake-indexeddb, non-extractable), pairing (shared fixtures), commands
 lifecycle (fake socket/timers), confirmations (raw text + digest + binding), relay client (fake
-socket: hello/kid, subscribe, invalid frames, backoff, revoked/unauthenticated/incompatible), api
-client (schema validation, CSRF, errors), targets, throttle, log redaction, Dashboard and
-ConfirmationModal component tests.
+socket: hello/kid, subscribe, invalid frames, backoff, close codes, revoked/unauthenticated/
+incompatible), api client (schema validation, CSRF, errors), targets, throttle, log redaction,
+power-request evidence, runtime wiring (401 mid-session, connection-lost confirmations, store clock,
+sign-out ordering), and component tests: Dashboard, ConfirmationModal, GlobalConfirmation (PC name
+from the challenge), SignInRedirect (deep-link fragment, `signing_out` never redirects), SettingsPage
+(sign-out / forget navigate once after the key is gone; connection-check gating), VolumeSlider
+(≤ 1 command per 250 ms + release value), PairPage (claim body, verification code, 2 s polling,
+reconnect on approval, 404 → invalid code, StrictMode deep link) and AppsPage (Close… → signed
+command → confirmation modal → signed approval). `pnpm typecheck`, `pnpm lint` and `pnpm build`
+pass.
 
 ## Not verifiable here (manual steps)
 

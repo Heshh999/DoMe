@@ -7,6 +7,7 @@ import asyncio
 import datetime as dt
 import secrets
 import uuid
+from typing import Any
 
 from dome_protocol import (
     KeyRecord,
@@ -216,7 +217,7 @@ async def _fresh_account(env: Env) -> Browser:
     return b
 
 
-async def _expect_relay_failure(ctrl: ControllerSim, cid: str, code: str) -> dict:
+async def _expect_relay_failure(ctrl: ControllerSim, cid: str, code: str) -> dict[str, Any]:
     result = await ctrl.recv_type("result", command_id=cid)
     assert result["origin"] == "relay" and result["state"] == "failed" and result["error"]["code"] == code, result
     return result
@@ -425,7 +426,8 @@ def _challenge_text(
         "display": {"pc_name": "Desk PC", "action_label": "Sleep", "detail": "Media title (untrusted) <script>"},
     }
     challenge.update(overrides)
-    return dumps_compact(challenge)
+    text: str = dumps_compact(challenge)
+    return text
 
 
 async def test_confirmation_transaction_is_forwarded_verbatim(env: Env, alice: Browser, online_agent: AgentSim) -> None:

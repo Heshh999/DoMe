@@ -27,3 +27,18 @@ Items from the review that were recorded rather than fully closed, plus residual
    `readyState === 1`) is handled by the 5 s nudge deadline but was tested only against a fake socket.
    Manual check: open the PWA, lock the phone for > 2 min, unlock — the status pill must go
    "Online · refreshing" → "Online" within ~6 s, not after 75–100 s.
+
+6. **Review follow-ups applied (this round).** Sign-out/Forget race with the sign-in redirect (major)
+   fixed with the `signing_out` session state and a reordered `Runtime.signOut`; the dead multi-verb
+   guard in `intents.ts`; connection-check gating; confirmation header PC name; voluntary close code
+   1000; README counts and two copy claims; component tests for `VolumeSlider`, `PairPage`,
+   `AppsPage` → confirmation modal and `GlobalConfirmation`. Nothing from the review remains open.
+
+7. **Pairing polling cadence is fixed at 2 s** (`POLL_MS` in `PairPage.tsx`) and its component tests
+   therefore run with real timers (~5 s each). Chosen over a test-only prop so the shipped component
+   has no knob a test could leave in a different state.
+
+8. **`signing_out` has no exit other than navigation.** After a manual sign-out the store stays in
+   `signing_out` until the page navigates to `/` (which it does right after `Runtime.signOut`
+   resolves). If a browser blocked that navigation the customer would see the "Signing out" screen
+   until reload; no path through the app sets `signing_out` without the navigation that follows.

@@ -82,7 +82,9 @@ export function normalizeText(text: string): string {
 }
 
 const INJECTION = /(ignore|instruction|disregard|override|system prompt|https?:|www\.|<|>|\{|\}|`|\$\(|;|&&|\|\|)/i;
-const VERB = /\b(pause|play|resume|skip|next|previous|back|rewind|forward|open|launch|start|close|quit|lock|sleep|shut|shutdown|restart|reboot|mute|unmute|set|turn|put|go|seek|focus|minimi[sz]e|hide|show|switch|cancel|stop|volume|louder|quieter|wake|ping|check)\b/g;
+// No `g` flag: a global regex used with `.test()` keeps `lastIndex` between calls, so the second
+// segment would be scanned from where the first match ended and the multi-verb guard would never fire.
+const VERB = /\b(pause|play|resume|skip|next|previous|back|rewind|forward|open|launch|start|close|quit|lock|sleep|shut|shutdown|restart|reboot|mute|unmute|set|turn|put|go|seek|focus|minimi[sz]e|hide|show|switch|cancel|stop|volume|louder|quieter|wake|ping|check)\b/;
 
 function action(name: ActionName, params: Record<string, JsonValue>, summary: string, opts: { target?: Record<string, JsonValue> | null; needsTarget?: TargetKind | null } = {}): Intent {
   const spec = registry.get(name);

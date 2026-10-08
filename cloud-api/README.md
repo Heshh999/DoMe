@@ -116,7 +116,7 @@ library, agents and controllers are simulated with real ES256 keys from `dome_pr
 cd cloud-api
 uv run pytest -q                 # creates dome_test_<random>, runs alembic upgrade head, drops it afterwards
 uv run ruff check . && uv run ruff format --check .
-uv run mypy dome_api
+uv run mypy dome_api tests
 ```
 
 `DOME_TEST_DATABASE_URL` (default `postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329`) names the

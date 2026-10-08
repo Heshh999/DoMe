@@ -28,7 +28,7 @@ const PAIRING_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PC_ID = "33333333-3333-4333-8333-333333333333";
 
 const payloads = [
-  '{"type":"command","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.set_paused","params":{"paused":true},"target":{"browser_instance_id":"bi_test0001","tab_id":7,"tab_token":"dGFiLXRva2VuLTAwMDAwMDAy"},"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AgICAgICAgICAgICAgICAg"}',
+  '{"type":"command","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.set_paused","params":{"paused":true},"target":{"browser_instance_id":"bi_test0001","tab_id":7,"tab_token":"dGFiLXRva2VuLTAyQUJDRE"},"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AgICAgICAgICAgICAgICAg"}',
   '{"type":"confirmation","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","challenge_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","challenge_digest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","decision":"approve","issued_at":"2026-10-08T12:00:05.000Z","expires_at":"2026-10-08T12:01:05.000Z","nonce":"AwMDAwMDAwMDAwMDAwMDAw"}',
   '{"emoji":"🎬","text":"Ünïcödé — ok"}',
 ];

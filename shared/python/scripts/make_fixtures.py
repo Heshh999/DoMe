@@ -20,7 +20,7 @@ PAIRING_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 PC_ID = "33333333-3333-4333-8333-333333333333"
 
 PAYLOADS = [
-    '{"type":"command","protocol_version":"1.0","command_id":"6f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.next","params":{},"target":{"browser_instance_id":"bi_test0001","tab_id":42,"tab_token":"dGFiLXRva2VuLTAwMDAwMDAx","expected_video_id":"dQw4w9WgXcQ"},"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AAAAAAAAAAAAAAAAAAAAAA"}',
+    '{"type":"command","protocol_version":"1.0","command_id":"6f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.next","params":{},"target":{"browser_instance_id":"bi_test0001","tab_id":42,"tab_token":"dGFiLXRva2VuLTAxQUJDRE","expected_video_id":"dQw4w9WgXcQ"},"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AAAAAAAAAAAAAAAAAAAAAA"}',
     '{"type":"command","protocol_version":"1.0","command_id":"7f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"windows.set_volume","params":{"value":35},"target":null,"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AQEBAQEBAQEBAQEBAQEBAQ"}',
     '{"unicode":"ü→😀","nested":{"a":[1,2,3]}}',
 ]

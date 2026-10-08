@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Runtime, setRuntimeForTests } from "../src/app/runtime.ts";
 import { api, configureApi } from "../src/lib/api.ts";
-import { resetDbHandleForTests } from "../src/lib/controllerKey.ts";
+import { getExistingKeyPair, getOrCreateKeyPair, getStoredControllerId, resetDbHandleForTests, setStoredControllerId } from "../src/lib/controllerKey.ts";
 import type { WebSocketLike } from "../src/lib/relay.ts";
 import { useDevicesStore } from "../src/store/devices.ts";
 import { pendingConfirmation, useLiveStore } from "../src/store/live.ts";
@@ -179,6 +179,45 @@ describe("Runtime", () => {
     sockets[1]!.open();
     sockets[1]!.receive(helloAck);
     expect(pendingConfirmation(useLiveStore.getState().commands)!.confirmation!.connectionLost).toBe(false);
+  });
+
+  it("signOut() enters signing_out before anything else, closes the socket, keeps the key and clears account state", async () => {
+    await getOrCreateKeyPair();
+    await setStoredControllerId(CONTROLLER);
+    const s = await connected();
+    const statuses: string[] = [];
+    const unsub = useSessionStore.subscribe((st) => statuses.push(st.status));
+    configureApi({ fetchImpl: async () => new Response(null, { status: 204 }) });
+    await rt!.signOut();
+    unsub();
+    expect(statuses[0]).toBe("signing_out");
+    expect(statuses).not.toContain("signed_out");
+    expect(useSessionStore.getState().status).toBe("signing_out");
+    expect(s.closed).toBe(1000);
+    expect(rt!.relay.status).toBe("closed");
+    expect(await getExistingKeyPair()).not.toBeNull();
+    expect(await getStoredControllerId()).toBeNull();
+    expect(useLiveStore.getState().commands).toEqual([]);
+  });
+
+  it("signOut({ forgetInstallation: true }) deletes the key and only resolves once the deletion is committed", async () => {
+    await getOrCreateKeyPair();
+    await connected();
+    configureApi({ fetchImpl: async () => new Response(null, { status: 204 }) });
+    await rt!.signOut({ forgetInstallation: true });
+    expect(await getExistingKeyPair()).toBeNull();
+    expect(await getStoredControllerId()).toBeNull();
+    expect(useSessionStore.getState().status).toBe("signing_out");
+  });
+
+  it("a 401 or a 4008 close during a manual sign-out leaves the status at signing_out (no automatic redirect)", async () => {
+    const s = await connected();
+    configureApi({ fetchImpl: async () => respond(401, { error: { code: "UNAUTHENTICATED", message: "Sign in", retryable: false } }) });
+    const done = rt!.signOut();
+    s.serverClose(4008);
+    await done;
+    expect(useSessionStore.getState().status).toBe("signing_out");
+    expect(useSessionStore.getState().session).toBeNull();
   });
 
   it("advances the live store clock while started and stops it on stop()", async () => {

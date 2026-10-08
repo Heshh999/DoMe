@@ -6,10 +6,10 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
+import { navigation } from "../../app/navigation.ts";
 import { getRuntime } from "../../app/runtime.ts";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { Button, Card, Notice } from "../../components/ui.tsx";
-import { deleteInstallationKey } from "../../lib/controllerKey.ts";
 import { APP_VERSION, buildDiagnostics, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useLiveStore } from "../../store/live.ts";
@@ -18,7 +18,7 @@ import { useSessionStore } from "../../store/session.ts";
 const SUPPORT_URL: string | undefined = import.meta.env.VITE_DOME_SUPPORT_URL;
 
 export function SettingsPage() {
-  const { pcId, pcName, canControl } = useSelectedPc();
+  const { pcId, pcName, live: livePc } = useSelectedPc();
   const { send, record, sending } = useSend(pcId);
   const labels = useLabels(pcId);
   const session = useSessionStore((s) => s.session);
@@ -46,20 +46,31 @@ export function SettingsPage() {
     downloadJson(`dome-diagnostics-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`, report);
   };
 
+  // Both flows navigate exactly once, after the runtime has finished: `Runtime.signOut` puts the
+  // session store into `signing_out` first so `RequireSession` never starts its own sign-in redirect
+  // in parallel (which could unload the page before the key deletion commits, or land the customer on
+  // the identity provider and silently sign them back in).
   const signOut = async () => {
     setBusy("signout");
-    await getRuntime().signOut();
-    window.location.assign("/");
+    try {
+      await getRuntime().signOut();
+    } finally {
+      navigation().assign("/");
+    }
   };
   const forget = async () => {
     setBusy("forget");
     try {
-      await getRuntime().signOut();
-      await deleteInstallationKey();
+      await getRuntime().signOut({ forgetInstallation: true });
     } finally {
-      window.location.assign("/");
+      navigation().assign("/");
     }
   };
+  // The ping is a non-consequential `status` action: it is exactly what a customer needs while the
+  // state is stale ("Online · refreshing") or remote control is switched off on the PC, so it is
+  // gated only on the socket being open and the relay reporting the PC online. The PC answers
+  // PC_REMOTE_DISABLED / PC_RECONNECTING honestly and the outcome shows the recovery steps.
+  const canPing = live.relayStatus === "open" && livePc.connection === "online";
 
   return (
     <div className="space-y-4">
@@ -68,7 +79,7 @@ export function SettingsPage() {
       <Card>
         <h2 className="font-semibold">Connection check</h2>
         <p className="text-sm text-text-muted mt-1">Sends a harmless round-trip to {pcName ?? "the selected PC"} and shows how long it took.</p>
-        <Button className="mt-3" disabled={!canControl} busy={sending} onClick={() => void send("system.ping", {}, null, "system")}>
+        <Button className="mt-3" disabled={!canPing || pcId === null} busy={sending} onClick={() => void send("system.ping", {}, null, "system")}>
           Check connection to {pcName ?? "PC"}
         </Button>
         {record ? (
@@ -104,7 +115,7 @@ export function SettingsPage() {
         <h2 className="font-semibold">Privacy</h2>
         <ul className="text-sm text-text-muted mt-1 space-y-1 list-disc pl-5">
           <li>Commands are signed by a key that never leaves this phone; your PC only accepts phones you approved on the PC.</li>
-          <li>The DoMe service routes commands and current PC state between your devices and keeps short-lived delivery records (action, state, timing) — not video titles or typed text.</li>
+          <li>The DoMe service routes commands and current PC state between your devices and keeps a lifecycle record per command (action, state, timing, error code) — not parameters, results, typed text or media titles.</li>
           <li>This app stores no analytics, advertising or session-replay scripts, and never caches your PC’s data.</li>
           <li>
             Full details: <Link to="/privacy" className="text-accent font-semibold">Privacy notice</Link>.

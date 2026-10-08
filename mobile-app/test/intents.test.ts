@@ -182,3 +182,22 @@ describe("helpers", () => {
     expect(normalizeText("set volume to 35%")).toBe("set volume to 35 percent");
   });
 });
+
+describe("multi-verb guard (two verb phrases joined never match one rule)", () => {
+  it.each(["open discord and shut down", "lock and sleep", "lock and lock", "pause youtube, then shut down", "mute the pc after that restart", "play and pause"])("%j → unknown, not a clarification or an action", (text) => {
+    expect(parseIntent(text, ctx)).toEqual({ kind: "unknown" });
+  });
+  it("is stateless: the same input gives the same verdict on repeated calls (regression for a sticky regex lastIndex)", () => {
+    for (let i = 0; i < 3; i++) {
+      expect(parseIntent("pause youtube and shut down", ctx)).toEqual({ kind: "unknown" });
+      expect(parseIntent("open discord and shut down", ctx)).toEqual({ kind: "unknown" });
+      expect(parseIntent("open discord", ctx)).toMatchObject({ kind: "action", action: "app.launch" });
+      expect(parseIntent("lock and lock", ctx)).toEqual({ kind: "unknown" });
+    }
+  });
+  it("a joiner with only one verb phrase still goes through the rule table", () => {
+    // the second segment has no verb → not a multi-verb sentence; no rule matches it either way
+    expect(parseIntent("pause youtube and the lights", ctx)).toEqual({ kind: "unknown" });
+    expect(parseIntent("open discord, thanks", ctx)).toMatchObject({ kind: "action", action: "app.launch" });
+  });
+});

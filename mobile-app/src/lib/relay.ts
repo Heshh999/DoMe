@@ -62,6 +62,13 @@ const IDLE_LIMIT_MS = 75_000;
 /** After a resume nudge on an apparently open socket, this long without any inbound frame means it is dead. */
 export const NUDGE_DEADLINE_MS = 5_000;
 const WS_OPEN = 1;
+/**
+ * Close code for every voluntary teardown (resume nudge, post-pairing rebind, idle/hello timeout).
+ * The contract reserves 4000 for protocol errors; browsers only let scripts send 1000 or 3000–4999,
+ * so "normal closure" is the honest choice. Invalid inbound frames are dropped, never answered with
+ * a close, so this client sends no 4000 at all.
+ */
+const CLOSE_NORMAL = 1000;
 
 export function relayUrl(apiOrigin: string, loc: { protocol: string; host: string }): string {
   if (apiOrigin) return apiOrigin.replace(/^http/, "ws") + "/ws/controller";
@@ -129,7 +136,7 @@ export class RelayClient {
   close(): void {
     this.wantOpen = false;
     this.clearReconnect();
-    this.teardownSocket(1000, "client closed");
+    this.teardownSocket(CLOSE_NORMAL, "client closed");
     this.setController(null);
     this.emitStatus("closed");
   }
@@ -168,7 +175,7 @@ export class RelayClient {
 
   private reconnectNow(reason: string): void {
     this.clearReconnect();
-    this.teardownSocket(4000, reason);
+    this.teardownSocket(CLOSE_NORMAL, reason);
     this.emitStatus("reconnecting");
     void this.open();
   }
@@ -180,7 +187,7 @@ export class RelayClient {
       return;
     }
     this.clearReconnect();
-    this.teardownSocket(4000, "rebind");
+    this.teardownSocket(CLOSE_NORMAL, "rebind");
     this.setController(null);
     this.emitStatus("reconnecting");
     void this.open();
@@ -231,13 +238,13 @@ export class RelayClient {
         this.sendRaw({ type: "hello", component: "controller", kid, component_version: this.opts.componentVersion, protocol_versions: [PROTOCOL_VERSION], registry_version: REGISTRY_VERSION });
       } catch (e) {
         log.error("relay.hello_failed", errorSummary(e));
-        this.teardownSocket(4000, "hello failed");
+        this.teardownSocket(CLOSE_NORMAL, "hello failed");
         this.scheduleReconnect();
         return;
       }
       this.helloTimer = this.timers.setTimeout(() => {
         log.warn("relay.hello_timeout");
-        this.teardownSocket(4000, "hello timeout");
+        this.teardownSocket(CLOSE_NORMAL, "hello timeout");
         this.scheduleReconnect();
       }, HELLO_TIMEOUT_MS);
     };
@@ -337,7 +344,7 @@ export class RelayClient {
       if (!this.isOpen) return;
       if (Date.now() - this.lastInbound > IDLE_LIMIT_MS) {
         log.warn("relay.idle_timeout");
-        this.teardownSocket(4000, "idle");
+        this.teardownSocket(CLOSE_NORMAL, "idle");
         this.scheduleReconnect();
         return;
       }

@@ -14,7 +14,7 @@ import socket
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -71,7 +71,7 @@ def ports() -> dict[str, int]:
 
 
 @pytest.fixture(scope="session")
-def database_url() -> AsyncIterator[str]:
+def database_url() -> Iterator[str]:
     base = make_url(TEST_DB_URL)
     name = f"dome_test_{secrets.token_hex(4)}"
     admin = base.set(database="postgres").set(drivername="postgresql")
@@ -97,7 +97,7 @@ def sql(database_url: str, query: str, params: tuple[Any, ...] = ()) -> list[tup
 
 
 @pytest.fixture(scope="session")
-def dev_idp(ports: dict[str, int]) -> AsyncIterator[str]:
+def dev_idp(ports: dict[str, int]) -> Iterator[str]:
     assert DEV_IDP_BIN.exists(), f"{DEV_IDP_BIN} missing: run `cd tools/dev-idp && uv sync`"
     issuer = f"http://127.0.0.1:{ports['idp']}"
     env = {
@@ -375,11 +375,13 @@ class AgentSim:
 
     @property
     def jwk(self) -> dict[str, str]:
-        return jwk_from_public_key(self.key.public_key())
+        jwk: dict[str, str] = jwk_from_public_key(self.key.public_key())
+        return jwk
 
     @property
     def kid(self) -> str:
-        return kid_from_jwk(self.jwk)
+        kid: str = kid_from_jwk(self.jwk)
+        return kid
 
     async def rest(
         self,
@@ -522,7 +524,7 @@ class AgentSim:
     async def serve_one(self, *, executing: bool = True) -> dict[str, Any]:
         """Receive one command, ack it and answer succeeded with a registry-valid result."""
         cmd = await self.recv_type("command")
-        payload = loads_strict(cmd["envelope"]["payload"])
+        payload: dict[str, Any] = loads_strict(cmd["envelope"]["payload"])
         cid = payload["command_id"]
         await self.ack(cid, "accepted")
         if executing:
@@ -606,11 +608,13 @@ class ControllerSim:
 
     @property
     def jwk(self) -> dict[str, str]:
-        return jwk_from_public_key(self.key.public_key())
+        jwk: dict[str, str] = jwk_from_public_key(self.key.public_key())
+        return jwk
 
     @property
     def kid(self) -> str:
-        return kid_from_jwk(self.jwk)
+        kid: str = kid_from_jwk(self.jwk)
+        return kid
 
     async def claim(
         self, code: str, capabilities: tuple[str, ...] = ("status", "media", "volume"), *, expect: int = 202
@@ -642,7 +646,9 @@ class ControllerSim:
         phone_code = pairing_verification_code(code, request["pairing_id"], agent.pc_id, self.kid)
         await agent.decide_pairing(request, code, granted=granted, expected_phone_code=phone_code)
         agent.snapshot = await agent.recv_type("grants_snapshot")
-        final = await self.browser.get(f"/v1/pairing/{started['pairing_id']}", schema="pairing_status_response")
+        final: dict[str, Any] = await self.browser.get(
+            f"/v1/pairing/{started['pairing_id']}", schema="pairing_status_response"
+        )
         assert final["state"] == "approved", final
         self.controller_id = final["controller_id"]
         self.grant_id = final["grant_id"]
@@ -803,7 +809,7 @@ async def wait_pairing_state(
     """Poll GET /v1/pairing/{id} until it reaches ``state`` (agent frames are processed asynchronously)."""
     deadline = time.monotonic() + timeout
     while True:
-        status = await browser.get(f"/v1/pairing/{pairing_id}", schema="pairing_status_response")
+        status: dict[str, Any] = await browser.get(f"/v1/pairing/{pairing_id}", schema="pairing_status_response")
         if status["state"] == state or time.monotonic() > deadline:
             return status
         await asyncio.sleep(0.05)

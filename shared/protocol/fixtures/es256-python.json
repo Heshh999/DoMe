@@ -9,16 +9,16 @@
   "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
   "cases": [
     {
-      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
       "envelope": {
         "v": 1,
         "alg": "ES256",
         "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
-        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
-        "sig": "ukv4n4fgeDiVwvlI8X1K5ig7XVFB_zJ8i7EJa3Bj9LItdWFV00mcKjE_b_n8U-XPwMZ1WgxaGhCxKreHTDhCjA"
+        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+        "sig": "SC6VZjrPxnbXwAioUN408RW_m1W4XwbillZ_5asQsxPyRgMVi4geeVSx_CCJC_F5M7x-sCA1iN31DmrCGY3yXg"
       },
       "expect": "valid",
-      "command_digest": "2YRyE8_thLj4wGE2oSYMxgPBHbNsqgbCQgPskn46USk"
+      "command_digest": "DOE0t4EuZxL06FMN8yJj8kpybZ8LqoPeWlX8bK9TfgM"
     },
     {
       "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"7f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"windows.set_volume\",\"params\":{\"value\":35},\"target\":null,\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AQEBAQEBAQEBAQEBAQEBAQ\"}",
@@ -27,7 +27,7 @@
         "alg": "ES256",
         "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
         "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"7f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"windows.set_volume\",\"params\":{\"value\":35},\"target\":null,\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AQEBAQEBAQEBAQEBAQEBAQ\"}",
-        "sig": "cxpUKc-0l9sm1q8ynF1iTXp925d37MGXTm5yrU64m_GZh4TyJS_1Txa7rg5CPLjWFLx7lK-LRYvsnDneD090wQ"
+        "sig": "XSmc_TfX2V0cr5DkL-lrBiLrQ7lw03GDTiubs7ff5RWxH2HDZGmk8H_3w_2FBz56rAa5zj1zISapitZ1qpF6qQ"
       },
       "expect": "valid",
       "command_digest": "RI5B7kPLFw3G8LS0e-zFBz3G_pIqBJGDqLQaSm3-Bj8"
@@ -39,41 +39,41 @@
         "alg": "ES256",
         "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
         "payload": "{\"unicode\":\"ü→😀\",\"nested\":{\"a\":[1,2,3]}}",
-        "sig": "bx1PLMrJSU3oCn2a7n7mAMeHPJrP1wMRLs4I-rqktcIJP1E2-C2S8qb_2UsGTf6NQx9zfAkZTv3aSyf0olq27A"
+        "sig": "0NXGiDw_LCJu87iK0YjHIYvBiembWxhwl8XyDgitpELcceg-L7_ceoGB48tCJ9azZSYWy7Ymy0sQo6DSUeBkMA"
       },
       "expect": "valid",
       "command_digest": "-Il6rczW4zk0ML1ocPn2iUaZ3433Us6Qb9u1iSFGyDo"
     },
     {
-      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":43,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":43,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
       "envelope": {
         "v": 1,
         "alg": "ES256",
         "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
-        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":43,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
-        "sig": "ukv4n4fgeDiVwvlI8X1K5ig7XVFB_zJ8i7EJa3Bj9LItdWFV00mcKjE_b_n8U-XPwMZ1WgxaGhCxKreHTDhCjA"
+        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":43,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+        "sig": "SC6VZjrPxnbXwAioUN408RW_m1W4XwbillZ_5asQsxPyRgMVi4geeVSx_CCJC_F5M7x-sCA1iN31DmrCGY3yXg"
       },
       "expect": "SIGNATURE_INVALID"
     },
     {
-      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
       "envelope": {
         "v": 1,
         "alg": "none",
         "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
-        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
-        "sig": "ukv4n4fgeDiVwvlI8X1K5ig7XVFB_zJ8i7EJa3Bj9LItdWFV00mcKjE_b_n8U-XPwMZ1WgxaGhCxKreHTDhCjA"
+        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+        "sig": "SC6VZjrPxnbXwAioUN408RW_m1W4XwbillZ_5asQsxPyRgMVi4geeVSx_CCJC_F5M7x-sCA1iN31DmrCGY3yXg"
       },
       "expect": "reject"
     },
     {
-      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+      "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
       "envelope": {
         "v": 1,
         "alg": "ES256",
         "kid": "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU",
-        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAwMDAwMDAx\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
-        "sig": "ukv4n4fgeDiVwvlI8X1K5ig7XVFB_zJ8i7EJa3Bj9LItdWFV00mcKjE_b_n8U-XPwMZ1WgxaGhCxKreHTDhCjA",
+        "payload": "{\"type\":\"command\",\"protocol_version\":\"1.0\",\"command_id\":\"6f1c2d3e-4a5b-4c6d-8e7f-901234567890\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"action\":\"youtube.next\",\"params\":{},\"target\":{\"browser_instance_id\":\"bi_test0001\",\"tab_id\":42,\"tab_token\":\"dGFiLXRva2VuLTAxQUJDRE\",\"expected_video_id\":\"dQw4w9WgXcQ\"},\"issued_at\":\"2026-10-08T12:00:00.000Z\",\"expires_at\":\"2026-10-08T12:00:30.000Z\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+        "sig": "SC6VZjrPxnbXwAioUN408RW_m1W4XwbillZ_5asQsxPyRgMVi4geeVSx_CCJC_F5M7x-sCA1iN31DmrCGY3yXg",
         "extra": "x"
       },
       "expect": "MALFORMED_MESSAGE"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+from typing import Any
 
 from tests.conftest import AgentSim, Browser, ControllerSim, Env, close_code, expect_nothing
 
@@ -24,7 +25,7 @@ async def test_agent_disconnect_terminates_inflight_commands(
     assert (await paired.recv_type("ack", command_id=executing))["state"] == "executing"
     await paired.recv_type("ack", command_id=accepted_only)
     await online_agent.abort()  # crash, no close handshake
-    frames = {}
+    frames: dict[str, Any] = {}
     for _ in range(3):
         f = await paired.recv()
         frames.setdefault(f["type"], []).append(f)

@@ -97,6 +97,30 @@ describe("RequireSession when signed out on the pairing deep link", () => {
   });
 });
 
+describe("RequireSession during a sign-out the customer started", () => {
+  it("renders a neutral 'Signing out' screen and never starts the sign-in redirect (that flow navigates once itself)", async () => {
+    useSessionStore.setState({ status: "signing_out", session: null, error: null });
+    const { nav, calls } = fakeNavigation();
+    setNavigationForTests(nav);
+    render(
+      <MemoryRouter initialEntries={["/app/settings"]}>
+        <RequireSession>
+          <div>settings</div>
+        </RequireSession>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("status", { name: "Signing out" })).toBeInTheDocument();
+    expect(screen.queryByText("settings")).toBeNull();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toHaveLength(0);
+    // a late server 401 during the sign-out does not change that
+    useSessionStore.getState().clear();
+    expect(useSessionStore.getState().status).toBe("signing_out");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("takeScanAgainHint", () => {
   it("reads the marker once and removes it from the address bar, leaving a code fragment for takeCodeFromLocation", () => {
     const replaced: string[] = [];

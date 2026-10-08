@@ -48,6 +48,15 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
 
 7. **Sign-out keeps the key.** `clearAccountState()` wipes controller id and selected PC; the key stays
    so signing back in needs no re-pairing. "Forget this installation" (Settings) deletes the key.
+   Both are customer-initiated and must never race the shell's automatic sign-in redirect: the
+   session store distinguishes `signed_out` (the server's verdict — REST 401 or relay close 4008 —
+   which `RequireSession` answers with the `loginUrl` redirect) from `signing_out` (set first thing in
+   `Runtime.signOut()`, rendered by `RequireSession` as a neutral "Signing out" screen, never a
+   redirect; a 401 from the logout call or a 4008 close during the flow leaves it alone). The order
+   inside `Runtime.signOut({ forgetInstallation })` is: `signing_out` → close the socket (no reconnect
+   can mint a new key) → delete the key and await the IndexedDB transaction → server logout → reset
+   stores → clear account state. The Settings page navigates exactly once, to `/`, after that
+   resolves, through the `navigation()` seam so tests can observe the single navigation.
 
 8. **Pairing code handling.** The deep-link fragment is read once and scrubbed with
    `history.replaceState` before React renders anything else; the code lives in component state only
@@ -92,3 +101,25 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
 16. **REST 401 mid-session.** `Runtime` wires `configureApi({ onUnauthenticated })` to clear the
     session store and close the socket, so `RequireSession` redirects to sign-in on the next render
     instead of leaving a signed-in-looking UI whose requests all fail.
+
+17. **Connection check gating.** `system.ping` is a `status`-capability, risk-`low`, non-consequential
+    action, so Settings gates it only on the socket being open and the relay reporting the PC
+    `online` — not on the 75 s freshness rule or `remote_enabled`. It is precisely the diagnostic a
+    customer needs while the pill reads "Online · refreshing" or remote control is off on the PC; the
+    PC answers `PC_RECONNECTING` / `PC_REMOTE_DISABLED` honestly and `recoverySteps` explains both.
+    Every consequential control keeps the stricter `canControl` rule.
+
+18. **Confirmation header PC.** `GlobalConfirmation` resolves the PC name from the device inventory by
+    the *challenge's* `pc_id` (falling back to "your PC"), not by the record's `pcId`, so when the
+    binding check reports "names a different PC" the header agrees with the warning.
+
+19. **Voluntary socket closes use 1000.** The contract reserves 4000 for protocol errors; the client
+    closes with 1000 for the resume nudge, the post-pairing rebind, hello/idle timeouts and sign-out.
+    Browsers only allow 1000 or 3000–4999 from script, so 1001 was not an option. Invalid inbound
+    frames are dropped without closing, so the client sends no 4000 at all.
+
+20. **Text-command multi-verb guard** (`intents.ts`): the verb regex is deliberately *not* global.
+    A global regex used with `.test()` keeps `lastIndex` across calls, so the second segment of
+    "pause youtube and shut down" was scanned from the end of the first match and the guard never
+    fired (the injection tests passed only because every rule is `^…$`-anchored). Tests now assert the
+    guard itself and its statelessness across repeated calls.

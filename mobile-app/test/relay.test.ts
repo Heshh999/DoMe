@@ -250,7 +250,7 @@ describe("RelayClient", () => {
     expect(sockets).toHaveLength(1);
     await ft.advance(2);
     await flush();
-    expect(s.closed?.code).toBe(4000);
+    expect(s.closed?.code).toBe(1000);
     expect(sockets).toHaveLength(2);
     expect(statuses[statuses.length - 1]).toBe("reconnecting");
     expect(client.isOpen).toBe(false);
@@ -278,7 +278,7 @@ describe("RelayClient", () => {
     sockets[0]!.open();
     await ft.advance(10_001);
     await flush();
-    expect(sockets[0]!.closed?.code).toBe(4000);
+    expect(sockets[0]!.closed?.code).toBe(1000);
     await ft.advance(200);
     await flush();
     expect(sockets.length).toBeGreaterThanOrEqual(2);
@@ -329,7 +329,7 @@ describe("RelayClient", () => {
     sockets[0]!.receive(helloAck(CONTROLLER));
     client.reconnect();
     await flush();
-    expect(sockets[0]!.closed?.code).toBe(4000);
+    expect(sockets[0]!.closed?.code).toBe(1000);
     expect(sockets).toHaveLength(2);
     expect(client.controllerId).toBeNull();
     sockets[1]!.open();

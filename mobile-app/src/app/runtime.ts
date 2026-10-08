@@ -7,7 +7,7 @@ import { ProtocolError, type JsonValue, type relayFrames } from "@dome/protocol"
 
 import { api, ApiError, configureApi, API_ORIGIN } from "../lib/api.ts";
 import { CommandService, type CommandRecord } from "../lib/commands.ts";
-import { clearAccountState, getControllerIdentity, getOrCreateKeyPair, setStoredControllerId } from "../lib/controllerKey.ts";
+import { clearAccountState, deleteInstallationKey, getControllerIdentity, getOrCreateKeyPair, setStoredControllerId } from "../lib/controllerKey.ts";
 import { APP_VERSION } from "../lib/diagnostics.ts";
 import { errorSummary, log } from "../lib/log.ts";
 import { RelayClient, relayUrl, type RelayClientOptions, type RelayStatus } from "../lib/relay.ts";
@@ -137,18 +137,36 @@ export class Runtime {
     this.commands.dismissConfirmation(commandId);
   }
 
-  /** Sign out: server session, socket, account state (the installation key is kept). */
-  async signOut(): Promise<void> {
+  /**
+   * Customer-initiated sign-out. Order matters:
+   * 1. the session store enters `signing_out` first, so `RequireSession` shows a neutral screen and
+   *    never starts the automatic sign-in redirect while this runs (a 401 from `logout` or a 4008
+   *    close would otherwise flip it to `signed_out` mid-way);
+   * 2. the socket is closed, so no reconnect can mint a fresh key while the old one is being deleted;
+   * 3. with `forgetInstallation`, the signing key is deleted and the IndexedDB transaction awaited —
+   *    this is the step the customer asked for ("before handing the phone to someone else") and it
+   *    must be complete before any navigation unloads the page;
+   * 4. server session, in-memory stores and account state (the key is kept unless 3 ran).
+   * Resolves only when everything is done; the caller then navigates exactly once.
+   */
+  async signOut(options: { forgetInstallation?: boolean } = {}): Promise<void> {
+    useSessionStore.getState().beginSignOut();
+    this.relay.close();
+    if (options.forgetInstallation) {
+      try {
+        await deleteInstallationKey();
+      } catch (e) {
+        log.warn("controller_key.delete_failed", errorSummary(e));
+      }
+    }
     try {
       await api.logout();
     } catch (e) {
       if (!(e instanceof ApiError && (e.status === 401 || e.code === "UNAUTHENTICATED"))) log.warn("logout.failed", errorSummary(e));
     }
-    this.relay.close();
     this.commands.reset();
     useLiveStore.getState().reset();
     useDevicesStore.getState().reset();
-    useSessionStore.getState().clear();
     configureApi({ csrfToken: null });
     try {
       await clearAccountState();
