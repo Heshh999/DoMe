@@ -25,7 +25,17 @@ from .signing import Envelope, sign_payload, verify_envelope
 from .registry import ActionSpec, Registry, load_registry
 from .schemas import Schemas, load_schemas
 from .timeutil import format_rfc3339, now_utc, parse_rfc3339
-from .digest import sha256_b64url, pairing_verification_code, challenge_digest, command_digest
+from .digest import (
+    sha256_b64url,
+    pairing_verification_code,
+    challenge_digest,
+    command_digest,
+    generate_pairing_code,
+    normalize_pairing_code,
+    format_pairing_code,
+    pairing_code_handle,
+)
+from .commands import KeyRecord, VerifiedCommand, VerifiedConfirmation, verify_and_parse_command, verify_and_parse_confirmation, protocol_compatible
 
 __all__ = [
     "ProtocolError",
@@ -52,4 +62,14 @@ __all__ = [
     "pairing_verification_code",
     "challenge_digest",
     "command_digest",
+    "generate_pairing_code",
+    "normalize_pairing_code",
+    "format_pairing_code",
+    "pairing_code_handle",
+    "KeyRecord",
+    "VerifiedCommand",
+    "VerifiedConfirmation",
+    "verify_and_parse_command",
+    "verify_and_parse_confirmation",
+    "protocol_compatible",
 ]

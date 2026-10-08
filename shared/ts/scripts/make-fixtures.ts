@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { challengeDigest, pairingVerificationCode } from "../src/digest.ts";
+import { challengeDigest, commandDigest, pairingCodeHandle, pairingVerificationCode } from "../src/digest.ts";
 import { ECDSA_P256, exportPublicJwk, kidFromJwk } from "../src/keys.ts";
 import { signPayload } from "../src/signing.ts";
 
@@ -16,7 +16,6 @@ const pem = readFileSync(resolve(fixtureDir, "test-controller-key.pem"), "utf8")
 const der = Buffer.from(pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, ""), "base64");
 
 const privateKey = await crypto.subtle.importKey("pkcs8", der, ECDSA_P256, false, ["sign"]);
-// Derive the public key by importing the PKCS8 as extractable JWK once (test-only convenience).
 const extractable = await crypto.subtle.importKey("pkcs8", der, ECDSA_P256, true, ["sign"]);
 const fullJwk = (await crypto.subtle.exportKey("jwk", extractable)) as JsonWebKey;
 const publicJwk: JsonWebKey = { kty: fullJwk.kty!, crv: fullJwk.crv!, x: fullJwk.x!, y: fullJwk.y!, ext: true };
@@ -24,23 +23,29 @@ const publicKey = await crypto.subtle.importKey("jwk", publicJwk, ECDSA_P256, tr
 const jwk = await exportPublicJwk(publicKey);
 const kid = await kidFromJwk(jwk);
 
+const PAIRING_CODE = "7Q3K9-M2XVB-5HTC8-D4RNW";
+const PAIRING_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const PC_ID = "33333333-3333-4333-8333-333333333333";
+
 const payloads = [
-  '{"type":"command","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.set_paused","params":{"paused":true},"target":{"browser_instance_id":"bi_test0001","tab_id":7},"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AgICAgICAgICAgICAgICAg"}',
-  '{"type":"confirmation","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","challenge_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","challenge_digest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","decision":"approve","issued_at":"2026-10-08T12:00:05.000Z","nonce":"AwMDAwMDAwMDAwMDAwMDAw"}',
+  '{"type":"command","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.set_paused","params":{"paused":true},"target":{"browser_instance_id":"bi_test0001","tab_id":7,"tab_token":"dGFiLXRva2VuLTAwMDAwMDAy"},"issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:00:30.000Z","nonce":"AgICAgICAgICAgICAgICAg"}',
+  '{"type":"confirmation","protocol_version":"1.0","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","challenge_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","challenge_digest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","decision":"approve","issued_at":"2026-10-08T12:00:05.000Z","expires_at":"2026-10-08T12:01:05.000Z","nonce":"AwMDAwMDAwMDAwMDAwMDAw"}',
   '{"emoji":"🎬","text":"Ünïcödé — ok"}',
 ];
 
 const cases: unknown[] = [];
 for (const payload of payloads) {
   const envelope = await signPayload(privateKey, publicKey, payload);
-  cases.push({ payload, envelope, expect: "valid" });
+  cases.push({ payload, envelope, expect: "valid", command_digest: await commandDigest(payload) });
 }
 const base = (cases[0] as { envelope: Record<string, unknown> }).envelope;
-cases.push({ payload: (base.payload as string).replace('"paused":true', '"paused":false'), envelope: { ...base, payload: (base.payload as string).replace('"paused":true', '"paused":false') }, expect: "SIGNATURE_INVALID" });
+const tamperedPayload = (base.payload as string).replace('"paused":true', '"paused":false');
+cases.push({ payload: tamperedPayload, envelope: { ...base, payload: tamperedPayload }, expect: "SIGNATURE_INVALID" });
 cases.push({ payload: base.payload, envelope: { ...base, v: 2 }, expect: "PROTOCOL_INCOMPATIBLE" });
 cases.push({ payload: base.payload, envelope: { ...base, kid: "A".repeat(43) }, expect: "UNKNOWN_KEY" });
 
-const challengeText = '{"challenge_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","command_id":"6f1c2d3e-4a5b-4c6d-8e7f-901234567890"}';
+const challengeText =
+  '{"challenge_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","controller_id":"22222222-2222-4222-8222-222222222222","pc_id":"33333333-3333-4333-8333-333333333333","action":"app.close","params":{},"target":{"app_id":"notepad"},"target_state_digest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:01:00.000Z","display":{"pc_name":"Wohnzimmer-PC","action_label":"Close Notepad","detail":"Untitled — Notepad / 📝"}}';
 const out = {
   $comment: "Generated by shared/ts/scripts/make-fixtures.ts. TEST KEY ONLY.",
   public_jwk: jwk,
@@ -49,7 +54,11 @@ const out = {
   digests: {
     challenge_text: challengeText,
     challenge_digest: await challengeDigest(challengeText),
-    pairing_verification_code: await pairingVerificationCode("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "33333333-3333-4333-8333-333333333333", kid),
+    pairing_code: PAIRING_CODE,
+    pairing_code_handle: await pairingCodeHandle(PAIRING_CODE),
+    pairing_id: PAIRING_ID,
+    pc_id: PC_ID,
+    pairing_verification_code: await pairingVerificationCode(PAIRING_CODE, PAIRING_ID, PC_ID, kid),
   },
 };
 writeFileSync(resolve(fixtureDir, "es256-typescript.json"), JSON.stringify(out, null, 2) + "\n");

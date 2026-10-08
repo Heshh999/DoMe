@@ -51,6 +51,8 @@ describe("loadsStrict", () => {
   });
   it("refuses __proto__ keys and does not pollute prototypes", () => {
     expect(code(() => loadsStrict('{"__proto__":{"polluted":1}}'))).toBe("MALFORMED_MESSAGE");
+    expect(code(() => loadsStrict('{"constructor":1}'))).toBe("MALFORMED_MESSAGE");
+    expect(code(() => loadsStrict('{"a":{"prototype":1}}'))).toBe("MALFORMED_MESSAGE");
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
   it("dumpsCompact refuses non-finite numbers", () => {

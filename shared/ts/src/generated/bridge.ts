@@ -5,12 +5,12 @@
  * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
  * via the `definition` "extension_to_agent".
  */
-export type ExtensionToAgent = BridgeHello | BridgeResponse | BridgeEvent;
+export type ExtensionToAgent = BridgeHello | BridgeResponse | BridgeEvent | BridgeError;
 /**
  * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
  * via the `definition` "agent_to_extension".
  */
-export type AgentToExtension = BridgeHelloAck | BridgeRequest;
+export type AgentToExtension = BridgeHelloAck | BridgeRequest | BridgeError;
 
 /**
  * Chrome Native Messaging frames between the extension service worker and `dome-native-host`, and the identical JSON forwarded over the host's protected local IPC to the tray agent. Native messaging frames are limited to 1 MiB by Chrome; DoMe limits them to 64 KiB. The agent treats every field originating from a web page (titles, video ids) as untrusted display data.
@@ -45,7 +45,7 @@ export interface BridgeHelloAck {
   agent_version: string;
 }
 /**
- * Agent → host → extension. `op` is a browser-adapter operation, not the public action name; the agent maps actions to ops.
+ * Agent → host → extension. `op` is a browser-adapter operation, not the public action name; the agent maps actions to ops. For tab ops the extension verifies tab_token matches the current attachment (else TARGET_CHANGED / TAB_NOT_CONTROLLABLE).
  *
  * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
  * via the `definition` "bridge_request".
@@ -67,6 +67,7 @@ export interface BridgeRequest {
     | "request_fullscreen";
   args: {
     tab_id?: number;
+    tab_token?: string;
     expected_video_id?: string;
     paused?: boolean;
     seconds?: number;
@@ -92,7 +93,7 @@ export interface BridgeResponse {
   };
 }
 /**
- * Extension → agent. Tab/player state changes, debounced to at most 2 per second per tab.
+ * Extension → agent. `tabs_changed` is emitted on tab open/close/navigation AND on content-script attach/detach; `player_state` is debounced to at most 2 per second per tab.
  *
  * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
  * via the `definition` "bridge_event".
@@ -110,6 +111,14 @@ export interface BridgeEvent {
 export interface YoutubeTab {
   browser_instance_id: string;
   tab_id: number;
+  /**
+   * Present when script_attached; changes on every content-script attach
+   */
+  tab_token?: string;
+  /**
+   * False means the tab exists but DoMe's content script is not running in it (reload needed); such a tab cannot be a target
+   */
+  script_attached: boolean;
   title?: string;
   video_id?: string;
   paused?: boolean;
@@ -121,4 +130,19 @@ export interface YoutubeTab {
   has_next?: boolean;
   has_previous?: boolean;
   active?: boolean;
+}
+/**
+ * Either direction. Protocol incompatibility on hello (carries both version lists in detail) or a request that could not be processed at all. Request-scoped failures use bridge_response{ok:false}.
+ *
+ * This interface was referenced by `DoMeBrowserBridgeFramesExtensionNativeHostAgent`'s JSON-Schema
+ * via the `definition` "bridge_error".
+ */
+export interface BridgeError {
+  type: "bridge_error";
+  ref_request_id?: string;
+  error: {
+    code: string;
+    message: string;
+    detail?: {};
+  };
 }

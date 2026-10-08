@@ -13,7 +13,20 @@ export {
   type EcPublicJwk,
 } from "./keys.ts";
 export { signPayload, verifyEnvelope, verifySignature, parseEnvelopeShape, type Envelope, type JwkResolver, type VerifyOptions } from "./signing.ts";
-export { sha256B64url, challengeDigest, pairingVerificationCode, randomNonce, randomUuid } from "./digest.ts";
+export {
+  sha256B64url,
+  challengeDigest,
+  commandDigest,
+  generatePairingCode,
+  normalizePairingCode,
+  formatPairingCode,
+  pairingCodeHandle,
+  pairingVerificationCode,
+  randomNonce,
+  randomUuid,
+  PAIRING_ALPHABET,
+  PAIRING_CODE_SYMBOLS,
+} from "./digest.ts";
 export { formatRfc3339, parseRfc3339, checkCommandWindow, type WindowOptions } from "./time.ts";
 export {
   registry,
@@ -41,6 +54,10 @@ export {
   buildConfirmationPayload,
   signConfirmation,
   verifyAndParseCommand,
+  verifyAndParseConfirmation,
+  type KeyRecord,
+  type KeyResolver,
+  type VerifiedConfirmation,
   type CommandPayload,
   type ConfirmationPayload,
   type BuildCommandInput,

@@ -1,5 +1,5 @@
-"""Verify the committed cross-language fixtures (both the Python-generated and, when present,
-the TypeScript-generated file) with the Python implementation."""
+"""Verify the committed cross-language fixtures (Python-generated and TypeScript-generated)
+with the Python implementation."""
 
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from dome_protocol import ProtocolError, verify_envelope
-from dome_protocol.digest import challenge_digest, pairing_verification_code
+from dome_protocol.digest import challenge_digest, command_digest, pairing_code_handle, pairing_verification_code
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "protocol" / "fixtures"
 FILES = sorted(FIXTURE_DIR.glob("es256-*.json"))
@@ -23,6 +23,7 @@ def test_fixture_file(path):
         if case["expect"] == "valid":
             _, parsed = verify_envelope(case["envelope"], resolve)
             assert json.dumps(parsed, separators=(",", ":"), ensure_ascii=False) == case["payload"]
+            assert command_digest(case["payload"]) == case["command_digest"]
         else:
             with pytest.raises(ProtocolError) as ei:
                 verify_envelope(case["envelope"], resolve)
@@ -30,4 +31,5 @@ def test_fixture_file(path):
                 assert ei.value.code == case["expect"]
     d = data["digests"]
     assert challenge_digest(d["challenge_text"]) == d["challenge_digest"]
-    assert pairing_verification_code("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "33333333-3333-4333-8333-333333333333", kid) == d["pairing_verification_code"]
+    assert pairing_code_handle(d["pairing_code"]) == d["pairing_code_handle"]
+    assert pairing_verification_code(d["pairing_code"], d["pairing_id"], d["pc_id"], kid) == d["pairing_verification_code"]

@@ -6,12 +6,23 @@
     "max_payload_bytes": 16384,
     "max_json_depth": 8,
     "max_frame_bytes": 65536,
+    "max_challenge_text_bytes": 4096,
     "default_command_lifetime_seconds": 30,
+    "default_confirmed_command_lifetime_seconds": 90,
     "max_command_lifetime_seconds": 300,
     "max_clock_skew_seconds": 5,
     "confirmation_challenge_lifetime_seconds": 60,
+    "pairing_code_symbols": 20,
     "pairing_code_lifetime_seconds": 300,
     "device_link_code_lifetime_seconds": 600,
     "per_pc_queue_depth": 16
+  },
+  "rules": {
+    "terminal_result": "Every command the controller sends is terminated by exactly one `result` frame per command_id (origin `agent` or `relay`). `error` frames are only used when no command_id is known (malformed frame, protocol error, subscription errors). Relay-side rejections before forwarding (signature, ownership, grant, rate limit, PC offline, queue full) are `result{origin:'relay', state:'failed', error}`; an agent connection lost after forwarding yields `result{origin:'relay', state:'outcome_unknown'}` when the agent had acknowledged `executing`, otherwise `result{origin:'relay', state:'failed', error:PC_OFFLINE}`.",
+    "duplicate_command": "An identical re-submission (same command_id, same signed payload bytes) is answered by re-emitting the previous `result` (or the current ack while still running). The same command_id with different payload bytes is rejected with COMMAND_ID_REUSED.",
+    "command_window_and_confirmation": "The command's issued_at/expires_at window is checked once when the PC receives the command. Once the PC has emitted confirmation_required, the challenge's expires_at governs: the signed confirmation is accepted iff the challenge is unexpired and unconsumed, and the command then proceeds regardless of its own expires_at. Controllers default disruptive commands to default_confirmed_command_lifetime_seconds so the two windows do not cross by accident.",
+    "grants_snapshot": "The PC's locally approved controller store (written only at local pairing approval) is the sole source of controller public keys. grants_snapshot is a revocation/intersection list: a kid is usable only if it is locally approved AND present in the latest snapshot; effective capabilities = local ∩ snapshot. A snapshot can never add a controller or widen a grant.",
+    "challenge_text": "A confirmation challenge travels as an opaque string (challenge_text). The PC stores the exact string it emitted; the relay validates it by strict-parsing a copy and forwards the original string verbatim; the controller strict-parses it once for display and hashes the string verbatim into challenge_digest.",
+    "pairing_secret": "The PC generates the pairing code locally. The backend only ever receives SHA-256 of the code as a lookup handle; the phone transfers the code out of band (QR or typing) and both devices derive the 6-digit verification code with HMAC-SHA256 keyed by the code, so a backend that substitutes a controller key cannot make the two displays agree."
   }
 }

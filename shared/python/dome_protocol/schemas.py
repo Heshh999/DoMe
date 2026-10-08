@@ -14,6 +14,7 @@ from referencing.jsonschema import DRAFT202012
 
 from .errors import ProtocolError
 from .registry import contract_dir
+from .strict_regex import StrictValidator
 
 SCHEMA_FILES = ("envelope", "command", "confirmation", "relay-frames", "bridge")
 BASE = "https://dome.app/schemas/"
@@ -28,18 +29,22 @@ class Schemas:
             with (schema_dir / f"{name}.schema.json").open("r", encoding="utf-8") as fh:
                 doc = json.load(fh)
             self._docs[name] = doc
-            registry = registry.with_resource(f"{BASE}{name}.schema.json", Resource.from_contents(doc, default_specification=DRAFT202012))
+            # jsonschema's `evolve()` re-selects the validator class from a subschema's `$schema`
+            # keyword, which would silently swap our strict `pattern` implementation for the stock
+            # one when following a `$ref` into another document. Register copies without `$schema`.
+            resource_doc = {k: v for k, v in doc.items() if k != "$schema"}
+            registry = registry.with_resource(f"{BASE}{name}.schema.json", Resource.from_contents(resource_doc, default_specification=DRAFT202012))
         self._registry = registry
         for doc in self._docs.values():
             Draft202012Validator.check_schema(doc)
-        self._validators: dict[str, Draft202012Validator] = {}
+        self._validators: dict[str, StrictValidator] = {}
 
-    def _validator(self, doc_name: str, pointer: str | None) -> Draft202012Validator:
+    def _validator(self, doc_name: str, pointer: str | None) -> StrictValidator:
         key = f"{doc_name}#{pointer or ''}"
         v = self._validators.get(key)
         if v is None:
             schema: dict[str, Any] = {"$ref": f"{BASE}{doc_name}.schema.json" + (f"#{pointer}" if pointer else "")}
-            v = Draft202012Validator(schema, registry=self._registry)
+            v = StrictValidator(schema, registry=self._registry)
             self._validators[key] = v
         return v
 
@@ -70,6 +75,18 @@ class Schemas:
         if direction not in ("extension_to_agent", "agent_to_extension"):
             raise ValueError(direction)
         self._validate("bridge", f"/$defs/{direction}", value)
+
+    def validate_challenge_text(self, challenge_text: str, *, max_bytes: int = 4096) -> dict[str, Any]:
+        """Strict-parse a copy of challenge_text and validate it against #/$defs/challenge.
+
+        Callers must keep and forward the ORIGINAL string; the returned object is for display and
+        checks only.
+        """
+        from .strict_json import loads_strict
+
+        parsed = loads_strict(challenge_text, max_bytes=max_bytes, require_object=True)
+        self._validate("relay-frames", "/$defs/challenge", parsed)
+        return parsed
 
     def validate_def(self, doc_name: str, def_name: str, value: Any) -> None:
         self._validate(doc_name, f"/$defs/{def_name}", value)

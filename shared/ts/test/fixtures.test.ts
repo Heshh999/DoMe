@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ProtocolError, challengeDigest, dumpsCompact, pairingVerificationCode, verifyEnvelope, type EcPublicJwk } from "../src/index.ts";
+import { ProtocolError, challengeDigest, commandDigest, dumpsCompact, pairingCodeHandle, pairingVerificationCode, verifyEnvelope, type EcPublicJwk } from "../src/index.ts";
 
 const fixtureDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../protocol/fixtures");
 const files = readdirSync(fixtureDir).filter((f) => /^es256-.*\.json$/.test(f)).sort();
@@ -12,12 +12,14 @@ const files = readdirSync(fixtureDir).filter((f) => /^es256-.*\.json$/.test(f)).
 interface Fixture {
   public_jwk: EcPublicJwk;
   kid: string;
-  cases: Array<{ payload: string; envelope: unknown; expect: string }>;
-  digests: { challenge_text: string; challenge_digest: string; pairing_verification_code: string };
+  cases: Array<{ payload: string; envelope: unknown; expect: string; command_digest?: string }>;
+  digests: { challenge_text: string; challenge_digest: string; pairing_code: string; pairing_code_handle: string; pairing_id: string; pc_id: string; pairing_verification_code: string };
 }
 
 describe("cross-language fixtures", () => {
-  expect(files.length).toBeGreaterThan(0);
+  it("has fixture files", () => {
+    expect(files.length).toBeGreaterThan(0);
+  });
   for (const file of files) {
     it(`verifies ${file}`, async () => {
       const data = JSON.parse(readFileSync(resolve(fixtureDir, file), "utf8")) as Fixture;
@@ -27,6 +29,7 @@ describe("cross-language fixtures", () => {
         if (c.expect === "valid") {
           const { payload } = await verifyEnvelope(c.envelope, resolveJwk);
           expect(dumpsCompact(payload)).toBe(c.payload);
+          expect(await commandDigest(c.payload)).toBe(c.command_digest);
         } else {
           let code = "OK";
           try {
@@ -39,8 +42,10 @@ describe("cross-language fixtures", () => {
           else expect(code).toBe(c.expect);
         }
       }
-      expect(await challengeDigest(data.digests.challenge_text)).toBe(data.digests.challenge_digest);
-      expect(await pairingVerificationCode("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "33333333-3333-4333-8333-333333333333", data.kid)).toBe(data.digests.pairing_verification_code);
+      const d = data.digests;
+      expect(await challengeDigest(d.challenge_text)).toBe(d.challenge_digest);
+      expect(await pairingCodeHandle(d.pairing_code)).toBe(d.pairing_code_handle);
+      expect(await pairingVerificationCode(d.pairing_code, d.pairing_id, d.pc_id, data.kid)).toBe(d.pairing_verification_code);
     });
   }
 });

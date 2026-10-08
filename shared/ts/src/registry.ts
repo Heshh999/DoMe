@@ -14,6 +14,7 @@ import relayFramesSchema from "../../protocol/schemas/relay-frames.schema.json" 
 import bridgeSchema from "../../protocol/schemas/bridge.schema.json" with { type: "json" };
 
 import { ProtocolError } from "./errors.ts";
+import { loadsStrict } from "./strictJson.ts";
 
 export type Risk = "low" | "moderate" | "disruptive";
 export type Confirmation = "none" | "challenge";
@@ -163,6 +164,13 @@ export const schemas = {
     const v = refValidator("bridge", `/$defs/${direction}`);
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
   },
+  /** Strict-parse a copy of challenge_text and validate it against #/$defs/challenge. Keep the original string for hashing. */
+  validateChallengeText(challengeText: string): Record<string, unknown> {
+    const parsed = loadsStrict(challengeText, { maxBytes: LIMITS.max_challenge_text_bytes, requireObject: true });
+    const v = refValidator("relay-frames", "/$defs/challenge");
+    if (!v(parsed)) throwValidation(v, "MALFORMED_MESSAGE", "challenge: ");
+    return parsed as Record<string, unknown>;
+  },
   validateDef(doc: "relay-frames" | "bridge" | "command", def: string, value: unknown): void {
     const v = refValidator(doc, `/$defs/${def}`);
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
@@ -170,7 +178,8 @@ export const schemas = {
 };
 
 export function protocolCompatible(peerVersion: string, supported: readonly string[]): boolean {
-  const m = /^(\d+)\.(\d+)$/.exec(peerVersion);
+  if (typeof peerVersion !== "string") return false;
+  const m = /^([0-9]+)\.([0-9]+)$/.exec(peerVersion);
   if (!m) return false;
   const major = Number(m[1]);
   const minor = Number(m[2]);

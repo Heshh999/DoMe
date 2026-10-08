@@ -24,6 +24,8 @@ describe("registry", () => {
     expect(() => registry.validateParams("youtube.seek_relative", { seconds: 0 })).toThrow(/INVALID_PARAMETERS/);
     expect(() => registry.validateParams("windows.lock", { extra: 1 })).toThrow(/INVALID_PARAMETERS/);
     expect(() => registry.validateTarget("youtube.next", null)).toThrow(/TARGET_REQUIRED/);
+    expect(() => registry.validateTarget("youtube.next", { browser_instance_id: "abcdefgh", tab_id: 1 })).toThrow(/INVALID_PARAMETERS/);
+    expect(registry.validateTarget("youtube.next", { browser_instance_id: "abcdefgh", tab_id: 1, tab_token: "AAAAAAAAAAAAAAAAAAAAAA" })).toBeTruthy();
     expect(() => registry.validateTarget("windows.lock", { app_id: "x" })).toThrow(/INVALID_PARAMETERS/);
     expect(() => registry.validateTarget("app.focus", {})).toThrow(/INVALID_PARAMETERS/);
     expect(registry.validateTarget("app.focus", { app_id: "discord" })).toEqual({ app_id: "discord" });
@@ -36,6 +38,15 @@ describe("registry", () => {
     expect(() => schemas.validateFrame("controller_to_relay", { type: "ping", extra: 1 })).toThrow(ProtocolError);
     expect(() => schemas.validateFrame("controller_to_relay", { type: "grants_snapshot" })).toThrow(ProtocolError);
     schemas.validateFrame("agent_to_relay", { type: "ack", command_id: "33333333-3333-4333-8333-333333333333", state: "accepted", at: "2026-10-08T12:00:00.000Z" });
+    expect(() => schemas.validateFrame("agent_to_relay", { type: "ack", command_id: "33333333-3333-4333-8333-333333333333", state: "succeeded", at: "2026-10-08T12:00:00.000Z" })).toThrow(ProtocolError);
+    expect(() => schemas.validateFrame("agent_to_relay", { type: "result", command_id: "33333333-3333-4333-8333-333333333333", state: "succeeded", at: "2026-10-08T12:00:00.000Z", duration_ms: 1 })).toThrow(ProtocolError); // origin required
+    schemas.validateFrame("relay_to_controller", { type: "result", command_id: "33333333-3333-4333-8333-333333333333", origin: "relay", state: "failed", at: "2026-10-08T12:00:00.000Z", duration_ms: 0, error: { code: "PC_OFFLINE", message: "x", retryable: true } });
+    schemas.validateFrame("relay_to_agent", { type: "revoked", reason: "pc_unlinked" });
+    schemas.validateFrame("agent_to_relay", { type: "revoke_controller", controller_id: "33333333-3333-4333-8333-333333333333", kid: "A".repeat(43), reason: "local_revocation" });
+    const snap = { type: "grants_snapshot", pc_id: "33333333-3333-4333-8333-333333333333", account_id: "11111111-1111-4111-8111-111111111111", snapshot_id: "33333333-3333-4333-8333-333333333333", controllers: [{ controller_id: "22222222-2222-4222-8222-222222222222", kid: "A".repeat(43), capabilities: ["media"], display_name: "Phone" }] };
+    schemas.validateFrame("relay_to_agent", snap);
+    expect(() => schemas.validateFrame("relay_to_agent", { ...snap, controllers: [{ ...snap.controllers[0], public_jwk: { kty: "EC", crv: "P-256", x: "A".repeat(43), y: "A".repeat(43) } }] })).toThrow(ProtocolError);
+    expect(() => schemas.validateFrame("relay_to_agent", { ...snap, controllers: [{ ...snap.controllers[0], capabilities: ["shell"] }] })).toThrow(ProtocolError);
     expect(() => schemas.validateFrame("agent_to_relay", { type: "ack", command_id: "x", state: "accepted", at: "2026-10-08T12:00:00.000Z" })).toThrow(ProtocolError);
     schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "next", args: { tab_id: 1 } });
     expect(() => schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "eval", args: {} })).toThrow(ProtocolError);
@@ -46,5 +57,7 @@ describe("registry", () => {
     expect(protocolCompatible("1.3", ["1.2"])).toBe(false);
     expect(protocolCompatible("2.0", ["1.2"])).toBe(false);
     expect(protocolCompatible("x", ["1.0"])).toBe(false);
+    expect(protocolCompatible("1.0\n", ["1.0"])).toBe(false);
+    expect(protocolCompatible("１.０", ["1.0"])).toBe(false);
   });
 });

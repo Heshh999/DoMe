@@ -1,7 +1,9 @@
 """Strict JSON: the only parser allowed for anything that crossed a trust boundary.
 
 Rejects: oversized text, nesting deeper than ``max_depth``, duplicate object keys, NaN/Infinity,
-lone surrogates in strings, and non-object top-level values when ``require_object`` is set.
+integers outside ±(2^53 − 1), prototype-pollution key names, lone surrogates in strings, and
+non-object top-level values when ``require_object`` is set. The TypeScript implementation makes
+exactly the same decisions; ``shared/protocol/fixtures/strict-json-cases.json`` is run by both.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from .errors import ProtocolError
 
 DEFAULT_MAX_BYTES = 16384
 DEFAULT_MAX_DEPTH = 8
+MAX_SAFE_INTEGER = 2**53 - 1
+FORBIDDEN_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 
 
 class _DuplicateKey(Exception):
@@ -37,6 +41,8 @@ def _check(value: Any, depth: int, max_depth: int) -> None:
         raise ProtocolError("MALFORMED_MESSAGE", "JSON nesting too deep")
     if isinstance(value, dict):
         for k, v in value.items():
+            if k in FORBIDDEN_KEYS:
+                raise ProtocolError("MALFORMED_MESSAGE", "forbidden key")
             _check_str(k)
             _check(v, depth + 1, max_depth)
     elif isinstance(value, list):
@@ -44,6 +50,11 @@ def _check(value: Any, depth: int, max_depth: int) -> None:
             _check(v, depth + 1, max_depth)
     elif isinstance(value, str):
         _check_str(value)
+    elif isinstance(value, bool):
+        return
+    elif isinstance(value, int):
+        if abs(value) > MAX_SAFE_INTEGER:
+            raise ProtocolError("MALFORMED_MESSAGE", "integer outside safe range")
     elif isinstance(value, float):
         if value != value or value in (float("inf"), float("-inf")):
             raise ProtocolError("MALFORMED_MESSAGE", "non-finite number")
@@ -89,7 +100,7 @@ def loads_strict(
 
 
 def dumps_compact(value: Any) -> str:
-    """Compact, deterministic-enough serialisation for payloads we sign ourselves.
+    """Compact serialisation for payloads we sign or hash ourselves.
 
     Key order is preserved (insertion order) and never re-sorted; the bytes we emit are the
     bytes we sign, so no canonicalisation is required by the verifier.

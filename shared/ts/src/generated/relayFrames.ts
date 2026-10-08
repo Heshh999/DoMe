@@ -58,7 +58,16 @@ export type RelayToController =
  * via the `definition` "agent_to_relay".
  */
 export type AgentToRelay =
-  Hello | AgentAck | AgentConfirmationRequired | AgentResult | AgentState | PairingDecision | ErrorFrame | Ping | Pong;
+  | Hello
+  | AgentAck
+  | AgentConfirmationRequired
+  | AgentResult
+  | AgentState
+  | PairingDecision
+  | ErrorFrame
+  | Ping
+  | Pong
+  | AgentRevokeController;
 /**
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "relay_to_agent".
@@ -72,10 +81,11 @@ export type RelayToAgent =
   | PairingRequest
   | ErrorFrame
   | Ping
-  | Pong;
+  | Pong
+  | AgentRevoked;
 
 /**
- * All frames are JSON objects with a `type`. Frames are limited to 65536 bytes. Unknown `type` or unknown fields are rejected with MALFORMED_MESSAGE and the socket may be closed. The relay never alters a signed envelope; it adds routing metadata in sibling fields which receivers treat as informational only.
+ * All frames are JSON objects with a `type`. Frames are limited to 65536 bytes. Unknown `type` or unknown fields are rejected with MALFORMED_MESSAGE and the socket may be closed. The relay never alters a signed envelope or a challenge_text; it adds routing metadata in sibling fields which receivers treat as informational only. Terminal-result rule: every command_id a controller sends ends with exactly one `result` frame (see version.json rules.terminal_result); `error` frames are for situations with no command_id.
  */
 export interface DoMeRelayWebSocketFrames {
   [k: string]: unknown | undefined;
@@ -199,12 +209,13 @@ export interface HelloAck {
   pc_id?: Uuid;
 }
 /**
+ * Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors). Command-scoped failures are always `result` frames.
+ *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "error_frame".
  */
 export interface ErrorFrame {
   type: "error";
-  ref_command_id?: Uuid;
   error: Error;
 }
 /**
@@ -318,7 +329,7 @@ export interface RelayToAgentCancel {
   controller_id: Uuid;
 }
 /**
- * Relay → agent, sent immediately after hello_ack and whenever grants change. The agent must apply it before accepting commands after (re)connect. Lists every currently valid controller for this PC; anything absent is revoked.
+ * Relay → agent, sent immediately after hello_ack and whenever grants change. The agent applies it BEFORE accepting commands after (re)connect. It is a revocation/intersection list over the PC's LOCALLY approved controllers: a controller is usable only if locally approved AND listed here; effective capabilities = local ∩ snapshot. It carries no public keys and can never add a controller or widen a grant. A listed controller_id/kid the PC does not know locally is ignored and reported as a security event.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "grants_snapshot".
@@ -334,24 +345,183 @@ export interface GrantsSnapshot {
   controllers: {
     controller_id: Uuid;
     kid: string;
-    public_jwk: EcPublicJwk;
-    capabilities: string[];
+    /**
+     * @maxItems 16
+     */
+    capabilities:
+      | []
+      | ["status" | "media" | "volume" | "apps" | "lock" | "power"]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ]
+      | [
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power",
+          "status" | "media" | "volume" | "apps" | "lock" | "power"
+        ];
     display_name: string;
   }[];
   /**
    * Compact JWS (EdDSA) or absent on Free
    */
   entitlement_assertion?: string;
-}
-/**
- * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
- * via the `definition` "ec_public_jwk".
- */
-export interface EcPublicJwk {
-  kty: "EC";
-  crv: "P-256";
-  x: string;
-  y: string;
 }
 /**
  * Relay → agent. A signed-in controller submitted this PC's pairing code. The agent computes the verification code from (pairing_id, pc_id, kid) and shows it with the display name; the user approves locally.
@@ -365,8 +535,188 @@ export interface PairingRequest {
   controller_display_name: string;
   public_jwk: EcPublicJwk;
   kid: string;
-  requested_capabilities: string[];
+  /**
+   * @maxItems 16
+   */
+  requested_capabilities:
+    | []
+    | ["status" | "media" | "volume" | "apps" | "lock" | "power"]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ];
   expires_at: Timestamp;
+}
+/**
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "ec_public_jwk".
+ */
+export interface EcPublicJwk {
+  kty: "EC";
+  crv: "P-256";
+  x: string;
+  y: string;
 }
 /**
  * Agent → relay after the local approve/decline. On approve, `kid` must equal the kid the agent computed from the JWK it stored; the relay only then creates the controller/grant rows.
@@ -379,10 +729,180 @@ export interface PairingDecision {
   pairing_id: Uuid;
   decision: "approve" | "decline";
   kid: string;
-  granted_capabilities: string[];
+  /**
+   * @maxItems 16
+   */
+  granted_capabilities:
+    | []
+    | ["status" | "media" | "volume" | "apps" | "lock" | "power"]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ]
+    | [
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power",
+        "status" | "media" | "volume" | "apps" | "lock" | "power"
+      ];
 }
 /**
- * Agent → relay → controller. Delivery/authorization acknowledgement only; NOT an execution result.
+ * Agent → relay → controller. Delivery/authorization acknowledgement only; NOT an execution result. Never carries a terminal state.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "agent_ack".
@@ -390,20 +910,22 @@ export interface PairingDecision {
 export interface AgentAck {
   type: "ack";
   command_id: Uuid;
-  state: LifecycleState;
+  state: "accepted" | "awaiting_confirmation" | "executing";
   at: Timestamp;
 }
 /**
+ * Agent → relay → controller. `challenge_text` is the PC's compact JSON serialisation of a `challenge` object, carried as an opaque string. The relay strict-parses a copy to validate it against #/$defs/challenge and forwards the ORIGINAL string verbatim; the controller strict-parses it once for display and hashes the string verbatim for confirmation.challenge_digest.
+ *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "agent_confirmation_required".
  */
 export interface AgentConfirmationRequired {
   type: "confirmation_required";
   command_id: Uuid;
-  challenge: Challenge;
+  challenge_text: string;
 }
 /**
- * Issued by the PC. The controller displays `display` fields verbatim and signs a confirmation containing SHA-256 of this object as serialised by the PC (the relay forwards the raw text).
+ * Issued by the PC and serialised ONCE into confirmation_required.challenge_text. `display.detail` and anything derived from window/tab titles is UNTRUSTED text: the controller renders the primary line from `action`/`params`/`target` using its own registry labels, shows the PC name from its own device inventory matched by `pc_id`, and renders `display.detail` as plain text in a secondary style. `action_label` is a hint only. The confirmation envelope must be signed by the same kid as the original command; the PC records that kid on the challenge.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "challenge".
@@ -420,6 +942,7 @@ export interface Challenge {
    * base64url SHA-256 of the relevant target state (e.g., window title + handle) at challenge time; the PC re-checks before executing
    */
   target_state_digest: string;
+  issued_at: Timestamp;
   expires_at: Timestamp;
   display: {
     pc_name: string;
@@ -428,7 +951,7 @@ export interface Challenge {
   };
 }
 /**
- * Agent → relay → controller. Terminal execution result.
+ * Terminal execution result. origin `agent` when produced by the PC, `relay` when the relay had to terminate the command itself (pre-forward rejection, PC offline, connection lost after forwarding → outcome_unknown).
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "agent_result".
@@ -436,6 +959,7 @@ export interface Challenge {
 export interface AgentResult {
   type: "result";
   command_id: Uuid;
+  origin: "agent" | "relay";
   state: "succeeded" | "failed" | "expired" | "canceled" | "outcome_unknown";
   at: Timestamp;
   duration_ms: number;
@@ -822,6 +1346,14 @@ export interface PcState {
 export interface YoutubeTab {
   browser_instance_id: string;
   tab_id: number;
+  /**
+   * Present when script_attached; changes on every content-script attach
+   */
+  tab_token?: string;
+  /**
+   * False means the tab exists but DoMe's content script is not running in it (reload needed); such a tab cannot be a target
+   */
+  script_attached: boolean;
   title?: string;
   video_id?: string;
   paused?: boolean;
@@ -872,4 +1404,26 @@ export interface Revoked {
   type: "revoked";
   pc_id?: Uuid;
   reason: "controller_revoked" | "grant_revoked" | "session_ended" | "account_deleted";
+}
+/**
+ * Agent → relay. The PC owner revoked a controller locally (tray). The relay revokes the grant, sends `revoked` to that controller's sockets and a fresh grants_snapshot back.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "agent_revoke_controller".
+ */
+export interface AgentRevokeController {
+  type: "revoke_controller";
+  controller_id: Uuid;
+  kid: string;
+  reason: "local_revocation" | "local_disable_all";
+}
+/**
+ * Relay → agent. This PC's cloud access is gone. The agent must stop reconnecting, discard the PC credential, keep local grants for the user to inspect, and show a local re-link prompt.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "agent_revoked".
+ */
+export interface AgentRevoked {
+  type: "revoked";
+  reason: "pc_unlinked" | "pc_disabled_by_account" | "account_deleted" | "credential_rotated";
 }

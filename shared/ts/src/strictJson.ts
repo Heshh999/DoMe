@@ -2,13 +2,16 @@
  * Strict JSON parser — the only parser allowed for anything that crossed a trust boundary.
  *
  * Rejects oversized text, nesting deeper than `maxDepth`, duplicate object keys, non-finite
- * numbers, integers outside the safe range, lone surrogates, raw control characters, and
- * non-object top-level values when `requireObject` is set. Mirrors the Python implementation.
+ * numbers, integers outside the safe range, prototype-pollution key names, lone surrogates, raw
+ * control characters, and non-object top-level values when `requireObject` is set. The Python
+ * implementation makes exactly the same decisions; `shared/protocol/fixtures/strict-json-cases.json`
+ * is run by both.
  */
 import { ProtocolError } from "./errors.ts";
 
 export const DEFAULT_MAX_BYTES = 16384;
 export const DEFAULT_MAX_DEPTH = 8;
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -34,6 +37,7 @@ class Parser {
 
   parse(): JsonValue {
     this.skipWs();
+    if (this.pos >= this.text.length) this.fail("empty input");
     const value = this.value(0);
     this.skipWs();
     if (this.pos !== this.text.length) this.fail("trailing characters");
@@ -89,15 +93,13 @@ class Parser {
     this.pos += literal.length;
     const n = Number(literal);
     if (!Number.isFinite(n)) throw new ProtocolError("MALFORMED_MESSAGE", "non-finite number");
-    if (Number.isInteger(n) && !literal.includes(".") && !/[eE]/.test(literal) && !Number.isSafeInteger(n)) {
-      throw new ProtocolError("MALFORMED_MESSAGE", "integer outside safe range");
-    }
+    const isIntegerLiteral = !literal.includes(".") && !/[eE]/.test(literal);
+    if (isIntegerLiteral && !Number.isSafeInteger(n)) throw new ProtocolError("MALFORMED_MESSAGE", "integer outside safe range");
     return n;
   }
 
   private string(): string {
-    // this.text[this.pos] === '"'
-    this.pos++;
+    this.pos++; // opening quote
     let out = "";
     let start = this.pos;
     for (;;) {
@@ -181,7 +183,7 @@ class Parser {
       if (this.text[this.pos] !== '"') this.fail("expected string key");
       const key = this.string();
       if (seen.has(key)) throw new ProtocolError("MALFORMED_MESSAGE", `duplicate JSON key ${JSON.stringify(key)}`);
-      if (key === "__proto__") throw new ProtocolError("MALFORMED_MESSAGE", "forbidden key");
+      if (FORBIDDEN_KEYS.has(key)) throw new ProtocolError("MALFORMED_MESSAGE", "forbidden key");
       seen.add(key);
       this.skipWs();
       if (this.text[this.pos] !== ":") this.fail("expected :");
@@ -209,6 +211,7 @@ export function loadsStrict(text: string, options: StrictJsonOptions = {}): Json
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
   const requireObject = options.requireObject ?? true;
   if (typeof text !== "string") throw new ProtocolError("MALFORMED_MESSAGE", "JSON input must be a string");
+  // Each UTF-16 unit is at most 3 UTF-8 bytes, so short strings skip the encode.
   if (text.length * 3 > maxBytes && utf8ByteLength(text) > maxBytes) {
     throw new ProtocolError("PAYLOAD_TOO_LARGE", `JSON exceeds ${maxBytes} bytes`);
   }

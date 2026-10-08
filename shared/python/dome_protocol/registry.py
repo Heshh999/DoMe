@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from .errors import ProtocolError
+from .strict_regex import StrictValidator
 
 CONTRACT_DIR_CANDIDATES = (
     Path(__file__).resolve().parent / "_contract",  # installed wheel
@@ -61,9 +62,9 @@ class Registry:
         self.verification_strategies: dict[str, str] = dict(raw["verification_strategies"])
         self._target_schemas: dict[str, dict[str, Any]] = raw["target_schemas"]
         self._actions: dict[str, ActionSpec] = {}
-        self._param_validators: dict[str, Draft202012Validator] = {}
-        self._target_validators: dict[str, Draft202012Validator] = {
-            name: Draft202012Validator(schema) for name, schema in self._target_schemas.items()
+        self._param_validators: dict[str, StrictValidator] = {}
+        self._target_validators: dict[str, StrictValidator] = {
+            name: StrictValidator(schema) for name, schema in self._target_schemas.items()
         }
         for name, spec in raw["actions"].items():
             target_name = spec.get("target")
@@ -93,7 +94,7 @@ class Registry:
                 raise ValueError(f"routine-allowed action {name} must not require confirmation")
             self._actions[name] = action
             Draft202012Validator.check_schema(action.params_schema)
-            self._param_validators[name] = Draft202012Validator(action.params_schema)
+            self._param_validators[name] = StrictValidator(action.params_schema)
         self.errors: dict[str, dict[str, Any]] = errors["errors"]
         self.protocol_version: str = version["protocol_version"]
         self.limits: dict[str, int] = dict(version["limits"])
