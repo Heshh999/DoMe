@@ -41,7 +41,7 @@ typecheck: ## Type-check Python (mypy) and TypeScript (tsc)
 	cd shared/ts && pnpm typecheck
 	cd mobile-app && pnpm typecheck
 	cd browser-extension && pnpm typecheck
-	cd cloud-api && uv run mypy dome_api
+	cd cloud-api && uv run mypy dome_api tests
 	cd pc-agent && uv run mypy dome_agent
 
 lint: ## Ruff + eslint
