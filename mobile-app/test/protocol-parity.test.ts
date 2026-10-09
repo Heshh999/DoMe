@@ -77,7 +77,7 @@ describe("protocol facade parity", () => {
         { app_id: "notepad", closed: false },
         { accepted: true, countdown_seconds: 10, fires_at: TS },
         { canceled: false },
-        { agent_time: TS, agent_version: "0.1", protocol_version: "1.0" },
+        { agent_time: TS, agent_version: "0.1", protocol_version: "1.1" },
         { remote_enabled: true, session_locked: false, extension_connected: false },
       ],
     };
@@ -99,8 +99,8 @@ describe("protocol facade parity", () => {
     const frames: unknown[] = [
       { type: "ping" },
       { type: "ping", extra: 1 },
-      { type: "hello_ack", protocol_version: "1.0", server_time: TS, connection_id: UUID },
-      { type: "hello_ack", protocol_version: "1.0", server_time: TS, connection_id: UUID, controller_id: UUID2 },
+      { type: "hello_ack", protocol_version: "1.1", server_time: TS, connection_id: UUID },
+      { type: "hello_ack", protocol_version: "1.1", server_time: TS, connection_id: UUID, controller_id: UUID2 },
       { type: "result", command_id: UUID, origin: "relay", state: "failed", at: TS, duration_ms: 0, error: { code: "PC_OFFLINE", message: "x", retryable: true } },
       { type: "result", command_id: UUID, origin: "relay", state: "accepted", at: TS, duration_ms: 0 },
       { type: "ack", command_id: UUID, state: "executing", at: TS },
@@ -127,7 +127,7 @@ describe("protocol facade parity", () => {
     }
     expect(pwaRegistry.schemas.validateChallengeText(fixture.digests.challenge_text)).toEqual(realRegistry.schemas.validateChallengeText(fixture.digests.challenge_text));
 
-    const session = { account: { id: UUID2, email: "a@example.test", display_name: "A", created_at: TS }, csrf_token: "C".repeat(40), plan: "free", limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false }, protocol_version: "1.0" };
+    const session = { account: { id: UUID2, email: "a@example.test", display_name: "A", created_at: TS }, csrf_token: "C".repeat(40), plan: "free", limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false }, protocol_version: "1.1" };
     const bodies: Array<[string, unknown]> = [
       ["session_response", session],
       ["session_response", { ...session, plan: "gold" }],

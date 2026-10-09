@@ -26,12 +26,12 @@ export const SESSION: rest.SessionResponse = {
   csrf_token: "C".repeat(40),
   plan: "free",
   limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false },
-  protocol_version: "1.0",
+  protocol_version: "1.1",
 };
 
 export const OFFICE_PC: rest.Pc = { id: PC, name: "Office PC", enabled: true, connection: "online", last_seen: TS, created_at: TS, platform: "windows" };
 
-export const HELLO_ACK = { type: "hello_ack", protocol_version: "1.0", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", controller_id: CONTROLLER };
+export const HELLO_ACK = { type: "hello_ack", protocol_version: "1.1", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", controller_id: CONTROLLER };
 
 export class FakeSocket implements WebSocketLike {
   readyState = 0;

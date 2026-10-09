@@ -164,8 +164,11 @@ Ctrl+L gating, Compose and Send success/review without resend), `NowPlaying`, `P
 `SupportPage` (201 reference, failure copy + summary, network failure, signed-out), `UpgradeAndHealth`
 (no upgrade copy on Free flows, dismissible Pro explanation, download not published, release notes,
 Health page layers/details/retries/walkthrough). Expectations updated for 1.1: `pairing.test.ts`
-(default capability list now includes pointer/keyboard) and `Dashboard.test.tsx` (the PC name also
-appears in the Now Playing panel). `pnpm typecheck`, `pnpm lint` and `pnpm build` pass.
+(default capability list now includes pointer/keyboard), `Dashboard.test.tsx` (the PC name also
+appears in the Now Playing panel), and the `hello_ack`/agent `protocol_version` fixtures in
+`test/helpers/harness.ts`, `relay.test.ts`, `runtime.test.ts`, `protocol-parity.test.ts` and `api.test.ts` now say
+`1.1` — the phone offers only `["1.1"]` in `hello`, so a relay can only answer `1.1` (the client
+does not re-check the negotiated value; the fixtures were merely stale). `pnpm typecheck`, `pnpm lint` and `pnpm build` pass.
 
 ## Not verifiable here (manual checklist)
 

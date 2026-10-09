@@ -23,7 +23,7 @@ const CONTROLLER = "22222222-2222-4222-8222-222222222222";
 const PC = "33333333-3333-4333-8333-333333333333";
 const KID = "SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU";
 const TS = "2026-10-08T12:00:00.000Z";
-const session = { account: { id: ACCOUNT, email: "a@example.test", display_name: "A", created_at: TS }, csrf_token: "C".repeat(40), plan: "free" as const, limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false }, protocol_version: "1.0" };
+const session = { account: { id: ACCOUNT, email: "a@example.test", display_name: "A", created_at: TS }, csrf_token: "C".repeat(40), plan: "free" as const, limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false }, protocol_version: "1.1" };
 
 class FakeSocket implements WebSocketLike {
   readyState = 0;
@@ -100,7 +100,7 @@ afterEach(() => {
   configureApi({ csrfToken: null, fetchImpl: (i, init) => fetch(i, init), onUnauthenticated: null });
 });
 
-const helloAck = { type: "hello_ack", protocol_version: "1.0", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", controller_id: CONTROLLER };
+const helloAck = { type: "hello_ack", protocol_version: "1.1", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", controller_id: CONTROLLER };
 
 async function connected(): Promise<FakeSocket> {
   rt!.start();

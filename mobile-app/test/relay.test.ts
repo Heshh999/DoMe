@@ -110,7 +110,7 @@ async function setup(extra: Partial<RelayClientOptions> = {}) {
   return { client, sockets, ft, statuses, frames, flush };
 }
 
-const helloAck = (controllerId?: string) => ({ type: "hello_ack", protocol_version: "1.0", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", ...(controllerId ? { controller_id: controllerId } : {}) });
+const helloAck = (controllerId?: string) => ({ type: "hello_ack", protocol_version: "1.1", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", ...(controllerId ? { controller_id: controllerId } : {}) });
 
 describe("RelayClient", () => {
   it("relayUrl derives wss from the page origin or the configured API origin", () => {

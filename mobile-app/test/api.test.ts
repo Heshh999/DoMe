@@ -4,7 +4,7 @@ import { api, ApiError, apiRequest, configureApi, loginUrl } from "../src/lib/ap
 
 const UUID = "33333333-3333-4333-8333-333333333333";
 const TS = "2026-10-08T12:00:00.000Z";
-const session = { account: { id: UUID, email: "a@example.test", display_name: "A", created_at: TS }, csrf_token: "C".repeat(40), plan: "free", limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false }, protocol_version: "1.0" };
+const session = { account: { id: UUID, email: "a@example.test", display_name: "A", created_at: TS }, csrf_token: "C".repeat(40), plan: "free", limits: { max_enabled_pcs: 1, max_controllers: 2, routines: false, custom_layouts: false }, protocol_version: "1.1" };
 
 function respond(status: number, body: unknown) {
   return new Response(body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
