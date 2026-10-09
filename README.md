@@ -4,9 +4,9 @@
 
 DoMe lets a customer control their own Windows PC from an iPhone-first mobile web app — pause or
 skip the YouTube video playing in a background tab, set the system volume, open an approved app,
-lock the PC, put it to sleep after confirming on the phone — through a managed relay, with no port
-forwarding, VPN, or scripting. Free is useful forever; Pro (routines, layouts, more devices) comes at
-paid launch.
+lock the PC, put it to sleep after confirming on the phone, or use the phone as a touchpad and
+keyboard for the PC — through a managed relay, with no port forwarding, VPN, or scripting. Free is
+useful forever; Pro (routines, layouts, more devices) comes at paid launch.
 
 > Status: **pre-release engineering build, not yet device-tested.** Nothing here is publicly
 > available and no billing exists. The whole path phone → relay → PC agent → browser extension is
@@ -19,14 +19,15 @@ paid launch.
 
 | Path | What it is | Tests (this environment) |
 | --- | --- | --- |
-| `shared/protocol/` | **Source of truth**: action registry (29 actions, 6 capabilities), plans, error codes, JSON Schemas, normative rules, cross-language fixtures. | — |
-| `shared/python/`, `shared/ts/` | One tested implementation per language of strict JSON, ES256 envelopes over exact bytes, registry/frame/result validation. | 132 · 84 (unit) |
-| `cloud-api/` | FastAPI backend + relay: OIDC sign-in (PKCE), PC linking, controllers, grants, pairing, command routing, plan limits, entitlement assertions. PostgreSQL + Alembic. | 89 (against real PostgreSQL and the dev identity provider) |
-| `pc-agent/` | Python Windows user agent: outbound WSS only, local authorization, coalescing queue, confirmation transaction, SQLite journal, action handlers, Windows adapters, Chrome Native Messaging host, tray. | 194 (unit, Linux, fake platform) |
+| `shared/protocol/` | **Source of truth** (protocol 1.1): action registry (31 actions, 8 capabilities incl. Free touchpad/keyboard), the signed manual-input stream, plans, error codes, JSON Schemas, normative rules, cross-language fixtures. | — |
+| `shared/python/`, `shared/ts/` | One tested implementation per language of strict JSON, ES256 envelopes over exact bytes, registry/frame/result validation, input-batch builders/verifiers. | 135 · 86 (unit) |
+| `cloud-api/` | FastAPI backend + relay: OIDC sign-in (PKCE), PC linking, controllers, grants, pairing, command routing, manual-input routing, plan limits, entitlement assertions, support tickets. PostgreSQL + Alembic. | CA_COUNT (against real PostgreSQL and the dev identity provider) |
+| `pc-agent/` | Python Windows user agent: outbound WSS only, local authorization, coalescing queue, confirmation transaction, SQLite journal, action handlers, manual-input session manager and SendInput adapter, single instance, Windows adapters, Chrome Native Messaging host, tray. | PA_COUNT (unit, Linux, fake platform) |
 | `browser-extension/` | Chrome/Edge MV3 extension: YouTube player adapter with transition-observed Next, narrow host permission, Native Messaging to the agent, no eval. | 90 (unit, DOM fixtures) |
-| `mobile-app/` | React + TypeScript + Vite + Tailwind PWA (iPhone-first). Non-extractable WebCrypto controller keys, strict validation of every frame, honest status everywhere. | 206 (unit, fake socket + fake IndexedDB) |
-| `tests/` | Cross-component suite: real agent process + real relay + real PostgreSQL + real OIDC login + fake extension. | 20 (integration, incl. a load smoke) |
+| `mobile-app/` | React + TypeScript + Vite + Tailwind PWA (iPhone-first): remote, touchpad and keyboard, Health screen, support, Now Playing. Non-extractable WebCrypto controller keys, strict validation of every frame, honest status everywhere. | 287 (unit, jsdom) |
+| `tests/` | Cross-component suite: real agent process + real relay + real PostgreSQL + real OIDC login + fake extension and fake input adapter. | IT_COUNT (integration, incl. manual input and a load smoke) |
 | `tools/dev-idp/` | Development-only OpenID Connect issuer, so local runs and tests never need an authentication bypass. | smoke |
+| `brand/` | Original DoMe icon and wordmark (editable SVG), export script, `BRAND.md`. | 29 (unit) + export drift check |
 | `deploy/` | Container image, Fly.io configuration, Docker Compose for development, deployment notes. | written, not yet built or deployed |
 | `.github/workflows/` | CI for every suite above. | not run on GitHub yet |
 | `docs/` | Everything written for people: see the list below. | — |
@@ -49,6 +50,8 @@ Start with `docs/adr/0001-foundational-decisions.md`, then `docs/ARCHITECTURE.md
 | `docs/COST_MODEL.md` | Hosting/vendor cost assumptions with dated sources |
 | `docs/DATA_RETENTION.md` | What is stored, for how long, and why |
 | `docs/WINDOWS_INSTALL.md`, `docs/IPHONE_SETUP.md` | Customer setup, as implemented today |
+| `docs/INPUT_CONTROL.md` | Touchpad/keyboard permissions, gestures, input-session protocol, recovery, tested compatibility |
+| `docs/SUPPORT.md` | Support submission and status, redaction rules, known-issues upkeep |
 | `docs/TROUBLESHOOTING.md` | One section per recovery scenario |
 | `docs/ACCEPTANCE.md` | Scenario matrix with the evidence tag for each |
 | `docs/PROGRESS.md`, `docs/HANDOFF.md` | Dated log; exact state, commands, failures and next tasks |

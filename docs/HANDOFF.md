@@ -12,13 +12,14 @@ repository has been Windows-device-tested or iPhone-tested yet.
 
 | Area | What exists | Evidence |
 | --- | --- | --- |
-| `shared/protocol` (protocol 1.0, registry 1) | Action registry (29 actions, 6 capabilities), plans, error codes, JSON Schemas for envelopes, commands, confirmations, relay/bridge frames, per-action results, entitlement claims, REST bodies; normative rules in `version.json → rules`; cross-language fixtures. Frozen during the component builds; additive proposals are collected in each component's `CONTRACT_ISSUES.md`. | unit-tested: `shared/python` 132, `shared/ts` 84; each language verifies the other's signed fixtures |
-| `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in (Authlib), sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller`), command lifecycle rows, plan limits, entitlement assertions (EdDSA JWS), security events, `/healthz`, static PWA serving. Alembic `0001` also creates the billing, usage, layout, routine, support, deletion and operator tables that have **no routes yet**. | integration-tested against real PostgreSQL + `tools/dev-idp`: 89 tests; ruff, mypy (source and tests) clean |
-| `pc-agent` | The Windows user agent: `link`, identity/secret store, outbound relay client, local authorization against the locally approved grant store, queue with coalescing, confirmation transaction, SQLite journal with crash recovery, every registry action, Windows adapters (pywin32 / pycaw / winsdk, import-gated), Chrome Native Messaging host, tray, local control channel (`status`, `pair`, `revoke`, `reconnect`, …), diagnostics, PyInstaller specs. | unit-tested on Linux with `fake_platform`: 194 tests; ruff + mypy clean; the Windows adapters are **not yet verified** on a device |
+| `shared/protocol` (protocol 1.1, registry 1.1) | Action registry (31 actions, 8 capabilities incl. Free `pointer`/`keyboard`), plans, error codes, JSON Schemas for envelopes, commands, confirmations, relay/bridge frames, the signed manual-input stream (`input_batch`, `input_ack`, `input_session`, `grant_update`), per-action results, entitlement claims, REST bodies incl. support tickets; normative rules in `version.json → rules` (incl. `input_sessions`, `grant_update`, `ai_eligibility`); cross-language fixtures. Changes since 1.0 are additive; 1.0 peers stay compatible and never receive input frames. | unit-tested: `shared/python` 135, `shared/ts` 86; each language verifies the other's signed fixtures |
+| `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in, sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller` with signed hello proof), command lifecycle, plan limits, entitlement assertions, security events, support tickets (Alembic `0002`), and the 1.1 input path: signed `input_batch` routing with per-event-type grant coverage and a per-controller budget, `input_ack`/`input_session` delivery, `grant_update`, agent input rejections routed to the batch's phone. Billing/usage/layout/routine/operator tables exist without routes. | integration-tested against real PostgreSQL + `tools/dev-idp`: CA_TESTS tests; ruff, mypy (source and tests) clean |
+| `pc-agent` | The Windows user agent: link, identity, outbound relay client, local authorization, coalescing queue, confirmations, SQLite journal, every registry action, Windows adapters (import-gated), Native Messaging host, tray, control channel, diagnostics, PyInstaller specs; for 1.1: the manual-input session manager (one owner per PC, agent-issued id, PC-side lease watchdog, seq/age/capability checks with a skew-tolerant age estimate, ordered dispatch, held-input release on every end reason, content-free crash recovery), a `SendInput` Windows input adapter, local `pointer`/`keyboard` grants with `grant_update`, single instance per Windows session with `repair`, power confirmation copy about losing remote access. | unit-tested on Linux with the fake platform: PA_TESTS; ruff + mypy clean; the Windows adapters (SendInput, mutex, secure-desktop detection) are **not yet verified** on a device |
 | `browser-extension` | Chrome/Edge MV3: service worker with native port + reconnect alarms, content-script YouTube player adapter (transition-observed Next/Previous, `tab_token` and `expected_video_id` guards, context flags), build-time precompiled validators (MV3 CSP forbids Ajv's `new Function`), popup. | unit-tested with hand-written DOM fixtures: 90 tests; Vite build succeeds; **never loaded in a real browser against youtube.com** |
-| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing by QR/code with the verification-code comparison, dashboard, remote, command page, apps, devices, settings, confirmation modal, billing status (no checkout), routines preview (nothing runs). Controller keys are non-extractable WebCrypto ECDSA P-256 keys in IndexedDB. | unit-tested with a fake socket and fake IndexedDB: 206 tests; typecheck, lint and production build clean; **not iPhone-tested** |
-| `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login through `tools/dev-idp` + an ES256-signing controller simulator + a fake extension on the agent's bridge socket. | integration-tested (Linux): 20 passed in 214 s, including a load smoke (see §3) |
+| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing (QR/code, verification digits), dashboard with Now Playing, remote, command page, apps, devices with touchpad/keyboard permissions, settings, confirmation modal with power-access copy, billing status, routines preview; for 1.1: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard (commit-once composition, Compose and Send, shortcut palette, never deletes text it did not send), the input session client, Health screen with layered states and one next action each, support ticket submission and status, release notes, brand icons. | unit-tested in jsdom: 287 tests; typecheck, lint and production build clean; **not iPhone-tested** |
+| `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login + an ES256-signing controller simulator + a fake extension; now also the manual-input scenarios (grant_update, ordering, replay/stale rejections reaching the phone, lease expiry releasing a held button, takeover, revocation, keyboard-only grant, no typed text on disk). | integration-tested (Linux): IT_RESULT |
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. | unit/smoke-tested |
+| `brand/` | Original DoMe icon and wordmark as editable SVG (light, dark, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (colour tokens, type, sizes, usage). The PWA uses the exports; the tray and installer wiring is pending. | unit-tested: 29 tests and an export drift check; renders not compared against a browser rasterizer |
 | `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | written against the real commands; **not yet verified**: never built, deployed or run on GitHub Actions (no Docker daemon or Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
@@ -40,13 +41,14 @@ make agent                 # terminal 4: agent (Linux → development platform, 
 Tests, per component (each is a standalone package with its own lockfile):
 
 ```sh
-cd shared/python && uv run pytest -q           # 132
-cd shared/ts && pnpm test                       # 84
-cd cloud-api && uv run pytest -q                # 89 (needs the local PostgreSQL and tools/dev-idp venv)
-cd pc-agent && uv run pytest -q                 # 194
+cd shared/python && uv run pytest -q           # 135
+cd shared/ts && pnpm test                       # 86
+cd cloud-api && uv run pytest -q                # CA_COUNT (needs the local PostgreSQL and tools/dev-idp venv)
+cd pc-agent && uv run pytest -q                 # PA_COUNT
 cd browser-extension && pnpm test               # 90
-cd mobile-app && pnpm test                      # 206
-cd tests && uv run pytest -q                    # 20, ~3.5 min; `-k load` for the load smoke alone
+cd mobile-app && pnpm test                      # 287
+cd brand && pnpm check                          # 29 tests + export drift check
+cd tests && uv run pytest -q                    # 23, ~4 min; `-k load` for the load smoke alone
 make lint typecheck                             # ruff / mypy / eslint / tsc across the repo
 ```
 
@@ -94,6 +96,14 @@ unless stated.
   forged, replayed and wrong-account proofs are refused with `UNKNOWN_KEY` + 4003 and logged.
 - Honest post-forward outcomes: a forwarded command whose PC connection drops (acked or not) ends
   `outcome_unknown`; the PC's re-sent result corrects it exactly once.
+- Manual input end to end (**integration-tested**, real agent process with the fake input adapter): the PC
+  owner's local grant reaches the relay through `grant_update` and comes back in the snapshot; an
+  existing phone cannot start a session before that; batches are applied in order; a replayed `seq`
+  and a stale batch are refused and the reason reaches the phone with the session it named; the
+  PC-side lease expires on its own and releases a held button; retired sessions are refused; one
+  owner per PC with explicit takeover; local revocation ends the session; a keyboard-only grant
+  cannot move the pointer; typed text never appears in the relay's command rows or in any file the
+  agent wrote (`tests/test_e2e_input.py`).
 - Unit level (**unit-tested**): every component's own suite, listed in §1.
 
 ## 4. What has NOT been verified
@@ -102,6 +112,12 @@ unless stated.
   winsdk, app launching, lock, power, start-at-login, native-host registry entries) has run on a
   Windows machine. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the
   manual checklist at the end of `pc-agent/README.md`.
+- **Manual input on real devices**: `SendInput` injection, multi-monitor and mixed-DPI motion, pointer
+  acceleration, UAC/lock/elevated-window refusal, the named mutex and repair have not run on Windows;
+  the touchpad gestures (pointer capture order, two-finger tap), the phone keyboard (IME, autocorrect,
+  dictation, emoji, `beforeinput` order) and backgrounding have not run on an iPhone. The checklists
+  are in `pc-agent/README.md`, `mobile-app/README.md` and `docs/INPUT_CONTROL.md`; spec §10A F lists
+  the required observations. The Free-feature claim must wait for them (spec §10A).
 - **Chrome/Edge**: the extension has never been loaded unpacked against the real youtube.com DOM
   (`browser-extension/KNOWN_ISSUES.md` K1); the manual checklist is in `browser-extension/README.md`.
 - **iPhone**: the PWA has not been opened in iOS Safari (standalone mode, resume behaviour, QR
@@ -167,7 +183,8 @@ in a protocol MINOR bump (`shared/protocol/version.json`), regenerate fixtures a
 
 1. **Windows device pass**: install Python 3.12 on a Windows 11 machine, `uv sync` in `pc-agent`,
    run `dome-agent link`, register the native host, load the extension unpacked, and work through the
-   manual checklists in `pc-agent/README.md` and `browser-extension/README.md`. Fix what breaks;
+   manual checklists in `pc-agent/README.md` and `browser-extension/README.md` (now including the
+   touchpad/keyboard injection, single-instance and repair rows). Fix what breaks;
    record results in `docs/ACCEPTANCE.md` with the tag Windows-device-tested.
 2. **iPhone pass**: serve the PWA over HTTPS (Fly.io staging or a tunnel), follow
    `docs/IPHONE_SETUP.md`, verify pairing by QR, Add to Home Screen, resume after lock, confirmation

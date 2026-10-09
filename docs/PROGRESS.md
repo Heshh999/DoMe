@@ -2,6 +2,47 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-09 — Manual touchpad/keyboard, health, support, single instance and brand built, reviewed and fixed
+
+- Built per component against the 1.1 contract, each reviewed by an independent skeptic who re-ran the
+  tests, then fixed (two usage-limit interruptions and one model switch were absorbed by resuming the
+  workflow; nothing was lost):
+  - **pc-agent**: input session manager (one owner per PC, agent-issued id, PC-side lease watchdog,
+    seq/age/capability checks, ordered dispatch with adjacent-motion coalescing only, backpressure
+    suspension, held-input release on every end reason, content-free crash recovery, acks ≤ 4/s),
+    `SendInput` Windows adapter (32/64-bit layouts, Unicode with intact surrogate pairs, CTRL shortcuts
+    that always release the modifier), local `pointer`/`keyboard` grants with `grant_update`, single
+    instance per Windows session with `repair`, power confirmation copy. Review fixes: a foreground
+    change now blocks queued typing until the phone clicks or restarts, the age check estimates the
+    phone's clock offset, only a lock or secure desktop ends a session (an elevated window marks
+    `input_restricted`), hold bookkeeping and journal hygiene.
+  - **cloud-api**: `input_batch` routing (signature, binding, per-event-type grant coverage,
+    per-controller budget, verbatim forward, no command row), `input_ack`/`input_session` delivery,
+    `grant_update`, support tickets (Alembic `0002`, redaction, references). Review fixes: bounded
+    agent-originated events and state, no duplicate session frames, abusive input sockets closed,
+    pre-database budget, no instance values in error messages.
+  - **mobile-app**: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard
+    (commit-once composition, Compose and Send, shortcut palette), input session client, INPUT_* copy,
+    Health screen, support submission and status, Now Playing, power copy, permissions UX, brand icons.
+    Review fixes: a **blocker** where live typing could send Backspaces that delete PC text the phone
+    never typed, two-finger right click on real browsers, Health ownership label, idle indicators,
+    honest support outcome copy, plus a compose draft that could leak into live typing.
+  - **brand**: original icon and wordmark (SVG), dependency-free export script, `BRAND.md`.
+- Cross-component gap closed by the maintainer: agent input rejections never reached the phone (the
+  error frame had no reference and the relay only logged it). Additive amendment: `error_frame`
+  `ref_input_session_id` / `ref_controller_id`; the agent names both, the relay routes after an account
+  check and strips the controller reference, the phone ignores rejections for sessions it left; the
+  age rule wording now matches the skew-tolerant implementation.
+- Documents: new `docs/INPUT_CONTROL.md` and `docs/SUPPORT.md`; manual-input updates to SECURITY
+  (new threats and controls), ACCEPTANCE (scenarios 18–25), TROUBLESHOOTING, WINDOWS_INSTALL,
+  IPHONE_SETUP, PRODUCT_AND_PLANS, COST_MODEL, ARCHITECTURE, PROTOCOL.
+- Tests: `shared/python` 135, `shared/ts` 86, `cloud-api` CA_COUNT, `pc-agent` PA_COUNT,
+  `browser-extension` 90, `mobile-app` 287, `brand` 29, `tests/` IT_COUNT.
+  **Evidence tag: unit-tested and integration-tested (Linux, fake input adapter).** Nothing here is
+  Windows-device-tested or iPhone-tested, so touchpad/keyboard are not yet advertised as working.
+- Next: Windows and iPhone passes with the new checklists; then the remaining release work in
+  `docs/HANDOFF.md` §7.
+
 ## 2026-10-09 — Consolidated spec (8 October) adopted; protocol 1.1 contract for manual input
 
 - The founder's consolidated prompt replaces `docs/spec/MASTER_PROMPT.md`. New Free-beta scope: manual
