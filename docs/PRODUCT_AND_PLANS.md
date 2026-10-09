@@ -48,12 +48,64 @@ the PWA pricing table (`mobile-app/src/lib/pricing.ts`) and the entitlement asse
 | Approved app launch / focus / minimise / close | included | included | see §3 |
 | Lock, and confirmed sleep / restart / shutdown with a cancellable countdown | included | included | see §3 |
 | Typed commands and keyboard dictation (deterministic) | included | included | unit-tested |
+| Touchpad: relative cursor movement, tap/double tap/right click, two-finger scroll, explicit Drag and End Drag, sensitivity and scroll direction, Stop Input (capability `pointer`) | included at Free beta after device verification | same; no extra responsiveness | implemented; unit- and integration-tested (fake input adapter); **Windows-device-tested: no; iPhone-tested: no**, so it is not advertised yet |
+| Keyboard into the PC's focused field: live typing, Enter/Tab/Esc/Backspace/Delete/arrows, Ctrl+A/C/V/Z, Ctrl+L in browsers, Compose and Send (capability `keyboard`) | included at Free beta after device verification | same | implemented; unit- and integration-tested; **real phone keyboards/IMEs and Windows `SendInput` not yet verified**, so it is not advertised yet |
+| Manual-input rate (`input_rate_limit`) | 40 batches/s, burst 80 per phone | identical | integration-tested (cloud-api) |
+| Connection health screen with one next action per layer, guided recovery, bounded retries | included | included | unit-tested (mobile-app); device behaviour not yet verified |
+| Now Playing panel and media-target clarity (§2.2) | included | included | unit-tested (mobile-app) |
+| Support request with reference number, release notes / known issues | included | included | integration-tested (cloud-api tickets), component-tested (PWA); response expectation unset until the founder configures it |
 | Basic remote layout | included | included | unit-tested (components) |
 | Custom layouts, shortcuts, named profiles | — | at paid launch | not implemented (tables exist) |
 | Saved routines (up to 10 steps, 60 s) using approved, non-disruptive actions | — | at paid launch | gate implemented and integration-tested (`ENTITLEMENT_REQUIRED`); routine CRUD/UI not implemented |
 | Permissions, revocation, session management, security activity | included | included | integration-tested |
 | Optional cloud AI interpretation and push-to-talk transcription | not offered | not offered until the Phase E gate (allowance 0 in `plans.json`) | not implemented |
 | Price | free | US$5.99/month or US$49.99/year (pricing experiment inputs) | no checkout exists |
+
+Touchpad and keyboard are **Free** features (`plans.json`: both capabilities are Free, and
+`input_rate_limit` is the same on every plan because Free gets the same input responsiveness as Pro).
+Pro adds no input speed and no input feature. They will be advertised as Free only after the
+device checks in `docs/ACCEPTANCE.md` scenarios 18–20 pass on a real iPhone and a real Windows PC.
+Until then:
+- the in-app Touchpad tab works for a phone the PC owner granted;
+- the landing page and the pricing table (`mobile-app/src/lib/pricing.ts`) do not list them;
+- the pre-release notes (`mobile-app/src/content/release-notes.json`) describe them next to an
+  explicit "not verified" list.
+
+### 2.1 Upgrade experience (spec §12; required before paid launch)
+
+What the code enforces now (component-tested in `mobile-app/test/components/UpgradeAndHealth.test.tsx`):
+
+- No upgrade copy, modal or banner on Dashboard, Remote, Touchpad, Devices, Health or the app shell,
+  online or offline. Play/Pause, Next, volume, pointer movement, typing, pairing and reconnects are
+  never interrupted by an upgrade prompt.
+- An explanation appears only when the customer deliberately opens a Pro capability (Routines,
+  Custom remotes from More): one dismissible `ProExplanation` that names the specific benefit and never
+  claims that subscribing fixes a connection or compatibility problem.
+- Free keeps media and touchpad/keyboard controls, diagnostics, security fixes, recovery and basic
+  support access (the support form needs a signed-in account, not a plan). No payment step sits in the
+  path to fixing a broken connection.
+- Entitlements stay central (`plans.json`, server and agent checks). The price stays a configurable
+  experiment input. Paid benefits (routines, layouts, AI) are advertised only after their release
+  gates pass.
+
+Not yet verified: the same flows on a real iPhone, and a Pro checkout (none exists).
+
+### 2.2 Media target clarity (spec §9; Free beta)
+
+- A compact **Now Playing** panel (`mobile-app/src/components/NowPlaying.tsx`, `src/lib/nowPlaying.ts`)
+  shows the PC name, the app or browser/profile, the title where available and the state.
+- Windows system volume and YouTube player volume are separate controls with their own ranges and
+  results.
+- A YouTube control goes only to the resolved YouTube tab. It never silently becomes a Windows media
+  key or launches another app. Two playing tabs or several media sessions require a deliberate choice.
+  A closed target shows nothing rather than another tab or profile. The Windows media-session fallback
+  is labelled with its app name and an explanation.
+- Unsupported operations (no previous item, an ad, a fullscreen request the browser refuses) get a
+  short inline explanation.
+
+Evidence: unit-tested (`test/components/NowPlaying.test.tsx`, `test/targets.test.ts`); the spec's
+device check (two tabs, two browser profiles, a music app, a closed tab, focus on an unrelated
+app) is outstanding (`docs/ACCEPTANCE.md` scenario 23).
 
 Account means one owner, not a shared household login. A controller installation is one browser or
 home-screen PWA installation; clearing its site data deletes its key and requires pairing again
@@ -86,9 +138,15 @@ publicly available.
 | Revocation terminates live control; local emergency "Disable remote control"; a reconnecting PC applies the revocation snapshot before accepting commands; a snapshot can never add a controller or widen a grant | all components | integration-tested |
 | Plan gates in the service and the agent: device limits, plan-disabled devices, Pro entitlement assertions (EdDSA, 1 h, 72 h offline grace), "editing client state cannot unlock Pro" | cloud-api, pc-agent | integration-tested |
 | Abuse limits: per-controller command rate limits, per-PC queue depth 16, frame-size and connection caps, login/link/pairing/token limits, bounded security-event writes | cloud-api | integration-tested |
-| PWA: installable shell (iPhone-first dark theme, light mode, 44 px targets, safe areas, reduced motion), offline screen, stale-state disabling, confirmation modal rendered from the registry, two clearly labelled volume controls, Pro preview without checkout, public pages (landing, pricing from `plans.json`, FAQ, download page with disabled links, privacy and terms **drafts**) | mobile-app | unit-tested (205 tests); not iPhone-tested; Lighthouse/PWA audit pending |
+| PWA: installable shell (iPhone-first dark theme, light mode, 44 px targets, safe areas, reduced motion), offline screen, stale-state disabling, confirmation modal rendered from the registry, two clearly labelled volume controls, Pro preview without checkout, public pages (landing, pricing from `plans.json`, FAQ, download page with disabled links, privacy and terms **drafts**) | mobile-app | unit-tested (287 tests in the 2026-10-09 run); not iPhone-tested; Lighthouse/PWA audit pending |
 | Redacted structured logs on the service and the agent; customer-initiated redacted diagnostics bundles | cloud-api, pc-agent, PWA | unit-tested |
 | Tray agent with status, enable/disable, pair, approved apps, start-at-login, diagnostics; native-messaging host registration per user without elevation; PyInstaller specs | pc-agent | code exists; **PyInstaller build and every tray/Windows path not yet verified on Windows** |
+| Manual touchpad and keyboard (protocol 1.1): explicit local `pointer`/`keyboard` grants, signed `input_batch` stream with sequence and age checks, one session owner per PC with explicit takeover, 3 s lease and held-input release on every end trigger, `SendInput` adapter with Unicode text and tested shortcuts, gesture state machine, live typing with IME handling and a Compose and Send fallback, Stop Input | pc-agent, cloud-api, mobile-app | unit-tested (pc-agent, mobile-app), integration-tested (cloud-api relay; `tests/test_e2e_input.py` with the real agent and a fake input adapter); **`SendInput` not Windows-device-tested, phone keyboards not iPhone-tested** |
+| One agent per Windows user session: named mutex / lock file, second launch shows the running instance, distinct stale-endpoint / permission / other-session reports, `dome-agent repair` that preserves pairing and never kills processes | pc-agent | unit- and integration-tested on Linux; Windows mutex not yet verified |
+| Connection health screen (`/app/health`): phone, account, PC relay connection, remote control/lock, manual-input permission, extension, media target; one next action each; bounded retries; first-use walkthrough returning to the failed step | mobile-app | unit- and component-tested; not iPhone-tested |
+| Power confirmations state that the action can interrupt or end remote access and that V1 has no remote wake | pc-agent, mobile-app | unit-tested (pc-agent `test_confirmations.py`), component-tested (`PowerConfirmation.test.tsx`) |
+| Support requests (`POST /v1/support/tickets`, reference `DM-XXXXXXXX`, redacted diagnostics, honest "Not sent" / "Not confirmed" states), release notes page | cloud-api, mobile-app | integration-tested (cloud-api), component-tested (PWA); operators have no route yet |
+| Brand: original icon and wordmark as editable SVG, PWA/favicon/tray exports, `brand/BRAND.md` | brand, mobile-app | export drift check and tests pass; tray/installer wiring pending; not device-viewed |
 | Development identity provider, Makefile, lockfiles, migrations, `.env.example` | repo | runs in CI-like Linux use |
 
 ### 3.2 Planned, with the stage it belongs to
@@ -105,7 +163,7 @@ publicly available.
 | Real-device evidence: Windows 10/11 and iPhone Safari checklists | Phase B/D acceptance | Checklists in `pc-agent/README.md`, `mobile-app/README.md`, `browser-extension/README.md` |
 | Activation-funnel instrumentation (install, connected, paired, extension connected, first verified command, repeat use, upgrade, cancellation) | Phase D | `activation_events` table; no events emitted |
 | Optional cloud AI interpretation and push-to-talk transcription with explicit consent, metering, quotas, spending ceiling, prompt-injection tests | Phase E (separate release gate) | `usage_periods` table, allowances fixed at 0, env settings declared |
-| Narrow keyboard/trackpad control, optional clipboard, consented screen previews, schedules, guest access with separate identities, supported Wake-on-LAN | Later expansion | Nothing; the action registry and grant model leave room |
+| Optional clipboard sync, consented screen previews, schedules, guest access with separate identities, supported Wake-on-LAN | Later expansion | Nothing; the action registry and grant model leave room |
 | Horizontal relay scaling (Redis pub/sub) | When a second relay replica is demonstrably needed | Single-process design; seam documented in ADR-0001 D1 |
 | End-to-end payload encryption between phone and PC | Later, separately reviewed, with a maintained standard protocol | Not started; privacy copy states the relay can read routed payloads |
 
@@ -114,7 +172,7 @@ publicly available.
 | Stage | Goal | State |
 | --- | --- | --- |
 | A — foundation | Secure relay/agent/extension path, one real phone-to-PC YouTube action | Code complete; Next/Pause proven end to end only with a fake extension and fake platform on Linux |
-| B — Free beta | Pairing/revocation, native extension integration, all core controls, deterministic text, onboarding, truthful states, permission/replay tests, development installer, real-device evidence | Code complete except packaging; real-device evidence outstanding |
+| B — Free beta | Pairing/revocation, native extension integration, all core controls, human-directed touchpad/keyboard with explicit grants and bounded input sessions, deterministic text, onboarding, connection health, single-instance agent, media-target clarity and power-state copy, truthful states, permission/replay/input-recovery tests, development installer, real-device evidence (including the actual phone keyboard and the Windows input adapter) | Code complete except packaging; real-device evidence outstanding |
 | C — paid launch | Multi-PC limits (done), layouts, routines, billing lifecycle, deletion, cost model (done: `docs/COST_MODEL.md`) | Design only for billing/layouts/routines |
 | D — public release preparation | Signed distribution and updates, privacy/help/pricing pages (drafts exist), monitoring, store submissions, backup/restore, support flows, load checks | Not started beyond drafts and this documentation |
 | E — optional AI/voice | Provider adapter, consent, metering, quotas, real iPhone microphone behaviour | Not started |
@@ -129,8 +187,15 @@ publicly available.
 - **No remote power-on.** Wake-on-LAN needs hardware, configuration and an awake device on the LAN;
   it is a future feature. Losing connectivity after a shutdown request is reported as "accepted by
   Windows; PC disconnected", never as "shutdown verified".
-- **No screen viewing, trackpad, keyboard, clipboard, scheduling, guest access, native iOS/Android
-  apps, plugin marketplace or autonomous desktop agent** in V1.
+- **No screen viewing, clipboard synchronisation, scheduling, guest access, native iOS/Android apps,
+  plugin marketplace or autonomous desktop agent** in V1. The touchpad and keyboard are human-directed
+  input only. Ctrl+C/Ctrl+V act on the PC's own clipboard, and nothing reads the phone's clipboard in
+  the background.
+- **Manual input is not sandboxed to approved apps and is not proof of an effect.** A phone given
+  touchpad/keyboard permission can use any app of the unlocked Windows session. "Windows accepted"
+  means the events were accepted, not that a field changed. Lock screens, UAC prompts and elevated
+  windows refuse remote input, and DoMe does not bypass them. Typed text passes the relay in readable
+  form inside TLS. It is not stored, logged or sent to an AI provider.
 - **No AI in the product today**, and when it comes it will be optional, consented, metered, with no
   automatic overage; typed commands and buttons never depend on it.
 - **No arbitrary executables, arguments, shell, PowerShell, registry edits, downloaded code or

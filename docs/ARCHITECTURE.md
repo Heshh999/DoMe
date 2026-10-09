@@ -1,6 +1,6 @@
 # DoMe architecture
 
-Status: pre-release engineering build, protocol 1.0. This document describes the system as it exists in
+Status: pre-release engineering build, protocol 1.1 (1.0 plus manual touchpad/keyboard input; 1.0 peers stay compatible). This document describes the system as it exists in
 this repository today. Every claim about behaviour is backed by code under `cloud-api/`, `pc-agent/`,
 `browser-extension/`, `mobile-app/` and the contract under `shared/protocol/`; every claim about
 verification carries one of the evidence tags from `docs/spec/MASTER_PROMPT.md` §17
@@ -24,6 +24,13 @@ signed confirmation, then executes the action through a Windows API or, for YouT
 browser extension reached over Chrome Native Messaging. The PC reports the observed result; the
 phone shows it. "Delivered" and "executed" are separate states everywhere.
 
+Since protocol 1.1 the same channel also carries the Free **manual touchpad and keyboard**. The
+phone signs small `input_batch` frames with the same controller key. The relay verifies and
+forwards them with no lifecycle row. The agent re-verifies each batch against the local grant
+and injects it with `SendInput` inside a short, single-owner input session (§4.11). This input is
+human-directed only and reaches whatever the unlocked Windows session has in front. The
+approved-app list does not limit it.
+
 ```
  iPhone PWA                      cloud-api (relay)                       Windows PC
  ──────────                      ─────────────────                       ──────────
@@ -46,12 +53,13 @@ phone shows it. "Delivered" and "executed" are separate states everywhere.
 
 | Component | Path | Runtime | Role | Persistent state it owns |
 | --- | --- | --- | --- | --- |
-| Shared protocol contract | `shared/protocol/` | JSON Schema + JSON | Single source of truth: action registry (30 actions, 6 capabilities), plans, error codes, envelope/command/confirmation/frame/bridge/result/entitlement/REST schemas, normative rules (`version.json → rules`), cross-language signing fixtures | none |
+| Shared protocol contract | `shared/protocol/` | JSON Schema + JSON | Single source of truth: action registry (32 actions, 8 capabilities incl. `pointer`/`keyboard`), plans, error codes, envelope/command/confirmation/frame/bridge/result/entitlement/REST schemas, normative rules (`version.json → rules`), cross-language signing fixtures | none |
 | Shared libraries | `shared/python` (`dome-protocol`), `shared/ts` (`@dome/protocol`) | Python 3.12, TypeScript 5.9 | One tested implementation per language of strict JSON parsing, key handling, ES256 signing/verification, registry and frame validation, command/confirmation build + verify, pairing derivations | none |
-| cloud-api | `cloud-api/` (`dome_api`) | FastAPI, SQLAlchemy 2 async, Alembic, Authlib, joserfc, uvicorn | Accounts (OIDC relying party), sessions, PC linking, pairing, controller/grant inventory and revocation, command relay and lifecycle rows, entitlement assertions, static PWA serving | PostgreSQL (migration 0001) |
-| pc-agent | `pc-agent/` (`dome_agent`) | Python 3.12 in the logged-in user's session; pywin32, pycaw, winsdk, psutil, pystray, tkinter on Windows | Outbound relay client, local authorization, serialized executor, action handlers, confirmation challenges, bridge server for the extension, tray, CLI, native-messaging host entry point | SQLite `state.sqlite3` (settings, local grants, bounded journal, challenges, approved apps, pending power, pending revocations); DPAPI-protected key and credential files |
+| cloud-api | `cloud-api/` (`dome_api`) | FastAPI, SQLAlchemy 2 async, Alembic, Authlib, joserfc, uvicorn | Accounts (OIDC relying party), sessions, PC linking, pairing, controller/grant inventory and revocation, command relay and lifecycle rows, manual-input verify-and-forward (`input_batch`, `input_ack`, `input_session`, `grant_update`), support tickets, entitlement assertions, static PWA serving | PostgreSQL (migrations 0001, 0002 `support_tickets`) |
+| pc-agent | `pc-agent/` (`dome_agent`) | Python 3.12 in the logged-in user's session; pywin32, pycaw, winsdk, psutil, pystray, tkinter on Windows | Outbound relay client, local authorization, serialized executor, action handlers, confirmation challenges, manual-input session manager and `SendInput` adapter, single-instance lock, bridge server for the extension, tray, CLI, native-messaging host entry point | SQLite `state.sqlite3` (settings, local grants, bounded journal, challenges, approved apps, pending power, pending revocations, pending grant updates); DPAPI-protected key and credential files; `input_holds.json` (only while input is held), `agent.lock`/`agent.pid` |
 | browser-extension | `browser-extension/` | Chrome/Edge Manifest V3, TypeScript | YouTube player adapter: background service worker ↔ native host; content script drives `<video>` and YouTube's own buttons | `chrome.storage.local`: `browser_instance_id`, `profile_label`, last connection state |
-| mobile-app | `mobile-app/` | React 19, Vite 7, Tailwind 4, vite-plugin-pwa | Public website and the installable remote; controller identity, pairing UI, command lifecycle UI, confirmation modal, deterministic text commands | IndexedDB: non-extractable `CryptoKey`, controller id, selected PC; service-worker precache of the built shell only |
+| mobile-app | `mobile-app/` | React 19, Vite 7, Tailwind 4, vite-plugin-pwa | Public website and the installable remote; controller identity, pairing UI, command lifecycle UI, confirmation modal, deterministic text commands, touchpad/keyboard (`/app/touchpad`), connection health (`/app/health`), Now Playing, support form and release notes | IndexedDB: non-extractable `CryptoKey`, controller id, selected PC; service-worker precache of the built shell only |
+| brand | `brand/` | SVG sources + a dependency-free Node export script | Original DoMe icon and wordmark, PWA/favicon/tray exports, `BRAND.md` | none |
 | tools/dev-idp | `tools/dev-idp/` | standalone Python process | Development-only OpenID Connect issuer so local runs and tests use a real OIDC login instead of a bypass | none (in-memory) |
 | tests | `tests/` | pytest | Cross-component integration: real cloud-api + real agent process + Python-signed controller + fake extension on loopback | none |
 
@@ -103,7 +111,10 @@ The relay **can read**, in memory while routing:
   artists, approved-app names and window titles — it keeps the latest `state` per online PC in
   memory to replay it to new subscribers (`version.json → rules.state_cache`);
 - every `challenge_text` (it strict-parses a copy to validate it and forwards the original string);
-- every `result` payload.
+- every `result` payload;
+- every manual-input batch, **including literal typed text**, and every `input_ack`/`input_session`
+  frame; `pc_state.foreground_app` (process name and window title of the PC's foreground window).
+  None of these is logged or stored: an accepted batch creates no `commands` row and no log line.
 
 The relay **cannot**:
 
@@ -129,7 +140,8 @@ redaction rules before storage. Logs are structured JSON with keys such as `toke
 Retention as implemented: `sessions` expire (30-day sliding idle, 90-day absolute) but no purge job
 deletes expired rows, `commands` and `security_events` rows are not pruned by any job yet, and the
 PC's journal is bounded to 5,000 rows. A written retention table with purge jobs is still to be
-produced (`docs/DATA_RETENTION.md` is listed as a required deliverable and does not exist yet).
+produced (see `docs/DATA_RETENTION.md`). Support tickets (migration 0002) store the customer's message and a
+diagnostics bundle that the server redacts again before storage.
 
 ### 3.4 Data the PC keeps
 
@@ -139,7 +151,10 @@ revoked_at, snapshot id), `journal` (command id, digest, action, state, result J
 timestamps; pruned to the newest 5,000 rows; rows found `executing` at start-up become
 `outcome_unknown`), `challenges` (exact `challenge_text`, pinned kid, expiry, consumed_at),
 `approved_apps` (app id, display name, absolute `.exe` path, pinned SHA-256), `pending_power`,
-`pending_revocations`, persisted entitlement claims (never the token). Logs:
+`pending_revocations`, `pending_grant_updates`, persisted entitlement claims (never the token).
+Manual input keeps no content on disk. While buttons or keys are held, `input_holds.json` lists
+their names, so a crash can be recovered at the next start-up. The instance lock files are
+`agent.lock` (non-Windows) and `agent.pid`. Logs:
 `%LOCALAPPDATA%\DoMe\logs\agent.log`, redacted. Diagnostics bundles are customer-initiated and
 redacted (`dome_agent/diagnostics.py`).
 
@@ -472,6 +487,132 @@ Evidence: integration-tested (cloud-api `tests/test_entitlement_and_misc.py`: as
 against the JWKS; `tests/test_e2e_security.py`: client state cannot unlock Pro); unit-tested
 (pc-agent `tests/test_entitlement.py`: refresh, grace, null).
 
+### 4.11 Manual touchpad and keyboard: the input path next to the command path (protocol 1.1)
+
+Commands are durable, journaled, one-result-each and live up to 30 s. Cursor motion and typing
+are different: tens of small events per second that lose their value within a second and are
+dangerous to replay. Protocol 1.1 therefore adds a **bounded, signed, non-journaled stream** next
+to the command path (`rules.input_sessions`, `docs/design/input-control.md`). Only the session
+lifecycle (`input.session_start`, `input.session_stop`) uses commands. The events use the stream.
+
+```
+Phone (Touchpad page)          Relay (cloud-api)                      Agent (pc-agent)
+  │ input.session_start ─────► command path (§4.6) ─────────────────► authz: pointer OR keyboard
+  │◄── result{input_session_id, lease 3 s, budget 1000 ms, flags, foreground_app} ── issues the id
+  │                                                                    ◄─ input_session{started}
+  │ gesture/keyboard → coalesce per animation frame → sign
+  │──input_batch{pc_id, envelope}──►│ kid = socket kid; 1.1 announced;
+  │   (≤ 64 events, seq, 5 s window) │ verify_and_parse_input_batch (signature, schema, binding, window);
+  │                                  │ seq not repeated on this socket; grant covers every event type;
+  │                                  │ plan/PC state; 40 batches/s burst 80 per controller; PC online
+  │                                  │ and past its first snapshot. No commands row, no log line.
+  │                                  │──input_batch{envelope verbatim, relay{received_at}}──►│
+  │                                  │                   re-verify against the LOCAL grant;  │
+  │                                  │                   live session owned by this phone;   │
+  │                                  │                   seq > last; age ≤ 1 s (clock-offset │
+  │                                  │                   estimate); renew lease; enqueue      │
+  │                                  │                   one worker, in order; sum adjacent   │
+  │                                  │                   moves only; foreground check before  │
+  │                                  │                   text/key/shortcut → SendInput        │
+  │◄── input_ack (≤ 4/s: Windows accepted N, dropped M, held buttons/keys) ◄────────────────│
+  │◄── input_session{suspended|ended, reason, holds_released} (owner + PC subscribers) ◄─────│
+  │◄── error{INPUT_*, ref_pc_id, ref_input_session_id} (only the batch's controller) ◄───────│
+```
+
+How it differs from the command path:
+
+| | Commands (§4.6) | Input stream |
+| --- | --- | --- |
+| Unit | one signed `command` per action | one signed `input_batch` per flush (≤ 64 events) |
+| Relay record | `commands` lifecycle row | none per batch; at most one `input_rejected` security event per controller per minute |
+| Agent record | durable journal row before the OS call | none; volatile `seq` per session; only `input_holds.json` (names of held buttons/keys, never content) for crash recovery |
+| Replay rule | identical bytes re-emit the stored result | a retired session id is refused; nothing is replayed after a reconnect or restart |
+| Freshness | 30 s window (300 s max) | 5 s signed window, 1 s age budget at dispatch, backlog over budget → `suspended{backpressure}` |
+| Result | exactly one `result` | `input_ack` reports Windows **acceptance** only, never an application effect |
+| Ownership | any granted controller | one session per PC; a second phone needs explicit `takeover` |
+| Capability | per action | `pointer` (pointer_*) and `keyboard` (text/key/shortcut), checked per event type at the relay and the agent |
+
+Session end, in a fixed order: retire the id, wait up to 2 s for an in-flight dispatch, release
+exactly the buttons/keys this session injected, then emit `input_session{ended, reason}`. Triggers:
+- stop and lease expiry (a PC-side watchdog, independent of the relay and of the phone's unload
+  events);
+- takeover, revocation and grant removal;
+- Windows lock and secure desktop;
+- remote disable, relay disconnect and agent stop.
+
+An elevated or unknown-integrity window in front does not end the session. It sets
+`pc_state.input_restricted`, and keyboard events are then refused `INPUT_RESTRICTED`.
+
+Code: phone `mobile-app/src/lib/input.ts` (session client), `src/lib/gestures.ts` (touchpad state
+machine), `src/lib/typing.ts` (live typing / IME), `src/pages/app/TouchpadPage.tsx`; relay
+`dome_api/relay/router.py::route_input_batch`, `relay/agent_ws.py` (acks, session frames, routed
+input errors, `grant_update`); agent `dome_agent/agent.py::Agent._on_input_batch`,
+`dome_agent/input_session.py` (`InputSessionManager`, `AgeEstimator`), `platform/protocol.py`
+(`InputAdapter`), `platform/windows/input.py` (`SendInput`), `testing/fake_platform.py` (`FakeInput`,
+test double only). Typed text is visible to the relay in transit and is never logged, stored or
+journaled by any component (`docs/SECURITY.md` T21).
+
+Evidence: unit-tested (pc-agent `tests/test_input_session.py`, `tests/test_windows_input_layout.py`;
+mobile-app `test/input.test.ts`, `test/gestures.test.ts`, `test/typing.test.ts`,
+`test/components/TouchpadPage.test.tsx`); integration-tested (cloud-api `tests/test_input_routing.py`,
+`tests/test_input_hardening.py`; `tests/test_e2e_input.py` with the real agent process and the fake
+input adapter, run record in `docs/ACCEPTANCE.md` scenarios 18–20). `SendInput` on a real desktop,
+multi-monitor behaviour, the real phone keyboard and latency on the real relay path: **not yet
+verified**.
+
+### 4.12 One agent per Windows user session
+
+`dome-agent run` takes an instance lock before it opens any endpoint (`dome_agent/single_instance.py`):
+
+- Windows: the named mutex `Local\DoMe.Agent.<session id>` (`platform/windows/instance.py`), scoped
+  to the logon session. Elsewhere: an `flock`ed `<state dir>/agent.lock`. In both cases an advisory
+  `agent.pid` records pid and session.
+- A second launch does not start a competing agent. It asks the running one, over the existing
+  user-scoped control channel (the same identity rule as the bridge IPC; no new listener and no
+  network port), to show its tray/status window (op `show`), then exits 0.
+- A held lock whose owner does not answer is reported as "running but not responding (pid N)" with
+  the `dome-agent repair` hint. `dome-agent status` reports a stale control endpoint, a stale pid
+  file, a permission problem on the state directory and an other-session conflict separately
+  (`single_instance.inspect`).
+- The state directory (`%LOCALAPPDATA%\DoMe`: identity, credential, grants) belongs to the Windows
+  **account**, not the logon session. An agent of the same account that is alive in another session
+  therefore makes `run` refuse rather than supersede it at the relay.
+- `dome-agent repair` re-registers the native-messaging host, removes stale endpoints and checks the
+  state directory. It preserves identity, credential, grants and approved apps and never terminates
+  a process. Any new controller still needs local approval.
+
+Structured-command deduplication across restarts is unchanged (the journal). Manual input never
+survives a restart: held input is released from `input_holds.json`, and the old session id is
+refused.
+
+Evidence: unit- and integration-tested on Linux (pc-agent `tests/test_single_instance.py`, 8 tests).
+The Windows mutex, `ProcessIdToSessionId` and repeated installer launches: not yet verified.
+
+### 4.13 Connection health screen
+
+`/app/health` (`mobile-app/src/pages/app/HealthPage.tsx`, logic in `src/lib/health.ts::assessHealth`)
+shows layered states instead of one green light. Each layer is derived only from what the phone can
+observe:
+
+| Layer | Source | Next action when it is a problem |
+| --- | --- | --- |
+| This phone | browser online state, socket state | reconnect this phone |
+| Your account | session status (401 → signed out) | sign in again |
+| Your PC | `pc_status` (online / reconnecting / offline, last seen); an unreachable PC has an **unknown** cause | open DoMe on the PC; pair or link when refused or missing |
+| Remote control on the PC | `pc_state.remote_enabled`, `session_locked` | enable remote control locally; unlock the PC |
+| Touchpad and keyboard permission | this phone's grant (`pointer`/`keyboard`), `pc_state.input_restricted`, `pc_state.input_session` owner compared with this phone's controller id | grant on the PC (tray ▸ Paired phones); unlock / leave the protected screen |
+| Browser extension | `pc_state.extension_connected` | install or update the extension (needed for YouTube only) |
+| Media target | YouTube tabs and media sessions in `pc_state` | choose a target; open a YouTube tab |
+
+Codes, component versions and timing are behind a details control. Retry is bounded to 3 attempts
+per visit and then offers the support path (`/support`, category and code preselected). A retry marks state stale, nudges the relay socket and re-reads devices and grants. It never re-sends a command. The first-use walkthrough returns to the
+first step that is not done, not to the start. Every status pill, the reconnect banner and every
+failure link here.
+
+Evidence: unit-tested (`mobile-app/test/health.test.ts`) and component-tested
+(`test/components/UpgradeAndHealth.test.tsx` "HealthPage"). The real Wi-Fi/cellular transitions,
+iOS background/resume and browser restarts listed in spec §11A: not yet verified.
+
 ## 5. Hosting constraints
 
 ADR-0001 D1/D2: one modular process, PostgreSQL as the only datastore, Fly.io as the single-region
@@ -510,16 +651,20 @@ latency targets remain unmeasured.
 - Billing: `billing/` tables and `DOME_STRIPE_*` settings are declared; endpoints are absent.
 - Analytics: `activation_events` table exists; nothing emits to it yet.
 - End-to-end payload encryption, LAN/offline mode, Wake-on-LAN, native apps, screen viewing,
-  trackpad/keyboard: not designed in V1 (ADR-0001 D10).
+  clipboard synchronisation: not designed in V1 (ADR-0001 D10). Manual touchpad/keyboard was added
+  in protocol 1.1 (§4.11) without changing the transport or the trust model.
+- Input stream: a relay → agent "controller socket gone" frame and a per-socket authorisation cache
+  for batches are recorded follow-ups (`cloud-api/KNOWN_ISSUES.md` #7, #8).
 
 ## 7. Evidence summary for this document
 
 | Claim group | Evidence tag |
 | --- | --- |
-| Contract parsing/signing/derivations identical across Python and TypeScript | unit-tested (`shared/python` 128 tests, `shared/ts` 82 tests, fixtures verified in both directions) |
-| Relay REST and routing behaviour, isolation, revocation, deadlines | integration-tested (cloud-api, 86 tests against PostgreSQL 16 + `tools/dev-idp` + uvicorn in-process) |
-| Agent authorization, executor, confirmations, bridge framing, relay client | unit-tested on Linux with explicit fakes (pc-agent, 194 tests) |
+| Contract parsing/signing/derivations identical across Python and TypeScript | unit-tested (`shared/python` 135 tests, `shared/ts` 86 tests on 2026-10-09, fixtures verified in both directions) |
+| Relay REST and routing behaviour, isolation, revocation, deadlines, input routing, `grant_update`, support tickets | integration-tested (cloud-api, 118 tests on 2026-10-09 against PostgreSQL 16 + `tools/dev-idp` + uvicorn in-process) |
+| Agent authorization, executor, confirmations, bridge framing, relay client, input sessions, single instance | unit-tested on Linux with explicit fakes (pc-agent, 256 passed + 1 skipped on 2026-10-09) |
 | Extension worker, player adapter, frames | unit-tested in jsdom with a `chrome` stub (90 tests); built bundle smoke-tested without `eval` |
-| PWA libraries, stores, components | unit-tested in jsdom (205 tests) |
+| PWA libraries, stores, components incl. touchpad, keyboard, health, support | unit-tested in jsdom (287 tests on 2026-10-09) |
 | Phone-sign → relay → real agent process → fake extension, including security and reliability scenarios | integration-tested (Linux, fake platform, fake extension): `cd tests && uv run pytest -q --deselect test_load_smoke.py` → 19 passed in 179 s on 2026-10-08 against PostgreSQL 16 and `tools/dev-idp` |
-| Any Windows API path, DPAPI, tray, native host registration, real YouTube DOM, iPhone Safari key persistence/camera/resume, hosting provider behaviour, load | not yet verified |
+| Manual input through the real agent process (grant, ordered stream, replay/stale refusal, lease release, takeover, revocation) | integration-tested (Linux, fake input adapter): `tests/test_e2e_input.py`; see `docs/ACCEPTANCE.md` scenarios 18–20 for the run record |
+| Any Windows API path (including `SendInput` and the single-instance mutex), DPAPI, tray, native host registration, real YouTube DOM, iPhone Safari key persistence/camera/resume, hosting provider behaviour, load | not yet verified |

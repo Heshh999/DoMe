@@ -1,24 +1,27 @@
-# DoMe protocol 1.0
+# DoMe protocol 1.1
 
 The wire contract between the phone PWA (controller), cloud-api (relay), the Windows agent (PC)
 and the browser extension. The normative source is `shared/protocol/`; this document explains it
-and reproduces the shapes. When the two disagree, the JSON files win and this document must be
+and reproduces the shapes. Sections 1–16 describe the 1.0 base, which 1.1 keeps unchanged.
+Section 17 describes what protocol 1.1 adds: manual touchpad and keyboard input, `grant_update`, and
+support tickets. When the two disagree, the JSON files win and this document must be
 corrected. Changing any schema requires a version bump (§1) and an update here.
 
 Evidence tags (spec §17) for everything in this document: the shapes, parsers, signing,
-derivations and rules are **unit-tested** in both `shared/python` (128 tests) and `shared/ts`
-(82 tests) against the shared fixtures; the relay's application of the rules is
-**integration-tested** in `cloud-api/tests` (86 tests against PostgreSQL + `tools/dev-idp`); the
-PC's application is **unit-tested** with explicit fakes in `pc-agent/tests` (194 tests); the whole
-path is **integration-tested** on Linux in `tests/` (20 passed on 2026-10-08, including a small load smoke). Nothing has been
-exercised on a Windows device or an iPhone.
+derivations and rules are **unit-tested** in both `shared/python` (135 tests) and `shared/ts`
+(86 tests) against the shared fixtures (runs of 2026-10-09). The relay's application of the rules is
+**integration-tested** in `cloud-api/tests` (118 tests against PostgreSQL + `tools/dev-idp`). The
+PC's application is **unit-tested** with explicit fakes in `pc-agent/tests` (256 passed, 1 skipped).
+The whole path is **integration-tested** on Linux in `tests/` (the 1.0 suite: 20 passed on
+2026-10-08, including a small load smoke; the 1.1 input tests are recorded in `docs/ACCEPTANCE.md`).
+Nothing has been exercised on a Windows device or an iPhone.
 
 Files:
 
 | File | Contents |
 | --- | --- |
 | `version.json` | `protocol_version`, compatibility rule, signing algorithms, limits, normative rules |
-| `actions.json` | Action registry (30 actions, 6 capabilities, 3 target schemas, availability conditions, verification strategies) |
+| `actions.json` | Action registry (32 actions, 8 capabilities, 3 target schemas, availability conditions, verification strategies; `ai_eligible` per action since 1.1) |
 | `errors.json` | Stable error codes with default retryability and customer copy |
 | `plans.json` | Free/Pro limits, rate limits, downgrade policy, entitlement assertion parameters |
 | `schemas/envelope.schema.json` | Signed envelope |
@@ -34,8 +37,9 @@ Files:
 
 ## 1. Versioning and compatibility
 
-- `protocol_version` is `MAJOR.MINOR`, currently **`1.0`**; `actions.json` carries its own
-  `registry_version` (`1.0`).
+- `protocol_version` is `MAJOR.MINOR`, currently **`1.1`**; `actions.json` carries its own
+  `registry_version` (`1.1`). 1.1 is additive over 1.0 (§17), so 1.0 peers remain compatible and
+  never receive 1.1-only frames or `pc_state` fields.
 - Rule (`version.json → compatibility_rule`): peers exchange `hello` frames listing the versions
   they support. A peer accepts a message only if its MAJOR equals a supported MAJOR **and** its
   MINOR is ≤ the highest supported MINOR for that MAJOR. Unknown fields are **rejected**, never
@@ -65,6 +69,7 @@ Limits (`version.json → limits`):
 | `pairing_code_symbols` / `pairing_code_lifetime_seconds` | 20 / 300 |
 | `device_link_code_lifetime_seconds` | 600 |
 | `per_pc_queue_depth` | 16 |
+| `input_batches_per_second`, `input_batch_max_events`, `input_batch_lifetime_seconds`, `input_age_budget_ms`, `input_lease_seconds`, `input_text_max_chars`, `input_motion_max` (1.1) | 40, 64, 5, 1000, 3, 256, 4096 — see §17.2 |
 
 ## 2. Transports and endpoints
 
@@ -326,6 +331,7 @@ added in sibling fields.
 | `command` | `pc_id`, `envelope` | Routed per §8 |
 | `confirmation` | `pc_id`, `envelope` | Only from the socket bound to the command's controller |
 | `cancel` | `pc_id`, `command_id` | Best-effort cancel of a queued or countdown command; unsigned in 1.0 (worst case is a cancelled action); the relay checks ownership |
+| `input_batch` (1.1) | `pc_id`, `envelope` | Signed manual-input events; verify-and-forward, no command lifecycle (§17.4) |
 | `ping` / `pong` | `t?` | |
 
 ### 6.2 Relay → controller (`relay_to_controller`)
@@ -340,6 +346,7 @@ added in sibling fields.
 | `state` | `pc_id`, `at`, `state{pc_state}` | Forwarded from the PC; cached per online PC |
 | `pc_status` | `pc_id`, `connection: online \| reconnecting \| offline`, `last_seen`, `last_power_request?{action, at}`, `enabled?` | Connection-level status the relay knows, not execution state |
 | `revoked` | `reason: controller_revoked \| grant_revoked \| session_ended \| account_deleted`, `pc_id?` | Socket closes afterwards (4003/4008) |
+| `input_ack`, `input_session` (1.1) | §17.4 | Only to sockets that announced 1.1; `error` additionally carries `ref_input_session_id` for input rejections |
 | `ping` / `pong` | | |
 
 ### 6.3 Agent → relay (`agent_to_relay`)
@@ -350,7 +357,8 @@ added in sibling fields.
 | `ack`, `confirmation_required`, `result`, `state` | as above | `state` right after applying the snapshot, on change (debounced 500 ms), every 30 s |
 | `pairing_decision` | `pairing_id`, `decision: approve \| decline`, `kid`, `granted_capabilities[]` | `kid` must equal the kid the PC computed from the JWK it stored |
 | `revoke_controller` | `controller_id`, `kid`, `reason: local_revocation \| local_disable_all` | Relay revokes the grant exactly as the REST path |
-| `error` | | Unverifiable confirmation, protocol errors |
+| `error` | | Unverifiable confirmation, protocol errors; since 1.1 dropped input batches with `ref_input_session_id` + `ref_controller_id` (§17.4) |
+| `input_ack`, `input_session`, `grant_update` (1.1) | §17.4 | |
 | `ping` / `pong` | | |
 
 ### 6.4 Relay → agent (`relay_to_agent`)
@@ -362,6 +370,7 @@ added in sibling fields.
 | `command` | `envelope`, `relay{received_at, connection_id}` | |
 | `confirmation` | `envelope`, `relay{received_at, connection_id}` | |
 | `cancel` | `command_id`, `controller_id` | |
+| `input_batch` (1.1) | `envelope`, `relay{received_at, connection_id}` | Envelope verbatim (§17.4) |
 | `pairing_request` | `pairing_id`, `code_hash`, `controller_display_name`, `public_jwk{kty: EC, crv: P-256, x, y}`, `kid`, `requested_capabilities[]`, `expires_at` | Delivered now, or after the snapshot on each connect for every unexpired claimed session |
 | `revoked` | `reason: pc_unlinked \| pc_disabled_by_account \| account_deleted \| credential_rotated` | Agent stops reconnecting, discards the credential, keeps local grants, shows a re-link prompt |
 | `error` | | e.g. `PROTOCOL_INCOMPATIBLE` before close 4000 |
@@ -373,7 +382,8 @@ Required: `remote_enabled`, `session_locked`, `extension_connected`. Optional:
 `media_while_locked`, `platform: windows \| development`, `volume{value, muted}`,
 `browser_instances[]{browser_instance_id, browser: chrome \| edge \| unknown, profile_label?}` (≤ 8),
 `youtube_tabs[]` (≤ 32), `media_sessions[]` (≤ 16), `pending_power_action{action, command_id,
-fires_at} \| null`.
+fires_at} \| null`. Since 1.1 also `foreground_app?`, `input_session?`, `input_restricted?` (§17.4; stripped
+for 1.0 subscribers).
 
 `youtube_tab`: `browser_instance_id`, `tab_id`, `script_attached` (false = tab exists but no
 content script; cannot be a target), `tab_token?` (present when attached; changes on every
@@ -515,6 +525,7 @@ Who emits what:
 | `TAB_NOT_CONTROLLABLE` | no | extension, PC | Tab has no running content script |
 | `PC_PLAN_DISABLED` / `CONTROLLER_PLAN_DISABLED` | no | relay, PC | Plan/account device state |
 | `ENTITLEMENT_PENDING` / `BILLING_PAST_DUE` | yes / no | reserved for Phase C | Not emitted in this build |
+| `INPUT_*` (ten codes, 1.1) | see §17.6 | relay, PC | Manual-input session and batch rejections |
 
 REST-only HTTP conditions used in `error_body` but not listed in `errors.json` (contract gap,
 proposed addition): `UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404),
@@ -545,6 +556,8 @@ emitting, the phone before rendering.
 | `app_close_result` | `app_id`, `window_id?`, `closed` (false with `CLOSE_REFUSED`) |
 | `power_result` | `accepted: true`, `countdown_seconds` 0..60, `fires_at?` — reported when the OS call is issued; completion is not observable |
 | `power_cancel_result` | `canceled` (false when nothing was pending or Windows did not abort), `action?`, `command_id?` |
+| `input_session_result` (1.1) | `input_session_id`, `lease_seconds`, `input_age_budget_ms`, `max_batch_events`, `pointer`, `keyboard`, `foreground_app?` |
+| `input_session_stop_result` (1.1) | `stopped`, `released_holds` |
 
 Example result frame for the `youtube.next` command above (illustrative, shape per schema):
 
@@ -592,6 +605,7 @@ self-validates every response outside production. Session-authenticated routes n
 | `GET /v1/plans` | — | | `plans_response{plans, pricing{currency, monthly_cents, annual_cents}, billing_enabled}` (`billing_enabled: false` in this build) |
 | `GET /healthz` | — | | `{status, version, database, relay{agents, controllers, max_connections}}` (no schema definition — contract gap #2) |
 | `GET /.well-known/dome-jwks.json` | — | | JWKS with the Ed25519 entitlement key(s) |
+| `POST /v1/support/tickets`, `GET /v1/support/tickets[/{id}]` (1.1) | session (+CSRF) | `support_ticket_request` | `support_ticket_response` / `support_tickets_response` — §17.8 |
 
 ## 12. Browser bridge (`bridge.schema.json`)
 
@@ -647,6 +661,8 @@ JWS `alg` name `EdDSA` is deprecated by RFC 9864 in favour of `Ed25519`; switchi
 | AI allowances | 0 | 0 until the Phase E gate |
 | `manual_command_rate_limit` | 120/min, burst 30 (per controller) | same |
 | `coalescable_command_rate_limit` | 360/min, burst 60 (actions with `coalesce`; the PWA throttles sliders to one command per 250 ms plus the release value) | same |
+| `input_rate_limit` (1.1) | 40 `input_batch` frames/s, burst 80 (per controller) | same — Free has the same input responsiveness as Pro |
+| `pointer`, `keyboard` capabilities (1.1) | Free | Free |
 
 `pricing_defaults`: USD 599 ¢/month, 4999 ¢/year — experiment inputs; live amounts come from Stripe
 price objects that do not exist yet. `downgrade_policy`: 14-day selection window, default
@@ -673,3 +689,245 @@ assertion grace. `entitlement_assertion`: `EdDSA`, 3600 s.
 9. No proof of possession in `agent_link_start_request` (cloud-api #10).
 10. An unbound controller socket has no "rebind" after pairing; the PWA reopens the socket
     (mobile-app #2).
+
+Recorded against 1.1 (manual input):
+
+11. No relay → agent frame tells the agent that the owning controller's socket closed; the 3 s lease
+    ends the session instead (cloud-api `CONTRACT_ISSUES.md` #12, `KNOWN_ISSUES.md` #8).
+12. The shared verifier reports `COMMAND_EXPIRED` for a batch outside its window; the relay
+    translates it to `INPUT_STALE` (cloud-api `CONTRACT_ISSUES.md` #11).
+13. `grant_update.capabilities` has `minItems: 1`, so a grant cannot be emptied that way (revoke
+    instead); `input_session{suspended}` releasing holds and "elevated foreground restricts but does
+    not end" are implemented but not yet stated in the rule text (pc-agent `CONTRACT_ISSUES.md`
+    #10, #12, #14, #17).
+14. No contract signal tells the agent that the phone saw a foreground change; the agent uses a 2 s
+    grace heuristic (pc-agent `KNOWN_ISSUES.md` #17).
+15. There is no way for a controller to learn its grant changed except a REST re-read after the
+    snapshot nudge (cloud-api `CONTRACT_ISSUES.md` #13).
+
+## 17. Protocol 1.1: manual touchpad and keyboard (spec §10A)
+
+Protocol 1.1 (registry 1.1) is an **additive MINOR** bump. A 1.0 peer stays compatible and never
+receives a 1.1 frame: the relay skips sockets that announced only 1.0 for `input_ack` /
+`input_session`, and strips the three 1.1-only `pc_state` keys from `state` frames sent to them
+(cloud-api `DECISIONS.md` #42). A controller must list `"1.1"` in `hello.protocol_versions` before
+it may send `input_batch` (otherwise `PROTOCOL_INCOMPATIBLE`), and a PC whose agent announced only
+1.0 refuses input with `PROTOCOL_INCOMPATIBLE` (the PC needs an agent update). The PWA offers
+`["1.1"]`. The agent announces `["1.0", "1.1"]`. Normative text: `version.json → rules.input_sessions`,
+`rules.grant_update`, `rules.ai_eligibility`. Design brief: `docs/design/input-control.md`.
+
+### 17.1 What 1.1 adds
+
+| Addition | Contract location |
+| --- | --- |
+| Capabilities `pointer` (cursor, clicks, scroll, drag) and `keyboard` (literal text, named keys, tested shortcuts). Both are Free and independently grantable, and existing grants do not gain them | `actions.json → capabilities` and every capability enum |
+| Actions `input.session_start` (`params.takeover?`; permitted by `pointer` **or** `keyboard` via `alternate_capabilities`; availability `session_unlocked`; `risk: moderate`; 5 s timeout) and `input.session_stop` (`params.input_session_id`; idempotent) | `actions.json`; results `input_session_result`, `input_session_stop_result` |
+| `ai_eligible` on every action (`false` for both input actions); `routine_allowed: false` for both | `actions.json`, `rules.ai_eligibility` |
+| Signed input stream: `controller_input_batch` → `relay_to_agent_input_batch`, payload `input_batch_payload`, events `input_event` | `relay-frames.schema.json` |
+| Agent frames `input_ack`, `input_session`, `grant_update` | `relay-frames.schema.json` |
+| `error_frame.ref_input_session_id` (input rejections) and `ref_controller_id` (agent → relay only; the relay routes on it and strips it) | `relay-frames.schema.json → error_frame` |
+| `pc_state.foreground_app`, `pc_state.input_session`, `pc_state.input_restricted` | `relay-frames.schema.json` |
+| Limits and the plan rate | `version.json → limits`, `plans.json → input_rate_limit` |
+| Ten `INPUT_*` error codes | `errors.json` |
+| Support-ticket REST bodies (spec §11A) | `rest.schema.json` |
+
+Library helpers: Python `build_input_batch_payload`, `verify_and_parse_input_batch`,
+`input_event_capabilities`, `ActionSpec.satisfied_by` (`shared/python/dome_protocol`). TypeScript
+`buildInputBatchPayload`, `signInputBatch`, `inputEventCapabilities`, `capabilitySatisfied`
+(`shared/ts/src`).
+
+### 17.2 Limits
+
+| Limit (`version.json → limits`) | Value | Meaning |
+| --- | --- | --- |
+| `input_batches_per_second` | 40 | per-socket input bucket at the relay (charged before any database work) |
+| `input_batch_max_events` | 64 | events per batch |
+| `input_batch_lifetime_seconds` | 5 | `expires_at − issued_at` of a batch |
+| `input_age_budget_ms` | 1000 | maximum age of a batch at dispatch on the PC |
+| `input_lease_seconds` | 3 | session lease, renewed by every valid batch (an empty batch is a keepalive) |
+| `input_text_max_chars` | 256 | characters per `text` event |
+| `input_motion_max` | 4096 | absolute bound of `dx`/`dy` for moves and scrolls |
+| `plans.json → input_rate_limit` | 40 batches/s, burst 80 per controller | identical on Free and Pro |
+
+### 17.3 Events (`input_event`, one of)
+
+| `type` | Fields | Capability | Windows behaviour (agent) |
+| --- | --- | --- | --- |
+| `pointer_move` | `dx`, `dy` integers in ±4096 (desktop pixels, relative) | `pointer` | `SendInput` `MOUSEEVENTF_MOVE`, not clamped to one display. Adjacent moves may be summed |
+| `pointer_button` | `button: left \| right \| middle`, `action: down \| up \| click \| double_click` | `pointer` | `down` adds to the session's held set, `up` removes it, `click`/`double_click` on a held button clear the hold |
+| `pointer_scroll` | `dx`, `dy` notches in ±4096; positive `dy` scrolls content up (wheel away from the user) | `pointer` | `WHEEL`/`HWHEEL` × `WHEEL_DELTA` |
+| `text` | `text` 1–256 characters, literal and never parsed | `keyboard` | `KEYEVENTF_UNICODE` per UTF-16 code unit, surrogate pairs kept together |
+| `key` | `key`: `enter`, `tab`, `escape`, `backspace`, `delete`, `space`, `arrow_up/down/left/right`, `home`, `end`, `page_up`, `page_down` | `keyboard` | one press and release (VK code, extended flag where needed) |
+| `shortcut` | `name`: `ctrl_a`, `ctrl_c`, `ctrl_v`, `ctrl_z`, `ctrl_l` | `keyboard` | CTRL down, key, CTRL up, and the modifier is always released. `ctrl_l` is offered only in browser contexts |
+
+A batch needs every capability its events require (`input_event_capabilities`). A mixed batch on a
+pointer-only grant is refused whole (`INPUT_NOT_PERMITTED`). A grant holding neither capability
+refuses even an empty keepalive.
+
+### 17.4 Frames
+
+| Direction | Frame | Fields | Notes |
+| --- | --- | --- | --- |
+| controller → relay | `input_batch` | `pc_id`, `envelope` (ES256 over `input_batch_payload`) | Never a command: no `ack`/`result`, no `commands` row, no log line |
+| relay → agent | `input_batch` | `envelope` (verbatim), `relay{received_at, connection_id}` | `received_at` lets the agent bound the relay → agent leg |
+| agent → relay → owner | `input_ack` | `pc_id`, `input_session_id`, `last_seq`, `accepted_events`, `dropped_events` (cumulative), `held_buttons[]` (≤ 3), `held_keys[]` (≤ 16), `at` | At most 4/s per live session. **Windows acceptance only**, never an observed application effect. Sent only to the owner's 1.1 sockets |
+| agent → relay → owner + subscribers | `input_session` | `pc_id`, `input_session_id`, `controller_id`, `event: started \| suspended \| ended`, `reason`, `holds_released`, `at` | `reason`: `started`, `stopped`, `lease_expired`, `takeover`, `controller_revoked`, `grant_removed`, `pc_switch`, `controller_disconnected`, `session_locked`, `secure_desktop`, `backpressure`, `remote_disabled`, `agent_restart`. The relay records the owner from `started` and accepts an owner only if it belongs to the account and holds a live grant on this PC |
+| agent → relay | `grant_update` | `controller_id`, `kid`, `capabilities[]` (1–16) | The PC owner changed a grant locally. The relay replaces the grant row's list exactly (it may widen or narrow it), writes `grant_updated` and re-pushes `grants_snapshot` |
+| agent → relay | `error` | `error`, `ref_input_session_id`, `ref_controller_id` | A dropped batch (≤ 1 per code per second). The relay checks that the controller belongs to the PC's account, removes `ref_controller_id`, adds `ref_pc_id`, and delivers it only to that controller's 1.1 sockets |
+| relay → controller | `error` | `error`, `ref_pc_id`, `ref_input_session_id?` | Relay-side batch rejections and routed agent rejections. The phone ignores errors for a session it no longer runs |
+
+`pc_state` additions: `foreground_app{process_name, window_title? (untrusted display data, ≤ 200),
+browser?: chrome | edge | other, elevated?}` (field-level focus is never claimed);
+`input_session: null | {controller_id, pointer, keyboard, lease_expires_at}`; `input_restricted`
+(true while the agent knows injection would be refused: locked session, secure desktop, elevated
+foreground). The agent sends a `state` frame when `foreground_app` or `input_restricted` changes and
+refreshes `foreground_app` at most every 2 s while a session is live.
+
+### 17.5 Rules in short (`rules.input_sessions`)
+
+1. **Session.** `input.session_start` makes the agent issue a fresh 22-character
+   `input_session_id` and a 3 s lease. Exactly one controller owns a PC's session. A second
+   controller gets `INPUT_SESSION_OWNED` unless it sends `takeover: true`, in which case the old
+   session ends first.
+2. **Ending.** Every end trigger (stop, lease expiry, takeover, revocation, grant narrowing to
+   neither capability, PC switch, remote disable, Windows lock, secure desktop, agent restart,
+   loss of the controller's socket) runs three steps in order: retire the id → release exactly the
+   buttons/keys **that session** injected (never the physical keyboard's) →
+   `input_session{ended, reason, holds_released}`. A suspension (`backpressure`) also releases
+   holds and needs a fresh `input.session_start`.
+3. **Batch checks.** The relay checks:
+   - the signature against the socket's key record, and the account/controller binding;
+   - the 5 s window;
+   - grant coverage per event type;
+   - the PC is online and past its first snapshot;
+   - the per-controller rate.
+
+   It then forwards the envelope verbatim. The agent checks again:
+   - the signature against its **local** grant;
+   - that the batch names the live session owned by this controller;
+   - `seq` strictly greater than the last accepted one;
+   - age ≤ `input_age_budget_ms`, measured against a per-session estimate of the controller's clock
+     offset seeded at `input.session_start` (so constant skew neither blocks input nor hides a stall).
+
+   Every valid batch renews the lease. Rejections drop the batch, count in `dropped_events` and
+   never terminate a command.
+4. **Dispatch.** One worker runs events in order. Only adjacent `pointer_move`s may be summed.
+   Nothing is merged across a button, scroll, text, key or shortcut. A backlog older than the age
+   budget is discarded and the session suspended. Nothing is replayed after a reconnect or
+   restart. The journal is never used for input.
+5. **Target.** Before each `text`/`key`/`shortcut` the agent compares the foreground window with the
+   one captured at session start or at the phone's last click. If it changed, keyboard input stops
+   with `INPUT_TARGET_CHANGED` until a click, a fresh start, or a batch issued ≥ 2 s after the change.
+6. **Content.** `text` is literal customer input. No component logs, journals, persists or forwards
+   it to an AI provider. The relay sees it in transit only (TLS, not end-to-end). Input actions and
+   primitives never enter an AI tool catalogue, a routine or a layout shortcut
+   (`rules.ai_eligibility`).
+7. **Grants.** Only the PC's local approval can add `pointer`/`keyboard`. `grant_update` carries
+   the change to the relay. `grants_snapshot` remains an intersection and can never add them
+   (`rules.grant_update`).
+
+### 17.6 Errors added in 1.1 (`errors.json`)
+
+| Code | Retry | Emitted by | When |
+| --- | --- | --- | --- |
+| `INPUT_SESSION_REQUIRED` | no | PC | Batch with no live session on this PC |
+| `INPUT_SESSION_EXPIRED` | yes | PC | Batch names a retired session id (stopped, expired, taken over, restarted) |
+| `INPUT_SESSION_OWNED` | no | PC | `input.session_start` while another controller owns the session and `takeover` is false |
+| `INPUT_SEQUENCE_INVALID` | no | relay, PC | `seq` not greater than the last one (relay: already forwarded on this socket); batch dropped, session continues |
+| `INPUT_STALE` | yes | relay, PC | Outside the 5 s window (relay) or older than the 1 s age budget at dispatch (PC) |
+| `INPUT_SUSPENDED` | yes | PC | Batch for a session suspended by backpressure; start a fresh session |
+| `INPUT_RESTRICTED` | no | PC | Keyboard input while a known restriction applies (elevated or protected foreground); pointer events still run |
+| `INPUT_INJECTION_FAILED` | no | PC | `SendInput` inserted fewer events than requested; UIPI is never claimed from the return value alone |
+| `INPUT_NOT_PERMITTED` | no | relay, PC | An event type the grant does not cover (`detail.missing` at the relay) |
+| `INPUT_TARGET_CHANGED` | no | PC | The foreground window changed before text/key/shortcut |
+
+Existing codes also apply: `UNKNOWN_KEY` (kid ≠ socket kid, close 4003), `SIGNATURE_INVALID`,
+`TARGET_PC_MISMATCH`, `PROTOCOL_INCOMPATIBLE`, `PC_OFFLINE`, `PC_RECONNECTING`, `RATE_LIMITED`,
+`GRANT_MISSING`, `PC_SESSION_LOCKED`, `PC_REMOTE_DISABLED`, `PLATFORM_UNSUPPORTED`.
+
+### 17.7 Examples
+
+Start a session (an ordinary signed command, §4) and its result (`input_session_result`). Values
+are illustrative and validate against the schema:
+
+```json
+{"type":"result","command_id":"…","origin":"agent","state":"succeeded","at":"2026-10-09T12:00:00.180Z","duration_ms":35,
+ "result":{"input_session_id":"Q2xvY2tXb3JrT3JhbmdlMQ","lease_seconds":3,"input_age_budget_ms":1000,"max_batch_events":64,
+           "pointer":true,"keyboard":true,"foreground_app":{"process_name":"chrome.exe","browser":"chrome"}}}
+```
+
+The result leaves out `window_title`, because results are journaled on the PC. The title reaches the
+phone only in memory-only `state` frames.
+
+An `input_batch` payload with a move, a click, literal text and Enter, as built by
+`build_input_batch_payload`:
+
+```json
+{"type":"input_batch","protocol_version":"1.1","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","input_session_id":"Q2xvY2tXb3JrT3JhbmdlMQ","seq":42,"issued_at":"2026-10-09T12:00:00.250Z","expires_at":"2026-10-09T12:00:05.250Z","events":[{"type":"pointer_move","dx":14,"dy":-3},{"type":"pointer_button","button":"left","action":"click"},{"type":"text","text":"weather today"},{"type":"key","key":"enter"}]}
+```
+
+The controller frame that carries it. This envelope is signed with the **test-only** fixture key
+`shared/protocol/fixtures/test-controller-key.pem` and verifies with `verify_and_parse_input_batch`
+at `issued_at`:
+
+```json
+{"type":"input_batch","pc_id":"33333333-3333-4333-8333-333333333333","envelope":{"v":1,"alg":"ES256","kid":"SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU","payload":"{\"type\":\"input_batch\",\"protocol_version\":\"1.1\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"controller_id\":\"22222222-2222-4222-8222-222222222222\",\"target_pc_id\":\"33333333-3333-4333-8333-333333333333\",\"input_session_id\":\"Q2xvY2tXb3JrT3JhbmdlMQ\",\"seq\":42,\"issued_at\":\"2026-10-09T12:00:00.250Z\",\"expires_at\":\"2026-10-09T12:00:05.250Z\",\"events\":[{\"type\":\"pointer_move\",\"dx\":14,\"dy\":-3},{\"type\":\"pointer_button\",\"button\":\"left\",\"action\":\"click\"},{\"type\":\"text\",\"text\":\"weather today\"},{\"type\":\"key\",\"key\":\"enter\"}]}","sig":"NBHu48GQWf-f2psQ845cqyMLK6DLMKw6ak7dlFNaoCEwXG1n9UUi3WeowxkMjT7ZFNZ3sv_DC_6mz1u-E0yI4g"}}
+```
+
+The relay forwards it to the agent as `{"type":"input_batch","envelope":{…unchanged…},"relay":{"received_at":"2026-10-09T12:00:00.290Z","connection_id":"44444444-4444-4444-8444-444444444444"}}`.
+
+The ack the owning phone receives (Windows accepted the events, with nothing held):
+
+```json
+{"type":"input_ack","pc_id":"33333333-3333-4333-8333-333333333333","input_session_id":"Q2xvY2tXb3JrT3JhbmdlMQ","last_seq":42,"accepted_events":118,"dropped_events":0,"held_buttons":[],"held_keys":[],"at":"2026-10-09T12:00:00.410Z"}
+```
+
+Lease expiry after the phone went quiet with a drag held (sent to the owner and the PC's subscribers):
+
+```json
+{"type":"input_session","pc_id":"33333333-3333-4333-8333-333333333333","input_session_id":"Q2xvY2tXb3JrT3JhbmdlMQ","controller_id":"22222222-2222-4222-8222-222222222222","event":"ended","reason":"lease_expired","holds_released":1,"at":"2026-10-09T12:00:08.100Z"}
+```
+
+A stale batch as the agent reports it, and as the phone receives it after relay routing:
+
+```json
+{"type":"error","error":{"code":"INPUT_STALE","message":"Input was delayed too long to deliver safely and was discarded. Try again.","retryable":true},"ref_input_session_id":"Q2xvY2tXb3JrT3JhbmdlMQ","ref_controller_id":"22222222-2222-4222-8222-222222222222"}
+{"type":"error","error":{"code":"INPUT_STALE","message":"Input was delayed too long to deliver safely and was discarded. Try again.","retryable":true},"ref_pc_id":"33333333-3333-4333-8333-333333333333","ref_input_session_id":"Q2xvY2tXb3JrT3JhbmdlMQ"}
+```
+
+The PC owner grants touchpad and keyboard to an already-paired phone:
+
+```json
+{"type":"grant_update","controller_id":"22222222-2222-4222-8222-222222222222","kid":"SuoPiWQtA7FeESmVk-Yk4r0ucbmt81cCcsFjGdkxXoU","capabilities":["status","media","volume","pointer","keyboard"]}
+```
+
+Each frame above validates against `relay-frames.schema.json` in its direction, checked with
+`dome_protocol` `validate_frame` on 2026-10-09. The signed example was also verified with
+`verify_and_parse_input_batch`. Both checks were one-off scripts, not part of a test suite.
+
+### 17.8 Support tickets (REST, 1.1)
+
+| Route | Auth | Request | Response |
+| --- | --- | --- | --- |
+| `POST /v1/support/tickets` | session + CSRF (10 per hour per account) | `support_ticket_request{category: connection \| pairing \| media \| input \| apps \| power \| install \| billing \| account \| other, message 1..2000, error_code?, diagnostics? (≤ 32,768 chars, already redacted by the client and redacted again by the server), app_version?}` | 201 `support_ticket_response{ticket_id, reference: DM-XXXXXXXX, status: received \| in_review \| answered \| closed, category, error_code?, created_at, updated_at, response_expectation? (only when the operator configured one), answer?}` |
+| `GET /v1/support/tickets` | session | | `support_tickets_response{tickets[] (≤ 50, newest first)}` |
+| `GET /v1/support/tickets/{id}` | session | | `support_ticket_response`; another account's id is a 404 |
+
+No support route can execute, queue or forward anything to a PC. A client may show "received" only
+with a `reference` from a 2xx body that validates.
+
+### 17.9 Evidence
+
+- unit-tested: the shapes, builders and verifiers in `shared/python` (135 tests) and `shared/ts`
+  (86 tests) on 2026-10-09.
+- integration-tested: relay behaviour in `cloud-api/tests/test_input_routing.py`,
+  `tests/test_input_hardening.py` and `tests/test_support_tickets.py` (cloud-api: 118 passed on
+  2026-10-09).
+- unit-tested: agent behaviour in `pc-agent/tests/test_input_session.py`,
+  `tests/test_single_instance.py` and `tests/test_windows_input_layout.py` (pc-agent: 256 passed,
+  1 skipped).
+- unit-tested: phone behaviour in `mobile-app/test/input.test.ts` and
+  `test/components/TouchpadPage.test.tsx` (287 passed).
+- integration-tested: the whole path with the real agent process in `tests/test_e2e_input.py`
+  (run record in `docs/ACCEPTANCE.md`).
+- not yet verified: Windows `SendInput`, the real phone keyboard and latency on the real relay path.

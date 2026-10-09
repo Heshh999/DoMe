@@ -28,6 +28,11 @@ figure on the vendor page before relying on it; prices change.
 - Identity is delegated to an OIDC issuer (Auth0 or Keycloak); billing to Stripe. Both scale with
   accounts, not with commands.
 - There is no AI cost until the Phase E gate (both plan allowances are 0).
+- Manual touchpad/keyboard (protocol 1.1, Free) is the only **streaming** traffic. While a phone
+  is actively controlling the cursor, the relay receives and verifies one small signed batch per
+  animation-frame flush, and forwards it to the PC. It stores nothing per batch. Its cost is relay
+  CPU (one ES256 verification plus a handful of database lookups per batch) and egress, not storage
+  (§7A).
 
 ## 2. Vendor price inputs (looked up 2026-10-08)
 
@@ -76,6 +81,14 @@ figure on the vendor page before relying on it; prices change.
 | Staging | one 1 GB machine, kept running | assumption; could be stopped between deploys |
 | Monitoring | Grafana Cloud free + Better Stack free at every tier; Sentry Developer free at 100 MAA, Team $26 from 1,000 | assumption |
 | AI | $0 (allowances are 0 until Phase E). Sensitivity in §8 | `plans.json` |
+| Touchpad/keyboard batch rate cap | 40 batches/s per phone, burst 80; identical on Free and Pro | `plans.json input_rate_limit`, `version.json limits.input_batches_per_second` |
+| Typical batch rate during active use | 10–20 batches/s while a finger is moving or text is being typed; about 1/s (empty keepalive) while the touchpad screen is open and idle; 0 when the screen is closed | assumption: the PWA flushes at most once per animation frame (up to 60 Hz on iPhone) and sends a keepalive about every second (`mobile-app/src/lib/input.ts`); active-use rate **not measured on a device** |
+| Input frame size | ≈ 0.65 KB keepalive, ≈ 0.7 KB one motion event, ≈ 0.77 KB motion + click, ≈ 3.6 KB for a full 64-event batch; relay → agent adds ≈ 0.1 KB of routing metadata | computed on 2026-10-09 by building and signing frames with `shared/python` (`build_input_batch_payload`, `sign_payload`); compact JSON, ES256 envelope |
+| Acks to the phone | `input_ack` ≤ 4/s per live session, ≈ 0.3 KB each; `input_session` frames only on start/suspend/end | `rules.input_sessions` (ack rate), size estimated from the schema |
+| Active touchpad/keyboard use | 20 % of MAA use it; 60 minutes of active control per user per month; peak concurrent active sessions ≈ 1 % of MAA | assumption, no usage data exists |
+| Verification per batch | Relay: one ES256 signature verification plus ≈ 5 database lookups (controller, account/plan, plan-enabled controllers, PC, grant). Agent: one more ES256 verification on the customer's PC (not a service cost) | `relay/router.py::route_input_batch`, `cloud-api/KNOWN_ISSUES.md` #7 |
+| ES256 verification time | ≈ 80 µs per signature with Python `cryptography` on the 4-CPU build machine (one micro-benchmark of 2,000 verifications, single thread) | measured once on 2026-10-09; **not load-tested** and not measured on the production host |
+| Input storage | none per batch: no `commands` row, no result, no log line; two lifecycle rows per session (`input.session_start`/`stop`) and at most one `input_rejected` security event per controller per minute | `rules.input_sessions`, cloud-api `README.md` "Manual input" |
 
 ## 4. Cost structure
 
@@ -157,10 +170,54 @@ the only way to validate conversion is the pricing experiment itself.
 | Concurrent sockets | Peak ≈ 50 % of PCs online + 10 % of phones. At 10,000 MAA with 1.1 PCs/account that is ≈ 5,500 agent sockets + 1,000 phones, **above the 5,000 default cap of one process** | not yet verified: memory per socket and the real cap of a 4 GB machine have not been load-tested; the horizontal-scaling seam (Redis pub/sub, ADR-0001 D1) is not built. Treat 10,000 MAA as requiring either a measured cap increase or the Redis work |
 | Heartbeats | 25 s pings per agent: 5,500 sockets → 220 frames/s inbound, trivial CPU | load-tested only at 40 + 40 sockets on loopback (numbers printed by `test_load_smoke.py`) |
 | Dispatch rate | Plan limits allow 120 manual + 360 coalescable commands/min per controller; realistic use is a few commands per session | not measured beyond the load smoke |
+| Manual-input stream | ≤ 40 batches/s per phone (typical 10–20 while active), verified and forwarded with no storage; see §7A | integration-tested for correctness and rate limiting (cloud-api `tests/test_input_routing.py`, `tests/test_input_hardening.py`); throughput and latency **not load-tested**; the input-age budget (1 s at dispatch) has not been measured on a real network |
 | Database size | < 1 GB for the first 10,000 accounts given the retention table; MPG Basic's 1 GB RAM is the limit, not disk | estimate |
 | Backups | Included with Managed Postgres; a restore has **not** been rehearsed (required by the spec before calling a release production-ready) | not yet verified |
 | Idle agent footprint | Target "modest"; not measured on Windows | not yet verified (not Windows-device-tested) |
 | Latency targets | Median < 500 ms, p95 < 1.5 s on a healthy network are targets to measure, not claims | not yet verified on real devices; loopback smoke numbers only |
+
+## 7A. Active touchpad/keyboard sessions (assumptions)
+
+Everything in this section is an assumption or a computation from the inputs in §3. No touchpad
+session has run on a device or against a deployed relay, so the active-use rate and the
+concurrency are guesses until real usage exists.
+
+Per active session (one phone controlling one PC):
+
+| Quantity | Typical (15 batches/s) | Cap (40 batches/s) | Idle screen (1 keepalive/s) |
+| --- | --- | --- | --- |
+| Phone → relay (inbound, not billed on the modelled host) | ≈ 11 KB/s | ≈ 31 KB/s with small batches; at most ≈ 144 KB/s with full 64-event motion batches | ≈ 0.65 KB/s |
+| Relay → PC (outbound, billed) | ≈ 12 KB/s | ≈ 32–148 KB/s | ≈ 0.75 KB/s |
+| Relay → phone acks (outbound, billed) | ≈ 1.2 KB/s (4 acks/s) | ≈ 1.2 KB/s | ≈ 0 (acks follow accepted events) |
+| Relay signature verifications | 15/s ≈ 1.2 ms CPU/s | 40/s ≈ 3.2 ms CPU/s | 1/s |
+| Relay database lookups (≈ 5 per batch) | ≈ 75/s | ≈ 200/s | ≈ 5/s |
+| Storage | none per batch | none | none |
+
+Monthly egress for one touchpad user at the §3 assumption (60 active minutes at the typical rate):
+(12 + 1.2) KB/s × 3,600 s ≈ 48 MB ≈ **$0.001** at $0.02/GB. This is negligible next to the $0.01
+per-account budget in §4, so the per-account variable costs in §4–§6 are unchanged.
+
+Concurrency is what matters. At the assumed 1 % of MAA controlling at the same moment:
+
+| MAA | Concurrent active sessions | Batches/s at the relay (typical) | ES256 CPU (≈ 80 µs each) | Database lookups/s (≈ 5 per batch) |
+| --- | --- | --- | --- | --- |
+| 100 | 1 | 15 | ≈ 0.1 % of one core | ≈ 75 |
+| 1,000 | 10 | 150 | ≈ 1.2 % of one core | ≈ 750 |
+| 10,000 | 100 | 1,500 | ≈ 12 % of one core (32 % at the cap) | ≈ 7,500 |
+
+Reading:
+- Signature verification is cheap at these scales.
+- The per-batch database work is not. About 7,500 lookups/s at 10,000 MAA is well beyond what
+  this model can assume of the Basic or Starter Managed Postgres plans in §4. No query rate has
+  been load-tested.
+- Before that scale, the relay needs the short per-socket authorisation cache proposed in
+  `cloud-api/KNOWN_ISSUES.md` #7 (invalidated by `grant_update`, revocation and PC status changes).
+  With it, each batch needs no database work, and the fixed tiers in §4 should stand.
+- Without the cache, budget a larger Postgres plan at 10,000 MAA (for example Launch, $282/month
+  instead of Starter, +$210/month). That would lower the 10,000-MAA rows of §5 by that amount.
+
+Free and Pro carry the same input cost by design (identical `input_rate_limit`). Input
+responsiveness is never a paid lever, so touchpad traffic is a Free-account cost.
 
 ## 8. Sensitivities
 
@@ -182,6 +239,11 @@ the only way to validate conversion is the pricing experiment itself.
 - **Free-tier dependence.** The base case uses free tiers for monitoring and email at small scale.
   Removing every free tier (Sentry Team $26, Resend Pro $20, Better Stack Responder $29) adds $75/month
   at 100 MAA. Free tiers are convenient, not a plan.
+- **Touchpad concurrency.** If 5 % of MAA control at the same moment instead of 1 %, relay batch
+  volume and database lookups grow five-fold (≈ 37,500 lookups/s at 10,000 MAA without the cache in
+  §7A). Egress stays immaterial (≈ $0.005/user/month even at 5 hours of active control). Measure the
+  real rate (batches per active minute, session length, concurrency) on staging before sizing the
+  database. The relay rate limits bound the worst case per phone, not the number of phones.
 - **Hosting alternative.** Neon Launch at an average 0.25 CU (≈ $19/month + $0.35/GB) or Supabase Pro
   ($25/month, Micro compute) would replace the $41 Postgres line at small scale; Fly Managed Postgres is
   kept in the base case because it stays inside the relay's private network and includes HA.

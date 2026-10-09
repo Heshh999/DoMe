@@ -3,7 +3,7 @@
 Status: **pre-release engineering build. Nothing in this document has been Windows-device-tested.**
 Every Windows API path in `pc-agent/dome_agent/platform/windows/` is implemented against the real
 Windows APIs and unit-tested on Linux behind an explicit fake platform (`DOME_AGENT_PLATFORM=fake`,
-194 tests at the last recorded run), but the agent has never been started on a Windows machine, the
+256 passed and 1 skipped at the last full run recorded in `pc-agent/README.md`), but the agent has never been started on a Windows machine, the
 PyInstaller specs have never been built, and there is no installer package yet. This document
 describes what the agent does and the install, run and uninstall steps **as the code implements
 them today**; the last section lists what is still blocked. Evidence tags follow
@@ -20,11 +20,16 @@ that user's ordinary rights. It:
 - opens **one outbound WebSocket** to the DoMe service (`wss://…/ws/agent`) and reconnects with
   backoff; it never listens on the internet and never accepts inbound connections from the network;
 - shows a **tray icon** (green connected, amber reconnecting, red disabled or superseded, grey offline)
-  with the menu *status · Disable/Enable remote control · Pair a phone… · Approved apps… · Start at
-  login · Reconnect · Diagnostics… · Quit DoMe*;
-- executes only the 30 actions of the shared registry (`shared/protocol/actions.json`): YouTube
+  with the menu *status · Disable/Enable remote control · Stop manual input · Paired phones ▸ · Pair a
+  phone… · Approved apps… · Start at login · Reconnect · Diagnostics… · Quit DoMe*;
+- executes only the 32 actions of the shared registry (`shared/protocol/actions.json`): YouTube
   control through the browser extension, Windows media sessions, system volume and mute, approved
-  application launch/focus/minimise/close, lock, and explicitly confirmed sleep/restart/shutdown;
+  application launch/focus/minimise/close, lock, explicitly confirmed sleep/restart/shutdown, and
+  starting/stopping a manual-input session;
+- injects **touchpad and keyboard input** (`SendInput`) from phones the PC owner explicitly allowed
+  (§4.9), through a signed, bounded input stream that is never queued or replayed
+  (`docs/INPUT_CONTROL.md`);
+- runs **once per Windows user session** and at most once per Windows account (§4.10);
 - verifies every command's ES256 signature against a key **you approved on this PC during pairing**,
   checks the grant, the replay journal, the target and (for disruptive actions) a signed confirmation
   before doing anything — the service cannot make the PC run something the PC has not authorised;
@@ -66,6 +71,8 @@ changes). Treat all of this as the checklist for the first device pass, not as a
 | Native-messaging manifest | `%LOCALAPPDATA%\DoMe\com.dome.agent.json` | `install-native-host` |
 | Native-host registration | `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.dome.agent` (default value = manifest path) | `install-native-host` |
 | Start at login | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DoMe` = `"<path>\DoMe.exe" run` | tray *Start at login* (opt-in; off by default) |
+| Instance lock and pid file | Named mutex `Local\DoMe.Agent.<session id>` (Windows) or `%LOCALAPPDATA%\DoMe\agent.lock` (`flock`, other systems), plus `agent.pid` (`{pid, session, started_at}`) | `run` |
+| Input recovery file | `%LOCALAPPDATA%\DoMe\input_holds.json` — only while the phone holds a button or key: session id, phone id and the held button/key **names**, never typed text; deleted when released | `run` |
 | Local IPC endpoints | Named pipes `\\.\pipe\DoMe.Agent.<hash>` (browser bridge) and `\\.\pipe\DoMe.Control.<hash>` (CLI ⇄ agent), DACL restricted to the current user and checked for the same session | `run` |
 
 No `HKLM` keys, no services, no scheduled tasks, no Program Files writes are made by the agent itself.
@@ -209,6 +216,84 @@ confirmation that arrives afterwards is refused, and no frame from the service c
 `DoMe.exe enable` or the tray item turns it back on. `DoMe.exe revoke <controller_id>` revokes one phone
 locally and tells the service (immediately, or on the next connect if offline).
 
+### 4.9 Allow touchpad and keyboard for a phone (on the PC)
+
+Touchpad (`pointer`) and keyboard (`keyboard`) are two separate permissions per phone. They are **off**
+for every phone until you turn them on here, including phones paired before this version; a phone
+cannot grant them to itself, and the DoMe service cannot either (`rules.grant_update`).
+
+**What they allow** — the PC shows this text before you grant them
+(`dome_agent/pairing.py::INPUT_SCOPE_EXPLANATION`):
+
+> Touchpad (pointer) and Keyboard let this phone move the mouse, click, scroll and type into whatever
+> is in front on this PC, in every app of the unlocked Windows session, not only the approved apps. The
+> approved-app list restricts structured app actions; it is not a sandbox around a real mouse and
+> keyboard. Only the phone you approve can use them, only while you keep remote control on, and you can
+> switch them off here at any time.
+
+Grant them only to phones you trust as much as someone sitting at this PC. Ways to grant:
+
+1. **While pairing**: the approval window lists the requested permissions and adds two unticked
+   checkboxes, *Allow touchpad / mouse (pointer)* and *Allow keyboard*. In the console, `DoMe.exe pair`
+   asks "Allow touchpad / mouse (pointer) for this phone? [y/N]" and "Allow keyboard (typing, keys,
+   shortcuts) for this phone? [y/N]" separately. `--yes` never grants them; only `--pointer` /
+   `--keyboard` do.
+2. **For a phone that is already paired**: tray → **Paired phones ▸ ‹phone name› (‹id›…) ▸ Allow
+   touchpad** / **Allow keyboard** (checkable; ticking shows the explanation as a notification;
+   **What this allows…** shows it again). A phone paired a moment ago appears after the next status
+   update (`pc-agent/KNOWN_ISSUES.md` #9).
+3. **Console**:
+
+   ```bat
+   DoMe.exe status                                   REM lists paired phones and their controller ids
+   DoMe.exe grant <controller_id> --pointer --keyboard
+   DoMe.exe grant <controller_id> --remove-keyboard
+   ```
+
+   The command prints the explanation, then "Permissions for <id>: …". With the agent not running it
+   changes the local store and says "The agent is not running, so the DoMe service has NOT been told
+   yet: it sends grant_update when it connects." (suffix "(service update pending)").
+
+The agent tells the service (`grant_update`), the phone's Devices page then shows "Touchpad / keyboard:
+Allowed: touchpad and keyboard". Removing both ends a live session and releases anything the phone
+held; removing only the touchpad releases a drag. To stop the current session without changing
+permissions: tray → **Stop manual input** or `DoMe.exe stop-input` ("Manual input stopped; released N
+held button(s)/key(s)."). **Disable remote control** (§4.8) stops all input too. Evidence: grant,
+removal and offline re-send are **integration-tested** on Linux; the tray and console flows on Windows
+are **not yet verified**.
+
+Windows itself refuses remote input on the lock screen, the sign-in screen, UAC prompts and windows
+running as administrator. DoMe does not work around that and does not need to run as administrator.
+
+### 4.10 One DoMe per Windows session
+
+Starting `DoMe.exe` again while it runs does not start a second agent: the new process asks the running
+one to show its window, prints "DoMe is already running in this session (pid N); its window was brought
+up. Nothing else started." and exits. If the running agent does not answer, it prints "Another DoMe
+instance is running but not responding (pid N)…" and suggests `dome-agent repair`. A second Windows
+session of the **same** Windows account (Remote Desktop, a second sign-in) is refused with "DoMe already
+runs for this Windows account in session N …", because both sessions would share one PC identity;
+another Windows account runs its own agent normally. DoMe never terminates another process.
+`DoMe.exe status` reports a stale endpoint, a stale pid file, a permission problem on
+`%LOCALAPPDATA%\DoMe` and an other-session conflict on an `INSTANCE:` line. Messages and steps:
+`docs/TROUBLESHOOTING.md` §20. Evidence: **unit-/integration-tested** on Linux (`flock`); the Windows
+named mutex and session-id detection are **not yet verified**.
+
+### 4.11 Repair
+
+```bat
+DoMe.exe repair
+DoMe.exe repair --host-path "C:\…\dome-native-host.exe"
+```
+
+Re-writes and re-registers the browser native-messaging host, removes a stale local endpoint and a stale
+pid file, and checks that `%LOCALAPPDATA%\DoMe` is writable. It leaves a running agent running, refuses
+to touch one that does not answer, and never touches `identity.json`, the DPAPI-protected key and
+credential, the paired phones and their permissions, or the approved apps; it ends with "Repair
+finished. Pairing, grants and approved apps were preserved; nothing was terminated." A new phone still
+needs the local approval. Evidence: **integration-tested** on Linux with a running agent; registry
+re-registration on Windows **not yet verified**.
+
 ## 5. Uninstall — as implemented today
 
 There is no uninstaller; the steps mirror what the install created:
@@ -219,8 +304,9 @@ There is no uninstaller; the steps mirror what the install created:
    unlink it from any signed-in device; the credential on this PC is useless once the folder is gone.
 3. `DoMe.exe uninstall-native-host` — removes the two `HKCU` native-messaging keys.
 4. Tray → untick **Start at login** (or delete `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DoMe`).
-5. Delete `%LOCALAPPDATA%\DoMe` — this removes the SQLite store (local phone approvals, journal,
-   approved apps), the DPAPI-protected key and credential, logs, diagnostics and the manifest file.
+5. Delete `%LOCALAPPDATA%\DoMe` — this removes the SQLite store (local phone approvals and their
+   touchpad/keyboard permissions, journal, approved apps), the DPAPI-protected key and credential, logs,
+   diagnostics, the pid file, any input recovery file and the manifest file.
 6. Remove the DoMe extension from `chrome://extensions` / `edge://extensions` and delete the
    `DoMe.exe` folder.
 
@@ -238,6 +324,16 @@ Spec §15 asks for installer-driven cleanup of all of the above; that packaging 
   for restart/shutdown, so Windows itself prompts about unsaved work and nothing is force-closed. Once
   the OS call has been issued a cancel is honestly reported as `canceled: false`
   (`pc-agent/KNOWN_ISSUES.md` #1).
+- **Power confirmations** on the phone state that sleep, restart or shutdown can interrupt or end
+  remote access and that DoMe cannot wake or turn the PC on again remotely (no remote wake in V1); the
+  agent's countdown detail says the same (`dome_agent/authz.py::power_confirmation_detail`). After a
+  restart, DoMe reconnects only if Start at login is on and Windows has signed you in.
+- **Manual input** ends by itself when the phone goes quiet for 3 s, when Windows locks or shows a
+  secure desktop (lock, sign-in, UAC), when remote control is disabled, when the phone is revoked or its
+  permissions are removed, and when DoMe quits; each time the agent releases the buttons and keys that
+  phone was holding (never your physical keyboard's). After a crash, the next start releases them from
+  `input_holds.json`. With an elevated window in front, typing from the phone is refused and clicks may
+  be dropped by Windows (`docs/INPUT_CONTROL.md` §7–§8).
 - **Close app** asks the window to close normally and reports `CLOSE_REFUSED` if it stays open
   (unsaved-work dialog); it never kills the process.
 - **Clock**: commands carry `issued_at`/`expires_at`; the PC tolerates 5 s of skew. A badly wrong PC
@@ -252,7 +348,9 @@ Spec §15 asks for installer-driven cleanup of all of the above; that packaging 
 `pc-agent/README.md` → "Windows verification checklist" is the exact list to work through on a real
 machine (DPAPI, volume, media sessions, lock, apps, power on a disposable machine, native host with
 two Chrome profiles, IPC identity across users and sessions, start at login, tray colours, relay URL
-error, offline revocation, packaging). `browser-extension/README.md` → "Manual verification checklist"
+error, offline revocation, packaging, and for protocol 1.1: SendInput on a real desktop, multi-monitor /
+mixed DPI, UAC / lock refusal, clock skew, tray grants, second launch, repair, crash recovery and the
+power confirmation copy). `browser-extension/README.md` → "Manual verification checklist"
 covers the browser side. Record results in `docs/ACCEPTANCE.md` with the tag **Windows-device-tested**.
 
 ## 8. Development run on Linux (and macOS)
@@ -275,7 +373,7 @@ export DOME_AGENT_PLATFORM=fake DOME_AGENT_HEADLESS=1
 .venv/bin/dome-agent run                    # terminal 1
 .venv/bin/dome-agent status                 # terminal 2
 .venv/bin/dome-agent pair                   # QR + code; or `pair --print-code --no-wait` then `pair-approve <id>`
-.venv/bin/pytest -q                         # 194 tests at the last recorded run (fake platform, fake relay, fake extension)
+.venv/bin/pytest -q                         # 256 passed, 1 skipped at the last recorded full run (fake platform, fake relay, fake extension)
 ```
 
 `install-native-host` on Linux writes the manifest and reports that registry registration was skipped;
@@ -293,6 +391,8 @@ test `tests/test_processes.py::test_native_host_process_forwards_frames` (**unit
 | Production extension id | `PRODUCTION_EXTENSION_IDS` is empty; only `DOME_AGENT_DEV_EXTENSION_ID` works | Chrome Web Store listing (founder account), pin its `"key"` in `browser-extension/public/manifest.json`, bake the id into the release build |
 | Public download page | `mobile-app` download links are disabled with "coming soon" | A signed build to link to |
 | Windows device evidence | None | The checklist in §7 |
+| Touchpad/keyboard on a real desktop (`SendInput`, multi-monitor, UAC/elevation, lock) | Implemented, unit-/integration-tested with a fake adapter only | The protocol 1.1 rows of the checklist in §7; results go to `docs/INPUT_CONTROL.md` §10–§11 and `docs/ACCEPTANCE.md` |
+| Single-instance mutex and same-account session detection on Windows | Implemented, not run on Windows | Checklist rows *Second launch* and *Repair* |
 | `media_while_locked` switch | Setting exists, no UI | A tray or CLI toggle (small change) |
 
 None of these affect the security model: an unsigned development build has the same authorisation
