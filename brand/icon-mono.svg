@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- DoMe glyph only, single colour (currentColor), no tile. For the Windows tray, monochrome contexts
      and anywhere the surface supplies the background. Same geometry as icon.svg. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t">
-  <title id="t">DoMe</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="dome-icon-mono-title">
+  <title id="dome-icon-mono-title">DoMe</title>
   <desc>A dome arc over a dot, single colour.</desc>
-  <g id="glyph">
+  <g id="dome-icon-mono-glyph">
     <path d="M15 39A17 17 0 0 1 49 39" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
     <circle cx="32" cy="39" r="5.5" fill="currentColor"/>
   </g>

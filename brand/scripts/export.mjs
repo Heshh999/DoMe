@@ -19,6 +19,18 @@ export const BRAND_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const EXPORTS_DIR = resolve(BRAND_DIR, "exports");
 
 /** Brand colour tokens used by the export plan (kept in sync with BRAND.md by tests/brand.test.mjs). */
+/**
+ * Role suffixes that couple the SVG sources to this script. Every id in the sources is file-unique
+ * (`dome-icon-tile`, `dome-wordmark-dark-glyph`, ...) so that several brand SVGs can be inlined on one
+ * page; the script recognises the *role* by the suffix instead of a fixed id.
+ */
+export const TILE_ID_RE = /(^|-)tile$/;
+export const GLYPH_GROUP_RE = /(^|-)glyph$/;
+/** @param {string|undefined} id */
+export const isTileId = (id) => id !== undefined && TILE_ID_RE.test(id);
+/** @param {string|undefined} id */
+export const isGlyphGroup = (id) => id !== undefined && GLYPH_GROUP_RE.test(id);
+
 export const TOKENS = Object.freeze({
   night: "#0b0f17",
   paper: "#f6f7fb",
@@ -157,6 +169,8 @@ export function parseSvg(text, options = {}) {
   /** @type {{name: string, fill: RGB|null|undefined, stroke: RGB|null|undefined, strokeWidth: number|undefined, group: string|undefined}[]} */
   const stack = []; // inherited paint state per open element
   let sawSvg = false;
+  /** @type {Set<string>} */
+  const ids = new Set();
 
   for (const tag of tags) {
     if (tag.closing) {
@@ -168,6 +182,11 @@ export function parseSvg(text, options = {}) {
     if (!ALLOWED_ELEMENTS.has(tag.name)) throw new Error(`element <${tag.name}> is outside the brand SVG subset`);
     for (const key of Object.keys(tag.attrs)) {
       if (!ELEMENT_ATTRS[tag.name].has(key)) throw new Error(`attribute ${key} on <${tag.name}> is outside the brand SVG subset`);
+    }
+    if (tag.attrs.id !== undefined) {
+      if (!/^[A-Za-z][\w-]*$/.test(tag.attrs.id)) throw new Error(`id="${tag.attrs.id}" must be a simple identifier (letters, digits, - and _)`);
+      if (ids.has(tag.attrs.id)) throw new Error(`duplicate id="${tag.attrs.id}" (ids must be unique within a file)`);
+      ids.add(tag.attrs.id);
     }
     const parent = stack.length ? stack[stack.length - 1] : { name: "", fill: undefined, stroke: undefined, strokeWidth: undefined, group: undefined };
     const cap = tag.attrs["stroke-linecap"];
@@ -421,8 +440,9 @@ export function arcToPoints(x1, y1, rxIn, ryIn, largeArc, sweep, x2, y2) {
  * @property {number} width   output width in px
  * @property {number} [height] output height in px (default: width × viewBox aspect)
  * @property {RGB|null} [background] fills the whole canvas first (null = transparent)
- * @property {string[]} [dropIds] shapes (by id) to leave out, e.g. ["tile"] for full-bleed exports
- * @property {number} [glyphScale] uniform scale about the canvas centre applied to shapes in group "glyph"
+ * @property {string[]} [dropIds] shapes (by id) to leave out, e.g. ["dome-icon-tile"] for full-bleed exports
+ * @property {number} [glyphScale] uniform scale about the canvas centre applied to shapes whose enclosing
+ *   <g> id has the glyph role (GLYPH_GROUP_RE: "glyph" or "*-glyph")
  * @property {Record<string, RGB>} [recolor] replace every paint equal to key colour (as #rrggbb) with value
  */
 
@@ -461,7 +481,7 @@ export function render(doc, options) {
 
   for (const shape of doc.shapes) {
     if (shape.id && drop.has(shape.id)) continue;
-    const gs = shape.group === "glyph" ? glyphScale : 1;
+    const gs = isGlyphGroup(shape.group) ? glyphScale : 1;
     // user units → pixels, scaling glyph shapes about the canvas centre
     /** @param {number} ux @param {number} uy @returns {[number, number]} */
     const toPx = (ux, uy) => {
@@ -736,6 +756,81 @@ function encodeDib({ width, height, data }) {
 }
 
 /**
+ * Decodes a 32-bpp BI_RGB DIB entry as written by encodeDib (XOR BGRA bottom-up + AND mask) back to
+ * straight-alpha RGBA. The AND mask is checked against the alpha channel so a reader that ignores alpha
+ * sees the same silhouette.
+ * @param {Buffer} body
+ * @returns {Image}
+ */
+export function decodeDib(body) {
+  if (body.readUInt32LE(0) !== 40) throw new Error("decodeDib: unexpected BITMAPINFOHEADER size");
+  const width = body.readInt32LE(4);
+  const height = body.readInt32LE(8) / 2;
+  if (body.readUInt16LE(14) !== 32 || body.readUInt32LE(16) !== 0) throw new Error("decodeDib supports only 32 bpp BI_RGB");
+  if (!(width > 0 && Number.isInteger(height) && height > 0)) throw new Error("decodeDib: bad dimensions");
+  const maskStride = Math.ceil(width / 32) * 4;
+  const xorSize = width * height * 4;
+  if (body.length !== 40 + xorSize + maskStride * height) throw new Error("decodeDib: body length mismatch");
+  const data = new Uint8Array(xorSize);
+  for (let y = 0; y < height; y++) {
+    const dstRow = height - 1 - y;
+    for (let x = 0; x < width; x++) {
+      const s = 40 + (y * width + x) * 4;
+      const d = (dstRow * width + x) * 4;
+      data[d] = body[s + 2];
+      data[d + 1] = body[s + 1];
+      data[d + 2] = body[s];
+      data[d + 3] = body[s + 3];
+      const masked = (body[40 + xorSize + y * maskStride + (x >> 3)] >> (7 - (x & 7))) & 1;
+      if (masked !== (data[d + 3] === 0 ? 1 : 0)) throw new Error("decodeDib: AND mask disagrees with the alpha channel");
+    }
+  }
+  return { width, height, data };
+}
+
+/**
+ * Decodes every entry of an .ico produced by encodeIco to RGBA images (DIB or PNG entries).
+ * @param {Buffer} buf
+ * @returns {Image[]}
+ */
+export function decodeIcoImages(buf) {
+  return readIcoDirectory(buf).map((e) => {
+    const body = buf.subarray(e.offset, e.offset + e.size);
+    const img = e.kind === "png" ? decodePng(body) : decodeDib(body);
+    if (img.width !== e.width || img.height !== e.height) throw new Error(`ICO entry says ${e.width}×${e.height} but holds ${img.width}×${img.height}`);
+    return img;
+  });
+}
+
+/** @param {Image} a @param {Image} b */
+function sameImage(a, b) {
+  return a.width === b.width && a.height === b.height && a.data.length === b.data.length && Buffer.from(a.data.buffer, a.data.byteOffset, a.data.length).equals(Buffer.from(b.data.buffer, b.data.byteOffset, b.data.length));
+}
+
+/**
+ * Whether two renders of one plan entry carry the same pixels. Compares decoded RGBA (and, for ICO,
+ * the directory layout), not file bytes: the zlib stream inside a PNG is not stable across Node/zlib
+ * builds, so byte equality would report drift for identical images (DECISIONS D13).
+ * @param {ExportEntry} entry @param {Buffer} a @param {Buffer} b
+ * @returns {boolean}
+ */
+export function exportsEquivalent(entry, a, b) {
+  try {
+    if (entry.ico) {
+      const da = readIcoDirectory(a);
+      const db = readIcoDirectory(b);
+      if (da.length !== db.length || da.some((e, i) => e.width !== db[i].width || e.height !== db[i].height || e.kind !== db[i].kind || e.bpp !== db[i].bpp)) return false;
+      const ia = decodeIcoImages(a);
+      const ib = decodeIcoImages(b);
+      return ia.every((img, i) => sameImage(img, ib[i]));
+    }
+    return sameImage(decodePng(a), decodePng(b));
+  } catch {
+    return false; // unreadable or foreign file on disk counts as drift
+  }
+}
+
+/**
  * Minimal structural read of an .ico (directory + entry kinds); used by the self-check and tests.
  * @param {Buffer} buf
  * @returns {{width: number, height: number, bpp: number, size: number, offset: number, kind: "png"|"dib"}[]}
@@ -797,14 +892,17 @@ export const EXPORT_PLAN = Object.freeze([
   { out: "windows/tray-32.png", source: "icon.svg", mode: "tile", size: 32 },
   { out: "windows/tray-48.png", source: "icon.svg", mode: "tile", size: 48 },
   { out: "windows/tray-256.png", source: "icon.svg", mode: "tile", size: 256 },
-  { out: "windows/tray-mono-light-16.png", source: "icon-mono.svg", mode: "mono", size: 16, color: TOKENS.white },
-  { out: "windows/tray-mono-light-32.png", source: "icon-mono.svg", mode: "mono", size: 32, color: TOKENS.white },
-  { out: "windows/tray-mono-light-48.png", source: "icon-mono.svg", mode: "mono", size: 48, color: TOKENS.white },
-  { out: "windows/tray-mono-light-256.png", source: "icon-mono.svg", mode: "mono", size: 256, color: TOKENS.white },
-  { out: "windows/tray-mono-dark-16.png", source: "icon-mono.svg", mode: "mono", size: 16, color: TOKENS.ink },
-  { out: "windows/tray-mono-dark-32.png", source: "icon-mono.svg", mode: "mono", size: 32, color: TOKENS.ink },
-  { out: "windows/tray-mono-dark-48.png", source: "icon-mono.svg", mode: "mono", size: 48, color: TOKENS.ink },
-  { out: "windows/tray-mono-dark-256.png", source: "icon-mono.svg", mode: "mono", size: 256, color: TOKENS.ink },
+  // Mono glyphs: the suffix names the background the file is FOR (DECISIONS D4): "on-dark" = white glyph
+  // for dark taskbars, "on-light" = Ink glyph for light taskbars. tests/brand.test.mjs checks the paint
+  // luminance against the suffix so the convention cannot drift.
+  { out: "windows/tray-mono-on-dark-16.png", source: "icon-mono.svg", mode: "mono", size: 16, color: TOKENS.white },
+  { out: "windows/tray-mono-on-dark-32.png", source: "icon-mono.svg", mode: "mono", size: 32, color: TOKENS.white },
+  { out: "windows/tray-mono-on-dark-48.png", source: "icon-mono.svg", mode: "mono", size: 48, color: TOKENS.white },
+  { out: "windows/tray-mono-on-dark-256.png", source: "icon-mono.svg", mode: "mono", size: 256, color: TOKENS.white },
+  { out: "windows/tray-mono-on-light-16.png", source: "icon-mono.svg", mode: "mono", size: 16, color: TOKENS.ink },
+  { out: "windows/tray-mono-on-light-32.png", source: "icon-mono.svg", mode: "mono", size: 32, color: TOKENS.ink },
+  { out: "windows/tray-mono-on-light-48.png", source: "icon-mono.svg", mode: "mono", size: 48, color: TOKENS.ink },
+  { out: "windows/tray-mono-on-light-256.png", source: "icon-mono.svg", mode: "mono", size: 256, color: TOKENS.ink },
   { out: "windows/dome.ico", source: "icon.svg", mode: "tile", ico: [16, 32, 48, 256] },
   // Wordmark lockups (website header, installer pages, documents)
   { out: "wordmark/wordmark-504.png", source: "wordmark.svg", mode: "wordmark", width: 504 },
@@ -822,6 +920,18 @@ function loadDoc(source, currentColor) {
   return /** @type {SvgDoc} */ (docCache.get(key));
 }
 
+/**
+ * Ids of the shapes with the tile role in a document (what "bleed" mode drops). Throws when there is
+ * none, so a renamed tile id fails the export instead of silently rendering the tile over the bleed.
+ * @param {SvgDoc} doc
+ * @returns {string[]}
+ */
+export function tileIds(doc) {
+  const ids = doc.shapes.filter((s) => isTileId(s.id)).map((s) => /** @type {string} */ (s.id));
+  if (!ids.length) throw new Error("document has no shape with a tile id (\"tile\" or \"*-tile\")");
+  return ids;
+}
+
 /** @param {ExportEntry} entry @param {number|undefined} size @returns {Image} */
 function renderEntryImage(entry, size) {
   const doc = loadDoc(entry.source, entry.mode === "mono" ? entry.color : undefined);
@@ -832,7 +942,7 @@ function renderEntryImage(entry, size) {
       return render(doc, { width: size, height: size });
     case "bleed":
       if (size === undefined || entry.background === undefined) throw new Error(`${entry.out}: size/background missing`);
-      return render(doc, { width: size, height: size, background: parseHexColor(entry.background), dropIds: ["tile"], glyphScale: entry.glyphScale });
+      return render(doc, { width: size, height: size, background: parseHexColor(entry.background), dropIds: tileIds(doc), glyphScale: entry.glyphScale });
     case "wordmark":
       if (entry.width === undefined) throw new Error(`${entry.out}: width missing`);
       return render(doc, { width: entry.width });
@@ -871,7 +981,8 @@ export function verifyExportBytes(entry, bytes) {
 }
 
 /**
- * Writes every export (or, with check=true, compares against the files on disk). Returns a report.
+ * Writes every export (or, with check=true, compares the decoded pixels of every file on disk against a
+ * fresh render; manifest.json is compared as text). Returns a report.
  * @param {{check?: boolean}} [options]
  */
 export function runExport({ check = false } = {}) {
@@ -887,7 +998,8 @@ export function runExport({ check = false } = {}) {
     const target = resolve(EXPORTS_DIR, entry.out);
     manifest.push({ file: entry.out, source: entry.source, mode: entry.mode, ...(info.kind === "ico" ? { sizes: info.sizes } : { width: info.width, height: info.height }), ...(entry.background ? { background: entry.background } : {}), ...(entry.color ? { color: entry.color } : {}), ...(entry.glyphScale ? { glyph_scale: entry.glyphScale } : {}) });
     if (check) {
-      if (!existsSync(target) || !readFileSync(target).equals(bytes)) drifted.push(entry.out);
+      // pixel equality, not byte equality (see exportsEquivalent)
+      if (!existsSync(target) || !exportsEquivalent(entry, readFileSync(target), bytes)) drifted.push(entry.out);
     } else {
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, bytes);
