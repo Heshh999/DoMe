@@ -479,6 +479,21 @@ test("drift check compares decoded pixels, not compressed bytes: a re-deflated P
   assert.equal(exportsEquivalent(icoEntry, ico, renderEntry(byOut["favicon/favicon.ico"])), false, "ICO with a different directory is drift");
 });
 
+test("export paths named in BRAND.md and README.md exist in the plan; the pre-D12 mono names are gone", () => {
+  const planned = new Set(EXPORT_PLAN.map((e) => e.out));
+  for (const doc of ["BRAND.md", "README.md"]) {
+    const text = read(doc);
+    const named = [...text.matchAll(/(?:exports\/)?((?:pwa|favicon|windows|wordmark)\/[\w.-]+\.(?:png|ico))/g)].map((m) => m[1]);
+    assert.ok(named.length >= 5, `${doc} names export files`);
+    for (const path of named) assert.ok(planned.has(path), `${doc} names ${path}, which the export plan does not produce`);
+    assert.doesNotMatch(text, /tray-mono-(light|dark)-/, `${doc} still uses a pre-D12 mono tray name`);
+  }
+  // BRAND.md §7 recommends the colour tile for the tray and keeps mono as the fallback (DECISIONS D15)
+  const brandMd = read("BRAND.md");
+  assert.match(brandMd, /\| Windows tray \(default\) \| `exports\/windows\/tray-16\.png`/);
+  assert.match(brandMd, /\| Windows tray \(fallback: high-contrast \/ monochrome only\) \| `exports\/windows\/tray-mono-on-dark-16\.png`/);
+});
+
 test("a renamed export cannot leave a stale copy behind: orphans fail --check and are removed on write", () => {
   assert.deepEqual(orphanedExports(), [], "committed exports/ holds only files the plan produces");
   const dir = mkdtempSync(join(tmpdir(), "dome-brand-"));

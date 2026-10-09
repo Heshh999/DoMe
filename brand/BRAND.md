@@ -10,14 +10,20 @@ geometry in the SVG sources of this directory; no font file, stock art or third-
 *a PC at home under its dome, and the one tap on the phone that reaches it*. It is deliberately
 plain: two shapes, one colour, no gradients, no text inside the icon.
 
-Geometry (64-unit grid, identical in every icon file): arc centre (32, 39), radius 17, stroke 6
-with round caps; dot centre (32, 39), radius 5.5. Visual bounds 12–52 × 19–44.5, so the glyph is
-centred in the tile and sits inside the 80 % safe circle required for maskable icons.
+Geometry (64-unit grid, identical in `icon.svg`, `icon-dark.svg` and `icon-mono.svg`): arc centre
+(32, 39), radius 17, stroke 6 with round caps; dot centre (32, 39), radius 5.5. Visual bounds
+12–52 × 19–44.5, so the glyph is centred in the tile. Maskable exports scale it by 0.85 about the
+tile centre; its farthest bounding-box corner is then ≈ 20.3 units from the centre, inside the
+25.6-unit (80 %) safe circle platform masks keep (asserted by `tests/brand.test.mjs`).
 
 **The tile**: a rounded square (corner radius 14/64 = 22 %) in Night with the glyph in Signal.
 
-**The wordmark**: the glyph followed by the word **DoMe** set as monoline strokes (stroke 6 on a
-64-unit grid, cap height 40, x-height 28, baseline 52). Capital D and M, lowercase o and e — the
+**The wordmark**: a wordmark-weight glyph followed by the word **DoMe** set as monoline strokes
+(stroke 6 on a 64-unit grid, cap height 40, x-height 28, baseline 52). The lockup glyph is its own
+drawing, not the icon glyph scaled: arc centre (31, 40), radius 20, dot radius 6.5, stroke 6 so the
+arc has the same stroke as the letters (scaling the icon glyph up to radius 20 would give a 7-unit
+stroke, heavier than the letters). The icon glyph (radius 17, dot 5.5) is used alone, in tiles and the
+tray; the lockup glyph only appears inside the wordmark. Capital D and M, lowercase o and e — the
 name is written *DoMe*, never "Dome", "DOME" or "do me".
 
 ## 2. Colour tokens
@@ -34,9 +40,9 @@ product never disagree.
 | **Signal** | `#5ee1c0` | The glyph and accents **on dark** surfaces |
 | **Signal deep** | `#0c8f70` | The glyph and accents **on light** surfaces (graphics and large text, not body text) |
 | **Paper** | `#f6f7fb` | Light page/app background |
-| **Ink** | `#101522` | Wordmark letters and text on light surfaces; dark-taskbar-inverse tray glyph |
+| **Ink** | `#101522` | Wordmark letters and text on light surfaces; mono tray glyph for light taskbars (`tray-mono-on-light-*.png`) |
 | **Cloud** | `#eef2f8` | Wordmark letters and text on dark surfaces |
-| **White** | `#ffffff` | Tray glyph on dark taskbars (`tray-mono-light-*.png`) |
+| **White** | `#ffffff` | Mono tray glyph for dark taskbars (`tray-mono-on-dark-*.png`) |
 
 Contrast (computed from the hex values with the WCAG relative-luminance formula, rounded; not
 device-measured): Signal on Night ≈ 11.9:1, Cloud on Night ≈ 17.1:1, Ink on Paper ≈ 17.0:1,
@@ -66,8 +72,9 @@ DoMe in the surrounding font.
 - **Icon tile**: nothing else inside the tile; the glyph's own margin (12 units on a 64 grid) is
   part of the design. Maskable exports scale the glyph to 85 % so platform masks never clip it.
 - **Wordmark**: keep clear space of at least the dot's diameter (13 units on the 64-unit grid,
-  ≈ 20 % of the lockup height) on every side. The exported PNGs include 8 units of built-in
-  padding on the left/right and 12 on top/bottom; add the rest in the layout.
+  ≈ 20 % of the lockup height) on every side. The exported PNGs (and the SVG viewBox) include
+  8 units of built-in padding on the left, 9 on the right and 9 on top and bottom (measured from
+  the path geometry including half the stroke; asserted by the tests); add the rest in the layout.
 - **Glyph next to text** (e.g. tray tooltip, setup window title): gap ≥ half the glyph height.
 
 ## 5. Minimum sizes
@@ -75,7 +82,7 @@ DoMe in the surrounding font.
 | Asset | Minimum | Note |
 | --- | --- | --- |
 | Tile icon (`icon.svg`, PNG exports) | 16 × 16 px | At 16 px the arc is 1.5 px thick and the dot 2.75 px wide: still a dome and a dot, verified by rendering and by the pixel test in `tests/brand.test.mjs`, **not yet verified** on a real device screen. |
-| Mono glyph (`icon-mono.svg`) | 16 × 16 px | Windows tray; white on dark taskbars, Ink on light ones. |
+| Mono glyph (`icon-mono.svg`) | 16 × 16 px | Fallback for monochrome / high-contrast contexts only (§7): at 16 px a lone arc over a dot can be mistaken for a one-bar Wi-Fi indicator. White on dark taskbars, Ink on light ones. |
 | Wordmark lockup | 126 × 32 px (height 32) | Below that, use the tile icon alone. |
 
 Never draw the glyph thinner than 6/64 of the tile, and never add a drop shadow, outline or
@@ -89,8 +96,10 @@ Do:
 - Use `icon-dark.svg` only when the Night tile would sit on a Night-coloured background and
   disappear (dark website sections, dark dialogs); it adds a Slate tile with a thin border.
 - Use `wordmark.svg` on light backgrounds and `wordmark-dark.svg` on dark ones.
-- Use `icon-mono.svg` where the platform supplies the colour (Windows tray, monochrome print).
-- Keep the glyph and letters exactly as drawn; scale uniformly.
+- Use `icon-mono.svg` only where the platform requires a single colour (high-contrast mode,
+  monochrome print); the Windows tray uses the colour tile by default (§7).
+- Keep the glyph and letters exactly as drawn in each file; scale each file uniformly. Do not
+  swap the icon glyph into the lockup or the lockup glyph into a tile (§1).
 
 Don't:
 - Recolour the glyph outside the tokens above; no gradients, shadows, bevels or outlines.
@@ -106,8 +115,23 @@ Don't:
 
 Sources are the five SVGs at the top level of `brand/`. Exports are regenerated by
 `node brand/scripts/export.mjs` (no dependencies) into `brand/exports/`; `brand/exports/manifest.json`
-lists every file with its source and render mode. Other components **copy** what they need (the
-maintainer wires this in; nothing outside `brand/` is modified by the brand build):
+lists every file with its source and render mode. Other components **copy** what they need;
+nothing outside `brand/` is modified by the brand build.
+
+**File-name convention**: a `-dark` / `on-dark` suffix always names the background the file is
+*for* (DECISIONS D4): `wordmark-dark.*` has light letters, `tray-mono-on-dark-*.png` is a white glyph
+for a dark taskbar, `tray-mono-on-light-*.png` an Ink glyph for a light one. The tests check every
+suffixed export's paint luminance against its suffix.
+
+**Downstream consumer — rename in both places**: the PWA and favicon rows below are copied by
+`mobile-app/scripts/make-icons.mjs` (`pnpm gen:icons` in `mobile-app/`), which reads
+`exports/manifest.json` (fields `file` and `source`, and requires `source: "icon.svg"`) and copies
+`pwa/icon-192.png`, `pwa/icon-512.png`, `pwa/icon-192-maskable.png`, `pwa/icon-512-maskable.png`,
+`pwa/apple-touch-icon-180.png`, `favicon/favicon-16.png`, `favicon/favicon-32.png`,
+`favicon/favicon.ico`, plus `icon.svg` as `favicon.svg`. Renaming any of these exports, or a manifest
+field, must be done together with that script (a brand test fails if the script asks for a path the
+plan no longer produces). The Windows rows are not wired yet (`pc-agent/dome_agent/tray.py` draws
+its own shape; `pc-agent/packaging/*.spec` have `icon=None`).
 
 | Surface | File(s) in `brand/` | Destination / use |
 | --- | --- | --- |
@@ -116,7 +140,8 @@ maintainer wires this in; nothing outside `brand/` is modified by the brand buil
 | iPhone home screen | `exports/pwa/apple-touch-icon-180.png` | `<link rel="apple-touch-icon">` in `mobile-app/index.html` (full-bleed; iOS rounds the corners) |
 | Favicon (website + PWA) | `icon.svg` (as `favicon.svg`), `exports/favicon/favicon-32.png`, `favicon-16.png`, `favicon-48.png`, `favicon.ico` (16/32/48) | `<link rel="icon">` entries; `.ico` for legacy and Windows "pin to taskbar" |
 | Website header / footer | `wordmark.svg`, `wordmark-dark.svg` (inline SVG preferred); `exports/wordmark/wordmark-504.png`, `wordmark-dark-504.png`, `-1008` for 2×/4× | public pages |
-| Windows tray | `exports/windows/tray-mono-light-16.png` … `-256.png` (white glyph, dark taskbar) and `tray-mono-dark-*.png` (Ink glyph, light taskbar); colour tile alternative `tray-16/32/48/256.png` | `pc-agent/dome_agent/tray.py` (`pystray.Icon`); the agent may keep tinting its own status colour behind the glyph |
+| Windows tray (default) | `exports/windows/tray-16.png`, `tray-32.png`, `tray-48.png`, `tray-256.png` (Night tile + Signal glyph, RGBA) | `pc-agent/dome_agent/tray.py` (`pystray.Icon` accepts RGBA images); the tile stands out on light **and** dark taskbars and is clearly distinct from the Wi-Fi/network indicator in the same notification area (judged from the renders here; **not yet verified** on a Windows taskbar). Status can be shown as a small badge over a corner of the tile. |
+| Windows tray (fallback: high-contrast / monochrome only) | `exports/windows/tray-mono-on-dark-16.png` … `-256.png` (white glyph, for dark taskbars) and `tray-mono-on-light-*.png` (Ink glyph, for light taskbars) | same; only when Windows asks for a single-colour icon. Not the default: at 16 px a lone arc over a dot resembles a one-bar Wi-Fi indicator. |
 | Windows executable / installer | `exports/windows/dome.ico` (16/32/48 DIB + 256 PNG) | PyInstaller `icon=` in `pc-agent/packaging/*.spec`, installer and shortcut icon |
 | Setup window title / about | `icon.svg` or `exports/windows/tray-48.png` + the wordmark PNG for dark or light theme | `pc-agent/dome_agent/ui.py` |
 | Documents, slides, support | `wordmark*.svg` or the 1008 px PNGs | — |
@@ -127,6 +152,14 @@ maintainer wires this in; nothing outside `brand/` is modified by the brand buil
 Keep edits within the subset the export script understands (it fails loudly otherwise):
 `rect` (optional `rx`), `circle`, `line`, `path` with `M L H V A Z` and `fill="none"`, `g` for
 inheritance only (no `transform`), colours as `#rrggbb`/`none`/`currentColor`, round caps and
-joins only, double-quoted attributes, no `style`, `text`, gradients, filters or masks. After an
+joins only, double-quoted attributes, no `style`, `text`, gradients, filters or masks.
+
+**Ids**: every id is prefixed with the file name (`dome-icon-…`, `dome-wordmark-dark-…`) so that
+several brand SVGs can be inlined on one page (e.g. both wordmarks for a theme switch, or the
+wordmark next to the icon) without duplicate ids, and each `aria-labelledby` resolves to its own
+`<title>`. When inlining a brand SVG, keep the ids unique on the page (do not inline the same file
+twice without renaming them). The export script finds the tile and the glyph group by the `-tile`
+and `-glyph` suffixes; the parser rejects duplicate ids and the tests reject ids without the file
+prefix. After an
 edit run `pnpm export` in `brand/` and commit the regenerated `exports/`; `pnpm test` fails on
 drift. `BRAND.md` must list every colour the sources use (also enforced by the tests).
