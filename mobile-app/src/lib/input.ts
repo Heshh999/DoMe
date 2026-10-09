@@ -332,6 +332,11 @@ export class InputSessionClient {
     return result;
   }
 
+  /** Resolves once every batch queued so far has been signed and handed to the relay, or dropped. */
+  whenSent(): Promise<void> {
+    return this.chain;
+  }
+
   /** Serialised through `chain` so signatures complete in seq order even though signing is async. */
   private sendBatch(events: InputEvent[]): Promise<number | null> {
     const sessionId = this.state.sessionId;

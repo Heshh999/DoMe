@@ -36,6 +36,9 @@ async function runFrames(): Promise<void> {
   await act(async () => {
     for (const fn of fns) fn();
     await flush(8);
+    // Signing is real WebCrypto, finished on a worker thread: wait for it rather than a number of ticks.
+    await rt.input.whenSent();
+    await flush(2);
   });
 }
 
@@ -66,9 +69,15 @@ function stops() {
     .filter((p) => p.action === "input.session_stop");
 }
 
+// Start commands already answered in this test: after "Start again" the earlier start is still in the
+// socket log, so waiting for "any start" could answer the old one before the new one was sent.
+let answeredStarts = new Set<string>();
+
 async function answerStart(foreground: Record<string, unknown> | null = { process_name: "chrome.exe", window_title: "Google - Chrome", browser: "chrome" }) {
-  await waitFor(() => expect(starts().length).toBeGreaterThan(0));
-  const s = starts()[starts().length - 1]!;
+  const unanswered = () => starts().filter((p) => !answeredStarts.has(String(p.command_id)));
+  await waitFor(() => expect(unanswered().length).toBeGreaterThan(0));
+  const s = unanswered()[unanswered().length - 1]!;
+  answeredStarts.add(String(s.command_id));
   await act(async () => {
     socket.receive({ type: "result", command_id: s.command_id, origin: "agent", state: "succeeded", at: TS, duration_ms: 5, result: { input_session_id: SESSION_ID, lease_seconds: 3, input_age_budget_ms: 1000, max_batch_events: 64, pointer: true, keyboard: true, foreground_app: foreground } });
     await flush();
@@ -95,6 +104,7 @@ function pointer(el: Element, type: "pointerdown" | "pointermove" | "pointerup" 
 }
 
 beforeEach(async () => {
+  answeredStarts = new Set<string>();
   freshStorage();
   signedIn();
   clearLogs();
@@ -145,8 +155,7 @@ describe("TouchpadPage", () => {
     expect(screen.getByText("Connected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop Input" })).toBeEnabled();
     unmount();
-    await flush();
-    expect(stops()).toHaveLength(1);
+    await waitFor(() => expect(stops()).toHaveLength(1)); // the stop command is signed asynchronously
     expect(stops()[0]!.params).toEqual({ input_session_id: SESSION_ID });
   });
 
