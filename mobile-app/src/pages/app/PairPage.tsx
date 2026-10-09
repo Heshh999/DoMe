@@ -27,6 +27,7 @@ const POLL_MS = 2000;
 export function PairPage() {
   const navigate = useNavigate();
   const refreshDevices = useDevicesStore((s) => s.refresh);
+  const selectPc = useDevicesStore((s) => s.select);
   const [scanAgain] = useState(() => takeScanAgainHint(window.location, window.history, "/app/devices/pair"));
   const [step, setStep] = useState<Step>(() => {
     const code = takeCodeFromLocation(window.location, window.history, "/app/devices/pair");
@@ -123,7 +124,9 @@ export function PairPage() {
           if (status.controller_id) await setStoredControllerId(status.controller_id).catch(() => undefined);
           setStep({ kind: "done", status });
           getRuntime().relay.reconnect();
-          void refreshDevices();
+          // the PC this phone just paired with is the one the user means to control next, even when
+          // another PC was selected before (a second PC, or one linked earlier and still listed)
+          void selectPc(status.pc_id).then(() => refreshDevices());
           return;
         }
         setStep({ kind: "failed", code: status.state === "declined" ? "PAIRING_DECLINED" : "PAIRING_CODE_INVALID", message: status.state === "declined" ? errorMessage({ code: "PAIRING_DECLINED" }) : "The pairing request expired before it was approved on the PC." });
@@ -141,7 +144,7 @@ export function PairPage() {
       ctrl.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [step, refreshDevices]);
+  }, [step, refreshDevices, selectPc]);
 
   const reset = () => setStep({ kind: "enter", mode: detectQrSupport() === "unsupported" ? "type" : "scan" });
 
@@ -307,9 +310,20 @@ export function PairPage() {
             <p>{step.message}</p>
             <Steps steps={recoverySteps(step.code)} />
           </Notice>
-          <Button className="mt-4" full onClick={reset}>
-            Start again
-          </Button>
+          {step.code === "DEVICE_LIMIT_REACHED" ? (
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <Button size="lg" variant="primary" onClick={() => void navigate("/app/devices")}>
+                Manage devices
+              </Button>
+              <Button size="lg" onClick={reset}>
+                Start again
+              </Button>
+            </div>
+          ) : (
+            <Button className="mt-4" full onClick={reset}>
+              Start again
+            </Button>
+          )}
         </Card>
       ) : null}
     </div>

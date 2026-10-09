@@ -15,7 +15,8 @@ import { configureApi } from "../../src/lib/api.ts";
 import { getControllerIdentity, getStoredControllerId } from "../../src/lib/controllerKey.ts";
 import { ALL_CAPABILITIES, normalizePairingCode, pairingCodeHandle, pairingVerificationCode } from "../../src/lib/pairing.ts";
 import { PairPage } from "../../src/pages/app/PairPage.tsx";
-import { CONTROLLER, freshStorage, jsonResponse, makeRuntime, PC, signedIn, type RuntimeHarness } from "../helpers/harness.ts";
+import { useDevicesStore } from "../../src/store/devices.ts";
+import { CONTROLLER, freshStorage, jsonResponse, makeRuntime, OFFICE_PC, OTHER_PC, PC, signedIn, type RuntimeHarness } from "../helpers/harness.ts";
 
 const CODE = "abcde-fghjk-mnpqr-stvwx"; // typed in lower case: normalisation is the page's job
 const NORMALIZED = normalizePairingCode(CODE);
@@ -32,12 +33,15 @@ interface Captured {
 let h: RuntimeHarness;
 let captured: Captured[];
 let statusResponse: () => Response;
+let pcsListed: unknown[];
+let claimResponse: (() => Response) | null;
 
 function renderPair(strict = false) {
   const tree = (
     <MemoryRouter initialEntries={[PATH]}>
       <Routes>
         <Route path={PATH} element={<PairPage />} />
+        <Route path="/app/devices" element={<p>Devices page</p>} />
       </Routes>
     </MemoryRouter>
   );
@@ -58,13 +62,16 @@ beforeEach(async () => {
   h = makeRuntime();
   await h.connect();
   captured = [];
+  pcsListed = [];
+  claimResponse = null;
   statusResponse = () => jsonResponse(200, { pairing_id: PAIRING_ID, state: "claimed", pc_id: PC, pc_name: "Office PC", pc_online: true, expires_at: EXPIRES });
   configureApi({
     fetchImpl: async (url, init) => {
       captured.push({ url, method: init.method ?? "GET", body: typeof init.body === "string" ? init.body : null });
+      if (url.endsWith("/v1/pairing/claim") && claimResponse) return claimResponse();
       if (url.endsWith("/v1/pairing/claim")) return jsonResponse(202, { pairing_id: PAIRING_ID, state: "claimed", pc_id: PC, pc_name: "Office PC", pc_online: true, expires_at: EXPIRES });
       if (url.includes(`/v1/pairing/${PAIRING_ID}`)) return statusResponse();
-      if (url.endsWith("/v1/pcs")) return jsonResponse(200, { pcs: [] });
+      if (url.endsWith("/v1/pcs")) return jsonResponse(200, { pcs: pcsListed });
       if (url.endsWith("/v1/controllers")) return jsonResponse(200, { controllers: [] });
       return jsonResponse(500, { error: { code: "INTERNAL", message: `unexpected ${url}`, retryable: false } });
     },
@@ -155,5 +162,31 @@ describe("PairPage", () => {
     await waitFor(() => expect(screen.getByTestId("verification-code")).toBeInTheDocument(), { timeout: 4000 });
     const claim = captured.find((c) => c.url.endsWith("/v1/pairing/claim"))!;
     expect((JSON.parse(claim.body!) as { code_hash: string }).code_hash).toBe(await pairingCodeHandle(NORMALIZED));
+  });
+  it("selects the PC it just paired with, even when another PC was selected", async () => {
+    vi.spyOn(h.rt.relay, "reconnect").mockImplementation(() => undefined);
+    const other = { ...OFFICE_PC, id: OTHER_PC, name: "Living room PC" };
+    pcsListed = [other, { ...OFFICE_PC, connection: "offline" }];
+    await useDevicesStore.getState().refresh();
+    expect(useDevicesStore.getState().selectedPcId).toBe(OTHER_PC); // the online one wins by default
+
+    renderPair();
+    await typeCodeAndClaim();
+    statusResponse = () => jsonResponse(200, { pairing_id: PAIRING_ID, state: "approved", pc_id: PC, pc_name: "Office PC", expires_at: EXPIRES, controller_id: CONTROLLER, granted_capabilities: ["status", "media"] });
+    await waitFor(() => expect(screen.getByText("Paired")).toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(useDevicesStore.getState().selectedPcId).toBe(PC));
+    await waitFor(() => expect(useDevicesStore.getState().pcs).toHaveLength(2));
+    expect(useDevicesStore.getState().selectedPcId).toBe(PC); // the refresh after pairing keeps it
+  });
+  it("a device limit refusal offers Manage devices next to Start again", async () => {
+    claimResponse = () => jsonResponse(403, { error: { code: "DEVICE_LIMIT_REACHED", message: "limit", retryable: false } });
+    renderPair();
+    await userEvent.type(screen.getByLabelText("Pairing code from the PC"), CODE);
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await userEvent.click(screen.getByRole("button", { name: "Request pairing" }));
+    await waitFor(() => expect(screen.getByText("Pairing did not complete")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Start again" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Manage devices" }));
+    expect(screen.getByText("Devices page")).toBeInTheDocument();
   });
 });
