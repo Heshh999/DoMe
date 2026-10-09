@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -20,7 +20,7 @@ from .keys import b64url_encode
 from .registry import ActionSpec, Registry, load_registry
 from .schemas import Schemas, load_schemas
 from .signing import Envelope, verify_envelope
-from .timeutil import check_command_window, format_rfc3339, now_utc
+from .timeutil import check_command_window, format_rfc3339, now_utc, parse_rfc3339
 
 _VERSION_RE = re.compile(r"\A([0-9]+)\.([0-9]+)\Z", re.ASCII)
 
@@ -253,3 +253,108 @@ def verify_hello_proof(
         max_skew_seconds=skew,
     )
     return VerifiedHelloProof(envelope=envelope, payload=payload, key=key)
+
+
+POINTER_EVENT_TYPES = frozenset({"pointer_move", "pointer_button", "pointer_scroll"})
+KEYBOARD_EVENT_TYPES = frozenset({"text", "key", "shortcut"})
+
+
+def input_event_capabilities(events: Iterable[dict[str, Any]]) -> set[str]:
+    """The capabilities a grant must hold to send these events (rules.input_sessions)."""
+    needed: set[str] = set()
+    for ev in events:
+        kind = ev.get("type")
+        if kind in POINTER_EVENT_TYPES:
+            needed.add("pointer")
+        elif kind in KEYBOARD_EVENT_TYPES:
+            needed.add("keyboard")
+        else:
+            raise ProtocolError("MALFORMED_MESSAGE", f"unknown input event type {kind!r}")
+    return needed
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedInputBatch:
+    envelope: Envelope
+    payload: dict[str, Any]
+    key: KeyRecord
+
+    @property
+    def input_session_id(self) -> str:
+        return str(self.payload["input_session_id"])
+
+    @property
+    def seq(self) -> int:
+        return int(self.payload["seq"])
+
+    @property
+    def target_pc_id(self) -> str:
+        return str(self.payload["target_pc_id"])
+
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        return list(self.payload["events"])
+
+    @property
+    def required_capabilities(self) -> set[str]:
+        return input_event_capabilities(self.payload["events"])
+
+    def age_seconds(self, now: datetime | None = None) -> float:
+        """Seconds since the controller issued the batch (the agent's input-age budget check)."""
+        return ((now or now_utc()) - parse_rfc3339(self.payload["issued_at"])).total_seconds()
+
+
+def build_input_batch_payload(
+    *,
+    account_id: str,
+    controller_id: str,
+    target_pc_id: str,
+    input_session_id: str,
+    seq: int,
+    events: list[dict[str, Any]],
+    now: datetime | None = None,
+    registry: Registry | None = None,
+) -> dict[str, Any]:
+    registry = registry or load_registry()
+    issued = now or now_utc()
+    return {
+        "type": "input_batch",
+        "protocol_version": registry.protocol_version,
+        "account_id": account_id,
+        "controller_id": controller_id,
+        "target_pc_id": target_pc_id,
+        "input_session_id": input_session_id,
+        "seq": seq,
+        "issued_at": format_rfc3339(issued),
+        "expires_at": format_rfc3339(issued + timedelta(seconds=registry.limits["input_batch_lifetime_seconds"])),
+        "events": events,
+    }
+
+
+def verify_and_parse_input_batch(
+    raw_envelope: Any,
+    resolve_key: KeyResolver,
+    *,
+    now: datetime | None = None,
+    registry: Registry | None = None,
+    schemas: Schemas | None = None,
+) -> VerifiedInputBatch:
+    """Relay and agent both call this: signature over the exact bytes, schema, protocol compatibility,
+    controller/account binding to the key record, and the batch window (lifetime <= input_batch_lifetime_seconds).
+    Session ownership, sequence, age budget and capability coverage are the caller's checks."""
+    registry = registry or load_registry()
+    schemas = schemas or load_schemas()
+    envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
+    schemas.validate_input_batch_payload(payload)
+    if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
+        raise ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version")
+    _bind(payload, key)
+    skew = registry.limits["max_clock_skew_seconds"]
+    check_command_window(
+        payload["issued_at"],
+        payload["expires_at"],
+        now=now,
+        max_lifetime_seconds=registry.limits["input_batch_lifetime_seconds"] + skew,
+        max_skew_seconds=skew,
+    )
+    return VerifiedInputBatch(envelope=envelope, payload=payload, key=key)

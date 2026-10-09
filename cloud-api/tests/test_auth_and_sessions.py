@@ -12,7 +12,7 @@ async def test_login_creates_session_and_session_document(alice: Browser) -> Non
     assert alice.account["email"] == alice.email
     s = await alice.get("/v1/session", schema="session_response")
     assert s["plan"] == "free" and s["limits"]["max_enabled_pcs"] == 1 and s["limits"]["max_controllers"] == 2
-    assert s["protocol_version"] == "1.0"
+    assert s["protocol_version"] == "1.1"
     assert len(s["csrf_token"]) >= 32
     # the cookie is HttpOnly and SameSite=Lax; not Secure on a plain-http test origin
     cookie = alice.client.cookies.jar

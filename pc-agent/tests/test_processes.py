@@ -61,7 +61,7 @@ async def test_native_host_process_forwards_frames(settings: Settings) -> None:
         import json
 
         ack = json.loads(raw)
-        assert ack["type"] == "bridge_hello_ack" and ack["protocol_version"] == "1.0"
+        assert ack["type"] == "bridge_hello_ack" and ack["protocol_version"] == "1.1"
         assert server.connected and server.instances()[0].browser == "edge"
         # an invalid frame from the "extension" is answered with bridge_error and the host keeps running
         proc.stdin.write(struct.pack("<I", 2) + b"{}")

@@ -27,7 +27,7 @@ export type B64UrlSha256 = string;
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "capability".
  */
-export type Capability = "status" | "media" | "volume" | "apps" | "lock" | "power";
+export type Capability = "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard";
 /**
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "plan_id".
@@ -509,4 +509,85 @@ export interface PlansResponse {
     annual_cents: number;
   };
   billing_enabled: boolean;
+}
+/**
+ * POST /v1/support/tickets. `diagnostics` is the customer-reviewed, already-redacted bundle as JSON text (component versions, connection states, error codes, timing only); the server passes it through its redactor again before storing. Never contains pairing material, credentials, typed text, media titles or URLs.
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "support_ticket_request".
+ */
+export interface SupportTicketRequest {
+  category:
+    "connection" | "pairing" | "media" | "input" | "apps" | "power" | "install" | "billing" | "account" | "other";
+  message: string;
+  /**
+   * The error the customer was looking at, preselected by the help link.
+   */
+  error_code?: string;
+  diagnostics?: string;
+  app_version?: string;
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "support_ticket".
+ */
+export interface SupportTicket {
+  ticket_id: Uuid;
+  /**
+   * Human-readable reference shown to the customer after successful receipt.
+   */
+  reference: string;
+  status: "received" | "in_review" | "answered" | "closed";
+  category:
+    "connection" | "pairing" | "media" | "input" | "apps" | "power" | "install" | "billing" | "account" | "other";
+  error_code?: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  /**
+   * Present only when the operator configured one (DOME_SUPPORT_RESPONSE_EXPECTATION); never a default promise.
+   */
+  response_expectation?: string;
+  /**
+   * Operator answer, when status is answered or closed.
+   */
+  answer?: string;
+}
+/**
+ * 201 POST /v1/support/tickets and 200 GET /v1/support/tickets/{id}
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "support_ticket_response".
+ */
+export interface SupportTicket1 {
+  ticket_id: Uuid;
+  /**
+   * Human-readable reference shown to the customer after successful receipt.
+   */
+  reference: string;
+  status: "received" | "in_review" | "answered" | "closed";
+  category:
+    "connection" | "pairing" | "media" | "input" | "apps" | "power" | "install" | "billing" | "account" | "other";
+  error_code?: string;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  /**
+   * Present only when the operator configured one (DOME_SUPPORT_RESPONSE_EXPECTATION); never a default promise.
+   */
+  response_expectation?: string;
+  /**
+   * Operator answer, when status is answered or closed.
+   */
+  answer?: string;
+}
+/**
+ * GET /v1/support/tickets (the account's own tickets, newest first, at most 50)
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "support_tickets_response".
+ */
+export interface SupportTicketsResponse {
+  /**
+   * @maxItems 50
+   */
+  tickets: SupportTicket[];
 }

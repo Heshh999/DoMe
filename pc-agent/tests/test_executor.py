@@ -138,7 +138,7 @@ async def test_executing_ack_and_success(harness: AgentHarness, controller: Cont
     res = await cap.wait_result(vc.command_id)
     acks = [f for f in cap.frames if f["type"] == "ack" and f["command_id"] == vc.command_id]
     assert [a["state"] for a in acks] == ["executing"]
-    assert res["state"] == "succeeded" and res["result"]["protocol_version"] == "1.0"
+    assert res["state"] == "succeeded" and res["result"]["protocol_version"] == "1.1"
     row = harness.agent.store.journal_get(vc.command_id)
     assert row is not None and row.state == "succeeded" and row.sent
 

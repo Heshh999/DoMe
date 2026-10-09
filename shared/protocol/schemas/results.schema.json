@@ -4,108 +4,389 @@
   "title": "DoMe per-action result shapes",
   "description": "Every action in actions.json names one of these $defs in its `result` field. The agent validates a result before emitting it; the controller validates before rendering. `agent_result.result` must match the named schema when state is succeeded; on failure `result` may be absent or carry the best-known post-failure state of the same shape.",
   "$defs": {
-    "timestamp": { "$ref": "command.schema.json#/$defs/timestamp" },
+    "timestamp": {
+      "$ref": "command.schema.json#/$defs/timestamp"
+    },
     "ping_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["agent_time", "agent_version", "protocol_version"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_time",
+        "agent_version",
+        "protocol_version"
+      ],
       "properties": {
-        "agent_time": { "$ref": "#/$defs/timestamp" },
-        "agent_version": { "type": "string", "maxLength": 64 },
-        "protocol_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+        "agent_time": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "agent_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
       }
     },
-    "status_result": { "$ref": "relay-frames.schema.json#/$defs/pc_state" },
+    "status_result": {
+      "$ref": "relay-frames.schema.json#/$defs/pc_state"
+    },
     "tabs_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["tabs"],
-      "properties": { "tabs": { "type": "array", "maxItems": 32, "items": { "$ref": "relay-frames.schema.json#/$defs/youtube_tab" } } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tabs"
+      ],
+      "properties": {
+        "tabs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "relay-frames.schema.json#/$defs/youtube_tab"
+          }
+        }
+      }
     },
     "youtube_state_result": {
       "description": "Post-action player state. `previous_video_id` is present for next/previous so the UI can show the observed transition.",
-      "type": "object", "additionalProperties": false,
-      "required": ["tab"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tab"
+      ],
       "properties": {
-        "tab": { "$ref": "relay-frames.schema.json#/$defs/youtube_tab" },
-        "previous_video_id": { "type": "string", "maxLength": 32 }
+        "tab": {
+          "$ref": "relay-frames.schema.json#/$defs/youtube_tab"
+        },
+        "previous_video_id": {
+          "type": "string",
+          "maxLength": 32
+        }
       }
     },
     "media_sessions_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["sessions"],
-      "properties": { "sessions": { "type": "array", "maxItems": 16, "items": { "$ref": "relay-frames.schema.json#/$defs/media_session" } } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "relay-frames.schema.json#/$defs/media_session"
+          }
+        }
+      }
     },
     "media_session_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["session"],
-      "properties": { "session": { "$ref": "relay-frames.schema.json#/$defs/media_session" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "$ref": "relay-frames.schema.json#/$defs/media_session"
+        }
+      }
     },
     "volume_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["value", "muted"],
-      "properties": { "value": { "type": "integer", "minimum": 0, "maximum": 100 }, "muted": { "type": "boolean" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "muted"
+      ],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "muted": {
+          "type": "boolean"
+        }
+      }
     },
     "accepted_result": {
       "description": "Windows accepted the request; completion is not observable (lock) — see verification strategy os_accepted.",
-      "type": "object", "additionalProperties": false,
-      "required": ["accepted"],
-      "properties": { "accepted": { "const": true } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted"
+      ],
+      "properties": {
+        "accepted": {
+          "const": true
+        }
+      }
     },
     "app_window": {
-      "type": "object", "additionalProperties": false,
-      "required": ["window_id", "title"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "window_id",
+        "title"
+      ],
       "properties": {
-        "window_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" },
-        "title": { "type": "string", "maxLength": 200, "description": "Untrusted display text" },
-        "minimized": { "type": "boolean" },
-        "foreground": { "type": "boolean" }
+        "window_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Untrusted display text"
+        },
+        "minimized": {
+          "type": "boolean"
+        },
+        "foreground": {
+          "type": "boolean"
+        }
       }
     },
     "app_entry": {
-      "type": "object", "additionalProperties": false,
-      "required": ["app_id", "display_name", "running", "windows"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "display_name",
+        "running",
+        "windows"
+      ],
       "properties": {
-        "app_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "maxLength": 64 },
-        "display_name": { "type": "string", "maxLength": 64 },
-        "running": { "type": "boolean" },
-        "windows": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/app_window" } }
+        "app_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "maxLength": 64
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "windows": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/app_window"
+          }
+        }
       }
     },
     "apps_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["apps"],
-      "properties": { "apps": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/app_entry" } } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apps"
+      ],
+      "properties": {
+        "apps": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/app_entry"
+          }
+        }
+      }
     },
     "app_launch_result": {
       "description": "`launched` = a new process was started; `running` = a matching process is observed afterwards (may already have been running). Focus is NOT implied.",
-      "type": "object", "additionalProperties": false,
-      "required": ["app_id", "launched", "running"],
-      "properties": { "app_id": { "type": "string" }, "launched": { "type": "boolean" }, "running": { "type": "boolean" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "launched",
+        "running"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "launched": {
+          "type": "boolean"
+        },
+        "running": {
+          "type": "boolean"
+        }
+      }
     },
     "app_focus_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["app_id", "focused"],
-      "properties": { "app_id": { "type": "string" }, "window_id": { "type": "string" }, "focused": { "type": "boolean", "description": "False with error FOCUS_DENIED when Windows refused" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "focused"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "window_id": {
+          "type": "string"
+        },
+        "focused": {
+          "type": "boolean",
+          "description": "False with error FOCUS_DENIED when Windows refused"
+        }
+      }
     },
     "app_minimize_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["app_id", "minimized"],
-      "properties": { "app_id": { "type": "string" }, "window_id": { "type": "string" }, "minimized": { "type": "boolean" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "minimized"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "window_id": {
+          "type": "string"
+        },
+        "minimized": {
+          "type": "boolean"
+        }
+      }
     },
     "app_close_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["app_id", "closed"],
-      "properties": { "app_id": { "type": "string" }, "window_id": { "type": "string" }, "closed": { "type": "boolean", "description": "False with error CLOSE_REFUSED when the window survived (e.g. unsaved-work dialog)" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "closed"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "window_id": {
+          "type": "string"
+        },
+        "closed": {
+          "type": "boolean",
+          "description": "False with error CLOSE_REFUSED when the window survived (e.g. unsaved-work dialog)"
+        }
+      }
     },
     "power_result": {
       "description": "The countdown was armed (or the OS call issued when countdown_seconds is 0). `fires_at` is when Windows is asked to act; actual completion is not observable.",
-      "type": "object", "additionalProperties": false,
-      "required": ["accepted", "countdown_seconds"],
-      "properties": { "accepted": { "const": true }, "countdown_seconds": { "type": "integer", "minimum": 0, "maximum": 60 }, "fires_at": { "$ref": "#/$defs/timestamp" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted",
+        "countdown_seconds"
+      ],
+      "properties": {
+        "accepted": {
+          "const": true
+        },
+        "countdown_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60
+        },
+        "fires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
     },
     "power_cancel_result": {
-      "type": "object", "additionalProperties": false,
-      "required": ["canceled"],
-      "properties": { "canceled": { "type": "boolean", "description": "False when nothing was pending" }, "action": { "type": "string" }, "command_id": { "$ref": "command.schema.json#/$defs/uuid" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canceled"
+      ],
+      "properties": {
+        "canceled": {
+          "type": "boolean",
+          "description": "False when nothing was pending"
+        },
+        "action": {
+          "type": "string"
+        },
+        "command_id": {
+          "$ref": "command.schema.json#/$defs/uuid"
+        }
+      }
+    },
+    "input_session_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_session_id",
+        "lease_seconds",
+        "input_age_budget_ms",
+        "max_batch_events",
+        "pointer",
+        "keyboard"
+      ],
+      "properties": {
+        "input_session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        },
+        "lease_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "input_age_budget_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 5000
+        },
+        "max_batch_events": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "pointer": {
+          "type": "boolean",
+          "description": "This session may send pointer_* events (the grant holds pointer)."
+        },
+        "keyboard": {
+          "type": "boolean",
+          "description": "This session may send text/key/shortcut events (the grant holds keyboard)."
+        },
+        "foreground_app": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "relay-frames.schema.json#/$defs/foreground_app"
+            }
+          ]
+        }
+      },
+      "description": "Result of input.session_start. The agent issued the id; the controller must use it in every input_batch of this session."
+    },
+    "input_session_stop_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stopped",
+        "released_holds"
+      ],
+      "properties": {
+        "stopped": {
+          "type": "boolean"
+        },
+        "released_holds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
   }
 }

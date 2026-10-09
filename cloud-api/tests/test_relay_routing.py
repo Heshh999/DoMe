@@ -129,7 +129,7 @@ async def test_hello_is_required_and_validated(env: Env, alice: Browser) -> None
         )
     )
     err = await recv_frame(ws, "relay_to_controller")
-    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.0"]
+    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.1"]
     assert await close_code(ws) == 4000
 
 

@@ -29,3 +29,24 @@ Rules:
    reinterpreted.
 3. Parameters are validated **by the PC** against `actions.json` regardless of what the backend
    or phone already checked.
+
+## Protocol 1.1 — manual touchpad and keyboard (spec §10A)
+
+Additive. 1.0 peers remain compatible (MINOR rule) and never receive the new frames.
+
+| Addition | Where |
+| --- | --- |
+| Capabilities `pointer` and `keyboard` (Free; independently grantable; absent from existing grants until the PC owner adds them) | `actions.json → capabilities`, every capability enum in the schemas |
+| Actions `input.session_start` (either capability, `alternate_capabilities`) and `input.session_stop`; `ai_eligible: false` marks human-only actions | `actions.json`, `results.schema.json → input_session_result / input_session_stop_result` |
+| Signed input stream: `input_batch_payload` (≤ 64 `input_event`s, `seq`, 5 s window) inside `controller_input_batch` → `relay_to_agent_input_batch`; `agent_input_ack` (≤ 4/s, Windows acceptance only); `agent_input_session` (started/suspended/ended with reason) | `relay-frames.schema.json` |
+| `agent_grant_update` — the PC owner changed a controller's capabilities locally; the relay replaces the grant's list | `relay-frames.schema.json`, `rules.grant_update` |
+| `pc_state.foreground_app`, `pc_state.input_session`, `pc_state.input_restricted` | `relay-frames.schema.json` |
+| Limits `input_batches_per_second`, `input_batch_max_events`, `input_batch_lifetime_seconds`, `input_age_budget_ms`, `input_lease_seconds`, `input_text_max_chars`, `input_motion_max`; plan `input_rate_limit` (identical for Free and Pro) | `version.json`, `plans.json` |
+| Errors `INPUT_*` | `errors.json` |
+| Rules `input_sessions`, `grant_update`, `ai_eligibility` | `version.json → rules` |
+| Support tickets: `support_ticket_request`, `support_ticket(_response)`, `support_tickets_response` | `rest.schema.json` |
+
+Library helpers: Python `build_input_batch_payload`, `verify_and_parse_input_batch`,
+`input_event_capabilities`, `ActionSpec.satisfied_by`; TypeScript `buildInputBatchPayload`,
+`signInputBatch`, `inputEventCapabilities`, `capabilitySatisfied`. Design brief:
+`docs/design/input-control.md`.

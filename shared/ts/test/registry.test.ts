@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { CAPABILITIES, ERRORS, PROTOCOL_VERSION, ProtocolError, protocolCompatible, registry, schemas } from "../src/index.ts";
+import { CAPABILITIES, ERRORS, PROTOCOL_VERSION, ProtocolError, protocolCompatible, registry, schemas, capabilitySatisfied } from "../src/index.ts";
 
 describe("registry", () => {
   it("loads a consistent action registry", () => {
-    expect(PROTOCOL_VERSION).toBe("1.0");
+    expect(PROTOCOL_VERSION).toBe("1.1");
+    const start = registry.get("input.session_start");
+    expect(capabilitySatisfied(start, ["keyboard"])).toBe(true);
+    expect(capabilitySatisfied(start, ["media"])).toBe(false);
+    expect(start.aiEligible).toBe(false);
+    expect(start.routineAllowed).toBe(false);
+    expect(registry.get("youtube.next").aiEligible).toBe(true);
     for (const [name, spec] of registry.actions()) {
       expect(spec.name).toBe(name);
       expect(spec.paramsSchema.additionalProperties).toBe(false);

@@ -240,6 +240,46 @@
     "BILLING_PAST_DUE": {
       "retryable": false,
       "user_message": "Your last payment did not go through. Update your payment method to keep DoMe Pro."
+    },
+    "INPUT_SESSION_REQUIRED": {
+      "retryable": false,
+      "user_message": "Start the touchpad or keyboard on this PC first."
+    },
+    "INPUT_SESSION_EXPIRED": {
+      "retryable": true,
+      "user_message": "The touchpad connection timed out. Tap the touchpad again to reconnect it."
+    },
+    "INPUT_SESSION_OWNED": {
+      "retryable": false,
+      "user_message": "Another phone is using the touchpad on this PC. Take over to continue."
+    },
+    "INPUT_SEQUENCE_INVALID": {
+      "retryable": false,
+      "user_message": "Some input arrived out of order and was dropped. Continue; nothing was replayed."
+    },
+    "INPUT_STALE": {
+      "retryable": true,
+      "user_message": "Input was delayed too long to deliver safely and was discarded. Try again."
+    },
+    "INPUT_SUSPENDED": {
+      "retryable": true,
+      "user_message": "Input paused because the connection fell behind. Start the touchpad again."
+    },
+    "INPUT_RESTRICTED": {
+      "retryable": false,
+      "user_message": "Windows is showing a protected screen (lock screen, sign-in or an administrator prompt). The phone cannot type or click there."
+    },
+    "INPUT_INJECTION_FAILED": {
+      "retryable": false,
+      "user_message": "Windows did not accept that input."
+    },
+    "INPUT_NOT_PERMITTED": {
+      "retryable": false,
+      "user_message": "This phone does not have touchpad or keyboard permission on this PC. The PC owner grants it on the PC."
+    },
+    "INPUT_TARGET_CHANGED": {
+      "retryable": false,
+      "user_message": "The window in front of the PC changed, so typing stopped. Check the PC and continue."
     }
   }
 }

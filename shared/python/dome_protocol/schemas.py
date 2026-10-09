@@ -70,6 +70,10 @@ class Schemas:
         """relay-frames.schema.json#/$defs/hello_proof — the payload of hello.proof."""
         self._validate("relay-frames", "/$defs/hello_proof", value)
 
+    def validate_input_batch_payload(self, value: Any) -> None:
+        """relay-frames.schema.json#/$defs/input_batch_payload — the signed payload of an input_batch frame."""
+        self._validate("relay-frames", "/$defs/input_batch_payload", value)
+
     def validate_frame(self, direction: str, value: Any) -> None:
         if direction not in ("controller_to_relay", "relay_to_controller", "agent_to_relay", "relay_to_agent"):
             raise ValueError(direction)

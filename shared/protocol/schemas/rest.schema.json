@@ -4,231 +4,1081 @@
   "title": "DoMe REST bodies that cross component boundaries",
   "description": "Request and response bodies exchanged between the PWA or the agent and cloud-api. Both clients validate responses at the boundary; cloud-api tests validate its responses against these definitions. Error responses always use `error_body`. Every object is closed (additionalProperties:false); additive changes bump the protocol MINOR version.",
   "$defs": {
-    "uuid": { "$ref": "command.schema.json#/$defs/uuid" },
-    "timestamp": { "$ref": "command.schema.json#/$defs/timestamp" },
-    "kid": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
-    "b64url_sha256": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
-    "capability": { "type": "string", "enum": ["status", "media", "volume", "apps", "lock", "power"] },
-    "plan_id": { "type": "string", "enum": ["free", "pro"] },
-
-    "error_body": {
-      "type": "object", "additionalProperties": false,
-      "required": ["error"],
-      "properties": { "error": { "$ref": "relay-frames.schema.json#/$defs/error" } }
+    "uuid": {
+      "$ref": "command.schema.json#/$defs/uuid"
     },
-
-    "session_response": {
-      "description": "GET /v1/session",
-      "type": "object", "additionalProperties": false,
-      "required": ["account", "csrf_token", "plan", "limits", "protocol_version"],
+    "timestamp": {
+      "$ref": "command.schema.json#/$defs/timestamp"
+    },
+    "kid": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "b64url_sha256": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "capability": {
+      "type": "string",
+      "enum": [
+        "status",
+        "media",
+        "volume",
+        "apps",
+        "lock",
+        "power",
+        "pointer",
+        "keyboard"
+      ]
+    },
+    "plan_id": {
+      "type": "string",
+      "enum": [
+        "free",
+        "pro"
+      ]
+    },
+    "error_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error"
+      ],
       "properties": {
-        "account": {
-          "type": "object", "additionalProperties": false,
-          "required": ["id", "email", "display_name", "created_at"],
-          "properties": { "id": { "$ref": "#/$defs/uuid" }, "email": { "type": "string", "maxLength": 254 }, "display_name": { "type": "string", "maxLength": 128 }, "created_at": { "$ref": "#/$defs/timestamp" } }
-        },
-        "csrf_token": { "type": "string", "minLength": 32, "maxLength": 128 },
-        "plan": { "$ref": "#/$defs/plan_id" },
-        "entitlement_state": { "type": "string", "enum": ["free", "active", "pending", "past_due", "canceling", "expired"] },
-        "limits": {
-          "type": "object", "additionalProperties": false,
-          "required": ["max_enabled_pcs", "max_controllers", "routines", "custom_layouts"],
-          "properties": { "max_enabled_pcs": { "type": "integer" }, "max_controllers": { "type": "integer" }, "routines": { "type": "boolean" }, "custom_layouts": { "type": "boolean" } }
-        },
-        "protocol_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+        "error": {
+          "$ref": "relay-frames.schema.json#/$defs/error"
+        }
       }
     },
-
+    "session_response": {
+      "description": "GET /v1/session",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account",
+        "csrf_token",
+        "plan",
+        "limits",
+        "protocol_version"
+      ],
+      "properties": {
+        "account": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "email",
+            "display_name",
+            "created_at"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/uuid"
+            },
+            "email": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "display_name": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "created_at": {
+              "$ref": "#/$defs/timestamp"
+            }
+          }
+        },
+        "csrf_token": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 128
+        },
+        "plan": {
+          "$ref": "#/$defs/plan_id"
+        },
+        "entitlement_state": {
+          "type": "string",
+          "enum": [
+            "free",
+            "active",
+            "pending",
+            "past_due",
+            "canceling",
+            "expired"
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_enabled_pcs",
+            "max_controllers",
+            "routines",
+            "custom_layouts"
+          ],
+          "properties": {
+            "max_enabled_pcs": {
+              "type": "integer"
+            },
+            "max_controllers": {
+              "type": "integer"
+            },
+            "routines": {
+              "type": "boolean"
+            },
+            "custom_layouts": {
+              "type": "boolean"
+            }
+          }
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
     "agent_link_start_request": {
       "description": "POST /v1/agent-link/start (no auth)",
-      "type": "object", "additionalProperties": false,
-      "required": ["pc_public_jwk", "agent_version", "platform"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pc_public_jwk",
+        "agent_version",
+        "platform"
+      ],
       "properties": {
-        "pc_public_jwk": { "$ref": "relay-frames.schema.json#/$defs/ec_public_jwk" },
-        "agent_version": { "type": "string", "maxLength": 64 },
-        "platform": { "type": "string", "enum": ["windows", "development"] },
-        "pc_name_hint": { "type": "string", "maxLength": 64 }
+        "pc_public_jwk": {
+          "$ref": "relay-frames.schema.json#/$defs/ec_public_jwk"
+        },
+        "agent_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "windows",
+            "development"
+          ]
+        },
+        "pc_name_hint": {
+          "type": "string",
+          "maxLength": 64
+        }
       }
     },
     "agent_link_start_response": {
-      "type": "object", "additionalProperties": false,
-      "required": ["device_code", "user_code", "verification_uri_complete", "expires_in", "interval"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_code",
+        "user_code",
+        "verification_uri_complete",
+        "expires_in",
+        "interval"
+      ],
       "properties": {
-        "device_code": { "type": "string", "minLength": 43, "maxLength": 43 },
-        "user_code": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$" },
-        "verification_uri_complete": { "type": "string", "format": "uri", "maxLength": 512 },
-        "expires_in": { "type": "integer", "minimum": 60, "maximum": 900 },
-        "interval": { "type": "integer", "minimum": 1, "maximum": 30 }
+        "device_code": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43
+        },
+        "user_code": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+        },
+        "verification_uri_complete": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 512
+        },
+        "expires_in": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 900
+        },
+        "interval": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
       }
     },
     "agent_link_preview_response": {
       "description": "GET /v1/agent-link/{user_code} (session)",
-      "type": "object", "additionalProperties": false,
-      "required": ["user_code", "agent_version", "platform", "kid", "expires_at"],
-      "properties": { "user_code": { "type": "string" }, "agent_version": { "type": "string" }, "platform": { "type": "string" }, "kid": { "$ref": "#/$defs/kid" }, "pc_name_hint": { "type": "string", "maxLength": 64 }, "expires_at": { "$ref": "#/$defs/timestamp" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_code",
+        "agent_version",
+        "platform",
+        "kid",
+        "expires_at"
+      ],
+      "properties": {
+        "user_code": {
+          "type": "string"
+        },
+        "agent_version": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "kid": {
+          "$ref": "#/$defs/kid"
+        },
+        "pc_name_hint": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
     },
     "agent_link_approve_request": {
       "description": "POST /v1/agent-link/{user_code}/approve (session + CSRF)",
-      "type": "object", "additionalProperties": false,
-      "required": ["pc_name", "remote_enabled"],
-      "properties": { "pc_name": { "type": "string", "minLength": 1, "maxLength": 64 }, "remote_enabled": { "const": true } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pc_name",
+        "remote_enabled"
+      ],
+      "properties": {
+        "pc_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "remote_enabled": {
+          "const": true
+        }
+      }
     },
     "agent_link_approve_response": {
-      "type": "object", "additionalProperties": false,
-      "required": ["pc_id", "enabled"],
-      "properties": { "pc_id": { "$ref": "#/$defs/uuid" }, "enabled": { "type": "boolean" }, "reason": { "type": "string", "enum": ["DEVICE_LIMIT_REACHED"] } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pc_id",
+        "enabled"
+      ],
+      "properties": {
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "DEVICE_LIMIT_REACHED"
+          ]
+        }
+      }
     },
     "agent_link_poll_request": {
-      "type": "object", "additionalProperties": false,
-      "required": ["device_code"],
-      "properties": { "device_code": { "type": "string", "minLength": 43, "maxLength": 43 } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_code"
+      ],
+      "properties": {
+        "device_code": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43
+        }
+      }
     },
     "agent_link_poll_pending": {
       "description": "HTTP 428",
-      "type": "object", "additionalProperties": false,
-      "required": ["status"],
-      "properties": { "status": { "type": "string", "enum": ["authorization_pending", "slow_down"] } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "authorization_pending",
+            "slow_down"
+          ]
+        }
+      }
     },
     "agent_link_poll_response": {
       "description": "HTTP 200, exactly once",
-      "type": "object", "additionalProperties": false,
-      "required": ["pc_id", "account_id", "pc_credential", "relay_url", "api_url", "pc_name", "enabled"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pc_id",
+        "account_id",
+        "pc_credential",
+        "relay_url",
+        "api_url",
+        "pc_name",
+        "enabled"
+      ],
       "properties": {
-        "pc_id": { "$ref": "#/$defs/uuid" },
-        "account_id": { "$ref": "#/$defs/uuid" },
-        "pc_credential": { "type": "string", "minLength": 43, "maxLength": 43 },
-        "relay_url": { "type": "string", "format": "uri" },
-        "api_url": { "type": "string", "format": "uri" },
-        "pc_name": { "type": "string", "maxLength": 64 },
-        "enabled": { "type": "boolean" }
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "account_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_credential": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43
+        },
+        "relay_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "api_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "pc_name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "enabled": {
+          "type": "boolean"
+        }
       }
     },
     "agent_token_request": {
       "description": "POST /v1/agent/token",
-      "type": "object", "additionalProperties": false,
-      "required": ["pc_credential"],
-      "properties": { "pc_credential": { "type": "string", "minLength": 43, "maxLength": 43 } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pc_credential"
+      ],
+      "properties": {
+        "pc_credential": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 43
+        }
+      }
     },
     "agent_token_response": {
-      "type": "object", "additionalProperties": false,
-      "required": ["access_token", "expires_in", "pc_id", "account_id"],
-      "properties": { "access_token": { "type": "string", "minLength": 43, "maxLength": 128 }, "expires_in": { "type": "integer", "minimum": 60 }, "pc_id": { "$ref": "#/$defs/uuid" }, "account_id": { "$ref": "#/$defs/uuid" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "access_token",
+        "expires_in",
+        "pc_id",
+        "account_id"
+      ],
+      "properties": {
+        "access_token": {
+          "type": "string",
+          "minLength": 43,
+          "maxLength": 128
+        },
+        "expires_in": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "account_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
     },
     "agent_entitlement_response": {
       "description": "POST /v1/agent/entitlement (PC bearer)",
-      "type": "object", "additionalProperties": false,
-      "required": ["plan", "assertion", "pc_enabled"],
-      "properties": { "plan": { "$ref": "#/$defs/plan_id" }, "assertion": { "oneOf": [{ "type": "null" }, { "type": "string", "maxLength": 4096 }] }, "pc_enabled": { "type": "boolean" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "assertion",
+        "pc_enabled"
+      ],
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/plan_id"
+        },
+        "assertion": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "maxLength": 4096
+            }
+          ]
+        },
+        "pc_enabled": {
+          "type": "boolean"
+        }
+      }
     },
-
     "pairing_start_request": {
       "description": "POST /v1/pairing/start (PC bearer). The PC generated the code locally and sends only its hash.",
-      "type": "object", "additionalProperties": false,
-      "required": ["code_hash"],
-      "properties": { "code_hash": { "$ref": "#/$defs/b64url_sha256" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_hash"
+      ],
+      "properties": {
+        "code_hash": {
+          "$ref": "#/$defs/b64url_sha256"
+        }
+      }
     },
     "pairing_start_response": {
-      "type": "object", "additionalProperties": false,
-      "required": ["pairing_id", "expires_at"],
-      "properties": { "pairing_id": { "$ref": "#/$defs/uuid" }, "expires_at": { "$ref": "#/$defs/timestamp" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pairing_id",
+        "expires_at"
+      ],
+      "properties": {
+        "pairing_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
     },
     "pairing_claim_request": {
       "description": "POST /v1/pairing/claim (session + CSRF)",
-      "type": "object", "additionalProperties": false,
-      "required": ["code_hash", "public_jwk", "display_name", "requested_capabilities"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_hash",
+        "public_jwk",
+        "display_name",
+        "requested_capabilities"
+      ],
       "properties": {
-        "code_hash": { "$ref": "#/$defs/b64url_sha256" },
-        "public_jwk": { "$ref": "relay-frames.schema.json#/$defs/ec_public_jwk" },
-        "display_name": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "requested_capabilities": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/capability" } }
+        "code_hash": {
+          "$ref": "#/$defs/b64url_sha256"
+        },
+        "public_jwk": {
+          "$ref": "relay-frames.schema.json#/$defs/ec_public_jwk"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "requested_capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        }
       }
     },
     "pairing_status_response": {
       "description": "POST /v1/pairing/claim (202) and GET /v1/pairing/{pairing_id}. `claimed` = waiting for approval on the PC (which may be offline; the relay re-delivers the request when it connects).",
-      "type": "object", "additionalProperties": false,
-      "required": ["pairing_id", "state", "pc_id", "pc_name", "expires_at"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pairing_id",
+        "state",
+        "pc_id",
+        "pc_name",
+        "expires_at"
+      ],
       "properties": {
-        "pairing_id": { "$ref": "#/$defs/uuid" },
-        "state": { "type": "string", "enum": ["claimed", "approved", "declined", "expired"] },
-        "pc_id": { "$ref": "#/$defs/uuid" },
-        "pc_name": { "type": "string", "maxLength": 64 },
-        "pc_online": { "type": "boolean" },
-        "expires_at": { "$ref": "#/$defs/timestamp" },
-        "controller_id": { "$ref": "#/$defs/uuid" },
-        "grant_id": { "$ref": "#/$defs/uuid" },
-        "granted_capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }
+        "pairing_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "claimed",
+            "approved",
+            "declined",
+            "expired"
+          ]
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "pc_online": {
+          "type": "boolean"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "grant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "granted_capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        }
       }
     },
-
     "pc": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "name", "enabled", "connection", "last_seen", "created_at", "platform"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "enabled",
+        "connection",
+        "last_seen",
+        "created_at",
+        "platform"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/uuid" },
-        "name": { "type": "string", "maxLength": 64 },
-        "enabled": { "type": "boolean" },
-        "connection": { "$ref": "relay-frames.schema.json#/$defs/pc_connection_state" },
-        "last_seen": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }] },
-        "created_at": { "$ref": "#/$defs/timestamp" },
-        "platform": { "type": "string", "enum": ["windows", "development"] },
-        "agent_version": { "type": "string", "maxLength": 64 },
-        "remote_enabled_reported": { "type": "boolean" },
-        "last_power_request": { "oneOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["action", "at"], "properties": { "action": { "type": "string" }, "at": { "$ref": "#/$defs/timestamp" } } }] }
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "connection": {
+          "$ref": "relay-frames.schema.json#/$defs/pc_connection_state"
+        },
+        "last_seen": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "windows",
+            "development"
+          ]
+        },
+        "agent_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "remote_enabled_reported": {
+          "type": "boolean"
+        },
+        "last_power_request": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "at": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
+            }
+          ]
+        }
       }
     },
-    "pcs_response": { "type": "object", "additionalProperties": false, "required": ["pcs"], "properties": { "pcs": { "type": "array", "items": { "$ref": "#/$defs/pc" } } } },
+    "pcs_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pcs"
+      ],
+      "properties": {
+        "pcs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pc"
+          }
+        }
+      }
+    },
     "pc_patch_request": {
-      "type": "object", "additionalProperties": false,
-      "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 64 }, "enabled": { "type": "boolean" } }
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
     },
     "controller": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "kid", "display_name", "status", "created_at", "last_seen"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kid",
+        "display_name",
+        "status",
+        "created_at",
+        "last_seen"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/uuid" },
-        "kid": { "$ref": "#/$defs/kid" },
-        "display_name": { "type": "string", "maxLength": 64 },
-        "status": { "type": "string", "enum": ["active", "plan_disabled", "revoked"] },
-        "created_at": { "$ref": "#/$defs/timestamp" },
-        "last_seen": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }] }
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "kid": {
+          "$ref": "#/$defs/kid"
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "plan_disabled",
+            "revoked"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "last_seen": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        }
       }
     },
-    "controllers_response": { "type": "object", "additionalProperties": false, "required": ["controllers"], "properties": { "controllers": { "type": "array", "items": { "$ref": "#/$defs/controller" } } } },
-    "controller_patch_request": { "type": "object", "additionalProperties": false, "required": ["display_name"], "properties": { "display_name": { "type": "string", "minLength": 1, "maxLength": 64 } } },
-    "grant": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "controller_id", "pc_id", "capabilities", "created_at"],
-      "properties": { "id": { "$ref": "#/$defs/uuid" }, "controller_id": { "$ref": "#/$defs/uuid" }, "pc_id": { "$ref": "#/$defs/uuid" }, "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }, "created_at": { "$ref": "#/$defs/timestamp" } }
+    "controllers_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controllers"
+      ],
+      "properties": {
+        "controllers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/controller"
+          }
+        }
+      }
     },
-    "grants_response": { "type": "object", "additionalProperties": false, "required": ["grants"], "properties": { "grants": { "type": "array", "items": { "$ref": "#/$defs/grant" } } } },
+    "controller_patch_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name"
+      ],
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "controller_id",
+        "pc_id",
+        "capabilities",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "grants_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grants"
+      ],
+      "properties": {
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/grant"
+          }
+        }
+      }
+    },
     "command_row": {
       "description": "GET /v1/commands — lifecycle only, never params/results/titles",
-      "type": "object", "additionalProperties": false,
-      "required": ["command_id", "pc_id", "controller_id", "action", "state", "created_at"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "pc_id",
+        "controller_id",
+        "action",
+        "state",
+        "created_at"
+      ],
       "properties": {
-        "command_id": { "$ref": "#/$defs/uuid" }, "pc_id": { "$ref": "#/$defs/uuid" }, "controller_id": { "$ref": "#/$defs/uuid" },
-        "action": { "type": "string" }, "state": { "$ref": "relay-frames.schema.json#/$defs/lifecycle_state" },
-        "error_code": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
-        "created_at": { "$ref": "#/$defs/timestamp" }, "finished_at": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/timestamp" }] },
-        "duration_ms": { "oneOf": [{ "type": "null" }, { "type": "integer" }] }
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "action": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "relay-frames.schema.json#/$defs/lifecycle_state"
+        },
+        "error_code": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "finished_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        },
+        "duration_ms": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        }
       }
     },
-    "commands_response": { "type": "object", "additionalProperties": false, "required": ["commands"], "properties": { "commands": { "type": "array", "items": { "$ref": "#/$defs/command_row" } } } },
+    "commands_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commands"
+      ],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/command_row"
+          }
+        }
+      }
+    },
     "security_event": {
-      "type": "object", "additionalProperties": false,
-      "required": ["id", "kind", "severity", "actor", "created_at"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "severity",
+        "actor",
+        "created_at"
+      ],
       "properties": {
-        "id": { "type": "integer" }, "kind": { "type": "string", "maxLength": 64 }, "severity": { "type": "string", "enum": ["info", "notice", "warning", "critical"] },
-        "actor": { "type": "string", "enum": ["account", "pc", "controller", "system"] }, "subject_id": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/uuid" }] },
-        "detail": { "type": "object" }, "created_at": { "$ref": "#/$defs/timestamp" }
+        "id": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "notice",
+            "warning",
+            "critical"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "enum": [
+            "account",
+            "pc",
+            "controller",
+            "system"
+          ]
+        },
+        "subject_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "detail": {
+          "type": "object"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        }
       }
     },
-    "security_events_response": { "type": "object", "additionalProperties": false, "required": ["events"], "properties": { "events": { "type": "array", "items": { "$ref": "#/$defs/security_event" } } } },
+    "security_events_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "events"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/security_event"
+          }
+        }
+      }
+    },
     "plans_response": {
       "description": "GET /v1/plans (public): plans.json content plus the configured display prices",
-      "type": "object", "additionalProperties": false,
-      "required": ["plans", "pricing", "billing_enabled"],
-      "properties": { "plans": { "type": "object" }, "pricing": { "type": "object", "additionalProperties": false, "required": ["currency", "monthly_cents", "annual_cents"], "properties": { "currency": { "type": "string" }, "monthly_cents": { "type": "integer" }, "annual_cents": { "type": "integer" } } }, "billing_enabled": { "type": "boolean" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plans",
+        "pricing",
+        "billing_enabled"
+      ],
+      "properties": {
+        "plans": {
+          "type": "object"
+        },
+        "pricing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "currency",
+            "monthly_cents",
+            "annual_cents"
+          ],
+          "properties": {
+            "currency": {
+              "type": "string"
+            },
+            "monthly_cents": {
+              "type": "integer"
+            },
+            "annual_cents": {
+              "type": "integer"
+            }
+          }
+        },
+        "billing_enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "support_ticket_request": {
+      "description": "POST /v1/support/tickets. `diagnostics` is the customer-reviewed, already-redacted bundle as JSON text (component versions, connection states, error codes, timing only); the server passes it through its redactor again before storing. Never contains pairing material, credentials, typed text, media titles or URLs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "message"
+      ],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": [
+            "connection",
+            "pairing",
+            "media",
+            "input",
+            "apps",
+            "power",
+            "install",
+            "billing",
+            "account",
+            "other"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "error_code": {
+          "type": "string",
+          "pattern": "^[A-Z_]+$",
+          "maxLength": 64,
+          "description": "The error the customer was looking at, preselected by the help link."
+        },
+        "diagnostics": {
+          "type": "string",
+          "maxLength": 32768
+        },
+        "app_version": {
+          "type": "string",
+          "maxLength": 64
+        }
+      }
+    },
+    "support_ticket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticket_id",
+        "reference",
+        "status",
+        "category",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "ticket_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^DM-[0-9A-HJKMNP-TV-Z]{8}$",
+          "description": "Human-readable reference shown to the customer after successful receipt."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "received",
+            "in_review",
+            "answered",
+            "closed"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "connection",
+            "pairing",
+            "media",
+            "input",
+            "apps",
+            "power",
+            "install",
+            "billing",
+            "account",
+            "other"
+          ]
+        },
+        "error_code": {
+          "type": "string",
+          "pattern": "^[A-Z_]+$",
+          "maxLength": 64
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "response_expectation": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Present only when the operator configured one (DOME_SUPPORT_RESPONSE_EXPECTATION); never a default promise."
+        },
+        "answer": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "Operator answer, when status is answered or closed."
+        }
+      }
+    },
+    "support_ticket_response": {
+      "description": "201 POST /v1/support/tickets and 200 GET /v1/support/tickets/{id}",
+      "$ref": "#/$defs/support_ticket"
+    },
+    "support_tickets_response": {
+      "description": "GET /v1/support/tickets (the account's own tickets, newest first, at most 50)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tickets"
+      ],
+      "properties": {
+        "tickets": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/support_ticket"
+          }
+        }
+      }
     }
   }
 }

@@ -170,6 +170,70 @@ export async function signHelloProof(privateKey: CryptoKey, publicKey: CryptoKey
   return signPayload(privateKey, publicKey, dumpsCompact(payload));
 }
 
+export type InputEvent =
+  | { type: "pointer_move"; dx: number; dy: number }
+  | { type: "pointer_button"; button: "left" | "right" | "middle"; action: "down" | "up" | "click" | "double_click" }
+  | { type: "pointer_scroll"; dx: number; dy: number }
+  | { type: "text"; text: string }
+  | { type: "key"; key: "enter" | "tab" | "escape" | "backspace" | "delete" | "space" | "arrow_up" | "arrow_down" | "arrow_left" | "arrow_right" | "home" | "end" | "page_up" | "page_down" }
+  | { type: "shortcut"; name: "ctrl_a" | "ctrl_c" | "ctrl_v" | "ctrl_z" | "ctrl_l" };
+
+export interface InputBatchPayload {
+  type: "input_batch";
+  protocol_version: string;
+  account_id: string;
+  controller_id: string;
+  target_pc_id: string;
+  input_session_id: string;
+  seq: number;
+  issued_at: string;
+  expires_at: string;
+  events: InputEvent[];
+}
+
+export interface BuildInputBatchInput {
+  accountId: string;
+  controllerId: string;
+  targetPcId: string;
+  inputSessionId: string;
+  seq: number;
+  events: InputEvent[];
+  now?: Date;
+}
+
+/** The capabilities a grant must hold to send these events (pointer_* → pointer; text/key/shortcut → keyboard). */
+export function inputEventCapabilities(events: readonly InputEvent[]): Set<"pointer" | "keyboard"> {
+  const needed = new Set<"pointer" | "keyboard">();
+  for (const ev of events) needed.add(ev.type === "pointer_move" || ev.type === "pointer_button" || ev.type === "pointer_scroll" ? "pointer" : "keyboard");
+  return needed;
+}
+
+/**
+ * One batch of the manual-input stream (rules.input_sessions). The phone builds and signs it with the
+ * controller key; the relay and the PC verify it. Lifetime = input_batch_lifetime_seconds (5 s); an empty
+ * events array renews the session lease.
+ */
+export function buildInputBatchPayload(input: BuildInputBatchInput): InputBatchPayload {
+  const now = input.now ?? new Date();
+  return {
+    type: "input_batch",
+    protocol_version: PROTOCOL_VERSION,
+    account_id: input.accountId,
+    controller_id: input.controllerId,
+    target_pc_id: input.targetPcId,
+    input_session_id: input.inputSessionId,
+    seq: input.seq,
+    issued_at: formatRfc3339(now),
+    expires_at: formatRfc3339(new Date(now.getTime() + LIMITS.input_batch_lifetime_seconds * 1000)),
+    events: input.events,
+  };
+}
+
+export async function signInputBatch(privateKey: CryptoKey, publicKey: CryptoKey, payload: InputBatchPayload): Promise<Envelope> {
+  schemas.validateInputBatchPayload(payload);
+  return signPayload(privateKey, publicKey, dumpsCompact(payload as unknown as JsonValue));
+}
+
 export interface VerifiedCommand {
   envelope: Envelope;
   payload: CommandPayload;

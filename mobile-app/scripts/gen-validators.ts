@@ -29,7 +29,7 @@ const SCHEMA_DOCS = ["envelope", "command", "confirmation", "relay-frames", "bri
 const BASE = "https://dome.app/schemas/";
 const ACTIONS_BASE = "https://dome.app/actions/";
 /** relay-frames $defs the phone validates directly (the two directions it speaks plus the challenge and its parts). */
-const RELAY_FRAME_DEFS = new Set(["relay_to_controller", "controller_to_relay", "challenge", "error", "pc_state", "youtube_tab", "media_session", "pc_connection_state", "lifecycle_state", "hello_proof"]);
+const RELAY_FRAME_DEFS = new Set(["relay_to_controller", "controller_to_relay", "challenge", "error", "pc_state", "youtube_tab", "media_session", "pc_connection_state", "lifecycle_state", "hello_proof", "input_batch_payload", "input_event", "foreground_app"]);
 
 interface JsonObject {
   [k: string]: unknown;

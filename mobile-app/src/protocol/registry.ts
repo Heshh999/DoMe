@@ -40,6 +40,16 @@ export interface ActionSpec {
   coalesce: string | null;
   idempotent: boolean;
   routineAllowed: boolean;
+  /** Capabilities that also permit the action (rules: `capability` OR any of these). */
+  alternateCapabilities: readonly Capability[];
+  /** false = human-only: never offered to an AI tool catalogue or a saved routine (rules.ai_eligibility). */
+  aiEligible: boolean;
+}
+
+/** True when a grant holding `capabilities` may run `spec`. */
+export function capabilitySatisfied(spec: Pick<ActionSpec, "capability" | "alternateCapabilities">, capabilities: Iterable<string>): boolean {
+  const held = new Set(capabilities);
+  return held.has(spec.capability) || spec.alternateCapabilities.some((c) => held.has(c));
 }
 
 export const PROTOCOL_VERSION: string = versionJson.protocol_version;
@@ -83,7 +93,10 @@ for (const [name, raw] of Object.entries(actionsJson.actions)) {
     coalesce: (r.coalesce as string | undefined) ?? null,
     idempotent: Boolean(r.idempotent),
     routineAllowed: Boolean(r.routine_allowed),
+    alternateCapabilities: ((r.alternate_capabilities as string[] | undefined) ?? []) as Capability[],
+    aiEligible: r.ai_eligible === undefined ? true : Boolean(r.ai_eligible),
   };
+  if (spec.routineAllowed && !spec.aiEligible) throw new Error(`human-only action ${name} cannot be routine-allowed`);
   if (spec.risk === "disruptive" && spec.confirmation !== "challenge") throw new Error(`disruptive action ${name} must require a challenge`);
   validatorFor("params", name); // fail fast if the generated code is stale
   actionSpecs.set(name, spec);
@@ -156,6 +169,11 @@ export const schemas = {
   /** relay-frames.schema.json#/$defs/hello_proof — the payload the phone signs to bind its socket. */
   validateHelloProofPayload(value: unknown): void {
     const v = validatorFor("relay_frames", "hello_proof");
+    if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
+  },
+  /** relay-frames.schema.json#/$defs/input_batch_payload — the signed payload of an input_batch frame. */
+  validateInputBatchPayload(value: unknown): void {
+    const v = validatorFor("relay_frames", "input_batch_payload");
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
   },
   validateFrame(direction: FrameDirection, value: unknown): void {

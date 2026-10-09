@@ -69,8 +69,15 @@ def signer():
 
 def test_registry_loads_and_is_consistent():
     reg = load_registry()
-    assert reg.protocol_version == "1.0"
+    assert reg.protocol_version == "1.1"
     assert "youtube.next" in reg.actions
+    # manual input (rules.input_sessions / ai_eligibility): either capability permits the session actions,
+    # and the human-only actions can never be AI tools or routine steps
+    start = reg.get("input.session_start")
+    assert start.satisfied_by({"keyboard"}) and start.satisfied_by({"pointer"}) and not start.satisfied_by({"media"})
+    assert not start.ai_eligible and not start.routine_allowed
+    assert reg.get("youtube.next").ai_eligible and reg.get("youtube.next").accepted_capabilities == ("media",)
+    assert {"pointer", "keyboard"} <= set(reg.capabilities)
     for spec in reg.actions.values():
         assert spec.params_schema.get("additionalProperties") is False
         assert spec.capability in reg.capabilities

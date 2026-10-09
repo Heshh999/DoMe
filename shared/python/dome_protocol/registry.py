@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -49,10 +50,22 @@ class ActionSpec:
     coalesce: str | None
     idempotent: bool
     routine_allowed: bool
+    alternate_capabilities: tuple[str, ...] = ()
+    ai_eligible: bool = True
 
     @property
     def requires_confirmation(self) -> bool:
         return self.confirmation == "challenge"
+
+    @property
+    def accepted_capabilities(self) -> tuple[str, ...]:
+        """Every capability that permits this action: ``capability`` or any of ``alternate_capabilities``."""
+        return (self.capability, *self.alternate_capabilities)
+
+    def satisfied_by(self, capabilities: Iterable[str]) -> bool:
+        """True when a grant holding ``capabilities`` may run this action."""
+        held = set(capabilities)
+        return any(c in held for c in self.accepted_capabilities)
 
 
 class Registry:
@@ -73,6 +86,9 @@ class Registry:
                 raise ValueError(f"action {name} references unknown target schema {target_name}")
             if spec["capability"] not in self.capabilities:
                 raise ValueError(f"action {name} references unknown capability {spec['capability']}")
+            for alt in spec.get("alternate_capabilities", ()):
+                if alt not in self.capabilities or alt == spec["capability"]:
+                    raise ValueError(f"action {name} references unknown/duplicate alternate capability {alt}")
             action = ActionSpec(
                 name=name,
                 summary=spec["summary"],
@@ -89,7 +105,11 @@ class Registry:
                 coalesce=spec.get("coalesce"),
                 idempotent=bool(spec["idempotent"]),
                 routine_allowed=bool(spec["routine_allowed"]),
+                alternate_capabilities=tuple(spec.get("alternate_capabilities", ())),
+                ai_eligible=bool(spec.get("ai_eligible", True)),
             )
+            if action.routine_allowed and not action.ai_eligible:
+                raise ValueError(f"human-only action {name} cannot be routine-allowed")
             if action.risk == "disruptive" and action.confirmation != "challenge":
                 raise ValueError(f"disruptive action {name} must require a challenge")
             if action.routine_allowed and action.confirmation != "none":

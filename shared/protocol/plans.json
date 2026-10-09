@@ -1,5 +1,5 @@
 {
-  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices. manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release.",
+  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices. manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); it is identical for every plan because Free has the same input responsiveness as Pro. The pointer and keyboard capabilities are Free features.",
   "plans": {
     "free": {
       "display_name": "DoMe Free",
@@ -18,6 +18,10 @@
       "coalescable_command_rate_limit": {
         "per_minute": 360,
         "burst": 60
+      },
+      "input_rate_limit": {
+        "batches_per_second": 40,
+        "burst": 80
       }
     },
     "pro": {
@@ -38,6 +42,10 @@
       "coalescable_command_rate_limit": {
         "per_minute": 360,
         "burst": 60
+      },
+      "input_rate_limit": {
+        "batches_per_second": 40,
+        "burst": 80
       }
     }
   },

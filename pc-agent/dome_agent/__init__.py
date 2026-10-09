@@ -9,4 +9,4 @@ Windows; everywhere else ``dome_agent.platform.unsupported`` answers ``PLATFORM_
 
 __version__ = "0.1.0"
 COMPONENT_NAME = "agent"
-SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0",)
+SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1")

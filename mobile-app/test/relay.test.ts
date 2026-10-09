@@ -127,7 +127,7 @@ describe("RelayClient", () => {
     const s = sockets[0]!;
     s.open();
     const hello = s.frames()[0]!;
-    expect(hello).toMatchObject({ type: "hello", component: "controller", kid: KID, protocol_versions: ["1.0"], registry_version: "1.0" });
+    expect(hello).toMatchObject({ type: "hello", component: "controller", kid: KID, protocol_versions: ["1.1"], registry_version: "1.1" });
     expect(client.isOpen).toBe(false);
     s.receive(helloAck(CONTROLLER));
     expect(client.isOpen).toBe(true);

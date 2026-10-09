@@ -377,6 +377,20 @@ export interface PcState {
     command_id: string;
     fires_at: Timestamp;
   };
+  foreground_app?: null | ForegroundApp;
+  /**
+   * The live manual-input session on this PC, if any.
+   */
+  input_session?: null | {
+    controller_id: string;
+    pointer: boolean;
+    keyboard: boolean;
+    lease_expires_at: Timestamp;
+  };
+  /**
+   * True while the agent knows injection would be refused (locked session, secure desktop, elevated foreground).
+   */
+  input_restricted?: boolean;
 }
 export interface YoutubeTab {
   browser_instance_id: string;
@@ -416,6 +430,21 @@ export interface MediaSession {
   artist?: string;
   status: "playing" | "paused" | "stopped" | "changing" | "closed" | "opened" | "unknown";
   controls: ("play" | "pause" | "next" | "previous")[];
+}
+/**
+ * What the PC has in front, as far as the agent can observe. Field-level focus inside the window is not observable and is never claimed.
+ */
+export interface ForegroundApp {
+  process_name: string;
+  /**
+   * Untrusted display data.
+   */
+  window_title?: string;
+  browser?: "chrome" | "edge" | "other";
+  /**
+   * True when the agent could determine the foreground window belongs to a higher-integrity process (input will be refused by Windows).
+   */
+  elevated?: boolean;
 }
 /**
  * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
@@ -698,4 +727,33 @@ export interface PowerCancelResult {
   canceled: boolean;
   action?: string;
   command_id?: string;
+}
+/**
+ * Result of input.session_start. The agent issued the id; the controller must use it in every input_batch of this session.
+ *
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "input_session_result".
+ */
+export interface InputSessionResult {
+  input_session_id: string;
+  lease_seconds: number;
+  input_age_budget_ms: number;
+  max_batch_events: number;
+  /**
+   * This session may send pointer_* events (the grant holds pointer).
+   */
+  pointer: boolean;
+  /**
+   * This session may send text/key/shortcut events (the grant holds keyboard).
+   */
+  keyboard: boolean;
+  foreground_app?: null | ForegroundApp;
+}
+/**
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "input_session_stop_result".
+ */
+export interface InputSessionStopResult {
+  stopped: boolean;
+  released_holds: number;
 }

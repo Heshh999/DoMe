@@ -19,7 +19,7 @@ from .helpers import Controller, payload_of, relay_command_frame
 async def test_hello_snapshot_command_ack_result(harness: AgentHarness, controller: Controller) -> None:
     conn = harness.relay.current
     assert conn is not None and conn.hello is not None
-    assert conn.hello["component"] == "agent" and conn.hello["protocol_versions"] == ["1.0"]
+    assert conn.hello["component"] == "agent" and conn.hello["protocol_versions"] == ["1.0", "1.1"]
     # a state frame followed the snapshot (rules.state_cache)
     tab = FakeTab(tab_id=5)
     ext = await harness.connect_extension(tab)

@@ -434,7 +434,9 @@
                     "volume",
                     "apps",
                     "lock",
-                    "power"
+                    "power",
+                    "pointer",
+                    "keyboard"
                   ]
                 }
               },
@@ -509,7 +511,9 @@
               "volume",
               "apps",
               "lock",
-              "power"
+              "power",
+              "pointer",
+              "keyboard"
             ]
           }
         },
@@ -559,7 +563,9 @@
               "volume",
               "apps",
               "lock",
-              "power"
+              "power",
+              "pointer",
+              "keyboard"
             ]
           }
         }
@@ -892,6 +898,52 @@
               }
             }
           ]
+        },
+        "foreground_app": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/foreground_app"
+            }
+          ]
+        },
+        "input_session": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "controller_id",
+                "pointer",
+                "keyboard",
+                "lease_expires_at"
+              ],
+              "properties": {
+                "controller_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "pointer": {
+                  "type": "boolean"
+                },
+                "keyboard": {
+                  "type": "boolean"
+                },
+                "lease_expires_at": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
+            }
+          ],
+          "description": "The live manual-input session on this PC, if any."
+        },
+        "input_restricted": {
+          "type": "boolean",
+          "description": "True while the agent knows injection would be refused (locked session, secure desktop, elevated foreground)."
         }
       }
     },
@@ -1169,6 +1221,9 @@
         },
         {
           "$ref": "#/$defs/pong"
+        },
+        {
+          "$ref": "#/$defs/controller_input_batch"
         }
       ]
     },
@@ -1203,6 +1258,12 @@
         },
         {
           "$ref": "#/$defs/pong"
+        },
+        {
+          "$ref": "#/$defs/agent_input_ack"
+        },
+        {
+          "$ref": "#/$defs/agent_input_session"
         }
       ]
     },
@@ -1237,6 +1298,15 @@
         },
         {
           "$ref": "#/$defs/agent_revoke_controller"
+        },
+        {
+          "$ref": "#/$defs/agent_input_ack"
+        },
+        {
+          "$ref": "#/$defs/agent_input_session"
+        },
+        {
+          "$ref": "#/$defs/agent_grant_update"
         }
       ]
     },
@@ -1271,6 +1341,9 @@
         },
         {
           "$ref": "#/$defs/agent_revoked"
+        },
+        {
+          "$ref": "#/$defs/relay_to_agent_input_batch"
         }
       ]
     },
@@ -1366,6 +1439,482 @@
         }
       },
       "description": "Payload of hello.proof. Proves to the relay that the socket's owner holds the controller key before the socket is bound to the paired controller (a bare kid is public to the whole account). Verifier checks: signature with the JWK the relay stored at pairing for (session account, kid); envelope.kid == kid == hello.kid; account_id == the session's account; issued_at/expires_at within the normal window with lifetime <= confirmation_challenge_lifetime_seconds; nonce not seen before on this relay (single use)."
+    },
+    "input_session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
+    "foreground_app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process_name"
+      ],
+      "properties": {
+        "process_name": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "window_title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Untrusted display data."
+        },
+        "browser": {
+          "type": "string",
+          "enum": [
+            "chrome",
+            "edge",
+            "other"
+          ]
+        },
+        "elevated": {
+          "type": "boolean",
+          "description": "True when the agent could determine the foreground window belongs to a higher-integrity process (input will be refused by Windows)."
+        }
+      },
+      "description": "What the PC has in front, as far as the agent can observe. Field-level focus inside the window is not observable and is never claimed."
+    },
+    "input_event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "dx",
+            "dy"
+          ],
+          "properties": {
+            "type": {
+              "const": "pointer_move"
+            },
+            "dx": {
+              "type": "integer",
+              "minimum": -4096,
+              "maximum": 4096
+            },
+            "dy": {
+              "type": "integer",
+              "minimum": -4096,
+              "maximum": 4096
+            }
+          },
+          "description": "Relative cursor motion in desktop pixels; adjacent moves may be summed by the agent."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "button",
+            "action"
+          ],
+          "properties": {
+            "type": {
+              "const": "pointer_button"
+            },
+            "button": {
+              "type": "string",
+              "enum": [
+                "left",
+                "right",
+                "middle"
+              ]
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "down",
+                "up",
+                "click",
+                "double_click"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "dx",
+            "dy"
+          ],
+          "properties": {
+            "type": {
+              "const": "pointer_scroll"
+            },
+            "dx": {
+              "type": "integer",
+              "minimum": -4096,
+              "maximum": 4096
+            },
+            "dy": {
+              "type": "integer",
+              "minimum": -4096,
+              "maximum": 4096
+            }
+          },
+          "description": "Wheel motion in notches; positive dy scrolls content up (wheel away from the user), matching Windows WHEEL_DELTA sign."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "description": "Literal committed text, inserted as Unicode; never parsed."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "key"
+          ],
+          "properties": {
+            "type": {
+              "const": "key"
+            },
+            "key": {
+              "type": "string",
+              "enum": [
+                "enter",
+                "tab",
+                "escape",
+                "backspace",
+                "delete",
+                "space",
+                "arrow_up",
+                "arrow_down",
+                "arrow_left",
+                "arrow_right",
+                "home",
+                "end",
+                "page_up",
+                "page_down"
+              ]
+            }
+          },
+          "description": "One press-and-release of a named key."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "name"
+          ],
+          "properties": {
+            "type": {
+              "const": "shortcut"
+            },
+            "name": {
+              "type": "string",
+              "enum": [
+                "ctrl_a",
+                "ctrl_c",
+                "ctrl_v",
+                "ctrl_z",
+                "ctrl_l"
+              ]
+            }
+          },
+          "description": "Tested shortcut; the modifier is released after the key. ctrl_l is the browser address bar and is only offered in browser contexts."
+        }
+      ]
+    },
+    "input_batch_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "account_id",
+        "controller_id",
+        "target_pc_id",
+        "input_session_id",
+        "seq",
+        "issued_at",
+        "expires_at",
+        "events"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_batch"
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "account_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "target_pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "input_session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/input_event"
+          }
+        }
+      },
+      "description": "Signed payload of a controller_input_batch envelope (rules.input_sessions). An empty events array renews the lease."
+    },
+    "controller_input_batch": {
+      "description": "Controller → relay. Manual-input events for the PC's live input session; the relay verifies and forwards, never executes, journals or logs the content.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "envelope"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_batch"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        }
+      }
+    },
+    "relay_to_agent_input_batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "envelope",
+        "relay"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_batch"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        },
+        "relay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "received_at",
+            "connection_id"
+          ],
+          "properties": {
+            "received_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "connection_id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        }
+      }
+    },
+    "agent_input_ack": {
+      "description": "Agent → relay → the owning controller. Windows accepted these events (not an observed application effect); at most 4 per second per session.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "input_session_id",
+        "last_seq",
+        "accepted_events",
+        "dropped_events",
+        "held_buttons",
+        "held_keys",
+        "at"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_ack"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "input_session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        },
+        "last_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "accepted_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "held_buttons": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "middle"
+            ]
+          }
+        },
+        "held_keys": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          }
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "agent_input_session": {
+      "description": "Agent → relay → controllers (the owner always; subscribers see the owner via pc_state.input_session). Session lifecycle: started, suspended (fresh start required) or ended with the reason; holds_released counts the buttons/keys this session still held and the agent released.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "input_session_id",
+        "controller_id",
+        "event",
+        "reason",
+        "holds_released",
+        "at"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_session"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "input_session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "event": {
+          "type": "string",
+          "enum": [
+            "started",
+            "suspended",
+            "ended"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "started",
+            "stopped",
+            "lease_expired",
+            "takeover",
+            "controller_revoked",
+            "grant_removed",
+            "pc_switch",
+            "controller_disconnected",
+            "session_locked",
+            "secure_desktop",
+            "backpressure",
+            "remote_disabled",
+            "agent_restart"
+          ]
+        },
+        "holds_released": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "agent_grant_update": {
+      "description": "Agent → relay. The PC owner changed a controller's capabilities locally (rules.grant_update). The relay replaces the grant's capabilities with this list and pushes a fresh grants_snapshot.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "controller_id",
+        "kid",
+        "capabilities"
+      ],
+      "properties": {
+        "type": {
+          "const": "grant_update"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "status",
+              "media",
+              "volume",
+              "apps",
+              "lock",
+              "power",
+              "pointer",
+              "keyboard"
+            ]
+          }
+        }
+      }
     }
   }
 }

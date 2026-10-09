@@ -1,13 +1,15 @@
 {
-  "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), target (name in target_schemas or null), result (name of a $def in schemas/results.schema.json; the agent validates before emitting, the controller before rendering), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: the coalescing GROUP is (coalesce key, canonical target JSON or '' when null) per PC across all controllers; a later command in the same group replaces queued earlier ones, which terminate as canceled/COMMAND_SUPERSEDED), routine_allowed (may appear in Pro routines), idempotent (safe to re-emit the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts).",
-  "registry_version": "1.0",
+  "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), target (name in target_schemas or null), result (name of a $def in schemas/results.schema.json; the agent validates before emitting, the controller before rendering), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: the coalescing GROUP is (coalesce key, canonical target JSON or '' when null) per PC across all controllers; a later command in the same group replaces queued earlier ones, which terminate as canceled/COMMAND_SUPERSEDED), routine_allowed (may appear in Pro routines), idempotent (safe to re-emit the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts). `alternate_capabilities` (optional): the action is permitted when the grant holds `capability` OR any listed alternate. `ai_eligible: false` marks human-only actions that must never enter an AI tool catalogue or a saved routine (rules.ai_eligibility).",
+  "registry_version": "1.1",
   "capabilities": {
     "status": "Read PC, media and browser state.",
     "media": "Control YouTube and Windows media sessions.",
     "volume": "Change Windows system volume and mute.",
     "apps": "Launch, focus, minimise and close approved applications.",
     "lock": "Lock the Windows session.",
-    "power": "Sleep, restart or shut down the PC (always confirmed)."
+    "power": "Sleep, restart or shut down the PC (always confirmed).",
+    "pointer": "Move the Windows cursor, click, scroll and drag from the phone touchpad. Human-directed; reaches every app of the unlocked Windows session, not only approved apps.",
+    "keyboard": "Type literal text and press keys or tested shortcuts into whatever the PC has focused. Human-directed; reaches every app of the unlocked Windows session, not only approved apps."
   },
   "target_schemas": {
     "youtube_target": {
@@ -98,7 +100,8 @@
       "availability": [],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "system.get_status": {
       "summary": "PC status: session locked, remote enabled, extension connected, browser instances, media sessions summary, volume.",
@@ -116,7 +119,8 @@
       "availability": [],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.list_tabs": {
       "summary": "List YouTube tabs across connected browser instances with title, video id, playing state.",
@@ -136,7 +140,8 @@
       ],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.get_state": {
       "summary": "Current player state for one tab: title, video id, paused, position, duration, muted, volume, page kind (watch/shorts/music/other) plus orthogonal flags ad_showing, is_live, in_playlist, theater, fullscreen.",
@@ -156,7 +161,8 @@
       ],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.set_paused": {
       "summary": "Pause or play the targeted YouTube player (absolute state, never a toggle).",
@@ -184,7 +190,8 @@
       ],
       "verification": "observe_player_state",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "youtube.next": {
       "summary": "Advance to the next video. Success requires an observed video-id/navigation transition.",
@@ -205,7 +212,8 @@
       ],
       "verification": "observe_video_transition",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.previous": {
       "summary": "Go to the previous video where the player/playlist supports it.",
@@ -226,7 +234,8 @@
       ],
       "verification": "observe_video_transition",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.seek_relative": {
       "summary": "Seek by a signed number of seconds (default UI: ±10).",
@@ -259,7 +268,8 @@
       ],
       "verification": "observe_player_state",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.seek_to": {
       "summary": "Seek to an absolute position in seconds, bounded by duration when known.",
@@ -289,7 +299,8 @@
       ],
       "verification": "observe_player_state",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.set_muted": {
       "summary": "Mute or unmute the YouTube player (player-level, not Windows).",
@@ -317,7 +328,8 @@
       ],
       "verification": "observe_player_state",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "youtube.set_volume": {
       "summary": "Set the YouTube player volume 0-100 (player-level, not Windows).",
@@ -348,7 +360,8 @@
       "verification": "observe_player_state",
       "coalesce": "youtube.set_volume",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "youtube.set_theater": {
       "summary": "Set theater mode as an absolute state (youtube_tab.theater read back). Separately tested; labelled distinctly from fullscreen.",
@@ -376,7 +389,8 @@
       ],
       "verification": "observe_player_state",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "youtube.request_fullscreen": {
       "summary": "Attempt fullscreen. Browsers require user activation on the PC; expected to fail with ACTIVATION_REQUIRED in most contexts, reported honestly.",
@@ -397,7 +411,8 @@
       ],
       "verification": "observe_player_state",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "media.get_sessions": {
       "summary": "List Windows media sessions (GlobalSystemMediaTransportControls) with app id, title, playback status and supported controls.",
@@ -417,7 +432,8 @@
       ],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "media.set_paused": {
       "summary": "Pause/play a specific Windows media session (absolute).",
@@ -445,7 +461,8 @@
       ],
       "verification": "observe_session_state",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "media.next": {
       "summary": "Next track on a Windows media session that advertises it.",
@@ -466,7 +483,8 @@
       ],
       "verification": "observe_session_state",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "media.previous": {
       "summary": "Previous track on a Windows media session that advertises it.",
@@ -487,7 +505,8 @@
       ],
       "verification": "observe_session_state",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "windows.get_volume": {
       "summary": "Current Windows master volume and mute state.",
@@ -507,7 +526,8 @@
       ],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "windows.set_volume": {
       "summary": "Set Windows master volume to an exact percentage. Slider bursts coalesce to the latest value.",
@@ -537,7 +557,8 @@
       "verification": "read_back",
       "coalesce": "windows.set_volume",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "windows.set_muted": {
       "summary": "Mute/unmute Windows master volume (absolute).",
@@ -564,7 +585,8 @@
       ],
       "verification": "read_back",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "windows.lock": {
       "summary": "Lock the Windows session (LockWorkStation).",
@@ -585,7 +607,8 @@
       ],
       "verification": "os_accepted",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "app.list": {
       "summary": "List locally approved applications with running/window state.",
@@ -605,7 +628,8 @@
       ],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "app.launch": {
       "summary": "Launch an approved application by app_id. No paths or arguments cross the wire.",
@@ -636,7 +660,8 @@
       ],
       "verification": "process_observed",
       "idempotent": false,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "app.focus": {
       "summary": "Bring an approved app's window to the foreground. Reports FOCUS_DENIED when Windows refuses.",
@@ -657,7 +682,8 @@
       ],
       "verification": "foreground_observed",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "app.minimize": {
       "summary": "Minimise an approved app's window.",
@@ -678,7 +704,8 @@
       ],
       "verification": "window_state_observed",
       "idempotent": true,
-      "routine_allowed": true
+      "routine_allowed": true,
+      "ai_eligible": true
     },
     "app.close": {
       "summary": "Request graceful close (WM_CLOSE). Never force-kills; reports CLOSE_REFUSED if the app stays open.",
@@ -699,7 +726,8 @@
       ],
       "verification": "window_gone_observed",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "power.sleep": {
       "summary": "Suspend the PC after a cancellable countdown. Confirmed on the phone, challenge issued by the PC.",
@@ -726,7 +754,8 @@
       ],
       "verification": "os_accepted",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "power.restart": {
       "summary": "Restart after a cancellable countdown. Does not force-close unsaved work.",
@@ -753,7 +782,8 @@
       ],
       "verification": "os_accepted",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "power.shutdown": {
       "summary": "Shut down after a cancellable countdown. Does not force-close unsaved work. 'Accepted by Windows; PC disconnected' is the strongest honest result.",
@@ -780,7 +810,8 @@
       ],
       "verification": "os_accepted",
       "idempotent": false,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
     },
     "power.cancel": {
       "summary": "Cancel a pending power countdown on this PC.",
@@ -800,7 +831,68 @@
       ],
       "verification": "response",
       "idempotent": true,
-      "routine_allowed": false
+      "routine_allowed": false,
+      "ai_eligible": true
+    },
+    "input.session_start": {
+      "summary": "Start, or take over, the manual-input session for this PC. The agent issues the session id and lease; events then travel in signed input_batch frames, not commands (rules.input_sessions).",
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "takeover": {
+            "type": "boolean",
+            "default": false,
+            "description": "Replace another controller's active session; the agent ends it and releases its held input first."
+          }
+        }
+      },
+      "target": null,
+      "result": "input_session_result",
+      "capability": "pointer",
+      "alternate_capabilities": [
+        "keyboard"
+      ],
+      "risk": "moderate",
+      "confirmation": "none",
+      "timeout_ms": 5000,
+      "availability": [
+        "session_unlocked"
+      ],
+      "verification": "response",
+      "idempotent": false,
+      "routine_allowed": false,
+      "ai_eligible": false
+    },
+    "input.session_stop": {
+      "summary": "End this controller's manual-input session on this PC and release every button or key it still holds.",
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "input_session_id"
+        ],
+        "properties": {
+          "input_session_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{22}$"
+          }
+        }
+      },
+      "target": null,
+      "result": "input_session_stop_result",
+      "capability": "pointer",
+      "alternate_capabilities": [
+        "keyboard"
+      ],
+      "risk": "low",
+      "confirmation": "none",
+      "timeout_ms": 5000,
+      "availability": [],
+      "verification": "response",
+      "idempotent": true,
+      "routine_allowed": false,
+      "ai_eligible": false
     }
   },
   "availability_conditions": {

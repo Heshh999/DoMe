@@ -152,7 +152,7 @@ async def test_hello_tabs_and_request(settings: Settings, bridge: Any) -> None:
     server, _events, changes = bridge
     ext = await connect(settings)
     try:
-        assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == "1.0"
+        assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == "1.1"
         assert server.connected and server.instances()[0].browser == "chrome"
         tab = ext.add_tab(FakeTab(tab_id=4))
         ext.publish_tabs()
@@ -197,7 +197,7 @@ async def test_incompatible_extension_is_refused(settings: Settings, bridge: Any
             break
         await asyncio.sleep(0.02)
     assert ext.errors and ext.errors[0]["error"]["code"] == "PROTOCOL_INCOMPATIBLE"
-    assert ext.errors[0]["error"]["detail"]["supported"] == ["1.0"]
+    assert ext.errors[0]["error"]["detail"]["supported"] == ["1.1"]
     assert not server.connected
     ext.close()
 
