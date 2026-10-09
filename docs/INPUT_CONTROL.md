@@ -61,7 +61,7 @@ The phone may *request* `pointer` and `keyboard` during pairing (the PWA request
 | Where | How |
 | --- | --- |
 | Pairing approval window (tray → **Pair a phone…**) | Two separate, **unticked** checkboxes, "Allow touchpad / mouse (pointer)" and "Allow keyboard", with the scope explanation below (`dome_agent/ui.py`). |
-| Tray menu | **Paired phones ▸ ‹phone› ▸ Allow touchpad / Allow keyboard** (checkable) and **What this allows…** (`dome_agent/tray.py`). The first time a capability is ticked the tray shows the explanation as a notification. |
+| Tray menu | **Paired phones ▸ ‹phone› ▸ Allow touchpad / Allow keyboard** (checkable) and **What this allows…** (`dome_agent/tray.py`). Ticking a capability also shows the explanation as a notification. |
 | Console | `DoMe.exe grant <controller_id> --pointer --keyboard`; withdraw with `--remove-pointer` / `--remove-keyboard`. The command prints the explanation before granting. `pair` / `pair-approve` grant input only when `--pointer` / `--keyboard` (or `--capabilities`) are named; `--yes` never implies them (**unit-tested**). |
 
 The agent stores the change locally and sends `grant_update{controller_id, kid, capabilities}`; the
@@ -283,8 +283,9 @@ refusals above twice the input rate for about five seconds — closes the socket
 ### 5.3 Starting and stopping
 
 `input.session_start` (params `{takeover?: boolean}`, default `false`; risk `moderate`, no
-confirmation, 5 s timeout, availability `session_unlocked`) is an ordinary signed command. The agent
-refuses it with `PLATFORM_UNSUPPORTED` off Windows (unless the explicit fake platform is selected),
+confirmation, 5 s timeout, availability `session_unlocked`) is an ordinary signed command. A grant
+with neither capability is refused by the relay and the agent's authorization (`GRANT_MISSING`). The
+agent's handler refuses it with `PLATFORM_UNSUPPORTED` off Windows (unless the explicit fake platform is selected),
 `PC_REMOTE_DISABLED`, `PC_SESSION_LOCKED`, `CONTROLLER_REVOKED`, `INPUT_NOT_PERMITTED` (neither
 capability effective) or `INPUT_SESSION_OWNED` (another phone owns the session and `takeover` is
 false). Otherwise it issues a fresh session and answers:

@@ -6,6 +6,11 @@ tested, using the evidence tags of §17. Nothing in DoMe has been Windows-device
 iPhone-tested, load-tested beyond a small loopback smoke, or reviewed by an external party. No security certification exists or is
 claimed. Where a control is designed but not implemented, this document says so.
 
+Protocol 1.1 (spec §10A, updated 2026-10-09) adds Free manual touchpad and keyboard input. Its
+threats are T16–T21. T22 covers the single-instance agent from spec §10. The Windows input adapter
+(`SendInput`) and the real phone keyboard have **not** been exercised on a device, so every
+statement about their real-world behaviour is **not yet verified**.
+
 Companion documents: `docs/ARCHITECTURE.md` (trust and data boundaries, flows),
 `docs/PROTOCOL.md` (the wire contract), `docs/adr/0001-foundational-decisions.md`,
 `cloud-api/KNOWN_ISSUES.md`, `pc-agent/KNOWN_ISSUES.md`, `browser-extension/KNOWN_ISSUES.md`,
@@ -22,6 +27,25 @@ could have invented. Account authentication is delegated to an OpenID Connect is
 sees a password. The PC never listens on the network; it opens one outbound connection. A local
 switch on the PC disables remote control and no remote message can undo it. This is not
 end-to-end encryption and is not described as such anywhere in the product.
+
+Manual input widens what a paired phone can do, and the boundary has to say so. The **approved-app
+list restricts structured app actions** (`app.launch`/`focus`/`minimize`/`close` by `app_id`). It
+is **not a sandbox around a real mouse and keyboard**. A phone holding `pointer` or `keyboard` can
+click and type into any app of the unlocked Windows session, as the person at the desk could. That
+includes apps that were never approved, settings pages and anything those apps can reach. No event
+schema can stop every consequential action reachable through ordinary UI. The safeguards are
+therefore:
+- explicit local grants that are off by default;
+- the same pairing, signature, grant and emergency-stop chain as commands;
+- one session owner per PC;
+- a short lease with held-input release;
+- Windows' own restrictions (lock screen, secure desktop, UAC, elevated windows), which the agent
+  never tries to bypass.
+
+Manual input is human-directed only. Pointer, key, text and shortcut primitives are excluded from
+any AI tool catalogue, from saved routines and from layout shortcuts (`rules.ai_eligibility`).
+Literal text is never parsed as a command and never reaches a shell or interpreter. Typed text
+crosses the trusted relay in readable form inside TLS, like every other payload.
 
 ## 2. Threat model
 
@@ -110,7 +134,9 @@ relay stops routing for the controller/PC, and the PC refuses the kid locally.
 | Account unlinks a PC (`DELETE /v1/pcs/{id}`) | Credentials, tokens and grants revoked; `revoked{pc_unlinked}` to the agent, socket closed; subscribers told `pc_status{offline, enabled: false}`. | The agent discards its credential, stops reconnecting, keeps local grants for inspection, shows a re-link prompt; a later `POST /v1/agent/token` with the old credential is 401. |
 | Account signs out / revokes a session | Session row revoked; that session's controller sockets closed with 4008. | The PWA shows sign-in; the installation key is kept so signing back in needs no re-pairing. |
 | PC owner revokes locally (tray/CLI `revoke`) | Local grant revoked at once; `revoke_controller{controller_id, kid, reason}` to the relay → same as the account path. | If offline, the revocation is journaled in `pending_revocations` and re-sent after every snapshot until the relay acknowledges by omitting the controller. |
-| PC owner disables remote control | Every command refused with `PC_REMOTE_DISABLED` (checked at authorization and again right before execution); armed countdowns canceled. | Local flag; no remote frame can change it; survives restarts. |
+| PC owner disables remote control | Every command refused with `PC_REMOTE_DISABLED` (checked at authorization and again right before execution); armed countdowns canceled; a live manual-input session ends `remote_disabled` with its holds released. | Local flag; no remote frame can change it; survives restarts. |
+| PC owner removes touchpad/keyboard (tray *Paired phones*, `dome-agent grant --remove-pointer/--remove-keyboard`) | Local grant narrowed at once. Removing both ends a live session `grant_removed`; removing only `pointer` keeps the session and releases a drag. `grant_update{controller_id, kid, capabilities}` goes to the relay, which replaces the grant row's list, writes `grant_updated` and re-pushes `grants_snapshot`. | If offline, the change is journaled in `pending_grant_updates` (by kid) and re-sent after the next snapshot. `capabilities` cannot be emptied this way (`minItems: 1`); revoke instead. |
+| Any revocation while a manual-input session is live | The session ends (`controller_revoked`) **before** anything else from that controller can run: the id is retired, then exactly the holds that session injected are released. | Applies to snapshot, REST and local revocation alike. |
 | Plan downgrade | **Not a revocation.** `pc_enabled: false` / `status: plan_disabled` refuse routing and execution but keep local grants, so revocation and emergency stop keep working for every paired device. | Fresh snapshot on plan change. |
 
 Reconnect rule: an agent processes **no** command until it has applied the connection's first
@@ -134,17 +160,25 @@ interrupt a command whose OS call is already under way (`pc-agent/KNOWN_ISSUES.m
   `pairing_started`, `pairing_claimed`, `pairing_declined`, `pairing_failed`,
   `pairing_rate_limited`, `controller_paired`, `controller_limit_reached`, `controller_revoked`,
   `grant_revoked`, `command_rejected`, `confirmation_rejected`, `subscribe_refused`,
-  `relay_frame_rejected`, `controller_throttled`, `relay_events_throttled`. `detail` is redacted
+  `relay_frame_rejected`, `controller_throttled`, `relay_events_throttled`, and since protocol 1.1
+  `input_rejected` (at most one per minute per controller; never one per accepted batch),
+  `grant_updated` (`added`/`removed`) and `controller_throttled` with `detail.reason: input_flood`.
+  `detail` is redacted
   before storage; the list is exposed to the customer on Free at
   `GET /v1/account/security-events`. The agent keeps local security events for identity mismatches,
   unknown snapshot controllers, IPC identity mismatches and changed approved-app binaries.
 - **Rate limits (in-memory, per process).** Link start 10/h per IP; failed `user_code` lookups
   10/15 min per account and per IP; pairing claims 5/15 min per account and per IP; login 60/min per
   IP; agent token 30/min per IP; command buckets from `plans.json`; controller frame budget
-  600/min burst 120; security-event rows per socket 20/min.
+  600/min burst 120; security-event rows per socket 20/min. Manual input (1.1): per-controller
+  `input_rate_limit` 40 batches/s burst 80 (the same on Free and Pro), a separate per-socket
+  input bucket charged before any database work, at most one `RATE_LIMITED` answer per second, and a
+  sustained flood above twice the input rate closes the socket (4000); support tickets 10 per hour per
+  account.
 - **Logging.** structlog JSON; redaction of `token`, `secret`, `code`, `device_code`,
   `pc_credential`, `cookie`, `authorization`, `payload`, `sig`, `title`, `challenge`, `email`,
-  `code_hash`, `challenge_text` and `*_token/_secret/_code/_credential/_key`; URLs as route
+  `code_hash`, `challenge_text`, `text` (typed keyboard content) and
+  `*_token/_secret/_code/_credential/_key`; input batches are never logged; URLs as route
   templates with `user_code` masked; no query strings. Agent and PWA logs follow the same rule
   (codes, ids, counts and durations only). Diagnostics bundles are customer-initiated and redacted.
 - **Secrets at rest.** Hashes for session ids, device codes, PC credentials, access tokens and
@@ -180,12 +214,32 @@ remote parties never send paths, arguments or shell text; the agent never runs w
 than the user; the native host accepts only same-user, same-session clients; and the key store is
 only ever written by local approval. A Session 0 service is deliberately not used (spec §10).
 
+Manual input stays inside the same boundary. `SendInput` runs as the signed-in user at that
+user's integrity level. The agent never elevates and never bypasses the lock screen, a secure
+desktop or UAC. A secure desktop or a locked session ends the session. An elevated or
+unknown-integrity window in front sets `pc_state.input_restricted`, and keyboard events are then
+refused with `INPUT_RESTRICTED` while pointer events still run, so the customer can click elsewhere.
+Windows' global input state is shared with the physical keyboard and mouse. The agent releases
+only what its own session injected and does **not** claim perfect ownership isolation when a person
+at the desk uses the same keys at the same moment.
+
 ## 8. What is NOT protected in V1
 
 - **Confidentiality from the relay.** Commands, confirmations, results and `state` frames
   (including YouTube titles, media titles, app window titles) are readable by the relay operator.
   There is no end-to-end payload encryption and the product must not be described as encrypted
   end to end or zero-knowledge.
+- **Typed keyboard content from the relay.** Text typed through the Keyboard panel (including
+  anything a customer chooses to type into a password field on the PC), the foreground window's
+  title and the input events themselves are readable by the relay operator in transit. They are not
+  stored or logged by design (T21), but they are not hidden from the relay.
+- **What a granted mouse and keyboard can do.** Within the unlocked Windows session, a phone with
+  `pointer`/`keyboard` can do what the person at the desk can do in ordinary UI. The approved-app
+  list does not limit it (T16).
+- **Proof of an application effect from input.** `input_ack` reports that Windows accepted events.
+  It does not show that a field changed or a button activated. Windows UIPI drops input aimed at a
+  higher-integrity window without an error, and such pointer events (or keyboard events while
+  integrity is unknown) are counted as accepted (pc-agent `KNOWN_ISSUES.md` #15).
 - **A compromised browser origin or phone OS.** A script running on the API origin, or malware on
   the phone, can sign commands while the page is open even though it cannot extract the key.
 - **A compromised PC.** A PC that is already compromised holds the key store, the credential and
@@ -222,6 +276,11 @@ only ever written by local approval. A Session 0 service is deliberately not use
 | Fixture `tab_token` is 24 characters, schema requires 22 | `mobile-app/CONTRACT_ISSUES.md` #1 | low (fixtures still valid as signing vectors) |
 | `AbortSystemShutdownW` window is effectively nil with `dwTimeout = 0` | `pc-agent/KNOWN_ISSUES.md` #1 | product decision |
 | Confirmation after a controller socket reconnect is unverified end to end | `mobile-app/KNOWN_ISSUES.md` #1 | low (challenge expires on the PC either way) |
+| Per-batch database work on the input path (≈ 5 queries per accepted batch; a short per-socket authorisation cache is the proposed fix) | `cloud-api/KNOWN_ISSUES.md` #7 | medium at scale (the agent re-verifies every batch, so a stale relay check grants nothing) |
+| No relay → agent frame for "the controller's socket is gone"; the 3 s lease ends the session instead | `cloud-api/KNOWN_ISSUES.md` #8, `CONTRACT_ISSUES.md` #12 | low (bounded by the lease) |
+| Target-change 2 s grace is a heuristic; a target generation number echoed by the phone would remove it | `pc-agent/KNOWN_ISSUES.md` #17 | low |
+| Other-session agent conflicts detected only through the pid file; a `Global\` per-account mutex is proposed | `pc-agent/KNOWN_ISSUES.md` #10 | low |
+| UIPI-dropped pointer events (and keyboard events at unknown integrity) are acked as accepted | `pc-agent/KNOWN_ISSUES.md` #15 | low (copy says "Windows accepted", never "done") |
 | Stale subscriptions after unlink, unscoped-looking `command_id` probe cost, `user_code` in request logs | cloud-api review | fixed in this build (`DECISIONS.md` #24, #25, README) |
 
 ## 10. Development hygiene
