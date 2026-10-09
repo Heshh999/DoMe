@@ -17,6 +17,10 @@ from joserfc.jwk import RSAKey
 
 AUTH_CODE_TTL = 120
 TOKEN_TTL = 3600
+# Passphrase gate (DEV_IDP_PASSPHRASE): after this many wrong passphrases in the window, every sign-in
+# is refused until the window passes. One process serves one tester; a restart clears it.
+PASSPHRASE_MAX_FAILURES = 10
+PASSPHRASE_FAILURE_WINDOW = 600
 
 
 DEFAULT_ISSUER = "http://127.0.0.1:8081"
@@ -34,6 +38,10 @@ class DevIdpSettings:
     redirect_uris: tuple[str, ...] = DEFAULT_REDIRECT_URIS
     # Users offered on the sign-in page. Any other email typed in is also accepted (dev only).
     users: tuple[str, ...] = DEFAULT_USERS
+    # When set, the sign-in form must also carry this passphrase and the non-interactive
+    # ``dev_user`` path is refused. For a test stack that is reachable from the internet
+    # (testkit/): without it, anyone who finds the URL could sign in as any email.
+    passphrase: str = ""
 
     @classmethod
     def from_env(cls) -> "DevIdpSettings":
@@ -43,6 +51,7 @@ class DevIdpSettings:
             client_id=os.environ.get("DEV_IDP_CLIENT_ID", DEFAULT_CLIENT_ID),
             client_secret=os.environ.get("DEV_IDP_CLIENT_SECRET", DEFAULT_CLIENT_SECRET),
             redirect_uris=tuple(u.strip() for u in redirect.split(",")) if redirect else DEFAULT_REDIRECT_URIS,
+            passphrase=os.environ.get("DEV_IDP_PASSPHRASE", "").strip(),
         )
 
 
@@ -63,6 +72,7 @@ class _State:
     key: RSAKey
     codes: dict[str, _Code] = field(default_factory=dict)
     access_tokens: dict[str, tuple[str, str, float]] = field(default_factory=dict)  # token -> (sub, email, exp)
+    passphrase_failures: list[float] = field(default_factory=list)  # monotonic times of wrong passphrases
 
 
 def _sub_for(email: str) -> str:
@@ -140,9 +150,11 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     async def authorize(request: Request):  # type: ignore[no-untyped-def]
         params = dict(request.query_params)
         _validate_authorize(params)
-        # Non-interactive path for integration tests: ?dev_user=<email>
+        # Non-interactive path for integration tests: ?dev_user=<email>. Never with a passphrase set.
         dev_user = params.pop("dev_user", None)
         if dev_user:
+            if settings.passphrase:
+                raise HTTPException(403, "dev_user sign-in is disabled while DEV_IDP_PASSPHRASE is set")
             return _issue_code(params, dev_user.strip().lower())
         hidden = "".join(
             f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k, v in params.items()
@@ -150,26 +162,47 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
         buttons = "".join(
             f'<button name="email" value="{html.escape(u)}">{html.escape(u)}</button>' for u in settings.users
         )
+        passphrase_field = (
+            '<label>Test passphrase (shown in the DoMe test kit window on your PC)'
+            '<input name="passphrase" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>'
+            if settings.passphrase
+            else ""
+        )
         page = f"""<!doctype html><html><head><meta charset="utf-8"><title>DoMe dev sign-in</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{{font:16px system-ui;background:#0b0f14;color:#e6edf3;display:grid;place-items:center;min-height:100vh;margin:0}}
 form{{background:#121821;padding:24px;border-radius:16px;width:min(420px,92vw);display:grid;gap:12px}}
 button,input{{font:inherit;padding:12px 14px;border-radius:10px;border:1px solid #2a3442;background:#1a2330;color:#e6edf3}}
 button{{cursor:pointer;background:#2563eb;border-color:#2563eb}} .warn{{color:#f59e0b;font-size:13px}}</style></head>
-<body><form method="post" action="/authorize">{hidden}
+<body><form method="post" action="authorize">{hidden}
 <h1 style="margin:0;font-size:20px">Development identity provider</h1>
 <p class="warn">This sign-in exists only on developer machines. It never runs in production.</p>
+{passphrase_field}
 {buttons}
 <label>Or any email<input name="email" type="email" placeholder="you@example.test"></label>
 <button type="submit">Continue</button></form></body></html>"""
         return HTMLResponse(page)
 
+    def _check_passphrase(supplied: str) -> None:
+        if not settings.passphrase:
+            return
+        now = time.monotonic()
+        state.passphrase_failures[:] = [t for t in state.passphrase_failures if now - t < PASSPHRASE_FAILURE_WINDOW]
+        if len(state.passphrase_failures) >= PASSPHRASE_MAX_FAILURES:
+            raise HTTPException(429, "too many wrong passphrases; wait 10 minutes or restart the test kit")
+        if not secrets.compare_digest(supplied.strip().lower().encode(), settings.passphrase.lower().encode()):
+            state.passphrase_failures.append(now)
+            raise HTTPException(403, "wrong passphrase")
+
     @app.post("/authorize")
     async def authorize_post(request: Request) -> RedirectResponse:
         form = await request.form()
-        params = {k: str(v) for k, v in form.items() if k != "email"}
+        params = {k: str(v) for k, v in form.items() if k not in ("email", "passphrase")}
         _validate_authorize(params)
-        email = str(form.get("email") or "").strip().lower()
+        _check_passphrase(str(form.get("passphrase") or ""))
+        # The page posts the clicked account button's value and the "any email" box (in that order); an
+        # untouched box is an empty value, so take the first non-empty one rather than the last value.
+        email = next((str(v).strip().lower() for v in form.getlist("email") if str(v).strip()), "")
         if not email or "@" not in email:
             raise HTTPException(400, "email required")
         return _issue_code(params, email)
