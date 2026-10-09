@@ -119,6 +119,10 @@ jobs:
         working-directory: pc-agent
         run: uv run pytest -q -p no:cacheprovider
 
+      # ---- testkit: the Windows scripts parse, stay ASCII, and their helpers behave (pwsh on Linux) ----
+      - name: testkit - script checks
+        run: pwsh -NoProfile -File testkit/tests/kit.tests.ps1
+
   node:
     name: Node (shared/ts, mobile-app, browser-extension)
     runs-on: ubuntu-24.04

@@ -20,9 +20,7 @@ $exitCode = Invoke-KitMain {
     if (Test-Path $current) { Remove-Item -Force $current }
     Write-Ok 'stopped'
     if ($DeleteData) {
-        # The PC's link pointed into the deleted data: step 2 links it again next time.
-        $linkRecord = Join-Path $script:StateDir 'agent-link.json'
-        if (Test-Path $linkRecord) { Remove-Item -Force $linkRecord }
+        Remove-LinkRecord  # the PC's link pointed into the deleted data: step 2 links it again next time
         Write-Ok 'test data deleted'
         Write-Note 'Next time, "2 Start DoMe on this PC.cmd" links this PC again to the new test account.'
     }

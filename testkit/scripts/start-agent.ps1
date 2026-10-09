@@ -88,19 +88,10 @@ $exitCode = Invoke-KitMain {
         Read-Host '  Press Enter when the extension is loaded' | Out-Null
     }
 
-    # DoMe identifies an account by sign-in address + email. A new quick-tunnel address (or deleted test
-    # data) is therefore a NEW test account, and a PC still linked to the old one could never be paired
-    # from the phone. The kit remembers which sign-in address this PC was linked through and links again
-    # when it changed.
-    $linkRecordPath = Join-Path $script:StateDir 'agent-link.json'
-    $linkRecord = $null
-    if (Test-Path $linkRecordPath) {
-        try { $linkRecord = Get-Content -Raw -Path $linkRecordPath | ConvertFrom-Json } catch { $linkRecord = $null }
-    }
-    $recordedSignin = $null
-    if ($linkRecord -and $linkRecord.PSObject.Properties['signin_url']) { $recordedSignin = [string]$linkRecord.signin_url }
+    # A PC still linked to an earlier test account could never be paired from the phone (common.ps1,
+    # Test-LinkedThrough): link again whenever the sign-in address changed or the data was deleted.
     $linked = [bool]$status.identity.linked
-    if ($linked -and $recordedSignin -ne [string]$current.signin_url) {
+    if ($linked -and -not (Test-LinkedThrough ([string]$current.signin_url))) {
         Write-Step 'This PC was linked to an earlier test account'
         Write-Note 'A new test address, or deleted test data, means a new test account. Linking this PC again.'
         Invoke-Native 'Forgetting the earlier test link' { & $script:AgentExe unlink }
@@ -116,9 +107,7 @@ $exitCode = Invoke-KitMain {
         $linkArgs = @('link', '--name', $env:COMPUTERNAME)
         if ($NoBrowser) { $linkArgs += '--no-browser' }
         Invoke-Native 'Linking this PC' { & $script:AgentExe @linkArgs }
-        Initialize-StateDir
-        [ordered]@{ signin_url = [string]$current.signin_url; app_url = $appUrl; linked_at = (Get-Date).ToString('s') } |
-            ConvertTo-Json | Set-Content -Path $linkRecordPath -Encoding Ascii
+        Save-LinkRecord ([string]$current.signin_url) $appUrl
         Write-Ok 'PC linked'
     } else {
         Write-Ok ('This PC is already linked as "' + [string]$status.identity.pc_name + '"')

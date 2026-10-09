@@ -188,14 +188,19 @@ function Get-ComposeOutput([string[]]$Arguments) {
     try { return (docker @all 2>$null | Out-String) } finally { $ErrorActionPreference = $previous }
 }
 
+# The address in cloudflared's "Your quick Tunnel has been created" banner (never api.trycloudflare.com),
+# and its failure lines: older releases say "failed to request quick Tunnel", 2026.x says
+# "quick tunnel provisioning failed with status 429: ...". Checked by testkit/tests/kit.tests.ps1.
+$script:TunnelUrlPattern = 'https://[a-z0-9]+(-[a-z0-9]+)+\.trycloudflare\.com'
+$script:TunnelFailurePattern = 'failed to (request|unmarshal) quick Tunnel|quick tunnel provisioning failed|429 Too Many Requests'
+
 function Wait-TunnelUrl([string]$Service, [int]$TimeoutSeconds = 90) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         $logs = Get-ComposeOutput @('--profile', 'quick-tunnel', 'logs', '--no-color', $Service)
-        $found = [regex]::Matches($logs, 'https://[a-z0-9]+(-[a-z0-9]+)+\.trycloudflare\.com')
+        $found = [regex]::Matches($logs, $script:TunnelUrlPattern)
         if ($found.Count -gt 0) { return $found[$found.Count - 1].Value }
-        # Older cloudflared: "failed to request quick Tunnel"; 2026.x: "quick tunnel provisioning failed with status 429: ..."
-        if ($logs -match 'failed to (request|unmarshal) quick Tunnel|quick tunnel provisioning failed|429 Too Many Requests') {
+        if ($logs -match $script:TunnelFailurePattern) {
             Stop-Kit ("Cloudflare did not create the temporary address for $Service. Wait a minute and run this again. Details: docker logs dome-test-$Service-1")
         }
         Start-Sleep -Seconds 2
@@ -242,6 +247,29 @@ function Read-StableAddresses {
 }
 
 function Get-CurrentPath { return (Join-Path $script:StateDir 'current.json') }
+
+# DoMe identifies an account by sign-in address + email, so a new quick-tunnel address (or deleted test
+# data) is a NEW test account. agent-link.json remembers which sign-in address this PC was linked through.
+function Get-LinkRecordPath { return (Join-Path $script:StateDir 'agent-link.json') }
+
+function Test-LinkedThrough([string]$SigninUrl) {
+    $path = Get-LinkRecordPath
+    if (-not (Test-Path $path)) { return $false }
+    try { $record = Get-Content -Raw -Path $path | ConvertFrom-Json } catch { return $false }
+    if (-not $record -or -not $record.PSObject.Properties['signin_url']) { return $false }
+    return ([string]$record.signin_url -eq $SigninUrl)
+}
+
+function Save-LinkRecord([string]$SigninUrl, [string]$AppUrl) {
+    Initialize-StateDir
+    [ordered]@{ signin_url = $SigninUrl; app_url = $AppUrl; linked_at = (Get-Date).ToString('s') } |
+        ConvertTo-Json | Set-Content -Path (Get-LinkRecordPath) -Encoding Ascii
+}
+
+function Remove-LinkRecord {
+    $path = Get-LinkRecordPath
+    if (Test-Path $path) { Remove-Item -Force $path }
+}
 
 function Read-Current {
     $path = Get-CurrentPath
