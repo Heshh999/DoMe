@@ -115,7 +115,7 @@
     (`apply_capabilities` on every snapshot and every local change). The agent applies steps 3-4
     (remote switch, plan state, live grant) first. This way the drop is counted in the acks instead of
     vanishing in an error frame.
-25. **Target change stops typing once, then the customer continues.** The spec forbids silently
+25. **(Superseded by #40.) Target change stops typing once, then the customer continues.** The spec forbids silently
     stealing focus and asks to stop pending text when the known target changes; it does not ask the
     agent to keep refusing forever. After one `INPUT_TARGET_CHANGED` the new foreground identity becomes
     the target (the phone shows it via `pc_state.foreground_app`); a user-directed click re-captures it
@@ -124,7 +124,8 @@
     as `KEYEVENTF_UNICODE` code units. `WM_CHAR` U+000A/U+0009 are not accepted by ordinary edit
     controls; rendering them as the key the customer would press keeps the text literal. The phone
     sends an explicit Enter key event anyway.
-27. **Secure desktop ends the session; an elevated foreground window only restricts.** The watchdog
+27. **(Decision kept, mechanism replaced by #41.) Secure desktop ends the session; an elevated foreground
+    window only restricts.** The watchdog
     ends with `secure_desktop` when `input_restricted()` is true and the foreground is unknown or not
     elevated (lock screen, UAC/consent desktop); an elevated window in front keeps the session alive
     (the customer can click elsewhere), reports `pc_state.input_restricted` and makes injections fail
@@ -168,3 +169,63 @@
 38. **`SUPPORTED_PROTOCOL_VERSIONS = ("1.0", "1.1")` is announced everywhere** (relay hello, bridge
     error detail): the MINOR rule makes both acceptable and the e2e test asserts the hello list. The
     bridge test that expected `["1.1"]` alone contradicted that and was corrected.
+39. **Input age is judged against the phone's own clock** (review finding). `issued_at` is the phone's
+    stamp and `rules.input_sessions` says `now - issued_at <= input_age_budget_ms`, but the envelope
+    window admits ±5 s of skew while the budget is 1 s: read literally, a phone 1 s behind kills the
+    touchpad and a phone ahead hides stalls. `AgeEstimator` keeps, per session, a windowed (30 s)
+    minimum of `delta = receipt − issued_at` (= latency − clock offset), seeded by the
+    `input.session_start` command's own `issued_at`; a batch's age is `delta − minimum`, i.e. its delay
+    over the fastest recent batch, independent of a constant offset. The baseline is clamped to what
+    the envelope can admit (`[-max_clock_skew, lifetime + max_clock_skew]`); samples expire after 30 s
+    (longer than any batch the envelope can admit) so a phone clock correction is followed. The relay's
+    `received_at` feeds a second estimator per relay connection id and the larger age wins, bounding
+    the relay → agent leg. The dispatch-lag (backpressure) check is unchanged. Residual: the very first
+    batch after a stall that ALSO delayed the start command is judged against that late seed; the
+    envelope window still bounds it. CONTRACT_ISSUES.md #16 proposes rule wording.
+40. **A target change blocks keyboard input until a deliberate re-capture** (review finding; replaces
+    #25). Dropping only the rest of the current batch let batches the phone had already streamed type
+    into the new window. Now `keyboard_blocked` is set on the change (one `INPUT_TARGET_CHANGED`); every
+    later text/key/shortcut is dropped and counted until (a) a `pointer_button` down/click/double_click
+    of this session (user-directed click: target re-captured), (b) a fresh `input.session_start`, or
+    (c) a batch whose estimated issue time (receipt − age, #39) is ≥ `target_change_grace_seconds` (2 s)
+    after the block. (c) exists for keyboard-only grants, which cannot click: 2 s is far longer than a
+    state frame takes to reach the phone, and the PWA pauses live typing when `foreground_app` changes,
+    so keyboard input issued that late is a deliberate continuation. Pointer events are never blocked.
+41. **Secure desktop vs elevated window is asked of the adapter, live** (review finding). The watchdog
+    used the cached foreground (2 s refresh, None during a switch, `elevated` None when unknown) to
+    decide, so clicking Task Manager could end a session as `secure_desktop`. `InputAdapter` gained
+    `secure_desktop_active()` (Windows: the input desktop cannot be opened or is not `Default`); only
+    that, or a locked session, ends the session. `input_restricted()` (secure desktop OR known-elevated
+    foreground) only sets `pc_state.input_restricted` (a state frame is requested when it flips).
+    Keyboard events are checked live once per batch: when restricted they fail `INPUT_RESTRICTED`
+    instead of reaching `SendInput`, because UIPI drops input to a higher-integrity window WITHOUT an
+    error and the agent would otherwise ack it as accepted. Pointer events still run so the customer
+    can click elsewhere; a click on the elevated window itself is dropped by Windows unseen (documented,
+    not detectable).
+42. **Holds after a bounded in-flight wait; click on a held button.** `_end`/`_suspend` still wait at
+    most 2 s for the running adapter call (a session end must not hang on a stuck `SendInput`); if the
+    call outlives the wait, a done-callback releases whatever it pressed meanwhile as soon as it
+    returns. `_release` removes only what it released (not a blanket `clear()`, which could lose a
+    concurrent press) and rewrites the recovery file for the CURRENT session, so a late release of an
+    old session cannot delete a newer session's file. `click`/`double_click` on a held button removes
+    it from `held_buttons` (Windows sent down+up, so the button is up).
+43. **Shortcut recovery releases the letter and CTRL; a failed recovery keeps them tracked.** During a
+    shortcut the session tracks `ctrl` and the shortcut name (its letter key, released by the Windows
+    adapter via `SHORTCUT_KEY`) so crash recovery covers both. On a partial insertion the adapter sends
+    key-up for the letter and CTRL; if that fails too it raises `InputHoldError(stuck_keys)` and the
+    manager keeps those keys in `held_keys` for the end-of-session release and `input_holds.json`.
+44. **One agent per Windows account's state directory.** The `Local\` mutex is per logon session but
+    `%LOCALAPPDATA%\DoMe` (identity, credential, grants, `state.sqlite3`, `agent.pid`) is per account.
+    A second agent of the same account in another session would share the PC identity and supersede
+    the first at the relay (4001). `dome-agent run` refuses before taking the lock when `agent.pid`
+    names a live process recorded in another session (pid reuse is excluded by comparing the process's
+    actual session with the recorded one) and says "DoMe already runs for this Windows account in
+    session N"; `status` reports the same conflict. No flag overrides it: two agents with one identity
+    cannot both work. Different Windows accounts have different state directories and are unaffected.
+45. **No window title in the `input.session_start` result; `--yes` never grants input.** Results are
+    journaled durably (SQLite) for duplicate re-emission, and spec §15 avoids storing window titles, so
+    the result's `foreground_app` omits `window_title`; the phone gets the title from the next
+    `pc_state` frame (memory only; a state frame is requested at session start). `pair --yes` /
+    `pair-approve --yes` approve the pairing and its non-input capabilities only; `pointer`/`keyboard`
+    need `--pointer`/`--keyboard` (or an explicit `--capabilities` list), keeping the PC owner's
+    per-capability decision explicit (spec §10A-D).

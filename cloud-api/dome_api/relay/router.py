@@ -64,6 +64,9 @@ class RateLimiters:
       ``version.json → limits.input_batches_per_second``, burst = the largest plan burst;
     * per-plan ``input_rate_limit`` buckets keyed by controller id (``rules.input_sessions``), applied once
       the batch verified;
+    * ``input_refusals``: per socket, a leaky budget for ``input_frames`` refusals (2x the input rate sustained,
+      capacity 5 s of that); a socket that empties it is flooding far beyond anything a touchpad sends and is
+      closed (4000) with one ``controller_throttled`` event, as the command path does after ``burst`` refusals;
     * ``input_rejections``: at most one ``input_rejected`` security event per minute per controller.
     """
 
@@ -78,11 +81,17 @@ class RateLimiters:
         per_second = int((registry.limits if registry is not None else {}).get("input_batches_per_second", 40))
         burst = max(p.input_rate_limit.burst for p in catalog().plans.values())
         self.input_frames = TokenBucketLimiter(per_second * 60, burst)
+        self.input_flood_factor = 2
+        self.input_flood_seconds = 5
+        self.input_refusals = TokenBucketLimiter(
+            per_second * self.input_flood_factor * 60, per_second * self.input_flood_factor * self.input_flood_seconds
+        )
         self.input_rejections = SlidingWindowLimiter(1, 60)
 
     def forget_connection(self, conn: ControllerConn) -> None:
         self.frames.forget(str(conn.connection_id))
         self.input_frames.forget(str(conn.connection_id))
+        self.input_refusals.forget(str(conn.connection_id))
 
     def allow(self, plan: Plan, controller_id: uuid.UUID, *, coalescable: bool) -> bool:
         table = self._coalescable if coalescable else self._manual
@@ -400,6 +409,10 @@ async def route_input_batch(
 async def _reject_input(
     mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, pc_id: str, rej: Rejection
 ) -> None:
+    if rej.code == "RATE_LIMITED" and not conn.input_notice_due(utcnow()):
+        # the per-controller budget refused another batch within the same second (e.g. a second socket of the
+        # same phone): no frame, no log line, no event — the first refusal of the second already said so
+        return
     error = frames.error_object(rej.code, rej.message, detail=rej.detail)
     await conn.send(
         {"type": "error", "error": error, "ref_pc_id": pc_id}

@@ -83,6 +83,12 @@ class SlidingWindowLimiter:
         self.exhausted(key)
         self._windows[key].hits.append(time.monotonic())
 
+    def release(self, key: str) -> None:
+        """Give back the most recent event recorded for ``key`` (a reservation whose work then failed)."""
+        w = self._windows.get(key)
+        if w is not None and w.hits:
+            w.hits.pop()
+
     def _prune(self, now: float) -> None:
         self._last_prune = now
         for k in [k for k, w in self._windows.items() if not w.hits or now - w.hits[-1] > self.window]:

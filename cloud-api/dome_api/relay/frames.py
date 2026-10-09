@@ -105,3 +105,13 @@ def pc_status(
 
 def validate_outbound(direction: str, frame: dict[str, Any]) -> None:
     load_schemas().validate_frame(direction, frame)
+
+
+def legacy_state_frame(frame: dict[str, Any], fields_1_1: tuple[str, ...]) -> dict[str, Any]:
+    """The copy of an agent ``state`` frame a protocol-1.0 subscriber receives: the 1.1-only ``pc_state`` keys
+    removed (1.0 peers reject unknown fields). State frames are unsigned routing data, so the relay may drop
+    keys; the original object is returned unchanged when it carries none of them."""
+    state = frame.get("state")
+    if not isinstance(state, dict) or not any(k in state for k in fields_1_1):
+        return frame
+    return {**frame, "state": {k: v for k, v in state.items() if k not in fields_1_1}}

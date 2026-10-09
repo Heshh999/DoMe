@@ -650,7 +650,9 @@ async def test_keyboard_batches_queued_across_a_target_change_are_not_typed(
     await wait_for(lambda: harness.fake.input_count("text") == 1)
     harness.fake.foreground_app = ForegroundApp("mail.exe", "inbox", None, False, "9", 90)
     await send_batch(harness, controller, sid, 2, [{"type": "text", "text": "b"}])
-    await send_batch(harness, controller, sid, 3, [{"type": "text", "text": "c"}, {"type": "shortcut", "name": "ctrl_v"}])
+    await send_batch(
+        harness, controller, sid, 3, [{"type": "text", "text": "c"}, {"type": "shortcut", "name": "ctrl_v"}]
+    )
     await expect_error(harness, "INPUT_TARGET_CHANGED")
     await wait_for(lambda: harness.agent.input.summary()["session"]["dropped_events"] == 3)
     await asyncio.sleep(0.2)

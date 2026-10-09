@@ -26,6 +26,7 @@ from dome_api.logging import get_logger
 from dome_api.plans import Plan, plan_for
 from dome_api.relay import frames
 from dome_api.security import events
+from dome_api.security.ratelimit import SlidingWindowLimiter
 from dome_api.settings import Settings
 from dome_api.util import ts_required, utcnow
 
@@ -36,6 +37,9 @@ CLOSE_PROTOCOL_ERROR = 4000
 CLOSE_SUPERSEDED = 4001
 CLOSE_REVOKED = 4003
 CLOSE_AUTH_REQUIRED = 4008
+MAX_AGENT_INPUT_SESSIONS = 4
+# pc_state fields added in protocol 1.1; a 1.0 peer rejects unknown fields, so its copy of a state frame omits them
+PC_STATE_1_1_FIELDS = ("foreground_app", "input_session", "input_restricted")
 
 
 @dataclass(slots=True)
@@ -97,6 +101,7 @@ class AgentConn(_Conn):
         "remote_enabled_reported",
         "supports_input",
         "input_sessions",
+        "events_suppressed",
     )
 
     def __init__(self, ws: WebSocket, pc_id: uuid.UUID, account_id: uuid.UUID) -> None:
@@ -110,8 +115,20 @@ class AgentConn(_Conn):
         self.remote_enabled_reported: bool | None = None
         # the agent announced protocol 1.1 (rules.controller_socket_identity: 1.0 peers never see input frames)
         self.supports_input = False
-        # live manual-input sessions as the AGENT reported them (input_session frames): id -> owning controller
+        # live manual-input sessions as the AGENT reported them (input_session frames): id -> owning controller.
+        # Bounded: the latest session per controller, at most MAX_AGENT_INPUT_SESSIONS entries (one live session
+        # per PC is the rule; the slack covers a takeover whose `ended` frame is still in flight).
         self.input_sessions: dict[str, uuid.UUID] = {}
+        self.events_suppressed = 0  # agent-attributed rejection rows not written because the per-PC cap was hit
+
+    def remember_input_session(self, input_session_id: str, controller_id: uuid.UUID) -> None:
+        for sid, owner in list(self.input_sessions.items()):
+            if owner == controller_id and sid != input_session_id:
+                del self.input_sessions[sid]  # a controller has at most one live session on a PC
+        self.input_sessions.pop(input_session_id, None)
+        self.input_sessions[input_session_id] = controller_id  # newest last
+        while len(self.input_sessions) > MAX_AGENT_INPUT_SESSIONS:
+            del self.input_sessions[next(iter(self.input_sessions))]
 
     async def send(self, frame: dict[str, Any], *, validate: bool = True) -> bool:
         if validate:
@@ -130,6 +147,7 @@ class ControllerConn(_Conn):
         "supports_input",
         "input_throttle_notified",
         "input_seq",
+        "input_refused",
     )
 
     def __init__(self, ws: WebSocket, session_id: uuid.UUID, account_id: uuid.UUID, kid: str) -> None:
@@ -143,6 +161,14 @@ class ControllerConn(_Conn):
         self.supports_input = False  # hello announced protocol 1.1
         self.input_throttle_notified: datetime | None = None  # last RATE_LIMITED error sent for input_batch floods
         self.input_seq: dict[str, int] = {}  # input_session_id -> highest seq forwarded on this socket (bounded)
+        self.input_refused = 0  # input_batch frames refused by the per-socket input bucket (separate from commands)
+
+    def input_notice_due(self, now: datetime) -> bool:
+        """At most one RATE_LIMITED error frame (and log line) per second for refused input batches."""
+        if self.input_throttle_notified is not None and (now - self.input_throttle_notified).total_seconds() < 1:
+            return False
+        self.input_throttle_notified = now
+        return True
 
     def remember_input_seq(self, input_session_id: str, seq: int) -> None:
         if input_session_id not in self.input_seq and len(self.input_seq) >= 8:
@@ -176,6 +202,12 @@ class ConnectionManager:
     pending_handshakes: int = 0
     # hello-proof nonces still inside their validity window (rules.controller_socket_identity: single use)
     hello_nonces: dict[str, datetime] = field(default_factory=dict)
+    # cap on agent-attributed rejection rows (relay_frame_rejected) per PC per minute, as `audited_event` caps
+    # controller sockets; a buggy or compromised agent cannot grow security_events at wire speed this way
+    agent_events: SlidingWindowLimiter = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.agent_events = SlidingWindowLimiter(self.settings.relay_security_events_per_connection_per_minute, 60)
 
     # ----- hello proof ---------------------------------------------------------------------------
     def accept_hello_nonce(self, nonce: str, expires_at: datetime) -> bool:
@@ -351,22 +383,37 @@ class ConnectionManager:
         return sent
 
     async def broadcast_to_subscribers(
-        self, pc_id: uuid.UUID, frame: dict[str, Any], *, validate: bool = True, input_frame: bool = False
+        self,
+        pc_id: uuid.UUID,
+        frame: dict[str, Any],
+        *,
+        validate: bool = True,
+        input_frame: bool = False,
+        legacy_frame: dict[str, Any] | None = None,
+        skip: set[uuid.UUID] | frozenset[uuid.UUID] = frozenset(),
     ) -> None:
-        """``input_frame`` marks protocol 1.1 frames, which 1.0 sockets never receive."""
+        """``input_frame`` marks protocol 1.1 frames, which 1.0 sockets never receive; ``legacy_frame`` is the
+        copy 1.0 sockets get instead of ``frame`` (a state frame without the 1.1 pc_state fields); ``skip`` lists
+        connection ids that already received the frame directly."""
         for conn_id in list(self.subs.get(pc_id, ())):
+            if conn_id in skip:
+                continue
             conn = self.controllers.get(conn_id)
-            if conn is not None and (conn.supports_input or not input_frame):
+            if conn is None:
+                continue
+            if conn.supports_input:
                 await conn.send(frame, validate=validate)
+            elif not input_frame:
+                await conn.send(legacy_frame if legacy_frame is not None else frame, validate=validate)
 
-    async def send_input_frame_to_controller(self, controller_id: uuid.UUID, frame: dict[str, Any]) -> int:
+    async def send_input_frame_to_controller(self, controller_id: uuid.UUID, frame: dict[str, Any]) -> set[uuid.UUID]:
         """Deliver an input_ack / input_session frame to every protocol-1.1 socket bound to the controller.
-        Returns the number of sockets written."""
-        n = 0
+        Returns the connection ids written, so a subscriber broadcast can skip them."""
+        written: set[uuid.UUID] = set()
         for conn in self.controller_conns(controller_id):
             if conn.supports_input and await conn.send(frame, validate=False):
-                n += 1
-        return n
+                written.add(conn.connection_id)
+        return written
 
     # ----- PC status -----------------------------------------------------------------------------
     async def pc_status_frame(self, pc_id: uuid.UUID, db: AsyncSession | None = None) -> dict[str, Any] | None:
@@ -605,6 +652,32 @@ class ConnectionManager:
         return int(getattr(r1, "rowcount", 0) or 0)
 
     # ----- security events -----------------------------------------------------------------------
+    async def agent_rejection_event(self, conn: AgentConn, detail: dict[str, Any]) -> bool:
+        """Write a ``relay_frame_rejected`` row for a frame the PC sent, unless the PC exhausted its per-minute
+        budget; the first suppressed row becomes one ``relay_events_throttled`` row. Returns whether written."""
+        if self.agent_events.allow(str(conn.pc_id)):
+            await self.security_event(
+                account_id=conn.account_id,
+                kind="relay_frame_rejected",
+                severity="warning",
+                actor="pc",
+                subject_id=conn.pc_id,
+                detail=detail,
+            )
+            return True
+        conn.events_suppressed += 1
+        if conn.events_suppressed == 1:
+            await self.security_event(
+                account_id=conn.account_id,
+                kind="relay_events_throttled",
+                severity="warning",
+                actor="pc",
+                subject_id=conn.pc_id,
+                detail={"first_suppressed": "relay_frame_rejected", "per_minute": self.agent_events.limit},
+            )
+        log.info("security_event.suppressed", kind="relay_frame_rejected", pc_id=str(conn.pc_id))
+        return False
+
     async def security_event(
         self,
         *,

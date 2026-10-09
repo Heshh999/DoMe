@@ -6,7 +6,8 @@ managed relay and executes locally authorised actions: YouTube through the brows
 explicitly confirmed power actions and — protocol 1.1 — the Free **manual touchpad/keyboard** stream
 (`SendInput`). It never listens on the internet, never accepts a path, argument or shell text over the
 wire, and honours a local **Disable remote control** switch that no remote frame can undo. One agent
-runs per Windows user session.
+runs per Windows user session, and at most one per Windows account (they share one state directory and
+PC identity; see "Single instance").
 
 Evidence tags used below: **unit-tested** (pytest on Linux with the fake platform/relay/extension),
 **integration-tested** (full agent ↔ fake relay ↔ fake adapters path), **not yet verified** (needs a
@@ -112,16 +113,40 @@ Pointer and keyboard events travel in signed `input_batch` frames that bypass th
   (`INPUT_SEQUENCE_INVALID`), age ≤ `input_age_budget_ms` = 1000 (`INPUT_STALE`), event types covered by
   the session's pointer/keyboard flags = the grant's effective capabilities (`INPUT_NOT_PERMITTED`).
   Every valid batch renews the 3 s lease; an empty batch is a keepalive. Rejections drop the batch, are
-  counted in `dropped_events` and reported as `error` frames (≤ 1 per code per second); they never end
+  counted in `dropped_events` and emitted as `error` frames (≤ 1 per code per second); they never end
   the session. No journal row, no security event, no content in any log line.
+* **Age is judged against the phone's own clock** (unit- and integration-tested with a phone clock 2 s
+  behind and 2 s ahead): `issued_at` is stamped by the phone, so the agent keeps a per-session windowed
+  minimum of `receipt − issued_at` (seeded by the `input.session_start` command) and measures each
+  batch's delay over the fastest recent one; the relay's `received_at` bounds the relay → agent leg the
+  same way. A constant skew neither makes every batch stale nor hides a stall (DECISIONS.md #39).
+* **What reaches the phone — honest limitation.** The contract's `error_frame` names no session or
+  controller, and the current relay (cloud-api) only logs agent `error` frames; it forwards nothing. In
+  the integrated system the batch-rejection REASONS (`INPUT_STALE`, `INPUT_SEQUENCE_INVALID`,
+  `INPUT_NOT_PERMITTED`, `INPUT_SUSPENDED`, `INPUT_RESTRICTED`, `INPUT_INJECTION_FAILED`,
+  `INPUT_TARGET_CHANGED`) therefore do **not** reach the phone. What does reach it: the growing
+  `dropped_events` count in `input_ack`, `input_session{suspended|ended, reason}`, and `pc_state`
+  (`input_restricted`, `foreground_app` — the agent triggers a state frame when either changes). The
+  pc-agent tests read the error frames from the fake relay, which proves only that the agent emits them
+  (CONTRACT_ISSUES.md #11 proposes the routing reference; not integration-tested on the real relay).
 * **Dispatch** (unit/integration-tested): one worker, in order; adjacent `pointer_move`s summed, nothing
   merged across a button/scroll/text/key/shortcut; if the dispatch lag exceeds the age budget the backlog
   is discarded and the session is **suspended** (`input_session{suspended, backpressure}`, holds
   released, `INPUT_SUSPENDED` for further batches; a fresh `input.session_start` is required).
 * **Target rule** (integration-tested): before each text/key/shortcut the foreground window identity
   (hwnd + pid) is compared with the one captured at session start or at the phone's last click; a change
-  drops the remaining keyboard events of the batch with `INPUT_TARGET_CHANGED` once, and typing continues
-  deliberately afterwards (the phone shows the new `foreground_app`). A click re-captures the target.
+  BLOCKS keyboard input of the session (`INPUT_TARGET_CHANGED` once; every later text/key/shortcut is
+  dropped and counted, including batches the phone had already sent before it could know). The block
+  clears on a user-directed click/press from the phone (re-capturing the target), on a fresh
+  `input.session_start`, or for a batch issued ≥ 2 s after the change (by then the phone has the new
+  `foreground_app` and has paused live typing; this is how a keyboard-only phone continues). Pointer
+  events keep working throughout.
+* **Restricted input** (integration-tested with the fake adapter): only a secure desktop
+  (`secure_desktop_active()`: the input desktop is not `Default` or cannot be opened) or a locked session
+  ends a session. An elevated or unknown-integrity window in front keeps it, sets
+  `pc_state.input_restricted`, and keyboard events are refused with `INPUT_RESTRICTED` (Windows UIPI would
+  drop them silently, so they are never acked as accepted); pointer events still run so the customer can
+  click elsewhere.
 * **Acks** (integration-tested): `input_ack` at most 4/s with `last_seq`, cumulative accepted/dropped
   counts and the current holds; Windows acceptance only, never an observed application effect.
 * **End triggers** (integration-tested, every one): `input.session_stop`, lease expiry (watchdog task,
@@ -129,8 +154,10 @@ Pointer and keyboard events travel in signed `input_batch` frames that bypass th
   pointer and keyboard are both gone; a narrowing of one flag keeps the session and releases a drag),
   Windows lock and secure desktop (polled every second), remote disable, relay disconnect / 4001
   supersession (`controller_disconnected`), agent stop (`agent_restart`). Order: retire the id → wait
-  for the in-flight dispatch → release exactly the buttons/keys this session injected → emit
-  `input_session{ended, reason, holds_released}`.
+  (≤ 2 s) for the in-flight dispatch → release exactly the buttons/keys this session injected → emit
+  `input_session{ended, reason, holds_released}`. If the adapter call outlives the wait, whatever it
+  still pressed is released the moment it returns (integration-tested with a slow fake adapter). A
+  `click`/`double_click` on a held button clears that hold.
 * **Crash recovery** (integration-tested): held buttons/keys are mirrored to `<state dir>/input_holds.json`
   (ids and names only, never content); the next start-up releases them, deletes the file and sends
   `input_session{ended, agent_restart}` after the first snapshot. Old session ids are rejected; nothing is
@@ -144,7 +171,10 @@ Pointer and keyboard events travel in signed `input_batch` frames that bypass th
   (unit-tested on Linux via fixed-width ctypes), relative `MOUSEEVENTF_MOVE` (no clamping to one display),
   `WHEEL`/`HWHEEL` × `WHEEL_DELTA`, `KEYEVENTF_UNICODE` per UTF-16 code unit with surrogate pairs kept
   in one call (unit-tested), VK codes + extended-key flags, CTRL shortcuts with the modifier always
-  released (unit-tested sequence; the release-on-failure path is Windows-only), `GetForegroundWindow` →
+  released (unit-tested sequence; after a partial insertion both the letter and CTRL get a key-up, and
+  if that recovery fails too the adapter raises `InputHoldError` so the session keeps both tracked for
+  the end-of-session release and crash recovery — unit-tested with a scripted `_send` double on Linux,
+  not device-tested), `GetForegroundWindow` →
   process name via psutil, chrome/msedge detection, elevation via token integrity level (unknown when
   the process cannot be opened). A short `SendInput` count → `INPUT_INJECTION_FAILED`; access denied
   while the input desktop is not `Default` → `INPUT_RESTRICTED`; UIPI is never claimed from the return
@@ -156,7 +186,11 @@ Pointer and keyboard events travel in signed `input_batch` frames that bypass th
 `pointer` and `keyboard` are independent, Free, initially absent from every existing grant. Only the PC
 owner adds them, locally: pairing approval (tray checkboxes / CLI prompts, off by default, with the
 explanation below), the tray menu *Paired phones ▸ phone ▸ Allow touchpad / Allow keyboard*, or
-`dome-agent grant <controller_id> --pointer --keyboard` (`--remove-*` to withdraw). The agent then sends
+`dome-agent grant <controller_id> --pointer --keyboard` (`--remove-*` to withdraw). `pair --yes` /
+`pair-approve --yes` answer only the general approval: touchpad/keyboard are granted without a prompt
+only when named explicitly (`--pointer` / `--keyboard`, or `--capabilities`), never implied by `--yes`
+(unit-tested). The `input.session_start` result omits `foreground_app.window_title` because results are
+journaled durably; the title reaches the phone only in memory-only `pc_state` frames (integration-tested). The agent then sends
 `grant_update{controller_id, kid, capabilities}`; the relay replaces the list and re-pushes
 `grants_snapshot`; effective capabilities stay local ∩ snapshot. A change made offline is journaled in
 `pending_grant_updates` (by kid) and re-sent after the next snapshot, like local revocations
@@ -180,8 +214,13 @@ launch asks the running instance over the authenticated control channel to show 
 the control channel does not answer, it prints "another DoMe instance is running but not responding
 (pid N)" with the `dome-agent repair` hint and exits 1 (unit-tested). `dome-agent status` reports a
 stale control endpoint, a stale pid file, a permission problem on the state directory and an
-other-session conflict distinctly (`single_instance.inspect`; the other-session case can only be
-detected on Windows and is **not yet verified**). Nothing ever terminates another process.
+other-session conflict distinctly (`single_instance.inspect`). **One agent per Windows account's state
+directory**: the mutex is per logon session, but `%LOCALAPPDATA%\DoMe` (identity, PC credential,
+grants, `state.sqlite3`) is per account, so a second agent of the same account in another session (RDS,
+a second or reconnected session) would reuse the same PC identity and supersede the first at the relay.
+`dome-agent run` therefore refuses with "DoMe already runs for this Windows account in session N" when
+`agent.pid` names a live agent in another session (unit-tested with injected session ids; the real
+`ProcessIdToSessionId` path is **not yet verified**). Nothing ever terminates another process.
 
 ## Repair
 
@@ -240,9 +279,10 @@ tests on Linux cover the logic around each adapter with `fake_platform`.
 | Packaging | Both PyInstaller specs build; `DoMe.exe status` works from a console; `dome-native-host.exe` is console-less. |
 | SendInput on a real desktop | Grant pointer+keyboard to a phone; from the touchpad: one-finger motion moves the cursor relative to its position, tap = left click, double tap = double click (Windows double-click time), two-finger tap = right click, two-finger move scrolls (dy>0 = content up), Drag holds the left button until End Drag; `input_ack.held_buttons` shows `["left"]` during the drag. Type `héllo 😀`, Enter, Backspace, arrows, Ctrl+A/C/V/Z into Notepad and the Chrome address bar (Ctrl+L): surrogate pairs arrive intact, CTRL is never left down (check with a physical modifier indicator / `GetAsyncKeyState`). |
 | Multi-monitor / mixed DPI | Two monitors, one at 150 % and one positioned left/above the primary: the cursor crosses every edge following the real topology; motion is never clamped to one display; "Enhance pointer precision" acceleration applies like a physical mouse (document the observed ratio). |
-| UAC / lock refusal | Open a UAC prompt or lock Windows while a session is live: the session ends `secure_desktop` / `session_locked` within ~1 s and the held drag is released; a batch sent to an elevated window answers `INPUT_RESTRICTED` (not `INPUT_INJECTION_FAILED`), `pc_state.input_restricted` is true and `foreground_app.elevated` is true where `OpenProcess` succeeds, absent otherwise. |
+| UAC / lock refusal | Open a UAC prompt or lock Windows while a session is live: the session ends `secure_desktop` / `session_locked` within ~1 s and the held drag is released. Click Task Manager / an elevated terminal from the phone: the session stays live, `pc_state.input_restricted` is true, typing is refused `INPUT_RESTRICTED` (no ack as accepted), and clicking a normal window clears it; `foreground_app.elevated` is true where `OpenProcess` succeeds, absent otherwise. |
+| Clock skew | Set the iPhone clock 3 s behind / ahead of the PC (Settings ▸ General ▸ Date & Time, manual): the touchpad keeps working; pull the network for 3 s mid-motion: the motion is not played back afterwards. |
 | Tray grants | Paired phones ▸ phone ▸ Allow touchpad: the explanation notification appears, the relay receives `grant_update`, the phone's Devices page shows `pointer`; untick → the live session ends `grant_removed` once both are off; a drag ends when only pointer is removed. |
-| Second launch | Start `DoMe.exe` twice: the second prints "already running (pid N)" and the first instance's window comes up; `dome-agent status` from another Windows session (switch user) reports the other-session conflict distinctly. |
+| Second launch | Start `DoMe.exe` twice: the second prints "already running (pid N)" and the first instance's window comes up; signed in to a second session of the SAME account (RDS), `DoMe.exe run` refuses with "already runs for this Windows account in session N" and `dome-agent status` reports the conflict; another Windows account runs its own agent normally. |
 | Repair | Delete the HKCU native-messaging key, run `DoMe.exe repair`: the key is re-created, identity/credential/grants/approved apps unchanged, the running agent untouched; with the agent hung (suspended in Process Explorer) `DoMe.exe run` prints "running but not responding (pid N)" and `repair` refuses to kill it. |
 | Crash recovery | Hold a drag from the phone, kill `DoMe.exe` from Task Manager, start it again: the left button is released at start-up (`input_holds.json` gone) and the phone receives `input_session{ended, agent_restart}`. |
 | Power confirmation copy | Sleep/Restart/Shutdown from the phone: the confirmation sheet shows the agent's detail text stating that remote access can be interrupted or end and that there is no remote wake in V1. |

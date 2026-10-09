@@ -9,6 +9,7 @@ from typing import Any
 from dome_protocol import ProtocolError, dumps_compact, loads_strict, parse_rfc3339, protocol_compatible
 from dome_protocol.keys import kid_from_jwk
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from dome_api.auth.deps import resolve_agent_token
@@ -19,6 +20,7 @@ from dome_api.relay.manager import (
     CLOSE_FRAME_TOO_LARGE,
     CLOSE_PROTOCOL_ERROR,
     CLOSE_REVOKED,
+    PC_STATE_1_1_FIELDS,
     AgentConn,
     ConnectionManager,
 )
@@ -238,14 +240,7 @@ async def _on_confirmation_required(
             raise ProtocolError("MALFORMED_MESSAGE", "challenge does not bind to this command")
     except ProtocolError as exc:
         log.warning("confirmation_required.invalid", pc_id=str(conn.pc_id), code=exc.code)
-        await mgr.security_event(
-            account_id=conn.account_id,
-            kind="relay_frame_rejected",
-            severity="warning",
-            actor="pc",
-            subject_id=conn.pc_id,
-            detail={"frame": "confirmation_required", "reason": exc.code},
-        )
+        await mgr.agent_rejection_event(conn, {"frame": "confirmation_required", "reason": exc.code})
         conn.inflight.pop(cid, None)
         await conn.send({"type": "cancel", "command_id": str(cid), "controller_id": str(inf.controller_id)})
         result = frames.relay_result(
@@ -321,7 +316,9 @@ async def _on_state(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, An
         async with mgr.db() as db:
             async with db.begin():
                 await db.execute(update(PC).where(PC.id == conn.pc_id).values(remote_enabled_reported=remote_enabled))
-    await mgr.broadcast_to_subscribers(conn.pc_id, frame, validate=False)
+    # 1.0 subscribers reject unknown fields: they get the frame without the 1.1-only pc_state keys
+    legacy = frames.legacy_state_frame(frame, PC_STATE_1_1_FIELDS)
+    await mgr.broadcast_to_subscribers(conn.pc_id, frame, validate=False, legacy_frame=legacy)
 
 
 async def _on_pairing_decision(svc: Services, mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
@@ -474,33 +471,45 @@ async def _on_input_ack(mgr: ConnectionManager, conn: AgentConn, frame: dict[str
 
 async def _on_input_session(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
     """Session lifecycle: remember (or forget) the owner, deliver to the owner's sockets and to the PC's
-    subscribers so other phones see ownership change. The controller must belong to this PC's account."""
+    subscribers so other phones see ownership change (each socket exactly once). The controller must belong to
+    this PC's account; a new owner must also be live (not revoked) and hold a live grant on this PC."""
     if frame["pc_id"] != str(conn.pc_id):
         await conn.send(frames.error_frame("TARGET_PC_MISMATCH", "input_session names another PC"))
         return
     controller_id = uuid.UUID(frame["controller_id"])
     session_id: str = frame["input_session_id"]
+    ended = frame["event"] == "ended"
     known = conn.input_sessions.get(session_id)
     if known != controller_id:
+        reason: str | None = None
         async with mgr.db() as db:
             ctrl = await db.get(Controller, controller_id)
-        if ctrl is None or ctrl.account_id != conn.account_id:
-            log.warning("input_session.foreign_controller", pc_id=str(conn.pc_id))
-            await mgr.security_event(
-                account_id=conn.account_id,
-                kind="relay_frame_rejected",
-                severity="warning",
-                actor="pc",
-                subject_id=conn.pc_id,
-                detail={"frame": "input_session", "reason": "controller_not_in_account"},
-            )
+            if ctrl is None or ctrl.account_id != conn.account_id:
+                reason = "controller_not_in_account"
+            elif not ended:
+                # learning an owner: only a live controller with a live grant on this PC can own a session here
+                # (an `ended` for a just-revoked controller still reaches its sockets and the subscribers)
+                grant = await db.scalar(
+                    select(Grant.id).where(
+                        Grant.controller_id == controller_id,
+                        Grant.pc_id == conn.pc_id,
+                        Grant.account_id == conn.account_id,
+                        Grant.revoked_at.is_(None),
+                    )
+                )
+                if ctrl.revoked_at is not None or grant is None:
+                    reason = "no_live_grant"
+        if reason is not None:
+            log.warning("input_session.refused", pc_id=str(conn.pc_id), reason=reason)
+            await mgr.agent_rejection_event(conn, {"frame": "input_session", "reason": reason})
             return
-    if frame["event"] == "ended":
-        conn.input_sessions.pop(session_id, None)
+    if ended:
+        if known == controller_id:
+            conn.input_sessions.pop(session_id, None)
     else:
-        conn.input_sessions[session_id] = controller_id
-    await mgr.send_input_frame_to_controller(controller_id, frame)
-    await mgr.broadcast_to_subscribers(conn.pc_id, frame, validate=False, input_frame=True)
+        conn.remember_input_session(session_id, controller_id)
+    written = await mgr.send_input_frame_to_controller(controller_id, frame)
+    await mgr.broadcast_to_subscribers(conn.pc_id, frame, validate=False, input_frame=True, skip=written)
 
 
 async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
@@ -509,59 +518,52 @@ async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[
     controller must belong to this PC's account, carry the stated kid and hold a live grant on this PC."""
     controller_id = uuid.UUID(frame["controller_id"])
     capabilities = sorted(set(frame["capabilities"]))
+    refused: str | None = None
     async with mgr.db() as db:
         async with db.begin():
-            ctrl = await db.get(Controller, controller_id)
-            if ctrl is None or ctrl.account_id != conn.account_id or ctrl.kid != frame["kid"] or ctrl.revoked_at:
-                log.info("grant_update.ignored", pc_id=str(conn.pc_id), reason="controller")
-                events.record(
-                    db,
-                    account_id=conn.account_id,
-                    kind="relay_frame_rejected",
-                    severity="warning",
-                    actor="pc",
-                    subject_id=conn.pc_id,
-                    detail={"frame": "grant_update", "reason": "controller_not_in_account"},
-                )
-                return
-            grant = await db.scalar(
-                select(Grant)
-                .where(
-                    Grant.controller_id == controller_id,
-                    Grant.pc_id == conn.pc_id,
-                    Grant.account_id == conn.account_id,
-                    Grant.revoked_at.is_(None),
-                )
-                .with_for_update()
-            )
-            if grant is None:
-                log.info("grant_update.ignored", pc_id=str(conn.pc_id), reason="no_live_grant")
-                events.record(
-                    db,
-                    account_id=conn.account_id,
-                    kind="relay_frame_rejected",
-                    severity="warning",
-                    actor="pc",
-                    subject_id=conn.pc_id,
-                    detail={"frame": "grant_update", "reason": "no_live_grant"},
-                )
-                return
-            before = sorted(set(grant.capabilities))
-            grant.capabilities = capabilities
-            events.record(
-                db,
-                account_id=conn.account_id,
-                kind="grant_updated",
-                severity="notice",
-                actor="pc",
-                subject_id=controller_id,
-                detail={
-                    "pc_id": str(conn.pc_id),
-                    "capabilities": capabilities,
-                    "added": sorted(set(capabilities) - set(before)),
-                    "removed": sorted(set(before) - set(capabilities)),
-                },
-            )
+            refused = await _apply_grant_update(db, conn, controller_id, frame["kid"], capabilities)
+    if refused is not None:
+        log.info("grant_update.ignored", pc_id=str(conn.pc_id), reason=refused)
+        await mgr.agent_rejection_event(conn, {"frame": "grant_update", "reason": refused})
+        return
     await mgr.push_grants_snapshot(conn.pc_id)
     # subscribers re-read the PC: pc_status is the frame every phone already handles as "refresh this PC"
     await mgr.broadcast_pc_status(conn.pc_id)
+
+
+async def _apply_grant_update(
+    db: AsyncSession, conn: AgentConn, controller_id: uuid.UUID, kid: str, capabilities: list[str]
+) -> str | None:
+    """Replace the live grant's capabilities inside the caller's transaction; returns the refusal reason or None."""
+    ctrl = await db.get(Controller, controller_id)
+    if ctrl is None or ctrl.account_id != conn.account_id or ctrl.kid != kid or ctrl.revoked_at:
+        return "controller_not_in_account"
+    grant = await db.scalar(
+        select(Grant)
+        .where(
+            Grant.controller_id == controller_id,
+            Grant.pc_id == conn.pc_id,
+            Grant.account_id == conn.account_id,
+            Grant.revoked_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if grant is None:
+        return "no_live_grant"
+    before = sorted(set(grant.capabilities))
+    grant.capabilities = capabilities
+    events.record(
+        db,
+        account_id=conn.account_id,
+        kind="grant_updated",
+        severity="notice",
+        actor="pc",
+        subject_id=controller_id,
+        detail={
+            "pc_id": str(conn.pc_id),
+            "capabilities": capabilities,
+            "added": sorted(set(capabilities) - set(before)),
+            "removed": sorted(set(before) - set(capabilities)),
+        },
+    )
+    return None

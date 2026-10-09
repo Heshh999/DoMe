@@ -34,10 +34,37 @@
 9. **The tray's *Paired phones* submenu is rebuilt on status updates**, so a phone paired a moment ago
    appears after the next `update_status` (every connection/state change), not instantly.
 10. **Other-session conflicts are detected only through the pid file's recorded session id** on
-    Windows; a pid file deleted by a crash leaves nothing to report (the `Local\` mutex namespace
-    already prevents an actual conflict). Not device-tested.
+    Windows; a pid file deleted by hand (or two sessions starting within the same instant, before either
+    wrote it) leaves nothing to detect, and then a second agent of the same account could start in
+    another session and supersede the first at the relay (DECISIONS.md #44). A global (`Global\`)
+    per-account mutex would close that gap but needs the account SID in the name and a device test; not
+    done. Not device-tested.
 11. **The recovery file is written synchronously from the dispatch thread** on every hold change
     (button down/up, shortcut begin/end): a tiny atomic replace without fsync; a power loss in that
     window could lose the last hold change.
 12. **`input_session{ended}` after a relay disconnect cannot be delivered** (the socket is gone); the
     phone relies on the relay's disconnect handling and on `INPUT_SESSION_EXPIRED` for the old id.
+13. **Batch-rejection reasons do not reach the phone through the current relay** (CONTRACT_ISSUES.md
+    #11): the agent emits them as `error` frames, which cloud-api logs and drops. The phone sees
+    `dropped_events`, `pc_state.input_restricted` / `foreground_app` and `input_session` frames only.
+    Needs a contract field (`error_frame.ref_input_session_id`) and relay routing; not fixable inside
+    pc-agent.
+14. **Clock-offset estimate, residual cases** (DECISIONS.md #39): the first batch of a session is judged
+    against the `input.session_start` sample; if that command and the first batch were both delayed by
+    the same stall, the first batch can pass (the envelope window still bounds it to ~15 s, and the next
+    fresh batch re-establishes the baseline). A phone clock stepped BACKWARDS mid-session makes batches
+    look stale for up to 30 s (the estimator window) unless the session is restarted.
+15. **A click on the elevated window itself is dropped by Windows without an error** (UIPI). Keyboard
+    events are refused honestly while the restriction is known; pointer events are not, so the customer
+    can click a normal window. The ack then counts such a click as accepted. Not detectable from
+    `SendInput`; documented in the README checklist. The same applies to keyboard events while the
+    foreground's integrity level is UNKNOWN (#7: `OpenProcess`/`OpenProcessToken` refused): the agent
+    refuses only on a known restriction, never on a guess, so such keystrokes can be dropped by UIPI and
+    still counted as accepted. Device testing must show how often elevation is undeterminable.
+16. **A `SendInput` call that never returns cannot be interrupted.** The session still ends after the
+    bounded 2 s wait and releases what it knows; anything that stuck call presses later is released
+    when (if) it returns (DECISIONS.md #42), otherwise at the next start-up from `input_holds.json`.
+17. **The target-change grace (2 s) is a heuristic for keyboard-only phones** (DECISIONS.md #40): a
+    phone that kept live-typing without pausing for a `foreground_app` change for more than 2 s would
+    type into the new window. The PWA pauses live typing on that change; a stricter contract signal
+    (e.g. a target generation number echoed by the phone) would remove the heuristic.

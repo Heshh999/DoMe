@@ -56,45 +56,60 @@ def ticket_body(t: SupportTicket, settings: Settings) -> dict[str, Any]:
 
 @router.post("/support/tickets", status_code=201)
 async def create_ticket(request: Request, auth: Auth, db: DB, svc: Svc) -> Any:
-    if svc.support_ticket_limiter.exhausted(str(auth.account.id)):
+    account_id = auth.account.id  # read once: nothing below may touch a possibly expired ORM attribute
+    budget_key = str(account_id)
+    # Reserve the budget before the first await (check and record are one synchronous step on the event loop),
+    # so concurrent submissions cannot all pass the check; the reservation is given back if nothing is stored.
+    if not svc.support_ticket_limiter.allow(budget_key):
         raise ApiError(429, "RATE_LIMITED", "Too many support requests this hour. Try again later.")
-    body = await strict_body(request, "support_ticket_request", max_bytes=SUPPORT_BODY_MAX_BYTES)
-    now = utcnow()
-    diagnostics = body.get("diagnostics")
-    ticket = SupportTicket(
-        account_id=auth.account.id,
-        reference=new_reference(),
-        category=str(body["category"]),
-        error_code=body.get("error_code"),
-        # the customer's own words still get the token-pattern pass: a pasted credential must not land in the table
-        message=redact_text(str(body["message"]))[:2000],
-        diagnostics_redacted=redact_diagnostics(str(diagnostics))[:32768] if isinstance(diagnostics, str) else None,
-        app_version=body.get("app_version"),
-        status="received",
-        created_at=now,
-        updated_at=now,
-    )
-    for _attempt in range(5):  # the reference is random; a collision is retried, never reported as success
-        db.add(ticket)
-        try:
-            await db.flush()
+    try:
+        body = await strict_body(request, "support_ticket_request", max_bytes=SUPPORT_BODY_MAX_BYTES)
+        now = utcnow()
+        diagnostics = body.get("diagnostics")
+        # the customer's own words still get the token/pairing-code pass: a pasted secret must not land in the table
+        message = redact_text(str(body["message"]))[:2000]
+        diagnostics_redacted = redact_diagnostics(str(diagnostics))[:32768] if isinstance(diagnostics, str) else None
+        ticket: SupportTicket | None = None
+        for _attempt in range(5):  # the reference is random; a collision is retried, never reported as success
+            candidate = SupportTicket(
+                account_id=account_id,
+                reference=new_reference(),
+                category=str(body["category"]),
+                error_code=body.get("error_code"),
+                message=message,
+                diagnostics_redacted=diagnostics_redacted,
+                app_version=body.get("app_version"),
+                status="received",
+                created_at=now,
+                updated_at=now,
+            )
+            try:
+                async with db.begin_nested():  # SAVEPOINT: a collision rolls back this insert only
+                    db.add(candidate)
+                    await db.flush()
+            except IntegrityError:
+                continue
+            ticket = candidate
             break
-        except IntegrityError:
-            await db.rollback()
-            ticket.reference = new_reference()
-    else:
-        raise ApiError(503, "SERVICE_UNAVAILABLE", "Could not record the support request. Nothing was received.")
-    svc.support_ticket_limiter.hit(str(auth.account.id))
-    events.record(
-        db,
-        account_id=auth.account.id,
-        kind="support_ticket_created",
-        severity="info",
-        actor="account",
-        subject_id=ticket.id,
-        detail={"category": ticket.category, "reference": ticket.reference, "has_diagnostics": diagnostics is not None},
-    )
-    await db.commit()
+        if ticket is None:
+            raise ApiError(503, "SERVICE_UNAVAILABLE", "Could not record the support request. Nothing was received.")
+        events.record(
+            db,
+            account_id=account_id,
+            kind="support_ticket_created",
+            severity="info",
+            actor="account",
+            subject_id=ticket.id,
+            detail={
+                "category": ticket.category,
+                "reference": ticket.reference,
+                "has_diagnostics": diagnostics is not None,
+            },
+        )
+        await db.commit()
+    except BaseException:
+        svc.support_ticket_limiter.release(budget_key)
+        raise
     return rest_response(
         svc.settings.validate_rest_responses, "support_ticket_response", ticket_body(ticket, svc.settings), status=201
     )

@@ -637,7 +637,9 @@ class InputSessionManager:
             session.accepted_events += outcome.accepted
             session.dropped_events += outcome.dropped
             if outcome.target_changed:
-                await self.refresh_foreground(force=True)
+                await self.refresh_foreground(force=True)  # state frame: the phone sees the new window
+            if any(code == "INPUT_RESTRICTED" for code, _m in outcome.errors):
+                await self._probe_restricted()  # state frame: pc_state.input_restricted reaches the phone
             for code, message in outcome.errors:
                 await self._report(session, code, message)
             if session.live:

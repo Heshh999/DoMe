@@ -27,6 +27,7 @@ from dome_api.relay.manager import (
     CLOSE_FRAME_TOO_LARGE,
     CLOSE_PROTOCOL_ERROR,
     CLOSE_REVOKED,
+    PC_STATE_1_1_FIELDS,
     ConnectionManager,
     ControllerConn,
 )
@@ -191,12 +192,15 @@ async def _loop(
         kind = frame["type"]
         if kind == "input_batch":
             # The input stream has its own pre-database bucket (rules.input_sessions: 40 batches/s), far above the
-            # command bucket. Refusals are RATE_LIMITED errors at most once per second per socket and never close
-            # the socket: a phone that overshoots the budget while dragging must keep its session.
+            # command bucket. Refusals are RATE_LIMITED errors at most once per second per socket; ordinary
+            # overshoot while dragging keeps the session, a sustained flood (refusals beyond 2x the budget for
+            # about 5 s) closes the socket like a command flood does.
             if not limiters.input_frames.allow(bucket_key):
-                now = utcnow()
-                if conn.input_throttle_notified is None or (now - conn.input_throttle_notified).total_seconds() >= 1:
-                    conn.input_throttle_notified = now
+                conn.input_refused += 1
+                if not limiters.input_refusals.allow(bucket_key):
+                    await _close_throttled(mgr, conn, reason="input_flood", refused=conn.input_refused)
+                    return
+                if conn.input_notice_due(utcnow()):
                     await conn.send(
                         frames.error_frame(
                             "RATE_LIMITED", "Too many input batches; slow down", ref_pc_id=frame["pc_id"]
@@ -211,16 +215,7 @@ async def _loop(
             conn.throttle_violations += 1
             await reject_throttled(mgr, conn, frame)
             if conn.throttle_violations >= limiters.frames.burst:
-                log.info("controller.throttled_close", controller_id=str(conn.controller_id))
-                await mgr.security_event(
-                    account_id=conn.account_id,
-                    kind="controller_throttled",
-                    severity="warning",
-                    actor="controller",
-                    subject_id=conn.controller_id,
-                    detail={"refused_frames": conn.throttle_violations},
-                )
-                await conn.close(CLOSE_PROTOCOL_ERROR)
+                await _close_throttled(mgr, conn, reason="frame_flood", refused=conn.throttle_violations)
                 return
             continue
         if kind == "ping":
@@ -237,6 +232,20 @@ async def _loop(
             await _on_confirmation(svc, mgr, conn, frame)
         elif kind == "cancel":
             await _on_cancel(mgr, conn, frame)
+
+
+async def _close_throttled(mgr: ConnectionManager, conn: ControllerConn, *, reason: str, refused: int) -> None:
+    """Close a flooding socket (4000) with exactly one ``controller_throttled`` security event."""
+    log.info("controller.throttled_close", controller_id=str(conn.controller_id), reason=reason)
+    await mgr.security_event(
+        account_id=conn.account_id,
+        kind="controller_throttled",
+        severity="warning",
+        actor="controller",
+        subject_id=conn.controller_id,
+        detail={"refused_frames": refused, "reason": reason},
+    )
+    await conn.close(CLOSE_PROTOCOL_ERROR)
 
 
 async def _on_subscribe(
@@ -278,7 +287,10 @@ async def _on_subscribe(
                 await conn.send(status)
             agent = mgr.agent_for(pc_id)
             if agent is not None and agent.state_frame is not None:
-                await conn.send(agent.state_frame, validate=False)  # cached, unchanged, original `at`
+                cached = agent.state_frame  # cached, original `at`; a 1.0 socket gets it without the 1.1 fields
+                if not conn.supports_input:
+                    cached = frames.legacy_state_frame(cached, PC_STATE_1_1_FIELDS)
+                await conn.send(cached, validate=False)
 
 
 async def _on_confirmation(svc: Services, mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:

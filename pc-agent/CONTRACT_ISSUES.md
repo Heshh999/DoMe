@@ -45,6 +45,18 @@
     must route it by the owning controller of the PC's live session (it has `pc_state.input_session`).
     The agent rate-limits these to one per code per second and puts counts in the acks. Proposal: an
     optional `ref_input_session_id` on `error_frame`.
+    **Consequence confirmed by review:** the current cloud-api relay only logs agent `error` frames
+    (`relay/agent_ws.py`), so NO batch-rejection reason (`INPUT_STALE`, `INPUT_SEQUENCE_INVALID`,
+    `INPUT_NOT_PERMITTED`, `INPUT_SUSPENDED`, `INPUT_RESTRICTED`, `INPUT_INJECTION_FAILED`,
+    `INPUT_TARGET_CHANGED`) reaches the phone in the integrated system. Concrete proposal for 1.2:
+    `error_frame.ref_input_session_id` (optional, `^[A-Za-z0-9_-]{22}$`), allowed only agent → relay;
+    the relay routes such a frame to the owning controller's 1.1 sockets exactly like `input_ack`
+    (owner looked up from its live-session table) and drops it when the id is not the live session.
+    The agent would fill it in `InputSessionManager._report` (one line). Until then the agent makes the
+    deliverable signals carry the meaning: `dropped_events` in `input_ack`, a state frame when
+    `pc_state.input_restricted` or `foreground_app` changes, `input_session{suspended|ended, reason}`.
+    pc-agent cannot add the integration test "reason reaches the controller on the real relay path":
+    the contract has no field for it and the relay is another component.
 12. **`grant_update.capabilities` has `minItems: 1`**, so a grant cannot be emptied through this frame;
     the agent refuses the local change ("revoke instead"). Fine, but worth a sentence in
     `rules.grant_update`.
@@ -60,3 +72,18 @@
     expect `supported == ["1.1"]`, but the agent announces every MINOR it speaks (`["1.0", "1.1"]`, also
     asserted by the relay hello test) as the compatibility rule intends. The test was corrected; the
     contract could state that `supported` lists all accepted versions.
+16. **`rules.input_sessions` age check vs clock skew.** The rule says "requires now - issued_at <=
+    input_age_budget_ms" with `issued_at` stamped by the phone, while the envelope window tolerates
+    `max_clock_skew_seconds` = 5 s and the budget is 1 s. Read literally, a phone clock ≥ 1 s behind the
+    PC rejects every batch (`INPUT_STALE`) and a phone clock ahead hides relay stalls. The agent judges
+    the age against a per-session estimate of the phone's clock offset (DECISIONS.md #39). Proposed
+    wording: "requires the batch's transit delay — now − issued_at corrected by the agent's estimate of
+    the controller's clock offset (bounded by max_clock_skew_seconds, e.g. a windowed minimum of
+    now − issued_at over the session's batches) — to be <= input_age_budget_ms; the agent may
+    additionally bound the relay → agent leg with relay.received_at the same way".
+17. **UIPI and `INPUT_RESTRICTED`.** Windows drops input aimed at a higher-integrity window without an
+    error (`SendInput` returns the full count), so "Windows accepted" in `input_ack` is not observable
+    there. The agent refuses keyboard events with `INPUT_RESTRICTED` while it knows an elevated window
+    or a protected desktop is in front (DECISIONS.md #41) and lets pointer events through. The contract
+    could say that `input_restricted: true` means keyboard input is refused and pointer input is
+    best-effort.
