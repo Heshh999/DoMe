@@ -76,3 +76,9 @@ Items from the review that were recorded rather than fully closed, plus residual
 16. **Brand exports are copied, not regenerated, by `pnpm gen:icons`.** If `brand/icon.svg` changes,
     run `node brand/scripts/export.mjs` from the repository root first (it writes `brand/exports/`),
     then `pnpm gen:icons` here; the script refuses exports whose manifest source is not `icon.svg`.
+
+17. **Test helpers wait for the first fake socket.** `connected()` in `runtime.test.ts` and
+    `makeRuntime().connect()` in `test/helpers/harness.ts` assumed the socket existed after 10 macrotasks;
+    with 30 files in parallel the key generation + hello-proof signing occasionally took longer and two
+    unrelated tests failed intermittently. Both helpers now poll (bounded, 50 rounds). No shipped code
+    changed for this.
