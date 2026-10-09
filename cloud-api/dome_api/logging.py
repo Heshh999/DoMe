@@ -7,6 +7,7 @@ logged as paths only by the request-logging middleware; this module never receiv
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -89,40 +90,69 @@ _TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 # Pairing codes (dome_protocol.digest): 20 Crockford symbols, typed or displayed with or without separators
-# (the normaliser accepts " -_." and maps I/L -> 1, O -> 0). Candidates are 20 contiguous symbols, 4 groups
-# of 5 (the PC's display form) or 5 groups of 4, joined by one consistent separator; ``_mask_pairing_code``
-# decides.
-_PAIRING_CANDIDATES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{5}([-_. ])(?:[0-9A-Za-z]{5}\1){2}[0-9A-Za-z]{5}(?![0-9A-Za-z_-])"),
-    re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{4}([-_. ])(?:[0-9A-Za-z]{4}\1){3}[0-9A-Za-z]{4}(?![0-9A-Za-z_-])"),
-    re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{20}(?![0-9A-Za-z_-])"),
+# (the normaliser accepts " -_." and maps I/L -> 1, O -> 0). Candidates are 20 contiguous symbols, or a run of
+# groups of 5 (the PC's display form, 4 groups) or of 4 (5 groups) joined by one consistent separator; within a
+# run every window of the right number of groups is checked, so "code K7Q2 M9XD 4HPR 8WTV ZC3N" masks the code
+# and keeps "code".
+_PAIRING_GROUP_RUNS: tuple[tuple[re.Pattern[str], int], ...] = (
+    (re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{5}([-_. ])[0-9A-Za-z]{5}(?:\1[0-9A-Za-z]{5})+(?![0-9A-Za-z_-])"), 4),
+    (re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{4}([-_. ])[0-9A-Za-z]{4}(?:\1[0-9A-Za-z]{4})+(?![0-9A-Za-z_-])"), 5),
 )
+_PAIRING_CONTIGUOUS = re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{20}(?![0-9A-Za-z_-])")
 _CROCKFORD = frozenset("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 _CROCKFORD_ALIASES = {"I": "1", "L": "1", "O": "0"}
 
 
-def _mask_pairing_code(match: re.Match[str]) -> str:
-    raw = match.group(0)
-    symbols = [ch for ch in raw if ch not in "-_. "]
+def _looks_like_pairing_code(groups: list[str], *, separated: bool) -> bool:
+    symbols = "".join(groups)
     if len(symbols) != 20:
-        return raw
-    normalized = [_CROCKFORD_ALIASES.get(ch, ch) for ch in "".join(symbols).upper()]
-    if any(ch not in _CROCKFORD for ch in normalized):
-        return raw
-    has_digit = any(ch.isdigit() for ch in symbols)
-    separated = len(symbols) != len(raw)
+        return False
+    if any(_CROCKFORD_ALIASES.get(ch, ch) not in _CROCKFORD for ch in symbols.upper()):
+        return False
     # A random code lacks a digit with probability ~0.06 %; without that anchor, only the displayed form
     # (upper case, grouped) counts, so a run of ordinary lower-case words never matches.
-    if has_digit or (separated and raw.upper() == raw):
-        return REDACTED
-    return raw
+    return any(ch.isdigit() for ch in symbols) or (separated and symbols.upper() == symbols)
+
+
+def _mask_group_run(match: re.Match[str], window: int) -> str:
+    sep = match.group(1)
+    groups = match.group(0).split(sep)
+    candidates = [
+        i for i in range(len(groups) - window + 1) if _looks_like_pairing_code(groups[i : i + window], separated=True)
+    ]
+    if not candidates:
+        return match.group(0)
+
+    def uniform_case(i: int) -> bool:
+        letters = "".join(groups[i : i + window])
+        return letters.upper() == letters or letters.lower() == letters
+
+    # overlapping windows: a code is shown in one case, so prefer the uniform window ("code K7Q2 ... ZC3N")
+    chosen: list[int] = []
+    for i in sorted(candidates, key=lambda i: (not uniform_case(i), i)):
+        if all(abs(i - j) >= window for j in chosen):
+            chosen.append(i)
+    out: list[str] = []
+    i = 0
+    while i < len(groups):
+        if i in chosen:
+            out.append(REDACTED)
+            i += window
+        else:
+            out.append(groups[i])
+            i += 1
+    return sep.join(out)
+
+
+def _mask_contiguous(match: re.Match[str]) -> str:
+    return REDACTED if _looks_like_pairing_code([match.group(0)], separated=False) else match.group(0)
 
 
 def redact_pairing_codes(text: str) -> str:
     out = text
-    for pattern in _PAIRING_CANDIDATES:
-        out = pattern.sub(_mask_pairing_code, out)
-    return out
+    for pattern, window in _PAIRING_GROUP_RUNS:
+        out = pattern.sub(functools.partial(_mask_group_run, window=window), out)
+    return _PAIRING_CONTIGUOUS.sub(_mask_contiguous, out)
 
 
 def redact_text(text: str) -> str:

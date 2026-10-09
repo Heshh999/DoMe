@@ -41,8 +41,8 @@ async def _input_pair(env: Env, alice: Browser, agent: AgentSim, caps: tuple[str
 
 
 def _wire(ctrl: ControllerSim, pc_id: str, sid: str, seq: int) -> str:
-    return dumps_compact(
-        {"type": "input_batch", "pc_id": pc_id, "envelope": ctrl.input_envelope(pc_id, sid, seq, [MOVE])}
+    return str(
+        dumps_compact({"type": "input_batch", "pc_id": pc_id, "envelope": ctrl.input_envelope(pc_id, sid, seq, [MOVE])})
     )
 
 
@@ -233,7 +233,6 @@ async def test_subscribed_owner_receives_each_input_session_frame_once(
 async def test_input_session_owner_requires_live_grant_on_this_pc(
     env: Env, alice: Browser, online_agent: AgentSim
 ) -> None:
-    pc = online_agent.pc_id
     owner = await _input_pair(env, alice, online_agent)
     # a controller of the account paired to nothing on this PC
     stranger = ControllerSim(env, alice, name="No grant here")
