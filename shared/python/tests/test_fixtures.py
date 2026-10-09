@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from dome_protocol import ProtocolError, verify_envelope
-from dome_protocol.digest import challenge_digest, command_digest, pairing_code_handle, pairing_verification_code
+from dome_protocol.digest import (
+    challenge_digest,
+    command_digest,
+    pairing_code_handle,
+    pairing_verification_code,
+)
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "protocol" / "fixtures"
 FILES = sorted(FIXTURE_DIR.glob("es256-*.json"))
@@ -17,7 +22,7 @@ FILES = sorted(FIXTURE_DIR.glob("es256-*.json"))
 def test_fixture_file(path):
     data = json.loads(path.read_text(encoding="utf-8"))
     jwk, kid = data["public_jwk"], data["kid"]
-    resolve = lambda k: jwk if k == kid else None  # noqa: E731
+    resolve = lambda k: jwk if k == kid else None
     assert data["cases"], "fixture has no cases"
     for case in data["cases"]:
         if case["expect"] == "valid":

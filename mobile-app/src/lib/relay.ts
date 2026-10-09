@@ -6,7 +6,7 @@
  * immediate reconnect. Consumers treat all PC state as stale until fresh frames arrive after a
  * (re)connect — that is the store's job, signalled through `status` events.
  */
-import { LIMITS, loadsStrict, PROTOCOL_VERSION, REGISTRY_VERSION, ProtocolError, schemas, type relayFrames } from "@dome/protocol";
+import { LIMITS, loadsStrict, PROTOCOL_VERSION, REGISTRY_VERSION, ProtocolError, schemas, type Envelope, type relayFrames } from "@dome/protocol";
 
 import { errorSummary, log } from "./log.ts";
 
@@ -34,6 +34,12 @@ export interface RelayTimers {
 export interface RelayClientOptions {
   url: string;
   kid: () => Promise<string>;
+  /**
+   * Signs the `hello_proof` for `kid` (rules.controller_socket_identity): the relay binds the socket to the
+   * paired controller only after verifying it. Return null when there is nothing to prove with yet (no
+   * session): the socket then opens unbound and `reconnect()` rebinds it later.
+   */
+  helloProof?: (kid: string) => Promise<Envelope | null>;
   componentVersion: string;
   socketFactory?: SocketFactory;
   timers?: RelayTimers;
@@ -222,6 +228,16 @@ export class RelayClient {
       this.scheduleReconnect();
       return;
     }
+    let proof: Envelope | null = null;
+    if (this.opts.helloProof) {
+      try {
+        proof = await this.opts.helloProof(kid);
+      } catch (e) {
+        // Without a proof the relay leaves the socket unbound (hello_ack without controller_id); the UI
+        // shows "not paired / not bound" honestly instead of a socket that silently cannot act.
+        log.warn("relay.hello_proof_failed", errorSummary(e));
+      }
+    }
     if (!this.wantOpen || this.socket) return;
     let ws: WebSocketLike;
     try {
@@ -235,7 +251,7 @@ export class RelayClient {
     ws.onopen = () => {
       this.lastInbound = Date.now();
       try {
-        this.sendRaw({ type: "hello", component: "controller", kid, component_version: this.opts.componentVersion, protocol_versions: [PROTOCOL_VERSION], registry_version: REGISTRY_VERSION });
+        this.sendRaw({ type: "hello", component: "controller", kid, ...(proof ? { proof } : {}), component_version: this.opts.componentVersion, protocol_versions: [PROTOCOL_VERSION], registry_version: REGISTRY_VERSION });
       } catch (e) {
         log.error("relay.hello_failed", errorSummary(e));
         this.teardownSocket(CLOSE_NORMAL, "hello failed");

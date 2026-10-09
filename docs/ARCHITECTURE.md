@@ -218,11 +218,16 @@ Evidence: integration-tested (cloud-api `tests/test_relay_lifecycle.py`; pc-agen
 
 1. PWA opens `wss://<origin>/ws/controller` with the session cookie; the relay checks the cookie
    session and an exact `Origin`.
-2. PWA → `hello{component: controller, kid, …}`. The relay resolves (session account, kid) to a
-   controller row. Found and not revoked → the socket is **bound** and `hello_ack{controller_id}`
-   says so; otherwise `hello_ack` without `controller_id` and the socket may not
-   subscribe/command/confirm/cancel (`error GRANT_MISSING`). Every envelope on the socket must carry
-   the socket's kid (else `UNKNOWN_KEY`, close 4003) — `rules.controller_socket_identity`.
+2. PWA → `hello{component: controller, kid, proof, …}`. `proof` is an envelope signed by the
+   controller key over `hello_proof{kid, account_id, issued_at, expires_at, nonce}`: a kid is public
+   to everyone signed in to the account, so possession of the key is proven before the socket may act
+   as the paired phone. The relay resolves (session account, kid) to a controller row and verifies the
+   proof with the JWK stored at pairing (kids equal, account = session, 60 s window, single-use
+   nonce). Found, not revoked and proven → the socket is **bound** and `hello_ack{controller_id}`
+   says so; no proof or no row → `hello_ack` without `controller_id` and the socket may not
+   subscribe/command/confirm/cancel (`error GRANT_MISSING`); an invalid proof → `UNKNOWN_KEY`, close
+   4003. Every envelope on the socket must carry the socket's kid (else `UNKNOWN_KEY`, close 4003) —
+   `rules.controller_socket_identity`.
 3. PWA → `subscribe{pc_ids}` (idempotent, replaces the set). Each id must be a PC of the account on
    which **this controller** holds a live grant, else `error{GRANT_MISSING, ref_pc_id}`. For each
    accepted id the relay sends `pc_status` then the cached `state` (unchanged, original `at`).
@@ -428,16 +433,21 @@ Evidence: integration-tested (cloud-api `tests/test_relay_lifecycle.py`, `tests/
 
 ### 4.9 Disconnects, deadlines and truthful outcomes
 
-- Agent socket drops after `ack{executing}` was seen → relay emits
-  `result{origin: relay, state: outcome_unknown}`; before that → `result{origin: relay, failed,
-  PC_OFFLINE}`. A sweeper (every 5 s) applies the `rules.in_flight` deadline
-  `max(expires_at, received_at + timeout_ms) [+ 60 s for challenge actions] + 10 s`.
+- Agent socket drops after the command was forwarded → relay emits
+  `result{origin: relay, state: outcome_unknown}` whether or not an ack was seen: a half-open PC
+  socket may still run a queued command, so the relay never claims "nothing ran" for anything it
+  wrote to the PC. `failed/PC_OFFLINE` from the relay means the command was never forwarded. A
+  sweeper (every 5 s) applies the `rules.in_flight` deadline
+  `max(expires_at, received_at + timeout_ms) [+ 60 s for challenge actions] + 10 s`, also as
+  `outcome_unknown`.
 - Agent crash between the OS call and the result: the journal row was set `executing` before the
   call, so start-up rewrites it to `outcome_unknown`; nothing is re-executed; the journaled result
   is re-sent once after the next snapshot and the relay forwards it once as a correction
   (`rules.late_results`); the PWA replaces the earlier outcome.
-- Agent restart or relay restart: queued commands fail `PC_OFFLINE` in the journal; the relay's
-  start-up sweep marks in-flight rows `outcome_unknown`/`expired`; nothing is replayed.
+- Agent restart or relay restart: queued commands fail `PC_OFFLINE` in the journal and that verdict is
+  re-sent on reconnect (together with every result finished after the last frame the previous
+  connection received — a socket write is not delivery), correcting the relay's `outcome_unknown`;
+  the relay's start-up sweep marks in-flight rows `outcome_unknown`; nothing is replayed.
 - Lost connectivity is never presented as a completed power action. The PWA says "requested …;
   DoMe cannot tell whether it ran" unless it saw an `executing` ack or an agent result
   (mobile-app `DECISIONS.md` #14).
@@ -475,7 +485,7 @@ host, not a description of a running deployment (**not yet verified on any hosti
 | Exactly **one** API/relay process per deployment. The connection manager, controller `state` cache, rate limiters and frame budgets are in-memory; a second replica would double every budget and could not route to agents connected to the other replica. Scaling out requires the documented Redis pub/sub seam (ADR-0001 D1, reversible). | `dome_api/relay/manager.py`, `security/ratelimit.py`, cloud-api `KNOWN_ISSUES.md` #2 |
 | Global socket cap `DOME_RELAY_MAX_CONNECTIONS` (default 5000); upgrades beyond it get HTTP 503. Sockets that have not sent `hello` within 10 s are dropped and count toward the cap until then. | `dome_api/settings.py`, `relay/manager.py` |
 | Frames above 64 KiB close the socket (1009); payloads above 16 KiB are rejected. | `version.json → limits` |
-| Deploys must drain: on process exit every in-flight command is terminated truthfully (`outcome_unknown` if executing, else `PC_OFFLINE`/`expired`) and agents reconnect with backoff 1–60 s. Fly's `kill_timeout` should cover the sweep. | `dome_api/relay/lifecycle.py`, `main.py` lifespan |
+| Deploys must drain: on process exit every in-flight command is terminated truthfully (`outcome_unknown`; the PC's re-sent results correct it after reconnect) and agents reconnect with backoff 1–60 s. Fly's `kill_timeout` should cover the sweep. | `dome_api/relay/lifecycle.py`, `main.py` lifespan |
 | `DOME_TRUSTED_PROXIES` **must** name the ingress proxy's source range in staging/production (`*` is refused, the process refuses to start without a value); otherwise every per-IP limit and `ip_hash` is spoofable. uvicorn is started with its own proxy handling disabled. On Fly the range must be checked with `fly ssh console` + `ss -tn` before trusting it. | cloud-api `README.md` "Client addresses behind a proxy", `security/proxy.py` |
 | Production requires https origins, a real `DOME_SESSION_SECRET`, a configured OIDC issuer with the redirect URI registered, and the Ed25519 entitlement key provisioned from a secret store; HSTS is enabled. | `dome_api/settings.py` |
 | `alembic upgrade head` runs before serving and the lifespan refuses to start on a schema that is not at head. | `cloud-api/README.md` |

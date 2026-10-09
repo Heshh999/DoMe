@@ -16,7 +16,11 @@ from dome_protocol import (
     now_utc,
     sign_payload,
 )
-from dome_protocol.commands import protocol_compatible, verify_and_parse_command, verify_and_parse_confirmation
+from dome_protocol.commands import (
+    protocol_compatible,
+    verify_and_parse_command,
+    verify_and_parse_confirmation,
+)
 from dome_protocol.digest import (
     challenge_digest,
     command_digest,

@@ -69,4 +69,4 @@ class StrictValidator(_BaseStrict):  # type: ignore[misc,valid-type]
         super().__init__(schema, *args, **kwargs)
 
 
-__all__ = ["StrictValidator", "pattern_matches", "compile_pattern", "URI_FORMAT"]
+__all__ = ["URI_FORMAT", "StrictValidator", "compile_pattern", "pattern_matches"]

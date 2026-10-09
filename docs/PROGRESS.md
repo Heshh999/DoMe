@@ -2,6 +2,65 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-09 — Cross-component security review and the two fixes it forced
+
+- An independent reviewer read every seam (relay ↔ phone, relay ↔ agent, agent ↔ extension, the
+  shared verifiers, the PWA) after the per-component reviews, with live probes against the real
+  stack. Verdict: the core guarantee holds everywhere traced — nothing executes on the PC without a
+  locally approved grant for the signing key, the relay cannot forge or alter commands or
+  confirmations, tenancy and pairing are sound, replay/expiry handling matches across Python and
+  TypeScript, no hidden bypass, no secret in logs or repo. Two seam-level gaps were confirmed live
+  and are now fixed; one minor hardening was applied.
+- **Fix 1 — controller hello proof of possession.** `/ws/controller` bound a socket to a paired
+  controller by its bare `kid`, which `GET /v1/controllers` reveals to everyone signed in to the
+  account; a second session could subscribe to the PC's state, receive the phone's results and
+  challenges when the phone was in the background, and cancel its commands. The hello now carries
+  `proof`: an ES256 envelope over `hello_proof{kid, account_id, issued_at, expires_at, nonce}`
+  (contract: `relay-frames#/$defs/hello_proof`, `rules.controller_socket_identity`). The relay
+  verifies it with the JWK stored at pairing, binds only then, refuses invalid proofs with
+  `UNKNOWN_KEY` + 4003 + a security event, and keeps a single-use nonce cache. Implemented in
+  `shared/python` (`verify_hello_proof`), `shared/ts` (`buildHelloProofPayload`, `signHelloProof`),
+  cloud-api (`controller_ws.py`), the PWA (`relay.ts` signs on every connect) and the test
+  simulators; new tests: shared (4 + 2), cloud-api `tests/test_hello_proof.py` (impostor stays
+  unbound; forged, replayed and wrong-account proofs rejected), PWA relay test.
+- **Fix 2 — honest outcome for a forwarded command that is lost.** After writing a command to the
+  PC's socket the relay still reported `failed/PC_OFFLINE` or `COMMAND_EXPIRED` unless an
+  `executing` ack had arrived, and the phone rendered "Nothing ran"; a PC behind a half-open socket
+  (NAT/Wi-Fi drop, up to 55 s before it notices) executes its queue and writes results into the dead
+  socket, which the agent counted as delivered. Now: the relay terminates every forwarded command as
+  `outcome_unknown` (`rules.terminal_result`, `rules.in_flight`; start-up sweep too); the agent
+  re-sends every terminal result finished after the last frame the previous connection received
+  (`rules.late_results`; `relay_client.previous_last_inbound_at`, `store.journal_terminal_finished_after`),
+  so the queued commands' `PC_OFFLINE` verdicts and any executed results correct the unknown
+  outcome once; the `OUTCOME_UNKNOWN` copy says "may or may not have run". Tests updated in
+  cloud-api (`test_relay_lifecycle.py`) and pc-agent (`test_agent_e2e.py`).
+- **Minor:** CSP `connect-src` tightened from `'self' wss: https:` to `'self'`.
+- Also fixed on the way: the signing fixtures' `tab_token` was 24 characters where the schema
+  requires 22, so the fixture commands were not valid commands; regenerated in both languages.
+- Tests run after the fixes: `shared/python` 132, `shared/ts` 84, `cloud-api` 89,
+  `pc-agent` 194, `mobile-app` 206 (typecheck, lint, build), `tests/` 20 passed in 191 s (load smoke: 400 commands in 9.58 s = 42 cmd/s, p50 907 ms, p95 1290 ms).
+  **Evidence tag: integration-tested (Linux); unit-tested.**
+- Docs updated: `PROTOCOL.md`, `SECURITY.md` (T1, T5, new T15), `ARCHITECTURE.md`.
+
+## 2026-10-09 — Documentation, deploy and CI written from the real state
+
+- `docs/`: ARCHITECTURE, SECURITY, PROTOCOL, PRODUCT_AND_PLANS, BILLING, COST_MODEL,
+  DATA_RETENTION, WINDOWS_INSTALL, IPHONE_SETUP, TROUBLESHOOTING, OPERATIONS, ACCEPTANCE, plus the
+  maintainer's HANDOFF and this log. Every claim carries an evidence tag; implemented vs planned is
+  marked per item; prices and vendor figures are dated assumptions with their sources.
+- `deploy/`: multi-stage `Dockerfile` (PWA build → uv-installed API → non-root runtime with
+  healthcheck), `entrypoint.sh` (writes the entitlement key from a secret, refuses to invent one
+  outside development, maps `DATABASE_URL`), `fly.toml` (WebSocket-friendly: machines never
+  auto-stop, connection-based concurrency, 30 s drain, release-command migrations),
+  `docker-compose.dev.yml`, `README.md` (secrets by name, environment separation, founder
+  prerequisites). **Not built or deployed here (no Docker daemon, no Fly account); not yet verified.**
+- `.github/workflows/ci.yml`: Python (shared/python, dev-idp, cloud-api with a PostgreSQL service
+  container, pc-agent), Node (shared/ts incl. generated-types drift check, mobile-app,
+  browser-extension incl. build), integration (`tests/`), container build; actions pinned to
+  release commits; the uv and pnpm versions match the lockfiles. **Not yet run on GitHub Actions.**
+- The documentation pass found no code defects; the docs agents verified their references against
+  the code (two of them were interrupted by a usage limit and re-run).
+
 ## 2026-10-08 — Cross-component integration suite (`tests/`)
 
 - What runs: the real `dome-agent` process (`DOME_AGENT_PLATFORM=fake`, headless) linked by device

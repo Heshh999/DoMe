@@ -88,6 +88,10 @@
           "pattern": "^[A-Za-z0-9_-]{43}$",
           "description": "REQUIRED when component is 'controller': the installation's controller key id. The relay binds the socket to the controller row (session account, kid); every envelope on this socket must carry the same kid."
         },
+        "proof": {
+          "$ref": "#/$defs/envelope",
+          "description": "Controller sockets only. An ES256 envelope signed by the key named by `kid` whose payload is a `hello_proof` (#/$defs/hello_proof). The relay binds the socket to the controller row only after verifying it; a hello without a valid proof stays unbound (hello_ack without controller_id). Agents never send it (they authenticate with the PC access token)."
+        },
         "component_version": {
           "type": "string",
           "maxLength": 64
@@ -1322,6 +1326,46 @@
           ]
         }
       }
+    },
+    "hello_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "kid",
+        "account_id",
+        "issued_at",
+        "expires_at",
+        "nonce"
+      ],
+      "properties": {
+        "type": {
+          "const": "hello_proof"
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "account_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        }
+      },
+      "description": "Payload of hello.proof. Proves to the relay that the socket's owner holds the controller key before the socket is bound to the paired controller (a bare kid is public to the whole account). Verifier checks: signature with the JWK the relay stored at pairing for (session account, kid); envelope.kid == kid == hello.kid; account_id == the session's account; issued_at/expires_at within the normal window with lifetime <= confirmation_challenge_lifetime_seconds; nonce not seen before on this relay (single use)."
     }
   }
 }

@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated 2026-10-08 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
+Last updated 2026-10-09 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
 continuing the work. `docs/PROGRESS.md` is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix;
 each component keeps its own `README.md`, `DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
 
@@ -12,14 +12,14 @@ repository has been Windows-device-tested or iPhone-tested yet.
 
 | Area | What exists | Evidence |
 | --- | --- | --- |
-| `shared/protocol` (protocol 1.0, registry 1) | Action registry (29 actions, 6 capabilities), plans, error codes, JSON Schemas for envelopes, commands, confirmations, relay/bridge frames, per-action results, entitlement claims, REST bodies; normative rules in `version.json → rules`; cross-language fixtures. Frozen during the component builds; additive proposals are collected in each component's `CONTRACT_ISSUES.md`. | unit-tested: `shared/python` 128, `shared/ts` 82; each language verifies the other's signed fixtures |
-| `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in (Authlib), sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller`), command lifecycle rows, plan limits, entitlement assertions (EdDSA JWS), security events, `/healthz`, static PWA serving. Alembic `0001` also creates the billing, usage, layout, routine, support, deletion and operator tables that have **no routes yet**. | integration-tested against real PostgreSQL + `tools/dev-idp`: 86 tests; ruff, mypy (source and tests) clean |
+| `shared/protocol` (protocol 1.0, registry 1) | Action registry (29 actions, 6 capabilities), plans, error codes, JSON Schemas for envelopes, commands, confirmations, relay/bridge frames, per-action results, entitlement claims, REST bodies; normative rules in `version.json → rules`; cross-language fixtures. Frozen during the component builds; additive proposals are collected in each component's `CONTRACT_ISSUES.md`. | unit-tested: `shared/python` 132, `shared/ts` 84; each language verifies the other's signed fixtures |
+| `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in (Authlib), sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller`), command lifecycle rows, plan limits, entitlement assertions (EdDSA JWS), security events, `/healthz`, static PWA serving. Alembic `0001` also creates the billing, usage, layout, routine, support, deletion and operator tables that have **no routes yet**. | integration-tested against real PostgreSQL + `tools/dev-idp`: 89 tests; ruff, mypy (source and tests) clean |
 | `pc-agent` | The Windows user agent: `link`, identity/secret store, outbound relay client, local authorization against the locally approved grant store, queue with coalescing, confirmation transaction, SQLite journal with crash recovery, every registry action, Windows adapters (pywin32 / pycaw / winsdk, import-gated), Chrome Native Messaging host, tray, local control channel (`status`, `pair`, `revoke`, `reconnect`, …), diagnostics, PyInstaller specs. | unit-tested on Linux with `fake_platform`: 194 tests; ruff + mypy clean; the Windows adapters are **not yet verified** on a device |
 | `browser-extension` | Chrome/Edge MV3: service worker with native port + reconnect alarms, content-script YouTube player adapter (transition-observed Next/Previous, `tab_token` and `expected_video_id` guards, context flags), build-time precompiled validators (MV3 CSP forbids Ajv's `new Function`), popup. | unit-tested with hand-written DOM fixtures: 90 tests; Vite build succeeds; **never loaded in a real browser against youtube.com** |
-| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing by QR/code with the verification-code comparison, dashboard, remote, command page, apps, devices, settings, confirmation modal, billing status (no checkout), routines preview (nothing runs). Controller keys are non-extractable WebCrypto ECDSA P-256 keys in IndexedDB. | unit-tested with a fake socket and fake IndexedDB: 205 tests; typecheck, lint and production build clean; **not iPhone-tested** |
+| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing by QR/code with the verification-code comparison, dashboard, remote, command page, apps, devices, settings, confirmation modal, billing status (no checkout), routines preview (nothing runs). Controller keys are non-extractable WebCrypto ECDSA P-256 keys in IndexedDB. | unit-tested with a fake socket and fake IndexedDB: 206 tests; typecheck, lint and production build clean; **not iPhone-tested** |
 | `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login through `tools/dev-idp` + an ES256-signing controller simulator + a fake extension on the agent's bridge socket. | integration-tested (Linux): 20 passed in 214 s, including a load smoke (see §3) |
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. | unit/smoke-tested |
-| `deploy/`, `.github/workflows/ci.yml` | DEPLOY_STATUS | not yet run on Fly.io or GitHub Actions |
+| `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | written against the real commands; **not yet verified**: never built, deployed or run on GitHub Actions (no Docker daemon or Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
 ## 2. Running everything on a fresh machine
@@ -40,18 +40,21 @@ make agent                 # terminal 4: agent (Linux → development platform, 
 Tests, per component (each is a standalone package with its own lockfile):
 
 ```sh
-cd shared/python && uv run pytest -q           # 128
-cd shared/ts && pnpm test                       # 82
-cd cloud-api && uv run pytest -q                # 86 (needs the local PostgreSQL and tools/dev-idp venv)
+cd shared/python && uv run pytest -q           # 132
+cd shared/ts && pnpm test                       # 84
+cd cloud-api && uv run pytest -q                # 89 (needs the local PostgreSQL and tools/dev-idp venv)
 cd pc-agent && uv run pytest -q                 # 194
 cd browser-extension && pnpm test               # 90
-cd mobile-app && pnpm test                      # 205
+cd mobile-app && pnpm test                      # 206
 cd tests && uv run pytest -q                    # 20, ~3.5 min; `-k load` for the load smoke alone
 make lint typecheck                             # ruff / mypy / eslint / tsc across the repo
 ```
 
 If `initdb` refuses to run as root, run the cluster as an unprivileged user (this is what the build
-environment did); the `make db-*` targets accept `PG_DIR`/`PG_PORT`.
+environment did); the `make db-*` targets accept `PG_DIR`/`PG_PORT`. Every directory above the data
+directory must stay traversable by that user: in the build environment a data directory under a
+root-owned `0700` parent made the checkpointer PANIC with `Permission denied` and the server shut
+itself down mid-test-run (seen twice); a data directory directly under `/tmp` was stable.
 
 ## 3. What has actually been verified
 
@@ -87,6 +90,10 @@ unless stated.
   machine): 40 agents + 40 controllers, 400 `system.ping` in 13.47 s = 30 commands/s, round trip
   p50 1314 ms / p95 1629 ms, test-process RSS 215 → 218 MiB. These are numbers from one run, not a
   performance promise; the spec's device latency targets remain unmeasured.
+- Hello proof of possession: a same-account session presenting a paired phone's kid stays unbound;
+  forged, replayed and wrong-account proofs are refused with `UNKNOWN_KEY` + 4003 and logged.
+- Honest post-forward outcomes: a forwarded command whose PC connection drops (acked or not) ends
+  `outcome_unknown`; the PC's re-sent result corrects it exactly once.
 - Unit level (**unit-tested**): every component's own suite, listed in §1.
 
 ## 4. What has NOT been verified
@@ -131,6 +138,9 @@ unless stated.
   of response classes (both hit in `tools/dev-idp`).
 - The first `state` frame a subscriber receives can be the cached pre-extension one; wait for the
   predicate you need (`tests/conftest.py::wait_state`).
+- A test run that suddenly reports `connection to server on socket "/tmp/.s.PGSQL.54329" failed` for
+  every test means PostgreSQL died, not that the code broke: check `pg.log` for the checkpointer
+  PANIC above, restart the cluster, re-run.
 
 ## 6. Open contract proposals (highest value first)
 
@@ -172,10 +182,21 @@ in a protocol MINOR bump (`shared/protocol/version.json`), regenerate fixtures a
    and layouts routes and the agent-side routine execution.
 6. **Protocol MINOR bump** applying §6.
 7. **Agent socket frame budget** and the other deferred items in each `KNOWN_ISSUES.md`.
-8. A **cross-component adversarial security review** of the implementations (each component was
-   reviewed on its own; the integration suite covers the seams, a dedicated review has not been run).
+8. Re-run the **cross-component security review** after the Windows and iPhone passes (the first one,
+   2026-10-09, confirmed the core guarantees and produced the hello proof and the honest-outcome
+   fixes; see `docs/PROGRESS.md`).
 
-## 8. How this was built
+## 8. Security review summary (2026-10-09)
+
+A cross-component reviewer traced every seam and reported: signing key ↔ grant binding, snapshot
+narrowing, relay non-forgeability, confirmation single use, replay/expiry, tenancy, pairing, hidden
+bypasses, secrets in logs, fake success, native messaging/IPC identity and the PWA's key handling
+all **fine**; two **major** seam gaps (controller socket bound by a bare kid; `failed` reported for
+commands already forwarded) and one **minor** (CSP `connect-src`) — all three fixed the same day
+with contract updates, code, tests and docs. Residual items are the ones in each `KNOWN_ISSUES.md`
+and §6 above.
+
+## 9. How this was built
 
 Every component was produced from its design document in `docs/design/` by a builder, reviewed by an
 independent skeptical reviewer who re-ran the tests, and fixed; a second review/fix round ran before

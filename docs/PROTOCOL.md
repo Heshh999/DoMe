@@ -72,7 +72,7 @@ Limits (`version.json → limits`):
 | --- | --- | --- | --- |
 | `GET /v1/*`, `POST/PATCH/DELETE /v1/*` | PWA | Session cookie `dome_session`; non-GET needs `X-DoMe-CSRF` + exact `Origin` | Bodies per `rest.schema.json`; errors always `error_body{error{code, message, retryable, detail?}}` |
 | `POST /v1/agent-link/*`, `POST /v1/agent/*`, `POST /v1/pairing/start` | agent | None (link start/poll), PC credential (token), PC bearer token (entitlement, pairing start) | Any `Origin` header is refused (403) |
-| `wss://…/ws/controller` | PWA | Session cookie + exact `Origin`; `hello{kid}` | Upgrade refusals: 401 no session, 403 bad Origin, 503 relay full |
+| `wss://…/ws/controller` | PWA | Session cookie + exact `Origin`; `hello{kid, proof}` (the proof is an envelope signed by the controller key; without it the socket stays unbound) | Upgrade refusals: 401 no session, 403 bad Origin, 503 relay full |
 | `wss://…/ws/agent` | agent | `Authorization: Bearer <access token>`; no `Origin` | Query-string tokens refused; one socket per PC (a new one supersedes with 4001) |
 | `GET /.well-known/dome-jwks.json` | agent | None | Entitlement verification keys |
 | Native Messaging stdio ↔ `dome-native-host` ↔ agent IPC | extension | OS-scoped (see §12) | 4-byte little-endian length + UTF-8 JSON |
@@ -321,7 +321,7 @@ added in sibling fields.
 
 | Frame | Fields | Notes |
 | --- | --- | --- |
-| `hello` | `component: "controller"`, `kid` (required for controllers), `component_version`, `protocol_versions[]`, `registry_version`, `capabilities?` | Binds the socket to `(session account, kid)` |
+| `hello` | `component: "controller"`, `kid` (required for controllers), `proof?` (an `envelope` over a `hello_proof` payload `{type, protocol_version, kid, account_id, issued_at, expires_at, nonce}`), `component_version`, `protocol_versions[]`, `registry_version`, `capabilities?` | Binds the socket to the controller row `(session account, kid)` only after the proof verifies (signature by the key stored at pairing, kids equal, account = session, 60 s window, single-use nonce); a present-but-invalid proof is `UNKNOWN_KEY` + close 4003 |
 | `subscribe` | `pc_ids[]` (1–16) | Idempotent; **replaces** the set; each id needs a live grant for this controller, else `error{GRANT_MISSING, ref_pc_id}`; accepted ids get `pc_status` then the cached `state` |
 | `command` | `pc_id`, `envelope` | Routed per §8 |
 | `confirmation` | `pc_id`, `envelope` | Only from the socket bound to the command's controller |
@@ -332,7 +332,7 @@ added in sibling fields.
 
 | Frame | Fields | Notes |
 | --- | --- | --- |
-| `hello_ack` | `protocol_version`, `server_time`, `connection_id`, `controller_id?` | Without `controller_id` the socket is unbound (unpaired installation) and may only be used while REST pairing completes |
+| `hello_ack` | `protocol_version`, `server_time`, `connection_id`, `controller_id?` | Without `controller_id` the socket is unbound (unpaired installation, or no proof was sent) and may only be used while REST pairing completes |
 | `error` | `error{code, message, retryable, detail?}`, `ref_pc_id?` | Only when no `command_id` can be associated |
 | `ack` | `command_id`, `state: accepted \| awaiting_confirmation \| executing`, `at` | Delivery/authorization acknowledgement; never terminal |
 | `confirmation_required` | `command_id`, `challenge_text` | §5 |
@@ -419,10 +419,12 @@ Who emits what:
 
 - `ack` frames come only from the PC and never carry a terminal state. "Sent" (phone), "PC received"
   (`accepted`), "Running" (`executing`) are distinct from the result.
-- `result` frames come from the PC (`origin: agent`) or, when the PC never got the chance, from the
-  relay (`origin: relay`): pre-forward rejections (`failed`), PC offline (`failed/PC_OFFLINE`),
-  connection lost after an `executing` ack (`outcome_unknown`), deadline reached (`outcome_unknown`
-  if executing was seen, else `failed/COMMAND_EXPIRED`).
+- `result` frames come from the PC (`origin: agent`) or, when the PC never got the chance to answer,
+  from the relay (`origin: relay`): pre-forward rejections (`failed`, including `failed/PC_OFFLINE`
+  when no agent socket exists — the PC never received the command), and `outcome_unknown` for every
+  command the relay had already written to the PC's socket when the connection was lost or the
+  deadline passed, whether or not an ack was seen. The PC's own journaled result corrects an
+  `outcome_unknown` once (for a command it dropped from its queue that is `failed/PC_OFFLINE`).
 - The `commands` row at the relay mirrors these transitions (`state`, `error_code`, `acked_at`,
   `finished_at`, `duration_ms`) and holds no content.
 - The PC's journal row is created at authorization step 5 (replay check) and updated through
@@ -432,16 +434,16 @@ Who emits what:
 
 | Rule | What it says | Why it exists |
 | --- | --- | --- |
-| `terminal_result` | Every command a controller sends ends with exactly one `result` (origin agent or relay). `error` frames only when no `command_id` is known. Relay rejections before forwarding are `result{relay, failed, error}`; a lost agent after forwarding is `outcome_unknown` if an executing ack was seen, else `failed/PC_OFFLINE`. | The phone can always close a command's lifecycle without timers lying about what happened. |
+| `terminal_result` | Every command a controller sends ends with exactly one `result` (origin agent or relay). `error` frames only when no `command_id` is known. Relay rejections before forwarding are `result{relay, failed, error}` and mean the PC never received the command; once the relay has written the command to the PC's socket, a lost agent yields `outcome_unknown` whether or not an ack was seen (the PC's journaled result may correct it once). | The phone can always close a command's lifecycle without timers lying about what happened, and a half-open PC socket can never turn an executed action into "nothing ran". |
 | `duplicate_command` | Same `command_id` + same bytes → re-emit the previous result (or current ack); same id + different bytes → `COMMAND_ID_REUSED`. | Safe client retries without duplicate execution; an attacker cannot repurpose an id. |
 | `command_window_and_confirmation` | The command's window is checked once at receipt. After `confirmation_required`, the challenge's `expires_at` governs: a confirmation is accepted iff the challenge is unexpired and unconsumed, regardless of the command's own `expires_at`. Controllers default disruptive commands to 90 s. | Avoids a command expiring under the customer while they read the confirmation. |
 | `grants_snapshot` | The PC's local store is the sole source of controller keys; the snapshot is an intersection: usable iff locally approved **and** listed; capabilities = local ∩ snapshot; a snapshot can never add a controller or widen a grant. | A compromised relay cannot enrol or escalate. |
 | `challenge_text` | Travels as an opaque string; the PC stores the exact string; the relay validates a copy and forwards the original; the controller parses once for display and hashes the string verbatim. | One serialisation across Python and TypeScript means one digest. |
 | `pairing_secret` | The PC generates the code; the backend only receives its SHA-256 handle; the code moves out of band; both devices derive the 6-digit code with HMAC keyed by the code. | A key-substituting backend cannot make the two displays agree. |
-| `controller_socket_identity` | `hello` must carry `kid`; the socket is bound to `(session account, kid)`; `subscribe/command/confirmation/cancel` need a bound, unrevoked controller; every envelope's kid equals the socket's kid (else `UNKNOWN_KEY`, close 4003); revocation sends `revoked` to every socket of that controller and closes them. | One socket = one controller = one account. |
+| `controller_socket_identity` | `hello` must carry `kid` and, to be bound, `proof` (an envelope signed by that key over `hello_proof{kid, account_id, issued_at, expires_at, nonce}`); the relay verifies it with the JWK stored at pairing, binds the socket to `(session account, kid)` and reports `hello_ack.controller_id`; no proof → unbound socket; invalid proof → `UNKNOWN_KEY`, close 4003. `subscribe/command/confirmation/cancel` need a bound, unrevoked controller; every envelope's kid equals the socket's kid (else `UNKNOWN_KEY`, close 4003); revocation sends `revoked` to every socket of that controller and closes them. | One socket = one controller = one account, and a kid (public to everyone signed in to the account) is never enough to observe a PC or cancel the real phone's commands. |
 | `state_cache` | The relay keeps the last `state` per online PC and re-sends it unchanged after `pc_status` on every accepted subscribe. The agent sends `state` after applying the snapshot, on change (debounced 500 ms) and every 30 s. | A resumed phone gets a truthful picture at once; staleness is computable from `at`. |
-| `in_flight` | In-flight = rows in `created\|accepted\|executing\|awaiting_confirmation`. Deadline = max(`expires_at`, `received_at` + `timeout_ms`) + 60 s for challenge actions + 10 s; at the deadline the relay emits `outcome_unknown` (executing seen) or `failed/COMMAND_EXPIRED` and frees the slot. Armed power countdowns are exempt until `fires_at` + `timeout_ms`. | Bounded queues and no eternal "pending". |
-| `late_results` | After the relay closed a command as `outcome_unknown`, the PC's journaled result (re-sent on reconnect for commands finished after its last acknowledged frame) may be forwarded once as a correction (`origin: agent`); the controller treats it as replacing the prior outcome. Any other post-terminal result is dropped and logged. | A crash during execution can still be resolved truthfully. |
+| `in_flight` | In-flight = rows in `created\|accepted\|executing\|awaiting_confirmation`. Deadline = max(`expires_at`, `received_at` + `timeout_ms`) + 60 s for challenge actions + 10 s; at the deadline the relay emits `outcome_unknown` (the command was forwarded, so it cannot know whether it ran) and frees the slot. Armed power countdowns are exempt until `fires_at` + `timeout_ms`. | Bounded queues and no eternal "pending". |
+| `late_results` | After the relay closed a command as `outcome_unknown`, the PC's journaled result may be forwarded once as a correction (`origin: agent`); the controller treats it as replacing the prior outcome. On every reconnect the PC re-sends every terminal result never written to a socket and every one finished after the last frame it received on the previous connection (a socket write is not delivery). Any other post-terminal result is dropped and logged. | A crash or a half-open socket during execution can still be resolved truthfully. |
 | `mismatch_handling` | A command whose `account_id`/`target_pc_id` do not match the PC's identity → `result{agent, failed, ACCOUNT_MISMATCH\|TARGET_PC_MISMATCH}`, not journaled, local security event; three within 60 s → close the socket and reconnect with backoff. | Misrouting is visible and self-limiting. |
 | `agent_identity` | `pc_id`/`account_id` are fixed at link time; a differing `hello_ack.pc_id` or snapshot identity makes the agent close, stop reconnecting and show a re-link prompt. A command before the connection's first snapshot → `PC_RECONNECTING`, not journaled. | The PC never serves a relay that claims it is someone else. |
 | `plan_state` | `pc_enabled=false` / `status=plan_disabled` are plan/account states, never revocations: local grants stay; relay and agent refuse with `PC_PLAN_DISABLED` / `CONTROLLER_PLAN_DISABLED`. | Revocation and emergency stop survive a downgrade. |
@@ -465,7 +467,7 @@ Who emits what:
 | `GRANT_MISSING` | no | relay, PC | No grant for this (controller, PC) or capability; unbound socket; subscribe refused |
 | `ACCOUNT_MISMATCH` | no | relay, PC | Payload `account_id` differs from the key record or the PC's identity; also a PC not on the account |
 | `TARGET_PC_MISMATCH` | no | PC (relay checks frame `pc_id`) | `target_pc_id` is not this PC |
-| `COMMAND_EXPIRED` | yes | relay, PC | Window passed; relay deadline without an executing ack |
+| `COMMAND_EXPIRED` | yes | relay, PC | Window passed before forwarding / on the PC's own check |
 | `CLOCK_SKEW` | yes | relay, PC | `issued_at` in the future beyond 5 s |
 | `COMMAND_ID_REUSED` | no | relay, PC | Same id, different bytes |
 | `UNKNOWN_ACTION` | no | relay, PC | Not in the registry |
@@ -474,7 +476,7 @@ Who emits what:
 | `CONFIRMATION_INVALID` | no | PC | Digest/kid/id mismatch |
 | `CONFIRMATION_EXPIRED` | yes | PC | Challenge past `expires_at` |
 | `CONFIRMATION_DECLINED` | no | PC | Customer declined |
-| `PC_OFFLINE` | yes | relay, PC journal | No agent socket; queued commands when the socket dropped |
+| `PC_OFFLINE` | yes | relay, PC journal | No agent socket (never forwarded); the PC's own verdict for queued commands when its socket dropped (re-sent on reconnect as the correction of the relay's `outcome_unknown`) |
 | `PC_RECONNECTING` | yes | PC | Command before the first snapshot of the connection |
 | `PC_REMOTE_DISABLED` | no | PC | Local switch off |
 | `PC_SESSION_LOCKED` | no | PC | Session locked, action needs `session_unlocked` |

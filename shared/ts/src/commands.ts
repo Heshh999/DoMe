@@ -131,6 +131,45 @@ export async function signConfirmation(privateKey: CryptoKey, publicKey: CryptoK
   return signPayload(privateKey, publicKey, dumpsCompact(payload));
 }
 
+export interface HelloProofPayload {
+  type: "hello_proof";
+  protocol_version: string;
+  kid: string;
+  account_id: string;
+  issued_at: string;
+  expires_at: string;
+  nonce: string;
+}
+
+export interface BuildHelloProofInput {
+  kid: string;
+  accountId: string;
+  now?: Date;
+}
+
+/**
+ * The payload a controller signs to prove it holds its key when opening the relay socket
+ * (`rules.controller_socket_identity`): a bare kid is public to the whole account, so the relay binds
+ * the socket to the paired controller only after verifying this. Lifetime = 60 s, single-use nonce.
+ */
+export function buildHelloProofPayload(input: BuildHelloProofInput): HelloProofPayload {
+  const now = input.now ?? new Date();
+  return {
+    type: "hello_proof",
+    protocol_version: PROTOCOL_VERSION,
+    kid: input.kid,
+    account_id: input.accountId,
+    issued_at: formatRfc3339(now),
+    expires_at: formatRfc3339(new Date(now.getTime() + LIMITS.confirmation_challenge_lifetime_seconds * 1000)),
+    nonce: randomNonce(),
+  };
+}
+
+export async function signHelloProof(privateKey: CryptoKey, publicKey: CryptoKey, payload: HelloProofPayload): Promise<Envelope> {
+  schemas.validateHelloProofPayload(payload);
+  return signPayload(privateKey, publicKey, dumpsCompact(payload));
+}
+
 export interface VerifiedCommand {
   envelope: Envelope;
   payload: CommandPayload;

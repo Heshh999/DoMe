@@ -8,16 +8,19 @@ never sign a payload that names another controller's id (and thereby another gra
 from __future__ import annotations
 
 import re
+import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Callable
+from datetime import datetime, timedelta
+from typing import Any
 
 from .digest import command_digest
 from .errors import ProtocolError
+from .keys import b64url_encode
 from .registry import ActionSpec, Registry, load_registry
 from .schemas import Schemas, load_schemas
 from .signing import Envelope, verify_envelope
-from .timeutil import check_command_window
+from .timeutil import check_command_window, format_rfc3339, now_utc
 
 _VERSION_RE = re.compile(r"\A([0-9]+)\.([0-9]+)\Z", re.ASCII)
 
@@ -185,3 +188,68 @@ def verify_and_parse_confirmation(
         max_skew_seconds=registry.limits["max_clock_skew_seconds"],
     )
     return VerifiedConfirmation(envelope=envelope, payload=payload, key=key)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedHelloProof:
+    """A controller hello proof whose signature, binding and window all checked out."""
+
+    envelope: Envelope
+    payload: dict[str, Any]
+    key: KeyRecord
+
+    @property
+    def nonce(self) -> str:
+        return str(self.payload["nonce"])
+
+
+def build_hello_proof_payload(
+    *, kid: str, account_id: str, now: datetime | None = None, registry: Registry | None = None
+) -> dict[str, Any]:
+    """The payload a controller signs to prove possession of its key when opening a relay socket
+    (``rules.controller_socket_identity``). Lifetime = confirmation_challenge_lifetime_seconds."""
+    registry = registry or load_registry()
+    issued = now or now_utc()
+    return {
+        "type": "hello_proof",
+        "protocol_version": registry.protocol_version,
+        "kid": kid,
+        "account_id": account_id,
+        "issued_at": format_rfc3339(issued),
+        "expires_at": format_rfc3339(issued + timedelta(seconds=registry.limits["confirmation_challenge_lifetime_seconds"])),
+        "nonce": b64url_encode(secrets.token_bytes(16)),
+    }
+
+
+def verify_hello_proof(
+    raw_envelope: Any,
+    resolve_key: KeyResolver,
+    *,
+    expected_kid: str,
+    expected_account_id: str,
+    now: datetime | None = None,
+    registry: Registry | None = None,
+    schemas: Schemas | None = None,
+) -> VerifiedHelloProof:
+    """Verify ``hello.proof`` before binding a controller socket: signature by the key the relay
+    stored for (account, kid), payload/envelope/hello kids all equal, account bound to the session,
+    normal time window. Nonce single-use is the caller's (relay's) job."""
+    registry = registry or load_registry()
+    schemas = schemas or load_schemas()
+    envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
+    schemas.validate_hello_proof_payload(payload)
+    if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
+        raise ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version")
+    if envelope.kid != expected_kid or payload["kid"] != expected_kid:
+        raise ProtocolError("UNKNOWN_KEY", "hello proof is not for this socket's kid")
+    if payload["account_id"] != expected_account_id or key.account_id != expected_account_id:
+        raise ProtocolError("ACCOUNT_MISMATCH", "hello proof account_id does not belong to this session")
+    skew = registry.limits["max_clock_skew_seconds"]
+    check_command_window(
+        payload["issued_at"],
+        payload["expires_at"],
+        now=now,
+        max_lifetime_seconds=registry.limits["confirmation_challenge_lifetime_seconds"] + skew,
+        max_skew_seconds=skew,
+    )
+    return VerifiedHelloProof(envelope=envelope, payload=payload, key=key)

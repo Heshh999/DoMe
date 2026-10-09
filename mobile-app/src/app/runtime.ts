@@ -3,7 +3,7 @@
  * zustand stores, and the browser lifecycle events (visibility/online) that trigger reconnects and
  * mark state stale. Pages talk to `runtime`, never to the socket directly.
  */
-import { ProtocolError, type JsonValue, type relayFrames } from "@dome/protocol";
+import { buildHelloProofPayload, ProtocolError, signHelloProof, type JsonValue, type relayFrames } from "@dome/protocol";
 
 import { api, ApiError, configureApi, API_ORIGIN } from "../lib/api.ts";
 import { CommandService, type CommandRecord } from "../lib/commands.ts";
@@ -54,6 +54,12 @@ export class Runtime {
     this.relay = new RelayClient({
       url: relayUrl(API_ORIGIN, window.location),
       kid: async () => (await getControllerIdentity()).kid,
+      helloProof: async (kid) => {
+        const accountId = useSessionStore.getState().session?.account.id;
+        if (!accountId) return null;
+        const pair = await getOrCreateKeyPair();
+        return signHelloProof(pair.privateKey, pair.publicKey, buildHelloProofPayload({ kid, accountId }));
+      },
       componentVersion: APP_VERSION,
       ...options.relay,
     });

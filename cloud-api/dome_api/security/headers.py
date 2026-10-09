@@ -18,7 +18,7 @@ log = get_logger("dome_api.http")
 
 def build_csp(issuer_origin: str) -> str:
     return (
-        "default-src 'self'; connect-src 'self' wss: https:; img-src 'self' data:; style-src 'self'; "
+        "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; "
         "script-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; "
         f"form-action 'self' {issuer_origin}"
     )

@@ -493,6 +493,17 @@ class Store:
             ).fetchall()
         return [_journal(r) for r in rows]
 
+    def journal_terminal_finished_after(self, finished_after: str) -> list[JournalRow]:
+        """Terminal rows finished after the RFC 3339 instant ``finished_after``, whether or not their result
+        frame was written to a socket: a successful write is not delivery (``rules.late_results``)."""
+        placeholders = ",".join("?" for _ in TERMINAL_STATES)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM journal WHERE frame_json IS NOT NULL AND state IN ({placeholders}) AND finished_at > ? ORDER BY seq",  # noqa: S608
+                (*TERMINAL_STATES, finished_after),
+            ).fetchall()
+        return [_journal(r) for r in rows]
+
     def journal_rows_in_states(self, states: Iterable[str]) -> list[JournalRow]:
         states = tuple(states)
         if not states:

@@ -153,6 +153,11 @@ export const schemas = {
     const v = validatorFor("confirmation", "");
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
   },
+  /** relay-frames.schema.json#/$defs/hello_proof — the payload the phone signs to bind its socket. */
+  validateHelloProofPayload(value: unknown): void {
+    const v = validatorFor("relay_frames", "hello_proof");
+    if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
+  },
   validateFrame(direction: FrameDirection, value: unknown): void {
     const v = validatorFor("relay_frames", direction);
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");

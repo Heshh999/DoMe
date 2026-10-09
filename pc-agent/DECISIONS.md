@@ -93,3 +93,12 @@
     /v1/agent/token` → 401/403 is `credential_rejected` (credential discarded, re-link). A malformed
     `DOME_AGENT_RELAY_URL` / `relay_url` stops connecting, keeps the credential and surfaces
     "relay URL is invalid" in the tray notification and `dome-agent status`.
+21. **A socket write is not delivery** (cross-component review, 2026-10-09). `RelayClient` records the
+    wall-clock instant of the last inbound frame per connection (`last_inbound_at`, rolled into
+    `previous_last_inbound_at` when a new connection is established). After the first snapshot of a
+    connection, `_resend_late_results` re-sends every terminal result that was never written to a
+    socket **and** every one finished after the previous connection's last inbound frame
+    (`Store.journal_terminal_finished_after`), whether or not `sent` was set: a frame written into a
+    half-open socket never reached the relay, which by then has told the phone `outcome_unknown` and
+    accepts one correction per command. This also delivers the `failed/PC_OFFLINE` verdict for queued
+    commands dropped at disconnect, so the phone learns that nothing ran.

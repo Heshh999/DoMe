@@ -246,7 +246,7 @@ export function recoverySteps(code: string): string[] {
     case "DEVICE_LIMIT_REACHED":
       return ["Your plan limits how many PCs and phones are enabled.", "Choose which devices stay enabled under Devices, or upgrade to DoMe Pro when available."];
     case "OUTCOME_UNKNOWN":
-      return ["The PC lost its connection while running this.", "Check the PC's current state here before sending it again."];
+      return ["The PC's connection was lost before it reported a result, so this may or may not have run.", "Check the PC's current state here before sending it again; the PC reports what happened once it reconnects."];
     case "COMMAND_EXPIRED":
       return ["The command did not reach the PC in time. Nothing ran.", "Try again when the PC shows Online."];
     case "CONFIRMATION_EXPIRED":

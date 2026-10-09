@@ -6,7 +6,16 @@ import asyncio
 import uuid
 from typing import Any
 
-from dome_protocol import ProtocolError, dumps_compact, loads_strict, protocol_compatible, verify_and_parse_confirmation
+from dome_protocol import (
+    KeyRecord,
+    ProtocolError,
+    dumps_compact,
+    loads_strict,
+    parse_rfc3339,
+    protocol_compatible,
+    verify_and_parse_confirmation,
+    verify_hello_proof,
+)
 from sqlalchemy import select
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -84,6 +93,8 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
             await ws.close(code=CLOSE_PROTOCOL_ERROR)
             return
         conn = ControllerConn(ws, session_id, account_id, hello["kid"])
+        proof = hello.get("proof")
+        proof_error: ProtocolError | None = None
         async with svc.db() as db:
             async with db.begin():
                 ctrl = await db.scalar(
@@ -91,9 +102,40 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
                         Controller.account_id == account_id, Controller.kid == conn.kid, Controller.revoked_at.is_(None)
                     )
                 )
-                if ctrl is not None:
-                    conn.controller_id = ctrl.id
-                    ctrl.last_seen_at = utcnow()
+                if ctrl is not None and proof is not None:
+                    # rules.controller_socket_identity: a kid is public to everyone signed in to the account, so the
+                    # socket is bound to the paired controller only once the caller proves it holds the key.
+                    record = KeyRecord(
+                        controller_id=str(ctrl.id), account_id=str(account_id), jwk=dict(ctrl.public_jwk)
+                    )
+                    try:
+                        verified = verify_hello_proof(
+                            proof,
+                            lambda kid: record if kid == conn.kid else None,
+                            expected_kid=conn.kid,
+                            expected_account_id=str(account_id),
+                            registry=svc.registry,
+                            schemas=svc.schemas,
+                        )
+                        if not mgr.accept_hello_nonce(verified.nonce, parse_rfc3339(verified.payload["expires_at"])):
+                            raise ProtocolError("UNKNOWN_KEY", "hello proof replayed")
+                    except ProtocolError as exc:
+                        proof_error = exc
+                    else:
+                        conn.controller_id = ctrl.id
+                        ctrl.last_seen_at = utcnow()
+        if proof_error is not None:
+            log.warning("controller.hello_proof_rejected", code=proof_error.code, kid_prefix=conn.kid[:8])
+            await mgr.security_event(
+                account_id=account_id,
+                kind="controller_hello_proof_rejected",
+                severity="warning",
+                actor="controller",
+                detail={"code": proof_error.code, "kid_prefix": conn.kid[:8]},
+            )
+            await ws.send_text(dumps_compact(frames.error_frame("UNKNOWN_KEY", "hello proof rejected")))
+            await ws.close(code=CLOSE_REVOKED)
+            return
         mgr.register_controller(conn)
         mgr.release_slot()  # the registered socket is counted from here on
         slot_reserved = False

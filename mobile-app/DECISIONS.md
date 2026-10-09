@@ -123,3 +123,10 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     "pause youtube and shut down" was scanned from the end of the first match and the guard never
     fired (the injection tests passed only because every rule is `^…$`-anchored). Tests now assert the
     guard itself and its statelessness across repeated calls.
+21. **The relay client signs a hello proof on every connect** (cross-component review, 2026-10-09).
+    `RelayClient` takes a `helloProof(kid)` callback; the runtime answers with an ES256 envelope over
+    `hello_proof{kid, account_id, issued_at, expires_at, nonce}` built by `@dome/protocol`
+    (`buildHelloProofPayload`/`signHelloProof`, validated by the no-eval facade) when a session is
+    known, else `null` so the socket opens unbound. The relay binds the socket to the paired controller
+    only after verifying the proof (`rules.controller_socket_identity`); a bare kid, which every
+    account member can read from the device list, is no longer enough to observe this phone's PCs.

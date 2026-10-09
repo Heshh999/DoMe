@@ -20,14 +20,14 @@ paid launch.
 | Path | What it is | Tests (this environment) |
 | --- | --- | --- |
 | `shared/protocol/` | **Source of truth**: action registry (29 actions, 6 capabilities), plans, error codes, JSON Schemas, normative rules, cross-language fixtures. | — |
-| `shared/python/`, `shared/ts/` | One tested implementation per language of strict JSON, ES256 envelopes over exact bytes, registry/frame/result validation. | 128 · 82 (unit) |
-| `cloud-api/` | FastAPI backend + relay: OIDC sign-in (PKCE), PC linking, controllers, grants, pairing, command routing, plan limits, entitlement assertions. PostgreSQL + Alembic. | 86 (against real PostgreSQL and the dev identity provider) |
+| `shared/python/`, `shared/ts/` | One tested implementation per language of strict JSON, ES256 envelopes over exact bytes, registry/frame/result validation. | 132 · 84 (unit) |
+| `cloud-api/` | FastAPI backend + relay: OIDC sign-in (PKCE), PC linking, controllers, grants, pairing, command routing, plan limits, entitlement assertions. PostgreSQL + Alembic. | 89 (against real PostgreSQL and the dev identity provider) |
 | `pc-agent/` | Python Windows user agent: outbound WSS only, local authorization, coalescing queue, confirmation transaction, SQLite journal, action handlers, Windows adapters, Chrome Native Messaging host, tray. | 194 (unit, Linux, fake platform) |
 | `browser-extension/` | Chrome/Edge MV3 extension: YouTube player adapter with transition-observed Next, narrow host permission, Native Messaging to the agent, no eval. | 90 (unit, DOM fixtures) |
-| `mobile-app/` | React + TypeScript + Vite + Tailwind PWA (iPhone-first). Non-extractable WebCrypto controller keys, strict validation of every frame, honest status everywhere. | 205 (unit, fake socket + fake IndexedDB) |
+| `mobile-app/` | React + TypeScript + Vite + Tailwind PWA (iPhone-first). Non-extractable WebCrypto controller keys, strict validation of every frame, honest status everywhere. | 206 (unit, fake socket + fake IndexedDB) |
 | `tests/` | Cross-component suite: real agent process + real relay + real PostgreSQL + real OIDC login + fake extension. | 20 (integration, incl. a load smoke) |
 | `tools/dev-idp/` | Development-only OpenID Connect issuer, so local runs and tests never need an authentication bypass. | smoke |
-| `deploy/` | Container image, Fly.io configuration, Docker Compose for development, deployment notes. | not deployed yet |
+| `deploy/` | Container image, Fly.io configuration, Docker Compose for development, deployment notes. | written, not yet built or deployed |
 | `.github/workflows/` | CI for every suite above. | not run on GitHub yet |
 | `docs/` | Everything written for people: see the list below. | — |
 

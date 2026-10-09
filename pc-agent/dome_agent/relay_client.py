@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 import websockets
-from dome_protocol import ProtocolError, load_schemas, loads_strict
+from dome_protocol import ProtocolError, format_rfc3339, load_schemas, loads_strict, now_utc
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI
 
@@ -150,6 +150,11 @@ class RelayClient:
         self._manual_reconnect = asyncio.Event()
         self._attempt = 0
         self._last_rx = 0.0
+        # Wall-clock instants of the last frame received on the current and on the previous connection.
+        # The agent re-sends every result finished after `previous_last_inbound_at` once the new connection
+        # is up: a frame written into a half-open socket was never delivered (rules.late_results).
+        self.last_inbound_at: str | None = None
+        self.previous_last_inbound_at: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._send_lock = asyncio.Lock()
         self.connection_id: str | None = None
@@ -282,6 +287,7 @@ class RelayClient:
             return "retry"
         self._ws = ws
         self._last_rx = time.monotonic()
+        self.previous_last_inbound_at = self.last_inbound_at
         try:
             hello_ack = await self._handshake(ws)
             if hello_ack is None:
@@ -335,6 +341,7 @@ class RelayClient:
             log.error("first frame from relay was not hello_ack", type=frame["type"])
             return None
         self._last_rx = time.monotonic()
+        self.last_inbound_at = format_rfc3339(now_utc())
         return frame
 
     def _decode(self, raw: str | bytes) -> dict[str, Any] | None:
@@ -364,6 +371,7 @@ class RelayClient:
             except OSError:
                 return "retry"
             self._last_rx = time.monotonic()
+            self.last_inbound_at = format_rfc3339(now_utc())
             frame = self._decode(raw)
             if frame is None:
                 await self.send(error_frame(("MALFORMED_MESSAGE", "frame rejected by the agent")))

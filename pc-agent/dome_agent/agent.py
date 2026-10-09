@@ -345,11 +345,20 @@ class Agent:
         self.entitlement.schedule_refresh()
 
     async def _resend_late_results(self) -> None:
-        for row in self.store.journal_unsent_terminal():
+        """``rules.late_results``: after (re)connecting, re-send every terminal result that was never written to a
+        socket and every one finished after the last frame the previous connection received — a write into a
+        half-open socket is not delivery. The relay drops duplicates it already has and uses the rest to correct
+        the ``outcome_unknown`` it reported while the PC was unreachable."""
+        rows = {row.command_id: row for row in self.store.journal_unsent_terminal()}
+        since = self.relay.previous_last_inbound_at if self.relay is not None else None
+        if since is not None:
+            for row in self.store.journal_terminal_finished_after(since):
+                rows.setdefault(row.command_id, row)
+        for row in rows.values():
             assert row.frame is not None
             if await self._send(row.frame):
                 self.store.journal_mark_sent(row.command_id, True)
-                log.info("late result re-sent", command_id=row.command_id, state=row.state)
+                log.info("late result re-sent", command_id=row.command_id, state=row.state, was_sent=row.sent)
 
     # ----- commands -------------------------------------------------------------------------------------------------------
     async def _on_command(self, frame: dict[str, Any]) -> None:

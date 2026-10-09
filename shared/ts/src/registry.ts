@@ -170,6 +170,11 @@ export const schemas = {
     const v = refValidator("confirmation", "");
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
   },
+  /** relay-frames.schema.json#/$defs/hello_proof — the payload of hello.proof. */
+  validateHelloProofPayload(value: unknown): void {
+    const v = refValidator("relay-frames", "/$defs/hello_proof");
+    if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
+  },
   validateFrame(direction: FrameDirection, value: unknown): void {
     const v = refValidator("relay-frames", `/$defs/${direction}`);
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");

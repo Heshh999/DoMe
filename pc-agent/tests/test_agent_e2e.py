@@ -237,12 +237,15 @@ async def test_late_result_resent_after_reconnect(harness: AgentHarness, control
     await harness.wait_snapshot_applied()
     res = await harness.relay.expect("result", command_id=cid, timeout=15)
     assert res["state"] == "succeeded" and res["result"]["session"]["status"] == "paused"
-    # the queued-but-not-started command was failed PC_OFFLINE in the journal and NOT replayed/re-sent
-    row = harness.agent.store.journal_get(payload_of(queued)["command_id"])
+    # the queued-but-not-started command was failed PC_OFFLINE in the journal and never replayed; its
+    # journaled result is re-sent after the reconnect (rules.late_results: the relay reported outcome_unknown
+    # for every forwarded command when the socket dropped, and this correction tells the phone nothing ran)
+    queued_id = payload_of(queued)["command_id"]
+    row = harness.agent.store.journal_get(queued_id)
     assert row is not None and row.state == "failed" and row.error_code == "PC_OFFLINE"
     assert harness.fake.count("media_set_paused") == 1
-    queued_id = payload_of(queued)["command_id"]
-    assert all(not (f["type"] == "result" and f.get("command_id") == queued_id) for f in harness.relay.drain())
+    late = await harness.relay.expect("result", command_id=queued_id, timeout=10)
+    assert late["state"] == "failed" and late["error"]["code"] == "PC_OFFLINE"
 
 
 async def test_cancel_frame_cancels_queued_and_awaiting(harness: AgentHarness, controller: Controller) -> None:

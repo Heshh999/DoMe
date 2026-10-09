@@ -132,6 +132,7 @@ export interface Hello {
    * REQUIRED when component is 'controller': the installation's controller key id. The relay binds the socket to the controller row (session account, kid); every envelope on this socket must carry the same kid.
    */
   kid?: string;
+  proof?: DoMeSignedEnvelope1;
   component_version: string;
   /**
    * @minItems 1
@@ -201,6 +202,22 @@ export interface Hello {
         string,
         string
       ];
+}
+/**
+ * Controller sockets only. An ES256 envelope signed by the key named by `kid` whose payload is a `hello_proof` (#/$defs/hello_proof). The relay binds the socket to the controller row only after verifying it; a hello without a valid proof stays unbound (hello_ack without controller_id). Agents never send it (they authenticate with the PC access token).
+ */
+export interface DoMeSignedEnvelope1 {
+  v: 1;
+  alg: "ES256";
+  /**
+   * base64url RFC 7638 JWK thumbprint (SHA-256) of the signing public key
+   */
+  kid: string;
+  payload: string;
+  /**
+   * base64url, IEEE P1363 r||s, 64 bytes
+   */
+  sig: string;
 }
 /**
  * controller_id is present on controller sockets whose kid matched a non-revoked controller of the account; a socket without controller_id may only be used to poll pairing status via REST, never for subscribe/command/confirmation/cancel (those answer error GRANT_MISSING). pc_id is present on agent sockets and must equal the agent's stored identity.
@@ -1462,4 +1479,19 @@ export interface AgentRevokeController {
 export interface AgentRevoked {
   type: "revoked";
   reason: "pc_unlinked" | "pc_disabled_by_account" | "account_deleted" | "credential_rotated";
+}
+/**
+ * Payload of hello.proof. Proves to the relay that the socket's owner holds the controller key before the socket is bound to the paired controller (a bare kid is public to the whole account). Verifier checks: signature with the JWK the relay stored at pairing for (session account, kid); envelope.kid == kid == hello.kid; account_id == the session's account; issued_at/expires_at within the normal window with lifetime <= confirmation_challenge_lifetime_seconds; nonce not seen before on this relay (single use).
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "hello_proof".
+ */
+export interface HelloProof {
+  type: "hello_proof";
+  protocol_version: string;
+  kid: string;
+  account_id: Uuid;
+  issued_at: Timestamp;
+  expires_at: Timestamp;
+  nonce: string;
 }

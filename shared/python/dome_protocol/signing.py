@@ -8,16 +8,26 @@ Nothing from the payload is used before the signature is verified.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature,
+    encode_dss_signature,
+)
 
 from .errors import ProtocolError
-from .keys import b64url_decode, b64url_encode, jwk_from_public_key, kid_from_jwk, public_key_from_jwk
+from .keys import (
+    b64url_decode,
+    b64url_encode,
+    jwk_from_public_key,
+    kid_from_jwk,
+    public_key_from_jwk,
+)
 from .strict_json import DEFAULT_MAX_BYTES, DEFAULT_MAX_DEPTH, loads_strict
 
 ENVELOPE_FIELDS = {"v", "alg", "kid", "payload", "sig"}
@@ -36,7 +46,7 @@ class Envelope:
         return {"v": self.v, "alg": self.alg, "kid": self.kid, "payload": self.payload, "sig": self.sig}
 
     @classmethod
-    def from_dict(cls, raw: Any) -> "Envelope":
+    def from_dict(cls, raw: Any) -> Envelope:
         if not isinstance(raw, dict):
             raise ProtocolError("MALFORMED_MESSAGE", "envelope must be an object")
         if set(raw) != ENVELOPE_FIELDS:

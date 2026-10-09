@@ -150,6 +150,20 @@ class ConnectionManager:
     subs: dict[uuid.UUID, set[uuid.UUID]] = field(default_factory=dict)
     # sockets accepted but not yet past ``hello`` (they hold a slot so a hello-less flood cannot exceed the cap)
     pending_handshakes: int = 0
+    # hello-proof nonces still inside their validity window (rules.controller_socket_identity: single use)
+    hello_nonces: dict[str, datetime] = field(default_factory=dict)
+
+    # ----- hello proof ---------------------------------------------------------------------------
+    def accept_hello_nonce(self, nonce: str, expires_at: datetime) -> bool:
+        """Record a verified hello-proof nonce; False when it was already used while still valid."""
+        now = utcnow()
+        for seen, until in list(self.hello_nonces.items()):
+            if until < now:
+                del self.hello_nonces[seen]
+        if nonce in self.hello_nonces:
+            return False
+        self.hello_nonces[nonce] = expires_at + timedelta(seconds=30)
+        return True
 
     # ----- capacity ------------------------------------------------------------------------------
     def connection_count(self) -> int:
@@ -198,21 +212,18 @@ class ConnectionManager:
         pending = list(conn.inflight.values())
         conn.inflight.clear()
         for inf in pending:
-            if inf.executing_seen:
-                frame = frames.relay_result(
-                    inf.command_id,
-                    "outcome_unknown",
-                    error=frames.error_object("OUTCOME_UNKNOWN"),
-                    started_at=inf.received_at,
-                )
-                await self.finish_command(inf, "outcome_unknown", "OUTCOME_UNKNOWN", frame)
-            else:
-                frame = frames.relay_result(
-                    inf.command_id, "failed", error=frames.error_object("PC_OFFLINE"), started_at=inf.received_at
-                )
-                await self.finish_command(inf, "failed", "PC_OFFLINE", frame)
+            await self._terminate_unknown(inf)
         if pending:
-            log.info("agent.inflight_failed", pc_id=str(conn.pc_id), count=len(pending), reason=reason)
+            log.info("agent.inflight_unknown", pc_id=str(conn.pc_id), count=len(pending), reason=reason)
+
+    async def _terminate_unknown(self, inf: InFlight) -> None:
+        """``rules.terminal_result``: the command was written to the PC's socket, so nothing the relay sees can
+        prove it did not run — whether or not an ack arrived, the honest terminal state is outcome_unknown.
+        The agent's journaled result may correct it once (``rules.late_results``)."""
+        frame = frames.relay_result(
+            inf.command_id, "outcome_unknown", error=frames.error_object("OUTCOME_UNKNOWN"), started_at=inf.received_at
+        )
+        await self.finish_command(inf, "outcome_unknown", "OUTCOME_UNKNOWN", frame)
 
     async def disconnect_agent(self, pc_id: uuid.UUID, *, revoked_reason: str | None) -> None:
         """Close the PC's socket; with ``revoked_reason`` the agent is told its cloud access is gone."""
@@ -539,41 +550,23 @@ class ConnectionManager:
                 if now < deadline:
                     continue
                 conn.inflight.pop(inf.command_id, None)
-                if inf.executing_seen:
-                    frame = frames.relay_result(
-                        inf.command_id,
-                        "outcome_unknown",
-                        error=frames.error_object("OUTCOME_UNKNOWN"),
-                        started_at=inf.received_at,
-                    )
-                    await self.finish_command(inf, "outcome_unknown", "OUTCOME_UNKNOWN", frame)
-                else:
-                    frame = frames.relay_result(
-                        inf.command_id,
-                        "failed",
-                        error=frames.error_object("COMMAND_EXPIRED"),
-                        started_at=inf.received_at,
-                    )
-                    await self.finish_command(inf, "failed", "COMMAND_EXPIRED", frame)
+                await self._terminate_unknown(inf)
                 swept += 1
         return swept
 
     async def startup_sweep(self) -> int:
-        """Rows left in flight by a previous process can never complete through this relay."""
+        """Rows left in flight by a previous process can never complete through this relay. A row exists only
+        once routing reached the forwarding step, so the previous process may have written the command to the
+        PC: the honest terminal state is outcome_unknown (``rules.terminal_result``)."""
         now = utcnow()
         async with self.db() as db:
             async with db.begin():
                 r1 = await db.execute(
                     update(Command)
-                    .where(Command.state == "executing")
+                    .where(Command.state.in_(("created", "accepted", "executing", "awaiting_confirmation")))
                     .values(state="outcome_unknown", error_code="OUTCOME_UNKNOWN", finished_at=now)
                 )
-                r2 = await db.execute(
-                    update(Command)
-                    .where(Command.state.in_(("created", "accepted", "awaiting_confirmation")))
-                    .values(state="expired", error_code="COMMAND_EXPIRED", finished_at=now)
-                )
-        return int(getattr(r1, "rowcount", 0) or 0) + int(getattr(r2, "rowcount", 0) or 0)
+        return int(getattr(r1, "rowcount", 0) or 0)
 
     # ----- security events -----------------------------------------------------------------------
     async def security_event(

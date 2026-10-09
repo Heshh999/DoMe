@@ -25,6 +25,7 @@ import psycopg
 import pytest
 import uvicorn
 from dome_protocol import (
+    build_hello_proof_payload,
     dumps_compact,
     format_rfc3339,
     generate_pairing_code,
@@ -654,23 +655,44 @@ class ControllerSim:
         self.grant_id = final["grant_id"]
         return final
 
-    async def connect(self, *, origin: str | None = None, cookie: bool = True) -> dict[str, Any]:
+    def make_proof(self, *, account_id: str | None = None, kid: str | None = None) -> dict[str, Any]:
+        """The signed ``hello_proof`` the phone attaches to ``hello`` (rules.controller_socket_identity)."""
+        payload = build_hello_proof_payload(kid=kid or self.kid, account_id=account_id or self.browser.account_id)
+        proof: dict[str, Any] = sign_payload(self.key, dumps_compact(payload)).to_dict()
+        return proof
+
+    async def connect(
+        self,
+        *,
+        origin: str | None = None,
+        cookie: bool = True,
+        proof: bool | dict[str, Any] = True,
+        kid: str | None = None,
+        expect_ack: bool = True,
+    ) -> dict[str, Any]:
+        """Open the socket and say hello. ``proof=True`` signs a fresh proof with this installation's key;
+        a dict is sent verbatim (tests forge/replay); ``False`` sends a bare kid. ``kid`` overrides the
+        hello's kid (impostor tests). With ``expect_ack=False`` the first frame is returned unchecked."""
         headers = {"Origin": origin if origin is not None else self.env.origin}
         if cookie:
             headers["Cookie"] = f"dome_session={self.browser.session_cookie}"
         self.ws = await connect(self.env.ws_base + "/ws/controller", additional_headers=headers, max_size=1 << 20)
-        await self.send(
-            {
-                "type": "hello",
-                "component": "controller",
-                "kid": self.kid,
-                "component_version": "0.1.0-test",
-                "protocol_versions": ["1.0"],
-                "registry_version": REGISTRY.registry_version,
-            }
-        )
+        hello: dict[str, Any] = {
+            "type": "hello",
+            "component": "controller",
+            "kid": kid or self.kid,
+            "component_version": "0.1.0-test",
+            "protocol_versions": ["1.0"],
+            "registry_version": REGISTRY.registry_version,
+        }
+        if proof is True:
+            hello["proof"] = self.make_proof(kid=kid)
+        elif proof:
+            hello["proof"] = proof
+        await self.send(hello)
         ack = await self.recv()
-        assert ack["type"] == "hello_ack", ack
+        if expect_ack:
+            assert ack["type"] == "hello_ack", ack
         return ack
 
     async def send(self, frame: dict[str, Any]) -> None:

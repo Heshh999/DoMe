@@ -27,7 +27,7 @@ not Windows-device-tested, not iPhone-tested. See `docs/ACCEPTANCE.md` for the s
 # once: PostgreSQL on /tmp:54329 (make db-start db-create from the root), tools/dev-idp venv
 cd tests
 uv venv --python 3.12 && uv sync
-uv run pytest -q                 # ~3.5 minutes; last full run: 20 passed in 214 s
+uv run pytest -q                 # ~3.5 minutes; last full runs: 20 passed in 214 s and 191 s
 uv run pytest -q -k load         # the small load smoke only (prints numbers; never a pass/fail promise)
 ```
 

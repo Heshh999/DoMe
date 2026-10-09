@@ -61,7 +61,7 @@ def format_pairing_code(code: str) -> str:
 def pairing_code_handle(code: str) -> str:
     """Lookup handle sent to the backend by both devices: SHA-256 of the normalised code."""
     code = normalize_pairing_code(code)
-    return sha256_b64url(f"dome-pair-handle-v1|{code}".encode("utf-8"))
+    return sha256_b64url(f"dome-pair-handle-v1|{code}".encode())
 
 
 def pairing_verification_code(code: str, pairing_id: str, pc_id: str, kid: str) -> str:
@@ -72,21 +72,21 @@ def pairing_verification_code(code: str, pairing_id: str, pc_id: str, kid: str) 
     matches what the phone displays.
     """
     key = normalize_pairing_code(code).encode("ascii")
-    msg = f"dome-pair-verify-v1|{pairing_id}|{pc_id}|{kid}".encode("utf-8")
+    msg = f"dome-pair-verify-v1|{pairing_id}|{pc_id}|{kid}".encode()
     digest = hmac.new(key, msg, hashlib.sha256).digest()
     number = int.from_bytes(digest[:8], "big") % 1_000_000
     return f"{number:06d}"
 
 
 __all__ = [
-    "sha256_b64url",
-    "challenge_digest",
-    "command_digest",
-    "generate_pairing_code",
-    "normalize_pairing_code",
-    "format_pairing_code",
-    "pairing_code_handle",
-    "pairing_verification_code",
     "PAIRING_ALPHABET",
     "PAIRING_CODE_SYMBOLS",
+    "challenge_digest",
+    "command_digest",
+    "format_pairing_code",
+    "generate_pairing_code",
+    "normalize_pairing_code",
+    "pairing_code_handle",
+    "pairing_verification_code",
+    "sha256_b64url",
 ]

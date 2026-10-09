@@ -183,7 +183,7 @@
     },
     "OUTCOME_UNKNOWN": {
       "retryable": false,
-      "user_message": "The PC lost connection while running this. It may or may not have happened. Check the PC's current state before retrying."
+      "user_message": "The PC's connection was lost before it reported a result. This may or may not have happened. Check the PC's current state before retrying."
     },
     "PLATFORM_UNSUPPORTED": {
       "retryable": false,

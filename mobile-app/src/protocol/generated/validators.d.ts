@@ -46,6 +46,7 @@ export const params__youtube_set_volume: Validator;
 export const relay_frames__challenge: Validator;
 export const relay_frames__controller_to_relay: Validator;
 export const relay_frames__error: Validator;
+export const relay_frames__hello_proof: Validator;
 export const relay_frames__lifecycle_state: Validator;
 export const relay_frames__media_session: Validator;
 export const relay_frames__pc_connection_state: Validator;

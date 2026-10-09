@@ -35,10 +35,15 @@ async def test_agent_disconnect_terminates_inflight_commands(
         and results[executing]["origin"] == "relay"
         and results[executing]["error"]["code"] == "OUTCOME_UNKNOWN"
     )
-    assert results[accepted_only]["state"] == "failed" and results[accepted_only]["error"]["code"] == "PC_OFFLINE"
+    # forwarded but never acked executing: the PC may still run it from its queue (half-open socket), so the
+    # relay must not claim "nothing ran" — rules.terminal_result
+    assert (
+        results[accepted_only]["state"] == "outcome_unknown"
+        and results[accepted_only]["error"]["code"] == "OUTCOME_UNKNOWN"
+    )
     assert frames["pc_status"][0]["connection"] == "offline"
     rows = {r["command_id"]: r for r in (await alice.get("/v1/commands"))["commands"]}
-    assert rows[executing]["state"] == "outcome_unknown" and rows[accepted_only]["state"] == "failed"
+    assert rows[executing]["state"] == "outcome_unknown" and rows[accepted_only]["state"] == "outcome_unknown"
     kinds = [e["kind"] for e in (await alice.get("/v1/account/security-events?limit=20"))["events"]]
     assert "agent_disconnected" in kinds and "agent_connected" in kinds
     pcs = (await alice.get("/v1/pcs"))["pcs"]
@@ -95,10 +100,14 @@ async def test_in_flight_deadline_sweeper(
     for _ in range(2):
         r = await paired.recv_type("result", timeout=5)
         results[r["command_id"]] = r
-    assert results[not_acked]["state"] == "failed" and results[not_acked]["error"]["code"] == "COMMAND_EXPIRED"
+    # both were forwarded: whether or not an ack was seen, the relay cannot know they did not run
+    assert results[not_acked]["state"] == "outcome_unknown" and results[not_acked]["error"]["code"] == "OUTCOME_UNKNOWN"
     assert results[executing]["state"] == "outcome_unknown"
     assert not conn.inflight
-    # the agent's eventual result for the expired one is dropped (post-terminal, not outcome_unknown)
+    # the agent's eventual result corrects the unknown outcome exactly once (rules.late_results)
+    await online_agent.result(not_acked, "succeeded", result=online_agent.ping_result())
+    late = await paired.recv_type("result", command_id=not_acked)
+    assert late["origin"] == "agent" and late["state"] == "succeeded"
     await online_agent.result(not_acked, "succeeded", result=online_agent.ping_result())
     await expect_nothing(paired.ws)  # type: ignore[arg-type]
 
@@ -236,8 +245,9 @@ async def test_new_agent_connection_supersedes_old(
     online_agent.ws = None
     await online_agent.connect()
     assert await close_code(old_ws) == 4001  # type: ignore[arg-type]
+    # the superseded instance had received the command and may have run it: outcome_unknown, not "failed"
     r = await paired.recv_type("result", command_id=cid)
-    assert r["state"] == "failed" and r["error"]["code"] == "PC_OFFLINE"
+    assert r["state"] == "outcome_unknown" and r["error"]["code"] == "OUTCOME_UNKNOWN"
     cid = await paired.command(online_agent.pc_id, "system.ping")
     assert (await online_agent.serve_one())["command_id"] == cid
     assert (await paired.recv_type("result", command_id=cid))["state"] == "succeeded"
@@ -312,7 +322,7 @@ async def test_startup_sweep_closes_rows_from_a_previous_process(
     conn.inflight.pop(uuid.UUID(cid))  # simulate a row orphaned by a crashed relay
     assert await env.services.relay.startup_sweep() >= 1
     assert sql(env.database_url, "SELECT state, error_code FROM commands WHERE id = %s", (cid,))[0] == (
-        "expired",
-        "COMMAND_EXPIRED",
+        "outcome_unknown",
+        "OUTCOME_UNKNOWN",
     )
     await asyncio.sleep(0)

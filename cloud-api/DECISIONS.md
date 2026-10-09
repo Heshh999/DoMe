@@ -98,3 +98,18 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     `account_id`; an id that exists in another tenant is invisible and surfaces only as a primary-key
     conflict at insert time, answered with the same `COMMAND_ID_REUSED` — no cross-tenant oracle, and
     the probe costs the caller a fully verified command.
+26. **A controller socket is bound only after a signed hello proof** (cross-component review, 2026-10-09).
+    `GET /v1/controllers` reveals every paired phone's `kid` to the whole account, so a bare kid in `hello`
+    must not be enough to act as that phone: `controller_ws` verifies `hello.proof` (an ES256 envelope over
+    `hello_proof{kid, account_id, issued_at, expires_at, nonce}`, `rules.controller_socket_identity`) with
+    the JWK stored at pairing, binds the socket only then, answers a present-but-invalid proof with
+    `UNKNOWN_KEY` + close 4003 + a `controller_hello_proof_rejected` event, and keeps verified nonces in
+    `ConnectionManager.hello_nonces` until they expire (single use). No proof → unbound socket, as for an
+    unpaired installation.
+27. **Everything forwarded ends as `outcome_unknown` when the PC connection is lost** (same review).
+    `_fail_inflight`, `sweep_deadlines` and `startup_sweep` no longer distinguish "executing ack seen"
+    from "not yet acked": once a command was written to the agent's socket the relay cannot know whether
+    the PC ran it (a half-open socket keeps executing for up to 55 s), so `failed/PC_OFFLINE` and
+    `COMMAND_EXPIRED` are reserved for commands that were never forwarded. The agent's re-sent results
+    (`rules.late_results`) correct the unknown outcome exactly once, including the `PC_OFFLINE` verdict
+    for queued commands it dropped.

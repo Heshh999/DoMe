@@ -158,7 +158,9 @@ class Registry:
 
     def validate_result(self, action: str, result: Any) -> dict[str, Any]:
         """Validate an action's result object against its declared result schema."""
-        from .schemas import load_schemas  # local import: schemas depends on registry for contract_dir
+        from .schemas import (
+            load_schemas,  # local import: schemas depends on registry for contract_dir
+        )
 
         spec = self.get(action)
         if not isinstance(result, dict):
