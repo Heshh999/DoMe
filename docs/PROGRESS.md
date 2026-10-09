@@ -36,7 +36,7 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
 - Documents: new `docs/INPUT_CONTROL.md` and `docs/SUPPORT.md`; manual-input updates to SECURITY
   (new threats and controls), ACCEPTANCE (scenarios 18–25), TROUBLESHOOTING, WINDOWS_INSTALL,
   IPHONE_SETUP, PRODUCT_AND_PLANS, COST_MODEL, ARCHITECTURE, PROTOCOL.
-- Tests: `shared/python` 135, `shared/ts` 86, `cloud-api` CA_COUNT, `pc-agent` PA_COUNT,
+- Tests: `shared/python` 135, `shared/ts` 86, `cloud-api` 118, `pc-agent` 256 (+1 skipped as root),
   `browser-extension` 90, `mobile-app` 287, `brand` 29, `tests/` IT_COUNT.
   **Evidence tag: unit-tested and integration-tested (Linux, fake input adapter).** Nothing here is
   Windows-device-tested or iPhone-tested, so touchpad/keyboard are not yet advertised as working.
