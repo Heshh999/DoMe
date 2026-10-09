@@ -34,10 +34,28 @@ Items the review surfaced that are deliberately deferred, with the reason and th
    "the relay losing the controller's socket" as a session-ending trigger with reason
    `controller_disconnected`, but `relay_to_agent` has no frame for it (`CONTRACT_ISSUES.md` #12); the agent's
    3 s lease ends the session instead.
-9. **`PC_RECONNECTING` for input is not exercised by a test.** The window between an agent's `hello_ack` and
-   its first `grants_snapshot` is a single awaited send in the same coroutine, so the harness cannot observe
-   a batch landing inside it; the branch is covered by the same check commands use (unit-level reasoning,
-   not yet verified by an integration test).
+9. ~~**`PC_RECONNECTING` for input is not exercised by a test.**~~ Resolved. The earlier note claimed the window
+   between `register_agent` and `snapshot_sent = True` was a single awaited send; it actually spans a database
+   transaction (`db.get(PC)`, `build_snapshot` with its queries) plus the send, so a batch can land in it.
+   `tests/test_input_hardening.py::test_input_batch_before_first_snapshot_is_pc_reconnecting` holds the snapshot
+   build on an event, asserts `PC_RECONNECTING`, releases it and asserts the next batch is forwarded.
 10. **`.env.example` is a root file** and was not extended with `DOME_RATE_SUPPORT_TICKETS_PER_HOUR` /
     `DOME_SUPPORT_RESPONSE_EXPECTATION`; both default sensibly and are documented in this README.
-
+11. **An input flood still costs a parse and a schema validation per frame until the socket closes.** The
+    pre-database input bucket runs after `loads_strict` + `validate_frame` (the frame type is only known then).
+    DECISIONS #37 bounds the cost to about the refusal budget (400 frames plus 80/s) per socket before the 4000
+    close; a reconnect needs a fresh hello proof (signature check + database). Peeking at the frame type before the
+    strict parse would save work but duplicates the parser's trust boundary; not done.
+12. **Pairing-code redaction is heuristic.** A code typed with mixed separators (e.g. `K7Q2-M9XD 4HPR`) or split
+    across lines is not recognised; a 20-symbol code with no digit in lower case is not masked (probability
+    ~0.06 % for a random code). Diagnostics bundles come from the PWA, which never includes pairing material
+    (mobile-app), so this is the server's second line, not the first.
+13. **Support budget release is approximate under concurrency.** `SlidingWindowLimiter.release` drops the most
+    recent timestamp for the key, which may belong to a concurrent request of the same account; the count stays
+    exact, the window edge moves by the gap between the two requests (milliseconds).
+14. **Timing-based relay tests can flake on a loaded machine.** The input flood tests and the 1.0-build
+    `test_queue_depth_and_rate_limit` compare token-bucket outcomes with wall-clock send rates. While these fixes
+    were made, one full run out of about ten failed once without a captured cause (an earlier failure of
+    `test_queue_depth_and_rate_limit` followed a crashed flood test that left the server draining a backlog; that
+    test bug is fixed). If it recurs, swap the limiters for smaller ones in the test, as
+    `test_controller_frame_flood_is_throttled_without_growing_security_events` does.

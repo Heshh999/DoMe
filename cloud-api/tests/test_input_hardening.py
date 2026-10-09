@@ -95,13 +95,23 @@ async def test_sustained_input_flood_closes_socket_with_one_security_event(
                 closed_after = time.monotonic() - started
                 break
             # read what the relay answered so far without blocking the send schedule
-            with contextlib.suppress(TimeoutError):
+            try:
                 while True:
                     ctrl_frames.append(await ctrl.recv(timeout=0.002))
+            except TimeoutError:
+                pass
+            except ConnectionClosed:
+                closed_after = time.monotonic() - started
+                break
         assert closed_after is not None, "the flood never closed the socket"
         # sustained, not instantaneous: the refusal budget holds ~5 s at 2x the rate; at 7.5x it lasts ~2 s
         assert 1.0 <= closed_after <= 10.0, closed_after
-        assert await close_code(ctrl.ws) == 4000
+        try:
+            await ctrl.ws.send(_wire(ctrl, pc, sid, seq + 1))
+        except ConnectionClosed as exc:
+            assert exc.rcvd is not None and exc.rcvd.code == 4000, exc
+        else:
+            assert await close_code(ctrl.ws) == 4000
         ctrl.ws = None
         limited = [f for f in ctrl_frames if f["type"] == "error" and f["error"]["code"] == "RATE_LIMITED"]
         assert 1 <= len(limited) <= int(closed_after) + 2, len(limited)  # one per second at most

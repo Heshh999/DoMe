@@ -158,4 +158,54 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
 36. **The input `error` frames carry `ref_pc_id` exactly as subscription errors do.** `rules.terminal_result`
     reserves `error` frames for situations without a command id; a batch has none, so no `result` is ever
     emitted for it and the controller correlates by PC (and by the session it is driving).
-
+37. **A sustained input flood closes the socket (amends #29).** #29 kept every input overshoot open; review showed
+    that lets one paired phone stream valid-shaped `input_batch` frames at wire speed, each costing a strict parse
+    and schema validation on the single relay process. Refusals of the per-socket input bucket now also drain a
+    second, leaky per-socket budget (`RateLimiters.input_refusals`: 2x `input_batches_per_second` sustained,
+    capacity 5 s of that, i.e. 80/s and 400). Emptying it closes the socket (4000) with one `controller_throttled`
+    event, `detail.reason = input_flood` (the command path's event now carries `reason = frame_flood`). A token
+    bucket rather than a 5-second window: a touchpad at up to 3x the budget (40 accepted + 80 refused per second)
+    never closes, a wire-speed burst of 400 frames never closes, anything well above that closes in proportion to
+    how far above it is. Input refusals are counted separately from command refusals (`input_refused`), so an
+    overshooting drag can never push a later command flood check over its limit.
+38. **RATE_LIMITED from the per-controller input budget is throttled per socket.** A batch that passes the socket
+    bucket but not the controller's `input_rate_limit` (two sockets of one phone) cost the DB checks, an error frame
+    and a log line every time. `_reject_input` now shares the socket's once-per-second notice
+    (`ControllerConn.input_notice_due`) with the socket bucket: further refusals in that second send nothing, log
+    nothing and write nothing. The per-batch DB work itself is still bounded by the socket bucket (KNOWN_ISSUES #7).
+39. **Input-session frames reach each socket once; owners are learned only for live grants.**
+    `send_input_frame_to_controller` returns the connection ids it wrote and the subscriber broadcast skips them.
+    Learning an owner (any non-`ended` frame naming a controller the connection does not already map to the
+    session) requires the controller to be in the account, not revoked, and to hold a live grant on this PC;
+    `ended` only requires account membership so a just-revoked controller's sockets and the subscribers still hear
+    that its session ended. `AgentConn.input_sessions` keeps the latest session per controller and at most
+    `MAX_AGENT_INPUT_SESSIONS = 4` entries (one live session per PC is the rule; the slack covers a takeover whose
+    `ended` is still in flight). Agent-attributed `relay_frame_rejected` rows go through
+    `ConnectionManager.agent_rejection_event`, a per-PC sliding window sized like the controller socket cap, with
+    one `relay_events_throttled` row on the first suppression (this also covers invalid `confirmation_required`).
+40. **Diagnostics have their own stricter redactor (amends #33).** The log key list is the wrong tool for what
+    spec §11A forbids in diagnostics. `redact_diagnostics` now masks, on top of the log keys, the keys that carry
+    typed text, input events, URLs, search queries, pairing material, clipboard and video ids (plus `_url`, `_href`,
+    `_text`, `_query` suffixes); strings get absolute URLs reduced to scheme + host (userinfo dropped), bare
+    `host/path` reduced to the host, the token patterns and a pairing-code pass. Pairing codes: 20 Crockford
+    symbols contiguous, or 4x5 / 5x4 groups with one consistent separator (`-`, `_`, `.`, space); within a longer
+    run of groups each window is checked and a uniform-case window is preferred ("code K7Q2 M9XD 4HPR 8WTV ZC3N"
+    keeps "code"); a candidate needs a digit, or upper case with separators, so ordinary lower-case prose never
+    matches. Over-redaction is the accepted failure mode (a shouted run of five four-letter words is masked;
+    UUIDs were already masked by the 32+ run rule). JSON embedded as a string is parsed and redacted by key too.
+    The ticket *message* gets the token and pairing-code pass but keeps URLs: it is the customer's own words and
+    the spec's URL rule is about default diagnostics. `text` joins the log `REDACT_EXACT` set
+    (rules.input_sessions (5)).
+41. **The support ticket budget is reserved, not checked (amends #35).** `exhausted()` before the first await
+    and `hit()` after the flush let concurrent posts all pass (12 stored against a limit of 10 in review's probe).
+    The handler now calls `allow()` — check and record in one synchronous step on the event loop — before reading
+    the body, and `release()`s the reservation on any exception before the commit (malformed bodies, 503, a failed
+    commit), so #35's "failures do not eat the budget" still holds. `account_id` is read once up front, and a
+    reference collision is retried inside `db.begin_nested()` (a SAVEPOINT with a fresh `SupportTicket`) instead of
+    rolling back the whole session, so no expired ORM attribute is touched on the retry path.
+42. **1.0 subscribers get state frames without the 1.1 pc_state keys.** The compatibility rule rejects unknown
+    fields, so forwarding an updated agent's `state` unchanged would break a stale 1.0 PWA's live view.
+    `frames.legacy_state_frame` drops `foreground_app`, `input_session` and `input_restricted`
+    (`manager.PC_STATE_1_1_FIELDS`) for sockets that did not announce 1.1, live and for the cached frame sent on
+    subscribe. State frames are unsigned routing data, so removing keys does not touch anything the phone verifies;
+    1.1 sockets still get the agent's frame unchanged.

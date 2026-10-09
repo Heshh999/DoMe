@@ -58,8 +58,13 @@ No `commands` row, no result, no security event and no log line per accepted bat
 with `ref_pc_id` (no command id exists) and at most one `input_rejected` security event per minute per
 controller, further bounded by the per-socket event cap. Before any database work, `input_batch` frames are
 charged to their own per-socket bucket (`version.json → limits.input_batches_per_second`, burst = plan
-burst) instead of the command frame bucket; a flood is answered with `RATE_LIMITED` at most once per second
-and never closes the socket (a phone that overshoots while dragging keeps its session).
+burst) instead of the command frame bucket. Refusals are answered with `RATE_LIMITED` at most once per second
+(also when the per-controller budget of step 7 refuses, e.g. for a second socket of the same phone: no frame and
+no log line per refused batch). Ordinary overshoot while dragging keeps the session; a sustained flood — refusals
+above twice the input rate for about five seconds (a leaky refusal budget of 80/s with 400 capacity), which no
+touchpad reaches — closes the socket with 4000 and exactly one `controller_throttled` security event
+(`detail.reason: input_flood`), as the command path does (integration-tested: 300 batches/s closes after
+~2 s; 100 batches/s for 3 s and a 400-frame wire-speed burst keep the socket).
 
 Commands now check the grant with `ActionSpec.satisfied_by`, so `input.session_start` /
 `input.session_stop` run on a keyboard-only grant as well as a pointer-only one (integration-tested).
@@ -70,16 +75,28 @@ Commands now check the grant with `ActionSpec.satisfied_by`, so `input.session_s
   agent announced in `input_session` (the agent issues session ids); an ack for a session the agent never
   announced on this connection is dropped, never guessed.
 - `input_session` → the owner's sockets **and** the PC's subscribers (other phones see ownership change);
-  `ended` forgets the owner mapping. The named controller must belong to the PC's account
-  (`relay_frame_rejected` event otherwise).
+  every socket gets each frame once, also an owner socket that is subscribed to the PC (integration-tested).
+  `ended` forgets the owner mapping. The named controller must belong to the PC's account, and to *become* an
+  owner it must be live (not revoked) and hold a live grant on this PC (`relay_frame_rejected`, reason
+  `controller_not_in_account` / `no_live_grant`, otherwise). The owner map is bounded: the latest session per
+  controller, at most 4 entries per agent connection (unit-tested).
+- Agent-attributed `relay_frame_rejected` rows (`input_session`, `grant_update`, `confirmation_required`) are capped
+  per PC at `DOME_RELAY_SECURITY_EVENTS_PER_CONNECTION_PER_MINUTE`; the first suppressed one becomes a single
+  `relay_events_throttled` row (integration-tested).
 - `grant_update{controller_id, kid, capabilities}` → the controller must belong to the PC's account with
   that kid and hold a live grant on this PC; the grant row's capabilities are replaced with exactly the
   given list (widen or narrow), a `grant_updated` security event records `added` / `removed`, a fresh
   `grants_snapshot` is pushed to the PC and subscribers get a `pc_status` nudge. `GET /v1/pcs/{id}/grants`
   shows the new list. `grant_update` cannot create a grant or touch another PC's grant.
-- `pc_state.foreground_app`, `pc_state.input_session`, `pc_state.input_restricted` pass through unchanged
+- `pc_state.foreground_app`, `pc_state.input_session`, `pc_state.input_restricted` pass through unchanged to 1.1
+  subscribers
   with the `state` frame (schema-validated on receipt).
-- 1.0 peers never receive 1.1 frames: `input_ack` / `input_session` skip sockets that announced only 1.0.
+- 1.0 peers never receive 1.1 frames: `input_ack` / `input_session` skip sockets that announced only 1.0, and a
+  1.0 subscriber's copy of a `state` frame (live and the cached one sent on subscribe) has the three 1.1-only
+  `pc_state` keys removed, because 1.0 peers reject unknown fields (integration-tested).
+- `PC_RECONNECTING`: a batch that arrives after the agent's `hello` but before its first `grants_snapshot` was sent
+  is refused with `PC_RECONNECTING` and forwarded once the snapshot is out (integration-tested by holding the
+  snapshot build).
 
 **Pairing**: `requested_capabilities` may include `pointer` and `keyboard`; granted = PC's list ∩ requested as
 before. Existing grants never gain them implicitly (`rules.grant_update`).
@@ -98,11 +115,21 @@ integration-tested):
 | `GET /v1/support/tickets` | the account's own tickets, newest first, ≤ 50 (`support_tickets_response`). |
 | `GET /v1/support/tickets/{id}` | own ticket or 404 (another account's id is indistinguishable from a missing one). |
 
-Before storage the diagnostics text goes through the log redactor twice over: the structural key rules
-(`token`, `code_hash`, `title`, `access_token`, …; JSON input) and a token-pattern pass over every string
-(JWT-like triples, `Bearer …`, Stripe-style keys, base64url/hex runs ≥ 32 characters) — the message gets
-the pattern pass as well (DECISIONS #33). `response_expectation` is present only when
-`DOME_SUPPORT_RESPONSE_EXPECTATION` is configured; there is no default promise. No support route can
+Before storage the diagnostics text goes through a dedicated diagnostics redactor (`redact_diagnostics`,
+DECISIONS #33, #40), the server's last check before a durable row: the log key rules (`token`, `code_hash`,
+`title`, `access_token`, `email`, …) plus the keys that carry what spec §11A forbids — `text`, `events`,
+`composer`, `typed`, `keys`, `url`/`href`/`link`, `query`/`search`, `pairing`/`pairing_code`, `clipboard`,
+`video_id` and anything ending in `_url`/`_href`/`_text`/`_query` — then every remaining string: absolute URLs
+reduced to scheme + host (userinfo dropped), bare `host/path` to the host, token-shaped substrings (JWT-like
+triples, `Bearer …`, Stripe-style keys, base64url/hex runs ≥ 32 characters) and pairing codes (20 Crockford
+symbols, contiguous or grouped 4×5 / 5×4 with one separator) masked; JSON embedded as a string gets the key
+rules too. Non-JSON text gets the string pass only. The message gets the token and pairing-code pass (not the
+URL reduction: it is the customer's own words). Integration-tested with a typed-text input event, a YouTube
+watch URL and pairing codes that never reach `support_tickets.diagnostics_redacted`; over-redaction (e.g. a
+shouted run of five four-letter upper-case words) is accepted. `response_expectation` is present only when
+`DOME_SUPPORT_RESPONSE_EXPECTATION` is configured; there is no default promise. The hourly budget is reserved
+before the request body is read (so concurrent submissions cannot overshoot it: 40 concurrent posts store exactly
+10, integration-tested) and given back if nothing is stored; a reference collision is retried inside a SAVEPOINT. No support route can
 execute, queue or forward anything to a PC, and operators have no route yet (`KNOWN_ISSUES.md` #6). A
 failed write is a 5xx, never a reference: the client must not claim receipt without one.
 
@@ -156,7 +183,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_RELAY_SWEEP_INTERVAL_SECONDS` | `5` | In-flight deadline sweeper period. |
 | `DOME_RELAY_HELLO_TIMEOUT_SECONDS` | `10` | Time a socket has to send `hello`. |
 | `DOME_RELAY_CONTROLLER_FRAMES_PER_MINUTE` / `DOME_RELAY_CONTROLLER_FRAME_BURST` | `600` / `120` | Inbound frames one controller socket may send (token bucket, checked before any database work). Refused frames are answered `RATE_LIMITED` from memory; after `burst` refusals the socket is closed (4000) with one `controller_throttled` security event. |
-| `DOME_RELAY_SECURITY_EVENTS_PER_CONNECTION_PER_MINUTE` | `20` | Security-event rows one controller socket may write per minute (`command_rejected`, `subscribe_refused`); the first suppressed one becomes a single `relay_events_throttled` row. |
+| `DOME_RELAY_SECURITY_EVENTS_PER_CONNECTION_PER_MINUTE` | `20` | Security-event rows one controller socket may write per minute (`command_rejected`, `subscribe_refused`, `input_rejected`), and `relay_frame_rejected` rows one PC may cause per minute; the first suppressed one becomes a single `relay_events_throttled` row. |
 | `DOME_RELAY_URL` / `DOME_API_URL` | derived from the public origin | URLs handed to the agent at link time (`wss://…/ws/agent`, `https://…`). |
 | `DOME_PC_ACCESS_TOKEN_SECONDS` | `3600` | Lifetime of PC access tokens. |
 | `DOME_RATE_LINK_START_PER_HOUR` | `10` | `POST /v1/agent-link/start` per client IP. |
@@ -210,9 +237,13 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy dome_api tests
 ```
 
-Current counts (2026-10-09, protocol 1.1 build): **106 passed** (89 from the 1.0 build, all unchanged in
-expectation, plus 13 in `tests/test_input_routing.py` and 4 in `tests/test_support_tickets.py`); mypy
-strict clean on 60 files; ruff clean. The harness (`tests/conftest.py`, shared with the repository-level
+Current counts (2026-10-09, protocol 1.1 build after the review fixes): **117 passed** (89 from the 1.0 build,
+all unchanged in expectation; 13 in `tests/test_input_routing.py`; 6 in `tests/test_support_tickets.py`, whose
+bundle and redaction-helper tests gained typed-text / URL / pairing-code assertions, plus concurrent-budget and
+reference-collision tests; 9 in `tests/test_input_hardening.py` for the flood close, per-socket RATE_LIMITED
+throttling, single delivery to a subscribed owner, live-grant owners and the bounded owner map, the per-PC
+rejection cap, 1.0 state stripping and `PC_RECONNECTING`); mypy strict clean on 61 files; ruff clean. The flood
+tests are timing-based (rate-controlled senders against the real limits) and passed in repeated full runs. The harness (`tests/conftest.py`, shared with the repository-level
 `tests/`) gained `ControllerSim.input_envelope` / `input_batch`, `AgentSim.input_ack` / `input_session` /
 `grant_update`, `new_input_session_id()` and a `protocol_versions` parameter on both `connect()`s; both
 simulators now announce `("1.0", "1.1")` by default. No existing test's expectation changed.
@@ -230,7 +261,7 @@ frame against `relay-frames.schema.json`.
 - One process per deployment (ADR-0001 D1). The connection manager is in-memory; a restart marks
   in-flight commands `outcome_unknown` / `expired` (start-up sweep) and agents reconnect with backoff.
 - Logs are JSON on stderr. Keys such as `token`, `pc_credential`, `code_hash`, `challenge_text`,
-  `payload`, `sig`, `title`, `email` and anything ending in `_token/_secret/_code/_credential/_key`
+  `payload`, `sig`, `title`, `email`, `text` (typed keyboard content) and anything ending in `_token/_secret/_code/_credential/_key`
   are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
   beyond the error code), so typed text exists only in transit through this process.
 - Migrations: `0001_initial`, `0002_support_tickets`. `dome-api` applies them at start-up.

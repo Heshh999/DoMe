@@ -70,3 +70,9 @@ next protocol MINOR bump.
     limit.** Not a contract defect, but worth noting: the support endpoint reads up to 48 KiB. Proposed: a
     `limits.max_rest_body_bytes` (or a per-def hint) so clients and servers size buffers from one place.
 
+16. **The contract does not say what a relay forwards to a 1.0 peer when an updated agent adds 1.1 `pc_state`
+    fields.** The compatibility rule ("Unknown fields are rejected, not ignored") means a 1.0 phone rejects the
+    whole `state` frame. Workaround (DECISIONS #42): the relay strips `foreground_app`, `input_session` and
+    `input_restricted` from state frames sent to sockets that did not announce 1.1 (state frames are unsigned).
+    Proposed: state in `rules.controller_socket_identity` (or the compatibility section) that the relay downgrades
+    unsigned routing frames to the peer's announced version, and list the fields per MINOR version.
