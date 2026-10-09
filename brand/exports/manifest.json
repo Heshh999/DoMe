@@ -1,0 +1,209 @@
+{
+  "generated_by": "brand/scripts/export.mjs",
+  "note": "Regenerate with `node brand/scripts/export.mjs`; `--check` fails on drift.",
+  "files": [
+    {
+      "file": "pwa/icon-192.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 192,
+      "height": 192
+    },
+    {
+      "file": "pwa/icon-512.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 512,
+      "height": 512
+    },
+    {
+      "file": "pwa/icon-192-maskable.png",
+      "source": "icon.svg",
+      "mode": "bleed",
+      "width": 192,
+      "height": 192,
+      "background": "#0b0f17",
+      "glyph_scale": 0.85
+    },
+    {
+      "file": "pwa/icon-512-maskable.png",
+      "source": "icon.svg",
+      "mode": "bleed",
+      "width": 512,
+      "height": 512,
+      "background": "#0b0f17",
+      "glyph_scale": 0.85
+    },
+    {
+      "file": "pwa/apple-touch-icon-180.png",
+      "source": "icon.svg",
+      "mode": "bleed",
+      "width": 180,
+      "height": 180,
+      "background": "#0b0f17",
+      "glyph_scale": 1
+    },
+    {
+      "file": "favicon/favicon-16.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "file": "favicon/favicon-32.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 32,
+      "height": 32
+    },
+    {
+      "file": "favicon/favicon-48.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 48,
+      "height": 48
+    },
+    {
+      "file": "favicon/favicon.ico",
+      "source": "icon.svg",
+      "mode": "tile",
+      "sizes": [
+        16,
+        32,
+        48
+      ]
+    },
+    {
+      "file": "windows/tray-16.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "file": "windows/tray-32.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 32,
+      "height": 32
+    },
+    {
+      "file": "windows/tray-48.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 48,
+      "height": 48
+    },
+    {
+      "file": "windows/tray-256.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 256,
+      "height": 256
+    },
+    {
+      "file": "windows/tray-mono-light-16.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 16,
+      "height": 16,
+      "color": "#ffffff"
+    },
+    {
+      "file": "windows/tray-mono-light-32.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 32,
+      "height": 32,
+      "color": "#ffffff"
+    },
+    {
+      "file": "windows/tray-mono-light-48.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 48,
+      "height": 48,
+      "color": "#ffffff"
+    },
+    {
+      "file": "windows/tray-mono-light-256.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 256,
+      "height": 256,
+      "color": "#ffffff"
+    },
+    {
+      "file": "windows/tray-mono-dark-16.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 16,
+      "height": 16,
+      "color": "#101522"
+    },
+    {
+      "file": "windows/tray-mono-dark-32.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 32,
+      "height": 32,
+      "color": "#101522"
+    },
+    {
+      "file": "windows/tray-mono-dark-48.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 48,
+      "height": 48,
+      "color": "#101522"
+    },
+    {
+      "file": "windows/tray-mono-dark-256.png",
+      "source": "icon-mono.svg",
+      "mode": "mono",
+      "width": 256,
+      "height": 256,
+      "color": "#101522"
+    },
+    {
+      "file": "windows/dome.ico",
+      "source": "icon.svg",
+      "mode": "tile",
+      "sizes": [
+        16,
+        32,
+        48,
+        256
+      ]
+    },
+    {
+      "file": "wordmark/wordmark-504.png",
+      "source": "wordmark.svg",
+      "mode": "wordmark",
+      "width": 504,
+      "height": 128
+    },
+    {
+      "file": "wordmark/wordmark-1008.png",
+      "source": "wordmark.svg",
+      "mode": "wordmark",
+      "width": 1008,
+      "height": 256
+    },
+    {
+      "file": "wordmark/wordmark-dark-504.png",
+      "source": "wordmark-dark.svg",
+      "mode": "wordmark",
+      "width": 504,
+      "height": 128
+    },
+    {
+      "file": "wordmark/wordmark-dark-1008.png",
+      "source": "wordmark-dark.svg",
+      "mode": "wordmark",
+      "width": 1008,
+      "height": 256
+    }
+  ]
+}

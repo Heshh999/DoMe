@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DoMe wordmark lockup for dark backgrounds: the dome glyph plus the letters D o M e drawn as
+     monoline strokes (stroke 6 on a 64-unit grid, cap height 40, x-height 28, baseline y=52).
+     No font is involved; the letterforms are paths. Editable source; exports via scripts/export.mjs. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 252 64" width="252" height="64" role="img" aria-labelledby="t">
+  <title id="t">DoMe</title>
+  <desc>The DoMe dome glyph followed by the word DoMe in rounded monoline letters.</desc>
+  <g id="glyph">
+    <path d="M11 40A20 20 0 0 1 51 40" fill="none" stroke="#5ee1c0" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="31" cy="40" r="6.5" fill="#5ee1c0"/>
+  </g>
+  <g id="letters" fill="none" stroke="#eef2f8" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- D -->
+    <path d="M71 12V52"/>
+    <path d="M71 12H83A20 20 0 0 1 83 52H71"/>
+    <!-- o -->
+    <circle cx="132" cy="38" r="14"/>
+    <!-- M -->
+    <path d="M161 52V12L179 40L197 12V52"/>
+    <!-- e -->
+    <path d="M212 38H240"/>
+    <path d="M240 38A14 14 0 1 0 237.5 46"/>
+  </g>
+</svg>

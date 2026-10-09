@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- DoMe app icon, standard tile. Editable source; exports come from scripts/export.mjs.
+     Subset: rect/circle/path(M L H V A Z)/line, #rrggbb or currentColor, round caps/joins only. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t">
+  <title id="t">DoMe</title>
+  <desc>A teal dome arc over a dot on a night-blue rounded tile.</desc>
+  <rect id="tile" x="0" y="0" width="64" height="64" rx="14" fill="#0b0f17"/>
+  <g id="glyph">
+    <path d="M15 39A17 17 0 0 1 49 39" fill="none" stroke="#5ee1c0" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="32" cy="39" r="5.5" fill="#5ee1c0"/>
+  </g>
+</svg>
