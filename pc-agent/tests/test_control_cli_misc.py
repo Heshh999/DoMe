@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -176,3 +177,42 @@ def test_state_frame_matches_schema(settings: Settings) -> None:
         store.close()
     load_schemas().validate_def("relay-frames", "pc_state", snap)
     assert snap["platform"] == "development" and snap["media_sessions"][0]["title"].__len__() <= 200
+
+
+def test_cli_unlink_keeps_the_key_and_new_key_replaces_it(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A test-kit start can be a new account while the old one still owns this PC's key, and the
+    service never moves a key between accounts: ``unlink --new-key`` makes the next link use a fresh key."""
+    from dome_agent.identity import Identity, LinkRecord
+
+    def link() -> str:
+        identity = Identity(settings.state_dir)
+        kid = identity.kid
+        identity.store_link(
+            LinkRecord(
+                pc_id=str(uuid.uuid4()),
+                account_id=str(uuid.uuid4()),
+                pc_name="Kit PC",
+                relay_url="wss://relay.example/ws/agent",
+                api_url="https://api.example",
+                linked_at="2026-10-09T00:00:00Z",
+            ),
+            "credential",
+        )
+        assert Identity(settings.state_dir).is_linked
+        return kid
+
+    state = ["--state-dir", str(settings.state_dir)]
+    first = link()
+    assert cli.main([*state, "unlink"]) == 0
+    assert not Identity(settings.state_dir).is_linked
+    assert Identity(settings.state_dir).kid == first  # plain unlink keeps the PC's identity key
+
+    second = link()
+    assert second == first
+    assert cli.main([*state, "unlink", "--new-key"]) == 0
+    assert "identity key was discarded" in capsys.readouterr().out
+    assert not Identity(settings.state_dir).is_linked
+    assert Identity(settings.state_dir).kid != first  # the next link registers a new key
+    assert cli.main([*state, "unlink", "--new-key"]) == 0  # idempotent when nothing is linked

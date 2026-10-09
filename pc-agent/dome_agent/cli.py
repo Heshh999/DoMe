@@ -220,11 +220,13 @@ def cmd_unlink(args: argparse.Namespace) -> int:
     from .identity import Identity
 
     identity = Identity(settings.state_dir)
-    if not identity.link and identity.read_credential() is None:
+    if not identity.link and identity.read_credential() is None and not args.new_key:
         print("This PC is not linked.")
         return 0
-    identity.unlink()
+    identity.unlink(new_key=args.new_key)
     print("Unlinked. Local grants were kept for inspection; pair again after re-linking.")
+    if args.new_key:
+        print("The PC identity key was discarded; the next link registers a new one.")
     return 0
 
 
@@ -744,7 +746,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=None, help="give up after N seconds (default: code lifetime)")
     p.set_defaults(fn=cmd_link)
 
-    sub.add_parser("unlink", help="forget the account link").set_defaults(fn=cmd_unlink)
+    p = sub.add_parser("unlink", help="forget the account link")
+    p.add_argument(
+        "--new-key",
+        action="store_true",
+        help="also discard this PC's identity key, so the next link (for example to another account) uses a new one",
+    )
+    p.set_defaults(fn=cmd_unlink)
 
     p = sub.add_parser("pair", help="pair a phone")
     p.add_argument(

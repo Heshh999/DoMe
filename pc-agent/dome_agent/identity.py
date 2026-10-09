@@ -140,13 +140,20 @@ class Identity:
         secret_files.delete_secret_file(self._credential_path)
         log.warning("PC credential discarded; re-link required")
 
-    def unlink(self) -> None:
+    def unlink(self, *, new_key: bool = False) -> None:
+        """Forget the account link. ``new_key`` also deletes the PC's identity key, so the next link
+        registers a fresh key: needed when the old key stays registered to a PC row in another account
+        (the service refuses to move a key between accounts)."""
         self.discard_credential()
         try:
             self._link_path.unlink()
         except FileNotFoundError:
             pass
         self._link = None
+        if new_key:
+            secret_files.delete_secret_file(self._key_path)
+            self._key = None
+            log.warning("PC identity key discarded; the next link registers a new key")
 
     def status_summary(self) -> dict[str, object]:
         return {
