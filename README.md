@@ -25,7 +25,7 @@ useful forever; Pro (routines, layouts, more devices) comes at paid launch.
 | `pc-agent/` | Python Windows user agent: outbound WSS only, local authorization, coalescing queue, confirmation transaction, SQLite journal, action handlers, manual-input session manager and SendInput adapter, single instance, Windows adapters, Chrome Native Messaging host, tray. | 256 (+1 skipped as root) (unit, Linux, fake platform) |
 | `browser-extension/` | Chrome/Edge MV3 extension: YouTube player adapter with transition-observed Next, narrow host permission, Native Messaging to the agent, no eval. | 90 (unit, DOM fixtures) |
 | `mobile-app/` | React + TypeScript + Vite + Tailwind PWA (iPhone-first): remote, touchpad and keyboard, Health screen, support, Now Playing. Non-extractable WebCrypto controller keys, strict validation of every frame, honest status everywhere. | 287 (unit, jsdom) |
-| `tests/` | Cross-component suite: real agent process + real relay + real PostgreSQL + real OIDC login + fake extension and fake input adapter. | IT_COUNT (integration, incl. manual input and a load smoke) |
+| `tests/` | Cross-component suite: real agent process + real relay + real PostgreSQL + real OIDC login + fake extension and fake input adapter. | 23 (integration, incl. manual input and a load smoke) |
 | `tools/dev-idp/` | Development-only OpenID Connect issuer, so local runs and tests never need an authentication bypass. | smoke |
 | `brand/` | Original DoMe icon and wordmark (editable SVG), export script, `BRAND.md`. | 29 (unit) + export drift check |
 | `deploy/` | Container image, Fly.io configuration, Docker Compose for development, deployment notes. | written, not yet built or deployed |
