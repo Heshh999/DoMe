@@ -103,7 +103,7 @@
       "height": 256
     },
     {
-      "file": "windows/tray-mono-light-16.png",
+      "file": "windows/tray-mono-on-dark-16.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 16,
@@ -111,7 +111,7 @@
       "color": "#ffffff"
     },
     {
-      "file": "windows/tray-mono-light-32.png",
+      "file": "windows/tray-mono-on-dark-32.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 32,
@@ -119,7 +119,7 @@
       "color": "#ffffff"
     },
     {
-      "file": "windows/tray-mono-light-48.png",
+      "file": "windows/tray-mono-on-dark-48.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 48,
@@ -127,7 +127,7 @@
       "color": "#ffffff"
     },
     {
-      "file": "windows/tray-mono-light-256.png",
+      "file": "windows/tray-mono-on-dark-256.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 256,
@@ -135,7 +135,7 @@
       "color": "#ffffff"
     },
     {
-      "file": "windows/tray-mono-dark-16.png",
+      "file": "windows/tray-mono-on-light-16.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 16,
@@ -143,7 +143,7 @@
       "color": "#101522"
     },
     {
-      "file": "windows/tray-mono-dark-32.png",
+      "file": "windows/tray-mono-on-light-32.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 32,
@@ -151,7 +151,7 @@
       "color": "#101522"
     },
     {
-      "file": "windows/tray-mono-dark-48.png",
+      "file": "windows/tray-mono-on-light-48.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 48,
@@ -159,7 +159,7 @@
       "color": "#101522"
     },
     {
-      "file": "windows/tray-mono-dark-256.png",
+      "file": "windows/tray-mono-on-light-256.png",
       "source": "icon-mono.svg",
       "mode": "mono",
       "width": 256,
