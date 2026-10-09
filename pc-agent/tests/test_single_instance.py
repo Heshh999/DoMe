@@ -133,3 +133,36 @@ async def test_show_control_op_reports_pid(harness: AgentHarness) -> None:
 
     result = await asyncio.to_thread(ControlClient(harness.settings.state_dir).call, "show")
     assert result["shown"] is True and result["pid"] == os.getpid() and result["connection"] == "connected"
+
+
+def test_same_account_agent_in_another_windows_session_is_a_refused_conflict(
+    settings: Settings, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``Local\\`` mutex is per logon session but the state directory (identity, credential, grants)
+    is per account: a second agent of the same account in another session must be refused, not suggested.
+    The session ids are injected here (off Windows they are always empty)."""
+    from dome_agent import single_instance
+
+    # agent.pid names a live process (this test process stands in for it) recorded in session 1
+    (settings.state_dir / PID_FILENAME).write_text(
+        json.dumps({"pid": os.getppid(), "session": "1", "started_at": 1}), encoding="utf-8"
+    )
+    monkeypatch.setattr(single_instance, "current_session_id", lambda: "2")
+    monkeypatch.setattr(single_instance, "session_id_of_pid", lambda pid: "1")
+    rc = cli.main(["--state-dir", str(settings.state_dir), "run", "--headless"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "already runs for this Windows account in session 1" in out and "start DoMe here to run one" not in out
+    probe = InstanceLock.acquire(settings.state_dir, probe=True)
+    assert probe is not None  # nothing was started or locked
+    probe.release()
+    report = inspect(settings.state_dir, control_timeout=0.3)
+    assert report.other_session_conflict and report.other_session == "1"
+    assert "only one agent can run" in report.message
+    # pid reuse: the recorded pid now lives in another session than recorded → not an agent conflict
+    monkeypatch.setattr(single_instance, "session_id_of_pid", lambda pid: "5")
+    assert single_instance.other_session_agent(settings.state_dir) is None
+    # same session: the per-session mutex handles it (second launch path), not this check
+    monkeypatch.setattr(single_instance, "current_session_id", lambda: "1")
+    monkeypatch.setattr(single_instance, "session_id_of_pid", lambda pid: "1")
+    assert single_instance.other_session_agent(settings.state_dir) is None

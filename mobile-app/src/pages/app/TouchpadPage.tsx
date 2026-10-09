@@ -77,25 +77,33 @@ export function TouchpadPage() {
     [client, machine],
   );
   // A session that ended for any reason lets the page start again deliberately, not automatically.
-  // Drag/held indicators are reset during render (previous-render comparison); the machine itself is
-  // an external system and is reset in the effect.
+  // Every transition into a non-live phase (ended, failed, suspended, and idle after a runtime stop
+  // for a PC switch or a hidden page) and every PC change resets drag mode and the held indicator:
+  // the PC already released what that session held, so nothing is "held" for the next session or
+  // the next PC. Indicators are reset during render (previous-render comparison); the machine is an
+  // external system and is reset in the effect (its release output is discarded, never sent).
   const sessionOver = session.phase === "ended" || session.phase === "failed" || session.phase === "suspended";
-  const [seenPhase, setSeenPhase] = useState(session.phase);
-  if (session.phase !== seenPhase) {
-    setSeenPhase(session.phase);
-    if (sessionOver) {
+  const [seen, setSeen] = useState({ phase: session.phase, sessionPc: session.pcId, pcId });
+  const [resetEpoch, setResetEpoch] = useState(0);
+  if (session.phase !== seen.phase || session.pcId !== seen.sessionPc || pcId !== seen.pcId) {
+    const leftPhase = session.phase !== seen.phase && session.phase !== "live";
+    const pcChanged = session.pcId !== seen.sessionPc || pcId !== seen.pcId;
+    setSeen({ phase: session.phase, sessionPc: session.pcId, pcId });
+    if (leftPhase || pcChanged) {
       setDragMode(false);
       setLeftHeld(false);
+      setResetEpoch((n) => n + 1);
     }
   }
   useEffect(() => {
-    if (sessionOver) {
-      started.current = null;
-      machine.cancel();
-      machine.setDragMode(false);
-      machine.take();
-    }
-  }, [sessionOver, machine]);
+    if (resetEpoch === 0) return;
+    machine.cancel();
+    machine.setDragMode(false);
+    machine.take();
+  }, [resetEpoch, machine]);
+  useEffect(() => {
+    if (sessionOver) started.current = null;
+  }, [sessionOver]);
 
   const drain = useCallback(() => {
     for (const o of machine.take()) client.enqueue(toEvent(o));

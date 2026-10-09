@@ -10,13 +10,20 @@
  *
  * Nothing typed here is logged, stored or kept after the panel closes; the echo shows what this
  * phone sent, which is not necessarily what the PC field contains.
+ *
+ * Certainty: `LiveTyping` only knows what this phone queued. Whenever that may differ from what the
+ * PC received — an edit could not be queued, the PC rejected a batch (INPUT_STALE, RATE_LIMITED,
+ * INPUT_TARGET_CHANGED, …), an ack reports more dropped events, or the session ended, was suspended
+ * or restarted — the model and the live textarea are reset, and if anything had been typed in this
+ * run live entry pauses (Compose and Send with an explanation). Later Backspaces therefore never
+ * reach back into PC text the phone cannot vouch for.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AckOutcome, InputEvent as ProtoEvent, InputSessionState } from "../lib/input.ts";
 import { foregroundLabel } from "../lib/inputStatus.ts";
 import { recoverySteps } from "../lib/labels.ts";
-import { LiveTyping, PAUSE_EXPLANATION, splitText, TEXT_EVENT_MAX, type TypingCommit } from "../lib/typing.ts";
+import { CERTAINTY_LOST_EXPLANATION, LiveTyping, PAUSE_EXPLANATION, splitText, TEXT_EVENT_MAX, type CertaintyLoss, type TypingCommit } from "../lib/typing.ts";
 import { Button, Notice, Steps } from "./ui.tsx";
 
 export interface KeyboardPanelProps {
@@ -63,6 +70,34 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
     setMode("compose");
   }, []);
 
+  /**
+   * What this phone queued may no longer be what the PC received: forget the live model and the
+   * live textarea; when anything had been typed in this live run, pause with the explanation.
+   */
+  const loseCertainty = useCallback(
+    (kind: CertaintyLoss) => {
+      const el = liveRef.current;
+      const hadText = typing.current.sentText !== "" || (el !== null && el.value !== "");
+      typing.current.reset();
+      if (el) el.value = "";
+      setEcho("");
+      if (hadText && mode === "live") pauseLive(CERTAINTY_LOST_EXPLANATION[kind]);
+    },
+    [mode, pauseLive],
+  );
+
+  // Watch the session for anything that breaks the "what was queued reached the PC" assumption.
+  const watched = useRef({ sessionId: session.sessionId, live: session.phase === "live", problem: session.problem, dropped: session.lastAck?.droppedEvents ?? 0 });
+  useEffect(() => {
+    const prev = watched.current;
+    const isLive = session.phase === "live";
+    const dropped = session.lastAck?.droppedEvents ?? 0;
+    watched.current = { sessionId: session.sessionId, live: isLive, problem: session.problem, dropped };
+    if (prev.sessionId !== session.sessionId || prev.live !== isLive) loseCertainty("session_changed");
+    else if (session.problem !== null && session.problem !== prev.problem) loseCertainty("rejected");
+    else if (dropped > prev.dropped) loseCertainty("dropped");
+  }, [session.sessionId, session.phase, session.problem, session.lastAck, loseCertainty]);
+
   // A new window in front of the PC: whatever we were mirroring is no longer the target.
   useEffect(() => {
     if (lastForeground.current === foregroundKey) return;
@@ -85,13 +120,19 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
   const commitLive = useCallback(
     (result: TypingCommit) => {
       if (result.ok) {
-        for (const ev of result.events) enqueue(ev);
+        for (const ev of result.events) {
+          if (!enqueue(ev)) {
+            // Not queued: the PC will not get this (or anything after it in the edit).
+            loseCertainty("not_queued");
+            return;
+          }
+        }
         return;
       }
       if (result.reason === "composing") return;
       pauseLive(PAUSE_EXPLANATION[result.reason]);
     },
-    [enqueue, pauseLive],
+    [enqueue, pauseLive, loseCertainty],
   );
 
   // Native listeners: React's synthetic beforeinput/composition events do not expose inputType reliably.
@@ -199,8 +240,10 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
         </Notice>
       ) : null}
 
+      {/* Distinct keys: without them React reuses one <textarea> node for both modes, and the
+          uncontrolled live field would inherit composer text and send it on the next keystroke. */}
       {mode === "live" ? (
-        <div className="space-y-2">
+        <div key="live-mode" className="space-y-2">
           <label htmlFor="live-typing" className="sr-only">
             Type here; each character is sent to the PC as you type
           </label>
@@ -213,7 +256,7 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
           </div>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div key="compose-mode" className="space-y-2">
           <label htmlFor="composer" className="sr-only">
             Compose text to send
           </label>

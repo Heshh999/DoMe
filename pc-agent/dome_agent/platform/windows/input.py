@@ -37,7 +37,7 @@ from typing import Any
 
 from dome_protocol import ProtocolError
 
-from ..protocol import NAMED_KEYS, POINTER_BUTTONS, SHORTCUTS, BrowserKind, ForegroundApp
+from ..protocol import NAMED_KEYS, POINTER_BUTTONS, SHORTCUTS, BrowserKind, ForegroundApp, InputHoldError
 
 # ----- Win32 constants -------------------------------------------------------------------------------
 
@@ -318,6 +318,16 @@ def shortcut_inputs(name: str, scan_for: Any = None) -> list[INPUT]:
     ]
 
 
+def shortcut_release_inputs(name: str, scan_for: Any = None) -> list[INPUT]:
+    """Key-up for the shortcut's letter, then CTRL (the recovery after a partially inserted shortcut)."""
+    vk = SHORTCUT_KEY.get(name)
+    if vk is None:
+        raise ProtocolError("MALFORMED_MESSAGE", f"unknown shortcut {name!r}")
+    ctrl_scan = int(scan_for(VK_CONTROL)) if scan_for is not None else 0
+    scan = int(scan_for(vk)) if scan_for is not None else 0
+    return [key_input(vk, up=True, scan=scan), key_input(VK_CONTROL, up=True, scan=ctrl_scan)]
+
+
 def browser_for_process(process_name: str) -> BrowserKind | None:
     return BROWSER_PROCESSES.get(process_name.lower())
 
@@ -435,12 +445,14 @@ class WindowsInput:
     def shortcut(self, name: str) -> None:
         try:
             self._send(shortcut_inputs(name, self._scan), f"the {name} shortcut")
-        except ProtocolError:
-            # The modifier must never stay down: release CTRL on its own, whatever happened above.
+        except ProtocolError as exc:
+            # Neither the letter nor the modifier may stay down: SendInput may have stopped after either
+            # key-down, so release both (a key-up for a key that is not down is harmless).
             try:
-                self._send([key_input(VK_CONTROL, up=True, scan=self._scan(VK_CONTROL))], "releasing CTRL")
-            except ProtocolError:
-                pass
+                self._send(shortcut_release_inputs(name, self._scan), "releasing the shortcut keys")
+            except ProtocolError as release_exc:
+                # Tell the session manager the keys may still be down so it keeps them tracked and retries.
+                raise InputHoldError(exc.code, exc.message, {"ctrl", name}) from release_exc
             raise
 
     def release(self, buttons: set[str], keys: set[str]) -> int:
@@ -451,6 +463,9 @@ class WindowsInput:
         for key in sorted(keys):
             if key == "ctrl":
                 inputs.append(key_input(VK_CONTROL, up=True, scan=self._scan(VK_CONTROL)))
+            elif key in SHORTCUT_KEY:  # the letter key of a shortcut whose own recovery release failed
+                letter = SHORTCUT_KEY[key]
+                inputs.append(key_input(letter, up=True, scan=self._scan(letter)))
             elif key in VK_FOR_KEY:
                 vk = VK_FOR_KEY[key]
                 inputs.append(key_input(vk, up=True, scan=self._scan(vk), extended=vk in EXTENDED_KEYS))
@@ -481,7 +496,7 @@ class WindowsInput:
         )
 
     def input_restricted(self) -> bool:
-        return self._secure_desktop_active() or bool(self._foreground_elevated())
+        return self.secure_desktop_active() or bool(self._foreground_elevated())
 
     # -- helpers --
     @staticmethod
@@ -495,7 +510,7 @@ class WindowsInput:
         except Exception:  # noqa: BLE001 - access denied / gone: report unknown, never guess
             return "unknown"
 
-    def _secure_desktop_active(self) -> bool:
+    def secure_desktop_active(self) -> bool:
         """The input desktop cannot be opened (secure desktop / lock screen) or is not ``Default``."""
         user32, _k, _a = self._libs()
         handle = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)

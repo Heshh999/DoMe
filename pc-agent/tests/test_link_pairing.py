@@ -261,7 +261,12 @@ def test_cli_capability_prompt_is_explicit(monkeypatch: Any, capsys: Any) -> Non
     answers = iter(["y", "n"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
     assert cli._choose_capabilities(pending, False) == ["status", "pointer"]  # noqa: SLF001
-    assert cli._choose_capabilities(pending, True) == ["status", "pointer", "keyboard"]  # noqa: SLF001
+    # --yes answers only the general approval: touchpad/keyboard need their own explicit flag (spec §10A-D)
+    assert cli._choose_capabilities(pending, True) == ["status"]  # noqa: SLF001
+    assert "--yes does not cover it" in capsys.readouterr().out
+    assert cli._choose_capabilities(pending, True, frozenset({"keyboard"})) == ["status", "keyboard"]  # noqa: SLF001
+    args = cli.build_parser().parse_args(["pair-approve", "x", "--yes", "--pointer"])
+    assert cli._explicit_input(args) == {"pointer"}  # noqa: SLF001
     cli._print_pending(pending)  # noqa: SLF001
     out = capsys.readouterr().out
     assert "every app of the unlocked Windows session" in out and "not a sandbox" in out

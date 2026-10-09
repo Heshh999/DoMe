@@ -99,6 +99,19 @@ describe("GestureMachine", () => {
     expect(m.isDragMode).toBe(true); // mode stays on; next touch starts a new drag
   });
 
+  it("hasFinger reports only pointers that are still down (a lifted finger's lost capture is not a cancel)", () => {
+    const m = new GestureMachine();
+    m.pointerDown(1, 10, 10, 0);
+    m.pointerDown(2, 50, 10, 5);
+    expect(m.hasFinger(1)).toBe(true);
+    m.pointerUp(1, 40);
+    expect(m.hasFinger(1)).toBe(false);
+    expect(m.hasFinger(2)).toBe(true);
+    m.pointerUp(2, 45);
+    expect(m.take()).toEqual([{ type: "click", button: "right", double: false }]);
+    expect(m.hasFinger(2)).toBe(false);
+  });
+
   it("cancel (pointercancel / lost capture / rotation / hidden) releases a held drag and discards the gesture without a tap", () => {
     const m = new GestureMachine();
     m.setDragMode(true);

@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from dome_protocol import ProtocolError
+
 PlatformName = Literal["windows", "unsupported", "fake"]
 MediaStatus = Literal["playing", "paused", "stopped", "changing", "closed", "opened", "unknown"]
 MediaControl = Literal["play", "pause", "next", "previous"]
@@ -163,6 +165,22 @@ class InputAdapter(Protocol):
     def input_restricted(self) -> bool:
         """True when injection is known to be refused: locked session, secure desktop, elevated foreground."""
         ...
+
+    def secure_desktop_active(self) -> bool:
+        """True only when the input desktop is a protected one (lock screen, sign-in, UAC consent) — the
+        session-ending case. An elevated window on the normal desktop is NOT a secure desktop: it only
+        restricts (``input_restricted``), the customer can click elsewhere."""
+        ...
+
+
+class InputHoldError(ProtocolError):
+    """An injection failed AND the adapter's own recovery release failed too: ``stuck_keys`` (held-key
+    names as the session tracks them, e.g. ``ctrl`` and a shortcut name for its letter key) may still be
+    down. The session keeps them tracked so the end-of-session release and crash recovery retry them."""
+
+    def __init__(self, code: str, message: str, stuck_keys: frozenset[str] | set[str]) -> None:
+        super().__init__(code, message)
+        self.stuck_keys = frozenset(stuck_keys)
 
 
 class VolumeAdapter(Protocol):

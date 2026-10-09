@@ -13,9 +13,9 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from dome_protocol import load_schemas, now_utc
+from dome_protocol import format_rfc3339, load_schemas, now_utc
 
-from dome_agent.input_session import HOLDS_FILENAME, coalesce_events
+from dome_agent.input_session import HOLDS_FILENAME, AgeEstimator, coalesce_events
 from dome_agent.platform.protocol import ForegroundApp
 
 from .conftest import AgentHarness
@@ -147,16 +147,16 @@ async def test_session_start_result_and_state(harness: AgentHarness, controller:
     r = res["result"]
     assert len(r["input_session_id"]) == 22 and r["pointer"] and r["keyboard"]
     assert r["lease_seconds"] == 3 and r["input_age_budget_ms"] == 1000 and r["max_batch_events"] == 64
-    assert r["foreground_app"] == {
-        "process_name": "notepad.exe",
-        "window_title": "Untitled - Notepad",
-        "elevated": False,
-    }
+    # no window title in the (durably journaled) result: it travels only in memory-only state frames
+    assert r["foreground_app"] == {"process_name": "notepad.exe", "elevated": False}
+    row = harness.agent.store.journal_get(res["command_id"])
+    assert row is not None and "Untitled - Notepad" not in json.dumps(row, default=str)
     started = await expect_session_event(harness, "started", "started")
     assert started["controller_id"] == controller.controller_id and started["holds_released"] == 0
     state = await harness.relay.expect("state", timeout=5)
     assert state["state"]["input_session"]["controller_id"] == controller.controller_id
     assert state["state"]["foreground_app"]["process_name"] == "notepad.exe"
+    assert state["state"]["foreground_app"]["window_title"] == "Untitled - Notepad"
     assert state["state"]["input_restricted"] is False
     assert harness.agent.status()["input"]["session"]["state"] == "live"
 
@@ -251,6 +251,69 @@ async def test_replayed_seq_and_stale_batches_are_dropped(harness: AgentHarness,
     assert harness.agent.input.current is not None and harness.agent.input.current.live  # rejections never end it
 
 
+def test_age_estimator_removes_a_constant_clock_offset() -> None:
+    est = AgeEstimator(lower=-5.0, upper=10.0, window_seconds=30.0)
+    # phone 2 s behind: every delta is latency + 2; the extra delay over the fastest batch is what counts
+    for t, delta in ((0.0, 2.05), (0.5, 2.04), (1.0, 2.06)):
+        est.observe(delta, t)
+        assert est.age(delta) < 0.05
+    est.observe(4.6, 1.5)  # a 2.5 s stall
+    assert est.age(4.6) > 2.5
+    # phone 2 s ahead: negative deltas; a stall is still visible
+    ahead = AgeEstimator(lower=-5.0, upper=10.0)
+    for t, delta in ((0.0, -1.95), (0.5, -1.96)):
+        ahead.observe(delta, t)
+    ahead.observe(0.6, 1.0)
+    assert ahead.age(0.6) > 2.5
+    # samples expire: after a phone clock correction the baseline follows within the window
+    est.observe(0.05, 40.0)
+    est.observe(0.06, 40.5)
+    assert est.baseline == 0.05 and est.age(0.06) < 0.05
+    # the baseline is clamped to what the envelope window admits
+    wild = AgeEstimator(lower=-5.0, upper=10.0)
+    wild.observe(-30.0, 0.0)
+    assert wild.baseline == -5.0
+
+
+@pytest.mark.parametrize("skew", [-2.0, 2.0])
+async def test_phone_clock_skew_neither_kills_input_nor_hides_a_stall(
+    harness: AgentHarness, controller: Controller, skew: float
+) -> None:
+    """Review finding: the 1 s age budget was compared against the PC clock directly, so a phone 2 s behind
+    made every batch INPUT_STALE and a phone 2 s ahead let a 2.5 s stall replay old motion."""
+
+    def phone_now() -> Any:
+        return now_utc() + timedelta(seconds=skew)
+
+    env = controller.command("input.session_start", {"takeover": False}, issued_at=phone_now())
+    await harness.send_command(env)
+    res = await harness.result(payload_of(env)["command_id"])
+    assert res["state"] == "succeeded", res
+    sid = res["result"]["input_session_id"]
+    for seq in (1, 2, 3):
+        await send_batch(harness, controller, sid, seq, [MOVE], issued_at=phone_now())
+    await wait_for(lambda: harness.fake.input_count("move") == 3)
+    await send_batch(harness, controller, sid, 4, [MOVE], issued_at=phone_now() - timedelta(seconds=2.5))  # stalled
+    await expect_error(harness, "INPUT_STALE")
+    await send_batch(harness, controller, sid, 5, [MOVE], issued_at=phone_now())
+    await wait_for(lambda: harness.fake.input_count("move") == 4)
+    assert harness.agent.input.summary()["session"]["dropped_events"] == 1
+
+
+async def test_relay_received_at_bounds_the_relay_to_agent_leg(harness: AgentHarness, controller: Controller) -> None:
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    conn = str(uuid.uuid4())
+    for seq in (1, 2):
+        await harness.relay.send(relay_input_batch_frame(controller.input_batch(sid, seq, [MOVE]), conn))
+    await wait_for(lambda: harness.fake.input_count("move") == 2)
+    # fresh phone stamp, but the relay received it 2.5 s ago: it sat between relay and agent
+    frame = relay_input_batch_frame(controller.input_batch(sid, 3, [MOVE]), conn)
+    frame["relay"]["received_at"] = format_rfc3339(now_utc() - timedelta(seconds=2.5))
+    await harness.relay.send(frame)
+    await expect_error(harness, "INPUT_STALE")
+    assert harness.fake.input_count("move") == 2
+
+
 async def test_forged_and_misaddressed_batches_are_rejected(harness: AgentHarness, controller: Controller) -> None:
     sid = (await start_input(harness, controller))["result"]["input_session_id"]
     stranger = Controller(controller.account_id, controller.pc_id)
@@ -307,6 +370,58 @@ async def test_lease_expiry_releases_held_button_and_ends(fast: AgentHarness, co
     await expect_error(fast, "INPUT_SESSION_EXPIRED")
     assert fast.fake.input_count("move") == 1
     await expect_state(fast, lambda st: st["input_session"] is None)
+
+
+async def test_click_on_a_held_button_clears_the_hold(harness: AgentHarness, controller: Controller) -> None:
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    await send_batch(harness, controller, sid, 1, [LEFT_DOWN, MOVE])
+    await wait_for(lambda: harness.agent.input.summary()["session"]["held_buttons"] == ["left"])
+    await send_batch(harness, controller, sid, 2, [CLICK])  # drag mode, then a tap: Windows released it
+    await wait_for(lambda: harness.fake.input_count("button") == 2)
+    assert harness.agent.input.summary()["session"]["held_buttons"] == []
+    assert not (harness.settings.state_dir / HOLDS_FILENAME).exists()
+    stopped = await stop_input(harness, controller, sid)
+    assert stopped["result"]["released_holds"] == 0  # no extra UP sent later
+    assert harness.fake.input_count("release") == 0
+
+
+async def test_dispatch_outliving_the_bounded_wait_is_released_when_it_returns(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    """Review finding: ``_end`` waits at most a bounded time for the adapter thread; a press that lands
+    after the release ran must be released as soon as the thread returns, not left to the next restart."""
+    harness.agent.input.inflight_wait_seconds = 0.1
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    harness.fake.input_delay_seconds = 0.6  # SendInput "blocks"
+    await send_batch(harness, controller, sid, 1, [LEFT_DOWN])
+    await asyncio.sleep(0.2)  # the down is in flight
+    stopped = await stop_input(harness, controller, sid)
+    assert stopped["result"]["stopped"] is True
+    await wait_for(lambda: harness.fake.input_count("button") == 1)  # the slow press landed after the end
+    await wait_for(lambda: harness.fake.held_buttons == set() and harness.fake.input_count("release") == 1)
+    assert not (harness.settings.state_dir / HOLDS_FILENAME).exists()
+    harness.fake.input_delay_seconds = 0.0
+
+
+async def test_shortcut_whose_recovery_release_failed_keeps_the_keys_tracked(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    # an ordinary failure: the adapter released the shortcut keys itself, nothing stays tracked
+    harness.fake.input_fail, harness.fake.input_fail_remaining = "INPUT_INJECTION_FAILED", 1
+    await send_batch(harness, controller, sid, 1, [{"type": "shortcut", "name": "ctrl_c"}])
+    await expect_error(harness, "INPUT_INJECTION_FAILED")
+    assert harness.agent.input.summary()["session"]["held_keys"] == []
+    # the recovery release failed too: CTRL and the letter may be down; keep them for release/crash recovery
+    harness.fake.input_fail, harness.fake.input_fail_remaining = "INPUT_INJECTION_FAILED", 1
+    harness.fake.input_fail_stuck = True
+    await send_batch(harness, controller, sid, 2, [{"type": "shortcut", "name": "ctrl_v"}])
+    await wait_for(lambda: harness.agent.input.summary()["session"]["held_keys"] == ["ctrl", "ctrl_v"])
+    assert json.loads((harness.settings.state_dir / HOLDS_FILENAME).read_text())["held_keys"] == ["ctrl", "ctrl_v"]
+    harness.fake.input_fail_stuck = False
+    ended = await stop_input(harness, controller, sid)
+    assert ended["result"]["released_holds"] == 2 and harness.fake.held_keys == set()
+    assert not (harness.settings.state_dir / HOLDS_FILENAME).exists()
 
 
 async def test_keepalives_renew_the_lease(fast: AgentHarness, controller: Controller) -> None:
@@ -431,14 +546,38 @@ async def test_secure_desktop_ends_session_but_elevated_window_only_restricts(
 ) -> None:
     fast.agent.input.lease_seconds = 10.0  # no keepalives in this test: only the desktop probes may end it
     fast.agent.input.foreground_refresh_seconds = 0.3
-    fast.fake.foreground_app = ForegroundApp("consent.exe", "", None, True, "7", 7)
+    fast.fake.foreground_app = ForegroundApp("taskmgr.exe", "", None, True, "7", 7)
     await start_input(fast, controller)
     fast.fake.input_restricted = True  # elevated window in front: restricted, session stays
     await asyncio.sleep(0.6)
     assert fast.agent.input.current is not None and fast.agent.input.current.live
     await expect_state(fast, lambda st: st["input_restricted"] is True and st["input_session"] is not None)
-    fast.fake.foreground_app = None  # secure desktop: no foreground window at all
+    fast.fake.secure_desktop = True  # the adapter reports a protected input desktop (UAC consent / sign-in)
     await expect_session_event(fast, "ended", "secure_desktop")
+
+
+async def test_elevated_window_with_stale_or_unknown_foreground_does_not_end_the_session(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Review finding: the watchdog used the cached foreground (refreshed every 2 s, None during a switch,
+    ``elevated`` None when unknown) to decide between 'secure desktop' and 'elevated window'."""
+    fast.agent.input.lease_seconds = 10.0
+    fast.agent.input.foreground_refresh_seconds = 60.0  # the cache stays stale for the whole test
+    fast.fake.foreground_app = ForegroundApp("notepad.exe", "doc", None, False, "1", 10)
+    sid = (await start_input(fast, controller))["result"]["input_session_id"]
+    # an elevated window comes to front: integrity unknown to us (OpenProcess denied) and the cache is stale
+    fast.fake.foreground_app = ForegroundApp("unknown", "", None, None, "2", 20)
+    fast.fake.input_restricted = True
+    await asyncio.sleep(0.8)  # several lock/desktop polls
+    session = fast.agent.input.current
+    assert session is not None and session.live, "an elevated window must only restrict, never end the session"
+    assert fast.agent.input.summary()["input_restricted"] is True
+    # keyboard input is refused honestly (Windows UIPI would drop it silently), pointer input still runs
+    await send_batch(fast, controller, sid, 1, [MOVE, {"type": "text", "text": "secret"}])
+    await expect_error(fast, "INPUT_RESTRICTED")
+    await wait_for(lambda: fast.agent.input.summary()["session"]["dropped_events"] == 1)
+    assert fast.fake.input_count("move") == 1 and fast.fake.input_count("text") == 0
+    assert fast.agent.input.summary()["session"]["accepted_events"] == 1
 
 
 async def test_remote_disable_ends_session(harness: AgentHarness, controller: Controller) -> None:
@@ -488,12 +627,55 @@ async def test_target_change_stops_typing_until_the_customer_continues(
     ack = await expect_ack(harness, 2)
     assert ack["dropped_events"] == 2 and ack["accepted_events"] == 2
     await expect_state(harness, lambda st: (st["foreground_app"] or {}).get("process_name") == "chrome.exe")
-    await send_batch(harness, controller, sid, 3, [{"type": "text", "text": "y"}])  # customer saw it and continued
-    await wait_for(lambda: harness.fake.input_count("text") == 2)
+    # typing the phone sends right after (it could not know yet) stays blocked: never into the new window
+    await send_batch(harness, controller, sid, 3, [{"type": "text", "text": "y"}, MOVE])
+    await wait_for(lambda: harness.fake.input_count("move") == 2)
+    assert harness.fake.input_count("text") == 1 and harness.agent.input.summary()["session"]["dropped_events"] == 3
     # a user-directed click re-captures the target: typing after it goes to the new window
     harness.fake.foreground_app = ForegroundApp("code.exe", "editor", None, False, "3", 30)
     await send_batch(harness, controller, sid, 4, [CLICK, {"type": "text", "text": "z"}])
-    await wait_for(lambda: harness.fake.input_count("text") == 3)
+    await wait_for(lambda: harness.fake.input_count("text") == 2)
+    assert harness.fake.input_events[-1].args == ("z",)
+
+
+async def test_keyboard_batches_queued_across_a_target_change_are_not_typed(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    """Review finding: the phone streams continuously; batches already in the agent's queue when the
+    foreground changes must not type into the new window."""
+    harness.fake.foreground_app = ForegroundApp("notepad.exe", "doc", None, False, "1", 10)
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    harness.fake.input_delay_seconds = 0.15  # the first batch is still being injected when the next ones queue
+    await send_batch(harness, controller, sid, 1, [{"type": "text", "text": "a"}, MOVE])
+    await wait_for(lambda: harness.fake.input_count("text") == 1)
+    harness.fake.foreground_app = ForegroundApp("mail.exe", "inbox", None, False, "9", 90)
+    await send_batch(harness, controller, sid, 2, [{"type": "text", "text": "b"}])
+    await send_batch(harness, controller, sid, 3, [{"type": "text", "text": "c"}, {"type": "shortcut", "name": "ctrl_v"}])
+    await expect_error(harness, "INPUT_TARGET_CHANGED")
+    await wait_for(lambda: harness.agent.input.summary()["session"]["dropped_events"] == 3)
+    await asyncio.sleep(0.2)
+    assert [r.args for r in harness.fake.input_events if r.name in ("text", "shortcut")] == [("a",)]
+    harness.fake.input_delay_seconds = 0.0
+
+
+async def test_typing_issued_well_after_a_target_change_continues(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    """Keyboard-only phones cannot click: typing issued at least ``target_change_grace_seconds`` after the
+    change (the phone has seen pc_state.foreground_app and paused live typing) is a deliberate continuation."""
+    harness.agent.input.target_change_grace_seconds = 0.4
+    harness.fake.foreground_app = ForegroundApp("notepad.exe", "doc", None, False, "1", 10)
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    harness.fake.foreground_app = ForegroundApp("chrome.exe", "tab", "chrome", False, "2", 20)
+    await send_batch(harness, controller, sid, 1, [{"type": "text", "text": "x"}])
+    await expect_error(harness, "INPUT_TARGET_CHANGED")
+    await send_batch(harness, controller, sid, 2, [{"type": "text", "text": "y"}])
+    await wait_for(lambda: harness.agent.input.summary()["session"]["dropped_events"] == 2)
+    assert harness.fake.input_count("text") == 0
+    await asyncio.sleep(0.5)
+    await send_batch(harness, controller, sid, 3, [{"type": "text", "text": "z"}])
+    await wait_for(lambda: harness.fake.input_count("text") == 1)
+    assert harness.fake.input_events[-1].args == ("z",)
 
 
 # ----- acks / backpressure ------------------------------------------------------------------------------------------

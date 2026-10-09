@@ -32,8 +32,14 @@ async def session_start(ctx: ExecutionContext) -> dict[str, Any]:
         pointer="pointer" in effective,
         keyboard="keyboard" in effective,
         takeover=bool(ctx.params.get("takeover", False)),
+        controller_issued_at=ctx.command.payload.get("issued_at"),
     )
     fg = manager.foreground
+    # The window title (document names, URLs) is NOT part of the result: results are journaled durably for
+    # duplicate re-emission. The phone gets the title through the next pc_state frame (memory only).
+    foreground = fg.as_result() if fg is not None else None
+    if foreground is not None:
+        foreground.pop("window_title", None)
     return {
         "input_session_id": session.input_session_id,
         "lease_seconds": max(1, min(30, int(round(manager.lease_seconds)))),
@@ -41,7 +47,7 @@ async def session_start(ctx: ExecutionContext) -> dict[str, Any]:
         "max_batch_events": max(1, min(256, int(manager.max_batch_events))),
         "pointer": session.pointer,
         "keyboard": session.keyboard,
-        "foreground_app": fg.as_result() if fg is not None else None,
+        "foreground_app": foreground,
     }
 
 

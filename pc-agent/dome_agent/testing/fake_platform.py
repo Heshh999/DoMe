@@ -18,6 +18,7 @@ from ..platform.protocol import (
     SHORTCUTS,
     AppWindow,
     ForegroundApp,
+    InputHoldError,
     MediaControl,
     MediaSession,
     MediaStatus,
@@ -56,7 +57,9 @@ class FakeState:
     # ----- manual input (FakeInput) -----
     input_events: list[InputRecord] = field(default_factory=list)  # ordered, timestamped
     foreground_app: ForegroundApp | None = None  # settable "what is in front"
-    input_restricted: bool = False  # settable restriction flag (secure desktop / UAC)
+    input_restricted: bool = False  # settable restriction flag (elevated window in front: restricts only)
+    secure_desktop: bool = False  # settable secure desktop (lock screen / UAC consent desktop): ends sessions
+    input_fail_stuck: bool = False  # a failing shortcut also fails its own recovery release (InputHoldError)
     input_fail: str | None = None  # error code raised by the next injection calls (None = succeed)
     input_fail_remaining: int = 0  # how many calls fail (0 with input_fail set = every call)
     input_delay_seconds: float = 0.0  # blocking delay per injection call (backpressure tests)
@@ -299,7 +302,14 @@ class FakeInput:
     def shortcut(self, name: str) -> None:
         if name not in SHORTCUTS:
             raise ProtocolError("MALFORMED_MESSAGE", f"unknown shortcut {name!r}")
-        self._inject("shortcut", name)
+        try:
+            self._inject("shortcut", name)
+        except ProtocolError as exc:
+            if self.st.input_fail_stuck:
+                # models SendInput stopping after CTRL/letter down and the recovery key-up failing too
+                self.st.held_keys.update({"ctrl", name})
+                raise InputHoldError(exc.code, exc.message, {"ctrl", name}) from exc
+            raise
 
     def release(self, buttons: set[str], keys: set[str]) -> int:
         self.st.input_events.append(
@@ -319,7 +329,10 @@ class FakeInput:
         return self.st.foreground_app
 
     def input_restricted(self) -> bool:
-        return self.st.input_restricted or self.st.locked
+        return self.st.input_restricted or self.st.secure_desktop or self.st.locked
+
+    def secure_desktop_active(self) -> bool:
+        return self.st.secure_desktop or self.st.locked
 
 
 class FakeNativeHost:

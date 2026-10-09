@@ -1,8 +1,10 @@
 /**
  * Support (spec §11A). Self-help topics for everyone; a request form for signed-in customers:
  * category preselected from the help link (`?category=…&code=…`), message, optional redacted
- * diagnostics the customer reviews before including. 201 → the reference is shown. Any failure says
- * so, offers a copyable redacted summary and never claims the request was received.
+ * diagnostics the customer reviews before including. 201 → the reference is shown. A definite
+ * rejection says "Not sent"; a failure after which the server may still have stored the request
+ * (network drop, 5xx, unreadable 2xx) says receipt could not be confirmed and points to "Your
+ * requests" before any retry. Both offer a copyable redacted summary; neither claims receipt.
  */
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -13,7 +15,7 @@ import { api, ApiError, loginUrl } from "../../lib/api.ts";
 import { APP_VERSION, buildDiagnostics, diagnosticsText, type DiagnosticsReport } from "../../lib/diagnostics.ts";
 import { absoluteTime } from "../../lib/format.ts";
 import { errorMessage } from "../../lib/labels.ts";
-import { CATEGORIES } from "../../lib/support.ts";
+import { CATEGORIES, submissionFailure, type SubmissionFailure } from "../../lib/support.ts";
 import { Button, Field, inputClass, Notice } from "../../components/ui.tsx";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useInputStore } from "../../store/input.ts";
@@ -37,7 +39,7 @@ function isCategory(v: string | null): v is rest.SupportTicketRequest["category"
   return CATEGORIES.some((c) => c.value === v);
 }
 
-type Submit = { kind: "idle" } | { kind: "sending" } | { kind: "received"; ticket: rest.SupportTicket } | { kind: "failed"; error: ApiError; summary: string };
+type Submit = { kind: "idle" } | { kind: "sending" } | { kind: "received"; ticket: rest.SupportTicket } | { kind: "failed"; error: ApiError; outcome: SubmissionFailure; summary: string };
 
 export function SupportPage() {
   const [params] = useSearchParams();
@@ -52,6 +54,7 @@ export function SupportPage() {
   const [submit, setSubmit] = useState<Submit>({ kind: "idle" });
   const [tickets, setTickets] = useState<rest.SupportTicket[] | null>(null);
   const [ticketsError, setTicketsError] = useState<string | null>(null);
+  const [ticketsVersion, setTicketsVersion] = useState(0);
   const [copied, setCopied] = useState(false);
   const code = presetCode && /^[A-Z_]+$/.test(presetCode) && presetCode.length <= 64 ? presetCode : null;
   const signedIn = status === "signed_in";
@@ -63,9 +66,12 @@ export function SupportPage() {
     if (!signedIn) return;
     api
       .supportTickets()
-      .then((r) => setTickets(r.tickets))
+      .then((r) => {
+        setTickets(r.tickets);
+        setTicketsError(null);
+      })
       .catch((e: unknown) => setTicketsError(errorMessage(e instanceof ApiError ? e : null)));
-  }, [signedIn, submit.kind]);
+  }, [signedIn, submit.kind, ticketsVersion]);
 
   const diagText = useMemo(() => (report ? diagnosticsText(report) : ""), [report]);
 
@@ -105,9 +111,10 @@ export function SupportPage() {
       setIncludeDiag(false);
       setReport(null);
     } catch (e) {
+      const outcome = submissionFailure(e);
       const error = e instanceof ApiError ? e : new ApiError(0, "INTERNAL", "Something went wrong on this phone.", false);
-      const summary = [`DoMe support request (not sent — ${error.code})`, `Category: ${category}`, code ? `Error code: ${code}` : null, `App: ${APP_VERSION}`, `Message: ${body.message}`, includeDiag && diagText ? `\nRedacted diagnostics:\n${diagText}` : null].filter((l): l is string => l !== null).join("\n");
-      setSubmit({ kind: "failed", error, summary });
+      const summary = [`DoMe support request (${outcome === "not_sent" ? "not sent" : "delivery not confirmed"} — ${error.code})`, `Category: ${category}`, code ? `Error code: ${code}` : null, `App: ${APP_VERSION}`, `Message: ${body.message}`, includeDiag && diagText ? `\nRedacted diagnostics:\n${diagText}` : null].filter((l): l is string => l !== null).join("\n");
+      setSubmit({ kind: "failed", error, outcome, summary });
     }
   };
 
@@ -206,7 +213,7 @@ export function SupportPage() {
                 </>
               )}
             </div>
-            {submit.kind === "failed" ? (
+            {submit.kind === "failed" && submit.outcome === "not_sent" ? (
               <Notice tone="danger" title="Not sent">
                 <p>{errorMessage(submit.error)} Support has not received this request.</p>
                 <p>Copy the redacted summary below and send it another way{SUPPORT_URL ? "" : " once a support contact is configured"}.</p>
@@ -217,6 +224,24 @@ export function SupportPage() {
                   </Button>
                   <Button size="md" type="button" variant="ghost" onClick={() => setSubmit({ kind: "idle" })}>
                     Try again
+                  </Button>
+                </div>
+              </Notice>
+            ) : null}
+            {submit.kind === "failed" && submit.outcome === "unconfirmed" ? (
+              <Notice tone="warning" title="Not confirmed">
+                <p>{errorMessage(submit.error)} DoMe could not confirm whether support received this request: it may have arrived before the problem.</p>
+                <p>Refresh “Your requests” below first. If the request is listed there, it was received; send it again only if it is not, so it does not arrive twice.</p>
+                <textarea readOnly className={`${inputClass} font-mono text-xs min-h-[120px]`} value={submit.summary} aria-label="Redacted summary of the unconfirmed request" data-testid="unsent-summary" />
+                <div className="flex flex-wrap gap-2">
+                  <Button size="md" type="button" variant="primary" onClick={() => setTicketsVersion((n) => n + 1)}>
+                    Refresh your requests
+                  </Button>
+                  <Button size="md" type="button" onClick={() => void copy(submit.summary)}>
+                    {copied ? "Copied" : "Copy summary"}
+                  </Button>
+                  <Button size="md" type="button" variant="ghost" onClick={() => setSubmit({ kind: "idle" })}>
+                    Back to the form
                   </Button>
                 </div>
               </Notice>

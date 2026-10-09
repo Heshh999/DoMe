@@ -38,6 +38,8 @@ export interface HealthInput {
   sessionStatus: SessionStatus;
   relayStatus: RelayStatus;
   controllerBound: boolean;
+  /** This phone's controller id (hello_ack), null before the relay bound one. */
+  controllerId: string | null;
   pc: rest.Pc | undefined;
   live: LivePc | undefined;
   /** This phone's grant on the PC (undefined = unknown yet, null = none). */
@@ -111,7 +113,7 @@ export function assessHealth(i: HealthInput): HealthLayer[] {
   if (i.grant === undefined) layers.push({ id: "input", title: "Touchpad and keyboard permission", status: "unknown", summary: "Not loaded yet.", action: ACTIONS.none, details: [] });
   else if (!inputGranted) layers.push({ id: "input", title: "Touchpad and keyboard permission", status: "problem", summary: "Not granted for this phone. The PC owner allows it on the PC; existing pairings do not get it automatically.", action: ACTIONS.grant_input, details: ["INPUT_NOT_PERMITTED", `grant: ${caps.join(", ") || "none"}`] });
   else if (state?.input_restricted) layers.push({ id: "input", title: "Touchpad and keyboard permission", status: "problem", summary: "Granted, but Windows is showing a protected screen (lock, sign-in or an administrator prompt) where remote input is refused by design.", action: ACTIONS.unlock_pc, details: ["INPUT_RESTRICTED", `grant: ${caps.join(", ")}`] });
-  else layers.push({ id: "input", title: "Touchpad and keyboard permission", status: "ok", summary: `${caps.includes("pointer") ? "Touchpad" : ""}${caps.includes("pointer") && caps.includes("keyboard") ? " and " : ""}${caps.includes("keyboard") ? "keyboard" : ""} allowed.${i.input.phase === "live" ? " A session is live." : ""}${state?.input_session && state.input_session.controller_id !== i.input.sessionId && i.input.phase !== "live" ? " Another phone currently holds the PC’s input session." : ""}`, action: ACTIONS.none, details: [`grant: ${caps.join(", ")}`, `session: ${i.input.phase}`, ...(i.input.problem ? [i.input.problem.code] : [])] });
+  else layers.push({ id: "input", title: "Touchpad and keyboard permission", status: "ok", summary: `${caps.includes("pointer") ? "Touchpad" : ""}${caps.includes("pointer") && caps.includes("keyboard") ? " and " : ""}${caps.includes("keyboard") ? "keyboard" : ""} allowed.${i.input.phase === "live" ? " A session is live." : ""}${pcSessionNote(state?.input_session ?? null, i)}`, action: ACTIONS.none, details: [`grant: ${caps.join(", ")}`, `session: ${i.input.phase}`, ...(i.input.problem ? [i.input.problem.code] : []), ...(state?.input_session ? [`pc input session: ${i.controllerId !== null && state.input_session.controller_id === i.controllerId ? "this phone" : i.controllerId === null ? "unknown controller" : "another controller"}`] : [])] });
 
   // 6. Browser extension
   if (!state) layers.push({ id: "extension", title: "Browser extension", status: "unknown", summary: "Not known until the PC reports its state.", action: ACTIONS.none, details: [] });
@@ -129,6 +131,18 @@ export function assessHealth(i: HealthInput): HealthLayer[] {
   else layers.push({ id: "target", title: "Media target", status: "problem", summary: state.extension_connected ? "No YouTube tab or media player is active on the PC." : "No media player is active; YouTube needs the extension.", action: state.extension_connected ? ACTIONS.open_youtube : ACTIONS.install_extension, details: [`youtube: ${yt.reason}`, `media: ${media.reason}`] });
 
   return layers;
+}
+
+/**
+ * What the PC's reported input session (state.input_session, a controller id) says, compared with
+ * THIS phone's controller id — never with the agent-issued input_session_id, which is a different
+ * identifier. Only an observed foreign controller id is reported as "another phone"; while this
+ * phone's own session lingers on the PC (its 3 s lease after Stop/hide), that is said instead.
+ */
+function pcSessionNote(pcSession: { controller_id: string } | null, i: HealthInput): string {
+  if (!pcSession || i.input.phase === "live" || i.controllerId === null) return "";
+  if (pcSession.controller_id === i.controllerId) return " The PC still lists this phone’s last input session; its lease ends it within a few seconds.";
+  return " Another phone currently holds the PC’s input session.";
 }
 
 /** Last command this phone saw a verified terminal result for on `pcId`. */

@@ -1,9 +1,13 @@
 """One agent per Windows user session (spec §10 "One agent per Windows user session", design §3.3).
 
 * Windows: a named mutex ``Local\\DoMe.Agent.<session id>`` (``Local\\`` = this logon session's
-  namespace, so two Windows sessions of the same or different users never conflict by design; the
-  session id comes from ``ProcessIdToSessionId``). ``ERROR_ALREADY_EXISTS`` means another agent of this
-  session holds it. The handle is kept open for the process lifetime and closed on release.
+  namespace; the session id comes from ``ProcessIdToSessionId``). ``ERROR_ALREADY_EXISTS`` means another
+  agent of this session holds it. The handle is kept open for the process lifetime and closed on release.
+* The state directory (``%LOCALAPPDATA%\\DoMe``: identity, PC credential, grants, ``state.sqlite3``) is
+  per Windows ACCOUNT, not per logon session. A second agent of the same account in another session
+  (RDS, a reconnected or second session) would reuse the same PC identity and supersede the first at the
+  relay. :func:`other_session_agent` detects that from ``agent.pid`` and ``dome-agent run`` refuses with
+  a distinct message instead of starting a competing agent: one agent per account's state directory.
 * elsewhere: ``flock(LOCK_EX | LOCK_NB)`` on ``<state dir>/agent.lock``.
 
 Both write a small ``agent.pid`` file (``{"pid", "session", "started_at"}``) next to the lock so a
@@ -195,6 +199,31 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def other_session_agent(state_dir: Path) -> PidRecord | None:
+    """The live agent recorded in ``agent.pid`` when it runs in ANOTHER Windows logon session of this
+    account (same state directory, different session id); None otherwise. Both session ids must be known
+    and non-empty (they are always empty off Windows). When the recorded pid now belongs to a process in
+    a different session than recorded (pid reuse), it is not reported."""
+    record = PidRecord.read(state_dir / PID_FILENAME)
+    if record is None or not record.session or record.pid == os.getpid():
+        return None
+    mine = current_session_id()
+    if not mine or record.session == mine or not _pid_alive(record.pid):
+        return None
+    actual = session_id_of_pid(record.pid)
+    if actual is not None and actual != record.session:
+        return None  # the pid was reused by an unrelated process: no DoMe agent there
+    return record
+
+
+def describe_other_session(record: PidRecord) -> str:
+    return (
+        f"DoMe already runs for this Windows account in session {record.session} (pid {record.pid}). Both "
+        "sessions share this account's DoMe identity, so only one agent can run: use DoMe from that session, "
+        "or quit it there (tray → Quit) and start it here."
+    )
+
+
 def _probe_permissions(state_dir: Path) -> str | None:
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -226,8 +255,7 @@ def inspect(state_dir: Path, *, control_timeout: float = 2.0) -> InstanceReport:
     if record is not None:
         if _pid_alive(record.pid):
             report.running_pid = record.pid
-            mine = current_session_id()
-            if sys.platform == "win32" and record.session and record.session != mine:
+            if other_session_agent(state_dir) is not None:
                 report.other_session_conflict = True
                 report.other_session = record.session
         else:
@@ -258,8 +286,9 @@ def describe(report: InstanceReport) -> str:
         )
     if report.other_session_conflict:
         return (
-            f"DoMe is running in another Windows session{pid} (session {report.other_session}); this session has "
-            "no agent. Sign in to that session to use it, or start DoMe here to run one per session."
+            f"DoMe already runs for this Windows account in session {report.other_session}{pid}. Both sessions "
+            "share this account's DoMe identity, so only one agent can run: use DoMe from that session, or quit "
+            "it there (tray → Quit) and start it here."
         )
     if report.control_responding:
         return f"DoMe is already running in this session{pid} and responding."

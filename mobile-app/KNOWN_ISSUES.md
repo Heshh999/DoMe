@@ -82,3 +82,19 @@ Items from the review that were recorded rather than fully closed, plus residual
     with 30 files in parallel the key generation + hello-proof signing occasionally took longer and two
     unrelated tests failed intermittently. Both helpers now poll (bounded, 50 rounds). No shipped code
     changed for this.
+
+18. **Live-typing pause is conservative.** Any batch rejection or increase in dropped events pauses
+    live typing when text was typed in that run, even if the dropped batch held only pointer events,
+    because an `error` frame does not name the batch's seq (CONTRACT_ISSUES 8). The customer
+    resumes with one tap on "Type live". Text that was already queued but not yet flushed when the
+    pause happened is still sent (it is text the customer typed, in order); only the phone's model of
+    it is forgotten.
+
+19. **The capture-loss and live-typing certainty fixes are jsdom-tested only.** The implicit
+    `lostpointercapture` after `pointerup` and the INPUT_STALE / dropped-ack / suspended-restart
+    sequences are reproduced by dispatching events in jsdom; real iPhone Safari ordering and real
+    agent rejections are **not yet verified** (README manual checklist rows added).
+
+20. **"Not confirmed" support submissions are not reconciled automatically.** After "Refresh your
+    requests" the customer compares the list by eye; the page does not match a new ticket to the
+    unconfirmed draft (there is no request id to match on, CONTRACT_ISSUES 11).

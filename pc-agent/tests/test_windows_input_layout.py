@@ -93,6 +93,50 @@ def test_key_and_shortcut_tables_cover_the_contract() -> None:
         w.shortcut_inputs("ctrl_w")
 
 
+class _ScriptedSend:
+    """Visible test double for the ONE OS call (``WindowsInput._send``): records every INPUT list and
+    raises for the scripted call numbers, so the recovery logic runs on Linux without user32."""
+
+    def __init__(self, fail_calls: set[int]) -> None:
+        self.fail_calls = fail_calls
+        self.calls: list[list[tuple[int, int]]] = []
+
+    def __call__(self, inputs: list[w.INPUT], what: str) -> None:
+        from dome_protocol import ProtocolError
+
+        self.calls.append([(i.ki.wVk, i.ki.dwFlags) for i in inputs])
+        if len(self.calls) in self.fail_calls:
+            raise ProtocolError("INPUT_INJECTION_FAILED", f"scripted failure for {what}")
+
+
+def _adapter_with(send: _ScriptedSend) -> w.WindowsInput:
+    adapter = w.WindowsInput()
+    adapter._send = send  # type: ignore[method-assign]  # noqa: SLF001
+    adapter._scan = lambda vk: 0  # type: ignore[method-assign]  # noqa: SLF001
+    return adapter
+
+
+def test_failed_shortcut_releases_the_letter_and_ctrl() -> None:
+    from dome_protocol import ProtocolError
+
+    from dome_agent.platform.protocol import InputHoldError
+
+    send = _ScriptedSend({1})
+    with pytest.raises(ProtocolError) as ei:
+        _adapter_with(send).shortcut("ctrl_c")
+    assert not isinstance(ei.value, InputHoldError) and ei.value.code == "INPUT_INJECTION_FAILED"
+    assert send.calls[1] == [(ord("C"), w.KEYEVENTF_KEYUP), (w.VK_CONTROL, w.KEYEVENTF_KEYUP)]
+    # the recovery release fails too: a distinguishable error naming what may still be down
+    send = _ScriptedSend({1, 2})
+    with pytest.raises(InputHoldError) as hold:
+        _adapter_with(send).shortcut("ctrl_v")
+    assert hold.value.code == "INPUT_INJECTION_FAILED" and hold.value.stuck_keys == {"ctrl", "ctrl_v"}
+    # ...and the end-of-session release knows how to lift a shortcut's letter key
+    send = _ScriptedSend(set())
+    assert _adapter_with(send).release(set(), {"ctrl", "ctrl_v"}) == 2
+    assert sorted(send.calls[0]) == sorted([(w.VK_CONTROL, w.KEYEVENTF_KEYUP), (ord("V"), w.KEYEVENTF_KEYUP)])
+
+
 def test_browser_detection_and_foreground_result_shape() -> None:
     assert w.browser_for_process("Chrome.EXE") == "chrome" and w.browser_for_process("msedge.exe") == "edge"
     assert w.browser_for_process("firefox.exe") == "other" and w.browser_for_process("notepad.exe") is None
@@ -125,4 +169,5 @@ def test_unsupported_platform_input_is_explicit() -> None:
             call()
         assert ei.value.code == "PLATFORM_UNSUPPORTED"
     assert adapter.foreground() is None and adapter.input_restricted() is False
+    assert adapter.secure_desktop_active() is False
     assert adapter.release(set(), set()) == 0

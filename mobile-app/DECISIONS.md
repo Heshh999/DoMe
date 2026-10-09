@@ -224,3 +224,55 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
 35. **Log redaction gains `text`/`composer`/`events`/`key(s)`.** No call site logs typed content; the
     regex (`^text$|_text$|composer|^events$|^key$|^keys$`) guarantees it would not survive if one did.
     `context` is deliberately not matched (`^text$` anchors) so YouTube tab contexts stay loggable.
+
+36. **Live typing treats any loss of certainty as a pause (review fix, blocker).** `LiveTyping` only
+    knows what this phone *queued*. `KeyboardPanel` now watches the session and, when the phone can
+    no longer vouch that what it queued reached the PC, resets the model and empties the live
+    textarea; if anything had been typed in that live run it pauses (Compose and Send + an
+    explanation from `CERTAINTY_LOST_EXPLANATION`). Triggers: `enqueue()` returned false; a new
+    `session.problem` object while the session continues (every such code — INPUT_STALE,
+    RATE_LIMITED, INPUT_TARGET_CHANGED, INPUT_INJECTION_FAILED, INPUT_SEQUENCE_INVALID,
+    INPUT_RESTRICTED, INPUT_NOT_PERMITTED — means a batch was dropped); `lastAck.droppedEvents`
+    increased; `sessionId` changed or the phase entered/left `live` (ended, suspended with the agent
+    discarding pending events, a fresh Start). Detection is by object identity of `problem` (the
+    client creates a new object for every rejection and the store keeps identity), so two identical
+    consecutive codes both trigger. A reset with nothing typed is silent. Conservative by design: a
+    rejection of a pointer-only batch also pauses typing, because the phone cannot tell which batch
+    the error refers to (CONTRACT_ISSUES 8). We deliberately do not try to "re-send" the lost text.
+
+37. **The live and compose textareas are keyed separately.** Found while testing decision 36: both
+    branches render a `<div><label/><textarea/></div>` at the same tree position, so React reused one
+    DOM node. The live field is uncontrolled, so after Compose → Type live it still held the composer
+    draft, and the next keystroke diffed the whole draft as new text and sent it. `key="live-mode"` /
+    `key="compose-mode"` force a fresh node; component-tested.
+
+38. **Lost pointer capture cancels only for a finger the machine still tracks (review fix, major).**
+    Browsers release capture implicitly right after each `pointerup` and fire `lostpointercapture`
+    for that (already lifted) pointer, i.e. between the two lifts of a two-finger tap. The surface now
+    asks `GestureMachine.hasFinger(id)` and, only for a still-down finger, calls `cancel()` — never
+    `pointerUp()`, because a capture lost mid-touch must not become a tap (the old code turned it into
+    a left click for a single finger). Component-tested by dispatching the implicit event in jsdom.
+
+39. **Health compares the PC's input session with this phone's controller id (review fix, major).**
+    `state.input_session.controller_id` is a controller UUID; it used to be compared with the
+    agent-issued `input_session_id`, so Health claimed "another phone" for this phone's own lingering
+    session. `HealthInput` gains `controllerId` (from the live store). Foreign id → "Another phone
+    currently holds…"; own id while not live → "The PC still lists this phone's last input session;
+    its lease ends it within a few seconds."; no bound controller id → nothing claimed.
+
+40. **Touchpad drag/held state resets on every move into a non-live phase and on any PC change
+    (review fix, minor).** Previously only ended/failed/suspended reset it; a runtime stop for a PC
+    switch or a hidden page goes to `idle` and left `DRAG MODE` showing and the machine's drag lock
+    set, so the next touch moved without a held button and End Drag sent a stray `up`. The page now
+    compares phase, the session's PC and the selected PC with the previous render, resets the
+    indicators during render and the machine in an effect (its release output is discarded — the PC
+    already released that session's holds).
+
+41. **Support failure copy distinguishes "Not sent" from "Not confirmed" (review fix, minor).**
+    `submissionFailure()` in `lib/support.ts`: never left the phone (no CSRF token, request failed the
+    contract) or a definite 4xx → "Not sent … Support has not received this request." A network
+    failure (the POST may have left first), a 5xx (possibly after commit), a 2xx that fails
+    `support_ticket_response` validation, or an unknown exception → "Not confirmed: DoMe could not
+    confirm whether support received this request", with a "Refresh your requests" button that
+    re-reads `GET /v1/support/tickets` before the customer decides to send again. Nothing is resent
+    automatically. A client request id would make retries safe (CONTRACT_ISSUES 11).

@@ -140,6 +140,9 @@ class UnsupportedInput:
     def input_restricted(self) -> bool:
         return False
 
+    def secure_desktop_active(self) -> bool:
+        return False
+
 
 def build_unsupported_platform() -> PlatformSet:
     return PlatformSet(

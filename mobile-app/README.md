@@ -101,7 +101,11 @@ scripts/         gen-validators.ts, make-icons.mjs
   within 300 ms / 24 px → second click marked double (Windows combines them; DECISIONS 22); one → two
   fingers never clicks; two-finger still tap → right click; two-finger movement → scroll notches
   (36 px/notch, natural or standard direction); Drag mode = drag lock with a conspicuous active state,
-  End Drag releases; cancel/lost capture/rotation/hidden release any hold without a tap. Sensitivity
+  End Drag releases; cancel/lost capture of a still-down finger/rotation/hidden release any hold
+  without a tap, while the routine `lostpointercapture` browsers fire after each `pointerup` is
+  ignored so a two-finger tap still right-clicks (component-tested in jsdom; DECISIONS 38). Drag mode
+  and the held indicator reset whenever the session leaves `live` (including idle after a PC switch
+  or hidden page) or the PC changes (component-tested; DECISIONS 40). Sensitivity
   0.5–3× with fractional carry; values clamped to ±4096. Buttons: Left, Right, Double (true
   `double_click`), Drag/End Drag, Keyboard, Gestures (guide sheet), Settings; Stop Input always visible.
   `touch-action: none` only on the surface (component-tested).
@@ -110,7 +114,13 @@ scripts/         gen-validators.ts, make-icons.mjs
   is diffed against what this phone sent and committed once; IME candidates are never forwarded;
   Enter/Tab/Esc/Backspace/Delete/arrows/Space keys; shortcuts Ctrl+A/C/V/Z, and Ctrl+L (labelled
   address bar) only while `foreground_app.browser` is set; an edit in the middle or an uncertain
-  deletion pauses live entry and switches to Compose and Send with the reason; Compose and Send keeps
+  deletion pauses live entry and switches to Compose and Send with the reason; so does any loss of
+  certainty about what reached the PC — an edit that could not be queued, a rejected batch
+  (INPUT_STALE, RATE_LIMITED, INPUT_TARGET_CHANGED, …), more dropped events in an ack, or the session
+  ending, being suspended or restarted — after which the live model and field start empty, so a later
+  Backspace never deletes PC text this phone did not type (component-tested; DECISIONS 36). The live
+  and compose fields are separate DOM nodes, so a compose draft never leaks into live typing
+  (component-tested; DECISIONS 37). Compose and Send keeps
   a memory-only buffer, clears it only on an acknowledged send, and after an uncertain send shows a
   review state with Discard / Send again — never an automatic resend. The panel is inline so the
   touchpad stays usable while typing. No typed text is logged or stored (`log.ts` drops
@@ -127,15 +137,19 @@ scripts/         gen-validators.ts, make-icons.mjs
   Inline explanations for unavailable Previous/Next, ads and fullscreen.
 - **Connection health** (`/app/health`, `lib/health.ts`, unit- and component-tested): seven layers —
   phone connectivity, account session, PC agent relay connection (unknown cause stated), local
-  remote-control/lock, manual-input permission (+ restricted screen), extension, media target — each
+  remote-control/lock, manual-input permission (+ restricted screen; the PC's input-session owner is
+  compared with this phone's controller id, so "another phone" is only said when observed —
+  unit-tested, DECISIONS 39), extension, media target — each
   with one next action; codes/versions behind a control; Retry bounded to 3 attempts then the support
   path (a retry never re-sends a command); last verified result; the first-use walkthrough that returns
   to the failed step; the V1 requirements stated plainly. Linked from every status pill, the reconnect
   banner and every failure.
 - **Support** (`/support`, component-tested): self-help topics; signed-in form → `POST
   /v1/support/tickets` (category preselected from the help link, optional reviewed redacted diagnostics
-  ≤ 32 KiB) → reference on 201; on failure "Not sent" + copyable redacted summary, never a receipt
-  claim; `GET /v1/support/tickets` lists the account's requests. `/release-notes` renders
+  ≤ 32 KiB) → reference on 201; a definite rejection (never left the phone, 4xx) → "Not sent"; a
+  network drop, 5xx or unreadable 2xx → "Not confirmed: DoMe could not confirm whether support
+  received this request" with "Refresh your requests" before any deliberate resend (component- and
+  unit-tested; DECISIONS 41); both with a copyable redacted summary, never a receipt claim; `GET /v1/support/tickets` lists the account's requests. `/release-notes` renders
   `src/content/release-notes.json` honestly (pre-release, no device verification). The Download page's
   official Windows path reads "not yet published".
 - **Upgrade experience** (component-tested): no upgrade copy, modal or banner on Dashboard, Remote,
@@ -149,7 +163,7 @@ scripts/         gen-validators.ts, make-icons.mjs
 
 ## Tests
 
-`pnpm test` — **30 files / 273 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
+`pnpm test` — **31 files / 287 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
 network). New in 1.1: `gestures` (tap/double thresholds, finger-count change never clicks, scroll
 without tap, drag lock + End Drag, cancel releases, sensitivity/clamp, guide coverage), `typing`
 (append once, IME commits once in either event order, autocorrect mapping, middle edit → pause,
@@ -159,9 +173,15 @@ awaitAck outcomes, ended/suspended frames, takeover, stop on hidden / PC switch 
 socket, INPUT_* error routing, pointer-only grant, no text in logs), `health` (every layer state and
 action, walkthrough), components `TouchpadPage` (session on entry/stop on leave, tap/move/right click,
 live pill from input_ack, Drag/End Drag/pointercancel, buttons, takeover prompt, missing grant
-explanation) and `KeyboardPanel` (commit once, Enter as key, IME, middle edit → Compose and Send,
-Ctrl+L gating, Compose and Send success/review without resend), `NowPlaying`, `PowerConfirmation`,
-`SupportPage` (201 reference, failure copy + summary, network failure, signed-out), `UpgradeAndHealth`
+explanation, implicit lostpointercapture between the lifts of a two-finger tap → exactly one right
+click, capture lost by a still-down finger → no click and a held drag released, drag/held reset after
+an idle stop) and `KeyboardPanel` (commit once, Enter as key, IME, middle edit → Compose and Send,
+Ctrl+L gating, Compose and Send success/review without resend, INPUT_STALE / dropped-events ack /
+suspended-then-restart → pause with no Backspace for earlier text, silent reset with nothing typed,
+compose draft never leaks into the live field), `health` (PC input session owned by this phone vs.
+another controller), `support` (submission failure classification), `NowPlaying`, `PowerConfirmation`,
+`SupportPage` (201 reference, 4xx "Not sent", 5xx / unreadable 201 / network "Not confirmed" with a
+list refresh and no resend, signed-out), `UpgradeAndHealth`
 (no upgrade copy on Free flows, dismissible Pro explanation, download not published, release notes,
 Health page layers/details/retries/walkthrough). Expectations updated for 1.1: `pairing.test.ts`
 (default capability list now includes pointer/keyboard), `Dashboard.test.tsx` (the PC name also
@@ -193,7 +213,7 @@ Gesture table (Safari and installed PWA, Windows PC with pointer+keyboard grante
 | Short still tap | one left click | no extra click after a slow or moved touch |
 | Two quick taps (same spot) | double click (e.g. opens a desktop icon) | second tap > 300 ms later = two singles |
 | Double button | double click | works where the two-tap timing fails |
-| Two-finger still tap / Right button | context menu | first finger lifting early still right-clicks |
+| Two-finger still tap / Right button | context menu | first finger lifting early still right-clicks (Safari fires lostpointercapture between the lifts) |
 | Two fingers moving | scroll (vertical; horizontal where supported); Natural vs Standard | no click, no cursor jump when one finger lifts first |
 | Drag → move → End Drag | window/icon drags, release at End Drag | lifting mid-drag keeps the hold (drag lock) |
 | Rotation / incoming call / app switch during drag | hold released ("Held on the PC" clears), no click | pill returns to Live after resume only via Start |
@@ -213,6 +233,7 @@ Keyboard varieties (click a real field on the PC first — Google search, addres
 | Ctrl+L in Chrome/Edge | address bar focused; button absent when Notepad is in front | modifier released afterwards |
 | Ctrl+A/C/V/Z | act on the PC's clipboard/field | pasting into the composer is plain text |
 | Compose and Send | text appears once; "Windows accepted N characters" | airplane mode before Send → review state, no automatic resend |
+| Live typing on weak cellular (INPUT_STALE) or after Stop/Start | "Live typing paused"; erasing on the phone deletes nothing on the PC | PC text you typed yourself stays intact |
 
 Rotation, backgrounding, network loss:
 

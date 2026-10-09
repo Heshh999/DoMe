@@ -506,7 +506,13 @@ class Agent:
                 )
             await self._send({"type": "error", "error": blocker.to_frame_error()})
             return
-        await self.input.handle_batch(vb)
+        relay_field = frame.get("relay")
+        relay_meta: dict[str, Any] = relay_field if isinstance(relay_field, dict) else {}
+        await self.input.handle_batch(
+            vb,
+            relay_received_at=relay_meta.get("received_at"),
+            relay_connection_id=relay_meta.get("connection_id"),
+        )
 
     def _input_grant_blocker(self, controller_id: str) -> ProtocolError | None:
         """Authorization steps 3-4 for a batch: local switch, plan state, live grant. Event-type coverage

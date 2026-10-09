@@ -87,10 +87,12 @@ export function TouchpadSurface({ machine, onOutput, disabled, dragActive, label
       onPointerUp={up}
       onPointerCancel={cancel}
       onLostPointerCapture={(e) => {
-        // Capture lost while a finger is still tracked (OS gesture, alert, rotation): never a tap.
-        if (machine.activeFingers > 0) {
-          machine.pointerUp(e.pointerId, e.timeStamp);
-          if (machine.activeFingers > 0) machine.cancel();
+        // Browsers release capture implicitly right after every pointerup, so lostpointercapture
+        // for a finger that already lifted is routine (it arrives between the two lifts of a
+        // two-finger tap) and must not touch the gesture. Only a capture lost by a finger that is
+        // still down (OS gesture, alert, rotation) cancels: release what is held, never click.
+        if (machine.hasFinger(e.pointerId)) {
+          machine.cancel();
           onOutput();
         }
       }}

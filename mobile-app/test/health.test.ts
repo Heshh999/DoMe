@@ -9,13 +9,15 @@ import { EMPTY_LIVE_PC, type LivePc, type PcState } from "../src/store/live.ts";
 
 const PC = "33333333-3333-4333-8333-333333333333";
 const TS = "2026-10-08T12:00:00.000Z";
+const ME = "44444444-4444-4444-8444-444444444444";
+const OTHER = "55555555-5555-4555-8555-555555555555";
 const pc: rest.Pc = { id: PC, name: "Office PC", enabled: true, connection: "online", last_seen: TS, created_at: TS, platform: "windows", agent_version: "0.1.0" };
 const grant: rest.Grant = { id: "g", controller_id: "c", pc_id: PC, capabilities: ["status", "media", "pointer", "keyboard"], created_at: TS };
 const state: PcState = { remote_enabled: true, session_locked: false, extension_connected: true, youtube_tabs: [{ browser_instance_id: "b", tab_id: 1, tab_token: "dGFiLXRva2VuLTAwMDAwMD", script_attached: true, context: "watch", ad_showing: false, is_live: false, in_playlist: false, paused: false, title: "Video" }] };
 const live: LivePc = { ...EMPTY_LIVE_PC, connection: "online", lastSeen: TS, state, stateReceivedAt: 1_000_000, stateAt: TS, stale: false };
 
 function base(over: Partial<HealthInput> = {}): HealthInput {
-  return { online: true, sessionStatus: "signed_in", relayStatus: "open", controllerBound: true, pc, live, grant, input: EMPTY_INPUT_STATE, selectedTab: undefined, selectedSession: undefined, commands: [], appVersion: "0.1.0", protocolVersion: "1.1", now: 1_000_500, ...over };
+  return { online: true, sessionStatus: "signed_in", relayStatus: "open", controllerBound: true, controllerId: ME, pc, live, grant, input: EMPTY_INPUT_STATE, selectedTab: undefined, selectedSession: undefined, commands: [], appVersion: "0.1.0", protocolVersion: "1.1", now: 1_000_500, ...over };
 }
 
 function layer(input: HealthInput, id: string) {
@@ -64,6 +66,26 @@ describe("assessHealth", () => {
     expect(layer(base({ grant: undefined }), "input").status).toBe("unknown");
     expect(layer(base({ live: { ...live, state: { ...state, input_restricted: true } } }), "input")).toMatchObject({ status: "problem", action: { kind: "unlock_pc" } });
     expect(layer(base(), "input").summary).toMatch(/Touchpad and keyboard allowed/);
+  });
+  it("manual-input layer: the PC's input session is compared with THIS phone's controller id, never with the input_session_id", () => {
+    const pcSession = (controller: string): LivePc => ({ ...live, state: { ...state, input_session: { controller_id: controller, pointer: true, keyboard: true, lease_expires_at: TS } } });
+    // this phone's own session lingering after Stop/hide (phase idle here, an agent-issued id earlier)
+    const own = layer(base({ live: pcSession(ME), input: { ...EMPTY_INPUT_STATE, phase: "idle", sessionId: "C".repeat(22) } }), "input");
+    expect(own.summary).not.toMatch(/Another phone/);
+    expect(own.summary).toMatch(/this phone’s last input session/);
+    expect(own.details).toContain("pc input session: this phone");
+    // while starting, the PC may already list this phone: still not "another phone"
+    expect(layer(base({ live: pcSession(ME), input: { ...EMPTY_INPUT_STATE, phase: "starting" } }), "input").summary).not.toMatch(/Another phone/);
+    // a different controller id is an observed foreign session
+    const other = layer(base({ live: pcSession(OTHER) }), "input");
+    expect(other.summary).toMatch(/Another phone currently holds the PC’s input session/);
+    expect(other.details).toContain("pc input session: another controller");
+    // while this phone is live nothing about ownership is claimed
+    expect(layer(base({ live: pcSession(OTHER), input: { ...EMPTY_INPUT_STATE, phase: "live", sessionId: "C".repeat(22) } }), "input").summary).not.toMatch(/Another phone/);
+    // without a bound controller id nothing can be compared, so nothing is diagnosed
+    expect(layer(base({ controllerId: null, live: pcSession(OTHER) }), "input").summary).not.toMatch(/Another phone|this phone’s last/);
+    // no PC session reported: no note at all
+    expect(layer(base(), "input").summary).not.toMatch(/Another phone|this phone’s last/);
   });
   it("extension layer: disconnected → install/update, with the note that only YouTube needs it", () => {
     const l = layer(base({ live: { ...live, state: { ...state, extension_connected: false } } }), "extension");

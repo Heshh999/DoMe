@@ -1,7 +1,9 @@
 /**
  * Support form (spec §11A): category preselected from the help link, POST body validated against the
- * contract, 201 → reference shown; failure → "Not sent", copyable redacted summary, never a claim of
- * receipt; the account's tickets listed.
+ * contract, 201 → reference shown; definite 4xx rejection → "Not sent"; a failure where the server may
+ * have stored the ticket (network drop, 5xx, unreadable 2xx) → "Not confirmed" with a refresh of
+ * "Your requests" before any retry; copyable redacted summary, never a claim of receipt either way;
+ * the account's tickets listed.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -80,10 +82,10 @@ describe("SupportPage", () => {
     expect((post.init.headers as Record<string, string>)["X-DoMe-CSRF"]).toBeDefined();
   });
 
-  it("a failed submission says so, offers a copyable redacted summary and never claims receipt", async () => {
+  it("a definite 4xx rejection says Not sent, offers a copyable redacted summary and never claims receipt", async () => {
     mock((url, init) => {
       if (init.method === "GET") return jsonResponse(200, { tickets: [TICKET] });
-      return jsonResponse(503, { error: { code: "INTERNAL", message: "down", retryable: true } });
+      return jsonResponse(429, { error: { code: "RATE_LIMITED", message: "slow down", retryable: true } });
     });
     renderSupport("?category=connection");
     expect(screen.getByLabelText("What is it about?")).toHaveValue("connection");
@@ -92,6 +94,7 @@ describe("SupportPage", () => {
     await waitFor(() => expect(screen.getByText("Not sent")).toBeInTheDocument());
     expect(screen.getByText(/Support has not received this request/)).toBeInTheDocument();
     expect(screen.queryByText(/Received/)).toBeNull();
+    expect(screen.queryByText(/could not confirm/)).toBeNull();
     const summary = screen.getByTestId("unsent-summary") as HTMLTextAreaElement;
     expect(summary.value).toContain("not sent");
     expect(summary.value).toContain("Category: connection");
@@ -101,7 +104,43 @@ describe("SupportPage", () => {
     expect(screen.getByText("DM-7K3M9P2Q")).toBeInTheDocument();
   });
 
-  it("a network failure is reported honestly too (no receipt claimed) and an unknown category falls back to 'other'", async () => {
+  it("a 5xx answer is reported as unconfirmed (the ticket may exist), never as Not sent; Refresh your requests re-reads the list before any retry", async () => {
+    let stored = false;
+    mock((url, init) => {
+      if (init.method === "GET") return jsonResponse(200, { tickets: stored ? [TICKET] : [] });
+      stored = true; // committed, then the answer failed
+      return jsonResponse(503, { error: { code: "INTERNAL", message: "down", retryable: true } });
+    });
+    renderSupport("?category=connection");
+    await userEvent.type(screen.getByLabelText("What happened?"), "PC shows offline although it is on.");
+    await userEvent.click(screen.getByRole("button", { name: "Send request" }));
+    await waitFor(() => expect(screen.getByText("Not confirmed")).toBeInTheDocument());
+    expect(screen.getByText(/could not confirm whether support received this request/)).toBeInTheDocument();
+    expect(screen.queryByText("Not sent")).toBeNull();
+    expect(screen.queryByText(/Support has not received/)).toBeNull();
+    expect(screen.queryByText(/Received —/)).toBeNull();
+    expect((screen.getByTestId("unsent-summary") as HTMLTextAreaElement).value).toContain("delivery not confirmed");
+    const getsBefore = requests.filter((r) => r.init.method === "GET").length;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh your requests" }));
+    await waitFor(() => expect(screen.getByText("DM-7K3M9P2Q")).toBeInTheDocument());
+    expect(requests.filter((r) => r.init.method === "GET").length).toBe(getsBefore + 1);
+    expect(requests.filter((r) => r.init.method === "POST")).toHaveLength(1); // nothing resent on its own
+  });
+
+  it("a 201 whose body fails support_ticket_response validation is unconfirmed, not a receipt and not Not sent", async () => {
+    mock((url, init) => {
+      if (init.method === "GET") return jsonResponse(200, { tickets: [] });
+      return jsonResponse(201, { reference: 42 });
+    });
+    renderSupport();
+    await userEvent.type(screen.getByLabelText("What happened?"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Send request" }));
+    await waitFor(() => expect(screen.getByText("Not confirmed")).toBeInTheDocument());
+    expect(screen.queryByText(/Received —/)).toBeNull();
+    expect(screen.queryByText("Not sent")).toBeNull();
+  });
+
+  it("a network failure is unconfirmed too (the POST may have left before the drop) and an unknown category falls back to 'other'", async () => {
     mock((url, init) => {
       if (init.method === "GET") return jsonResponse(200, { tickets: [] });
       throw new TypeError("Failed to fetch");
@@ -111,8 +150,9 @@ describe("SupportPage", () => {
     expect(screen.queryByText(/Error you were looking at/)).toBeNull();
     await userEvent.type(screen.getByLabelText("What happened?"), "x");
     await userEvent.click(screen.getByRole("button", { name: "Send request" }));
-    await waitFor(() => expect(screen.getByText("Not sent")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Not confirmed")).toBeInTheDocument());
     expect(screen.getByText(/offline, or DoMe could not be reached/)).toBeInTheDocument();
+    expect(screen.queryByText(/Support has not received/)).toBeNull();
   });
 
   it("signed out: self-help stays, the form asks to sign in and sends nothing", () => {

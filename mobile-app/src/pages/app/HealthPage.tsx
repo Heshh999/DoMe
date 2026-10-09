@@ -78,7 +78,7 @@ export function HealthPage() {
     if (pcId && grant === undefined) void loadGrants(pcId);
   }, [pcId, grant, loadGrants]);
 
-  const layers = assessHealth({ online, sessionStatus, relayStatus, controllerBound: controllerId !== null, pc, live, grant, input, selectedTab, selectedSession, commands, appVersion: APP_VERSION, protocolVersion: PROTOCOL_VERSION, now });
+  const layers = assessHealth({ online, sessionStatus, relayStatus, controllerBound: controllerId !== null, controllerId, pc, live, grant, input, selectedTab, selectedSession, commands, appVersion: APP_VERSION, protocolVersion: PROTOCOL_VERSION, now });
   const steps = onboardingSteps({ sessionStatus, pc, live, controllerBound: controllerId !== null, grant, selectedTab, selectedSession, commands });
   const firstUndone = steps.find((s) => !s.done) ?? null;
   const problems = layers.filter((l) => l.status === "problem");

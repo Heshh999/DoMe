@@ -57,3 +57,10 @@ modified; each item records the workaround used here.
 10. **No `NO_ANSWER` code exists** for a command that got neither ack nor result within the local
     deadline; the PWA uses a client-only `NO_ANSWER` in `labels.ts` (like `NETWORK`, item 4) for the
     touchpad start that times out.
+
+11. **`support_ticket_request` has no idempotency key.** After a network drop, timeout, 5xx or an
+    unreadable 2xx the phone cannot know whether the ticket was stored, and a retry may create a
+    duplicate. Workaround: the PWA says "DoMe could not confirm whether support received this
+    request" and offers "Refresh your requests" before a deliberate resend (DECISIONS 41). Suggested
+    (minor, next revision): optional `client_request_id` (UUID) in `support_ticket_request`, with the
+    server returning the existing ticket for a repeated id.

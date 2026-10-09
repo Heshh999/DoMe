@@ -96,6 +96,11 @@ export class GestureMachine {
     return this.fingers.size;
   }
 
+  /** Whether pointer `id` is still down as far as this machine knows (lost-capture handling). */
+  hasFinger(id: number): boolean {
+    return this.fingers.has(id);
+  }
+
   /** Drain the primitives produced since the last call, in order. */
   take(): GestureOutput[] {
     return this.out.splice(0, this.out.length);

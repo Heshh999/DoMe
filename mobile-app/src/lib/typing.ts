@@ -150,3 +150,18 @@ export const PAUSE_EXPLANATION: Record<Exclude<TypingCommit, { ok: true }>["reas
   uncertain_deletion: "That deletion removed a character (an emoji, accent or script cluster) that one Backspace on Windows may not remove the same way. Nothing was sent. Use the PC to fix it, or Compose and Send for the rest.",
   composing: "Your keyboard is still composing text. It is sent once the composition finishes.",
 };
+
+/**
+ * Why live typing lost certainty about what reached the PC (spec §10A B). When any of these happens
+ * the phone no longer knows which of its characters the PC field holds, so a later Backspace could
+ * delete the customer's own PC text: `LiveTyping` is reset and, if anything had been typed in this
+ * run, live entry pauses with one of these explanations.
+ */
+export type CertaintyLoss = "not_queued" | "rejected" | "dropped" | "session_changed";
+
+export const CERTAINTY_LOST_EXPLANATION: Record<CertaintyLoss, string> = {
+  not_queued: "That edit could not be sent because the touchpad session is not live, so the PC did not get it. Live typing paused rather than guessing what the PC field holds. Check the PC field, then continue.",
+  rejected: "The PC refused some of what was typed (see the notice above), so DoMe no longer knows exactly which characters reached the PC. Live typing paused so a later Backspace cannot delete text this phone never typed. Check the PC field, then continue.",
+  dropped: "The PC reported dropped input, so DoMe no longer knows exactly which characters reached the PC. Live typing paused so a later Backspace cannot delete text this phone never typed. Check the PC field, then continue.",
+  session_changed: "The touchpad session ended or was restarted, and anything still on its way was discarded. Live typing paused so a later Backspace cannot delete text this phone never typed. Check the PC field, then continue.",
+};

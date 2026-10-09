@@ -1,6 +1,7 @@
 /** Support-ticket categories (rest.schema.json support_ticket_request.category) with customer labels. */
-import type { rest } from "@dome/protocol";
+import { ProtocolError, type rest } from "@dome/protocol";
 
+import { ApiError } from "./api.ts";
 import { supportCategoryFor } from "./labels.ts";
 
 export const CATEGORIES: Array<{ value: rest.SupportTicketRequest["category"]; label: string }> = [
@@ -25,3 +26,24 @@ export function supportLink(code: string | null | undefined): string {
   return `/support?${params.toString()}`;
 }
 
+
+/**
+ * What a failed ticket POST says about receipt (spec §11A honesty, both directions):
+ *  - "not_sent": the request definitely did not create a ticket — it never left the phone (no CSRF
+ *    token, request body failed the contract) or the server answered with a definite 4xx rejection;
+ *  - "unconfirmed": the request may have been stored — the connection failed or timed out (the POST
+ *    may have left before it dropped), the server answered 5xx (possibly after committing), or a 2xx
+ *    answer failed `support_ticket_response` validation. The customer checks "Your requests" before
+ *    retrying, because the request schema carries no idempotency key (CONTRACT_ISSUES.md).
+ */
+export type SubmissionFailure = "not_sent" | "unconfirmed";
+
+export function submissionFailure(e: unknown): SubmissionFailure {
+  if (e instanceof ApiError) {
+    if (e.status === 0) return e.code === "NETWORK" ? "unconfirmed" : "not_sent";
+    if (e.status >= 400 && e.status < 500) return "not_sent";
+    return "unconfirmed";
+  }
+  if (e instanceof ProtocolError) return "not_sent";
+  return "unconfirmed";
+}

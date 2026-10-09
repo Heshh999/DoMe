@@ -72,8 +72,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     settings = _settings(args)
     configure_logging(settings.log_level, settings.log_path)
     headless = settings.headless or bool(args.headless)
-    from .single_instance import InstanceLock
+    from .single_instance import InstanceLock, describe_other_session, other_session_agent
 
+    other = other_session_agent(settings.state_dir)
+    if other is not None:
+        # Same account, another Windows session: it owns this account's identity. Refuse; never compete.
+        print(describe_other_session(other))
+        log.warning("refusing to start: an agent of this account runs in another Windows session")
+        return 1
     lock = InstanceLock.acquire(settings.state_dir)
     if lock is None:
         return _second_launch(settings)
@@ -247,20 +253,33 @@ def _print_pending(pending: dict[str, Any]) -> None:
     print(f"\n  Check that the phone shows this verification code:  {pending['verification_code']}\n")
 
 
-def _choose_capabilities(pending: dict[str, Any], assume_yes: bool) -> list[str]:
+def _choose_capabilities(
+    pending: dict[str, Any], assume_yes: bool, explicit_input: frozenset[str] = frozenset()
+) -> list[str]:
     """The requested non-input capabilities are granted with the approval; pointer and keyboard are
-    offered one by one so the PC owner decides explicitly (spec §10A-D). ``--yes`` grants all requested."""
+    offered one by one so the PC owner decides explicitly (spec §10A-D). ``--yes`` answers only the
+    general approval: pointer/keyboard are granted without a prompt ONLY when named explicitly
+    (``--pointer`` / ``--keyboard``), never implied by ``--yes``."""
     from .pairing import INPUT_CAPABILITIES
 
     requested = list(pending["requested_capabilities"])
-    if assume_yes:
-        return requested
     granted = [c for c in requested if c not in INPUT_CAPABILITIES]
     labels = {"pointer": "touchpad / mouse (pointer)", "keyboard": "keyboard (typing, keys, shortcuts)"}
     for cap in INPUT_CAPABILITIES:
-        if cap in requested and _confirm(f"  Allow {labels[cap]} for this phone? [y/N] ", False):
+        if cap not in requested:
+            continue
+        if cap in explicit_input:
+            granted.append(cap)
+            print(f"  {labels[cap]}: allowed (--{cap})")
+        elif assume_yes:
+            print(f"  {labels[cap]}: NOT allowed (--yes does not cover it; pass --{cap} to allow)")
+        elif _confirm(f"  Allow {labels[cap]} for this phone? [y/N] ", False):
             granted.append(cap)
     return granted
+
+
+def _explicit_input(args: argparse.Namespace) -> frozenset[str]:
+    return frozenset(c for c in ("pointer", "keyboard") if getattr(args, c, False))
 
 
 def _confirm(prompt: str, assume_yes: bool) -> bool:
@@ -310,7 +329,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
         ctl.call("pair_decline", pairing_id=pending["pairing_id"])
         print("Declined.")
         return 1
-    granted = _choose_capabilities(pending, args.yes)
+    granted = _choose_capabilities(pending, args.yes, _explicit_input(args))
     result = ctl.call("pair_approve", pairing_id=pending["pairing_id"], capabilities=granted)
     print(f"Approved '{result['display_name']}' with: {', '.join(granted)}. The phone can control this PC now.")
     return 0
@@ -331,7 +350,11 @@ def cmd_pair_approve(args: argparse.Namespace) -> int:
         if not _confirm("Approve this phone? [y/N] ", args.yes):
             print("Not approved.")
             return 1
-        granted = args.capabilities if args.capabilities is not None else _choose_capabilities(pending, args.yes)
+        granted = (
+            args.capabilities
+            if args.capabilities is not None
+            else _choose_capabilities(pending, args.yes, _explicit_input(args))
+        )
         result = ctl.call("pair_approve", pairing_id=args.pairing_id, capabilities=granted)
     except ControlError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
@@ -728,13 +751,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--print-code", action="store_true", help="print the code on one line instead of the QR (scripts/tests)"
     )
     p.add_argument("--no-wait", action="store_true", help="exit after showing the code")
-    p.add_argument("--yes", action="store_true", help="approve without asking (tests only)")
+    p.add_argument("--yes", action="store_true", help="approve without asking (tests only; not touchpad/keyboard)")
+    p.add_argument("--pointer", action="store_true", help="also allow touchpad / mouse input if the phone asked")
+    p.add_argument("--keyboard", action="store_true", help="also allow keyboard input if the phone asked")
     p.add_argument("--timeout", type=int, default=300)
     p.set_defaults(fn=cmd_pair)
 
     p = sub.add_parser("pair-approve", help="approve a pending pairing request")
     p.add_argument("pairing_id")
-    p.add_argument("--yes", action="store_true")
+    p.add_argument("--yes", action="store_true", help="approve without asking (not touchpad/keyboard)")
+    p.add_argument("--pointer", action="store_true", help="also allow touchpad / mouse input if the phone asked")
+    p.add_argument("--keyboard", action="store_true", help="also allow keyboard input if the phone asked")
     p.add_argument("--capabilities", nargs="*", default=None, help="subset of the requested capabilities to grant")
     p.set_defaults(fn=cmd_pair_approve)
 

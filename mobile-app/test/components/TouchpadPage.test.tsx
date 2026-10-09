@@ -86,7 +86,7 @@ function renderPage() {
 
 let clock = 10_000;
 /** Pointer events with an explicit, monotonically increasing timeStamp so the tap thresholds never depend on test speed. */
-function pointer(el: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel", id: number, x: number, y: number, dt = 20) {
+function pointer(el: Element, type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel" | "lostpointercapture", id: number, x: number, y: number, dt = 20) {
   clock += dt;
   const ev = new (window.PointerEvent ?? MouseEvent)(type, { pointerId: id, clientX: x, clientY: y, bubbles: true, pointerType: "touch", isPrimary: id === 1, button: 0 } as PointerEventInit);
   Object.defineProperty(ev, "timeStamp", { value: clock });
@@ -208,6 +208,68 @@ describe("TouchpadPage", () => {
     const after = allEvents().slice(before);
     expect(after).toEqual([{ type: "pointer_button", button: "left", action: "up" }]);
     expect(after.some((e) => e.action === "click")).toBe(false);
+  });
+
+  it("the implicit lostpointercapture after the first finger lifts does not cancel a two-finger tap (exactly one right click)", async () => {
+    renderPage();
+    await answerStart();
+    const surface = screen.getByTestId("touchpad-surface");
+    pointer(surface, "pointerdown", 1, 100, 100);
+    pointer(surface, "pointerdown", 2, 140, 100);
+    pointer(surface, "pointerup", 1, 100, 100);
+    pointer(surface, "lostpointercapture", 1, 100, 100, 0); // browsers release capture right after pointerup
+    pointer(surface, "pointerup", 2, 140, 100);
+    pointer(surface, "lostpointercapture", 2, 140, 100, 0);
+    await runFrames();
+    expect(allEvents()).toEqual([{ type: "pointer_button", button: "right", action: "click" }]);
+  });
+
+  it("capture lost by a finger that is still down cancels the gesture: no click, a held drag is released", async () => {
+    renderPage();
+    await answerStart();
+    const surface = screen.getByTestId("touchpad-surface");
+    pointer(surface, "pointerdown", 1, 100, 100);
+    pointer(surface, "lostpointercapture", 1, 100, 100);
+    pointer(surface, "pointerup", 1, 100, 100);
+    await runFrames();
+    expect(allEvents()).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "Drag mode" }));
+    pointer(surface, "pointerdown", 1, 50, 50);
+    pointer(surface, "pointermove", 1, 90, 70);
+    pointer(surface, "lostpointercapture", 1, 90, 70);
+    await runFrames();
+    const ev = allEvents();
+    expect(ev[0]).toEqual({ type: "pointer_button", button: "left", action: "down" });
+    expect(ev[ev.length - 1]).toEqual({ type: "pointer_button", button: "left", action: "up" });
+    expect(ev.some((e) => e.action === "click")).toBe(false);
+  });
+
+  it("a session that goes idle (page hidden / PC switch) clears Drag mode and the held indicator; the next touch after a deliberate restart does not press", async () => {
+    renderPage();
+    await answerStart();
+    const surface = screen.getByTestId("touchpad-surface");
+    await userEvent.click(screen.getByRole("button", { name: "Drag mode" }));
+    pointer(surface, "pointerdown", 1, 50, 50);
+    pointer(surface, "pointermove", 1, 90, 70);
+    pointer(surface, "pointerup", 1, 90, 70);
+    await runFrames();
+    expect(screen.getByText(/DRAG MODE — holding the left button/)).toBeInTheDocument();
+    await act(async () => {
+      await rt.input.stop("hidden");
+      await flush();
+    });
+    expect(rt.input.snapshot.phase).toBe("idle");
+    expect(screen.queryByText(/DRAG MODE/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "End Drag" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Drag mode" })).toBeInTheDocument();
+    const before = allEvents().length;
+    await userEvent.click(screen.getByRole("button", { name: /Start touchpad on Office PC/ }));
+    await answerStart();
+    pointer(surface, "pointerdown", 1, 100, 100);
+    pointer(surface, "pointerup", 1, 100, 100);
+    await runFrames();
+    // a plain tap: no stray "down" (drag mode off) and no stray "up" for a button the PC never got
+    expect(allEvents().slice(before)).toEqual([{ type: "pointer_button", button: "left", action: "click" }]);
   });
 
   it("Left/Right/Double buttons send the matching primitives; Stop Input ends the session", async () => {
@@ -362,5 +424,102 @@ describe("KeyboardPanel", () => {
     expect(screen.getByRole("button", { name: "Discard" })).toBeEnabled();
     expect(JSON.stringify(recentLogs())).not.toContain("search terms");
     expect(JSON.stringify(recentLogs())).not.toContain("again");
+  });
+  async function typeLive(ta: HTMLTextAreaElement, value: string) {
+    ta.value = value;
+    fireEvent.input(ta);
+    await runFrames();
+  }
+  function backspaces() {
+    return allEvents().filter((e) => e.type === "key" && e.key === "backspace").length;
+  }
+  async function resumeLiveAndCheckFreshModel() {
+    // Live entry again: the textarea starts empty and the model knows nothing of the earlier run.
+    await userEvent.click(screen.getByRole("tab", { name: "Type live" }));
+    const ta = screen.getByTestId("live-textarea") as HTMLTextAreaElement;
+    expect(ta.value).toBe("");
+    const before = allEvents().length;
+    await typeLive(ta, "xy");
+    await typeLive(ta, "x");
+    expect(allEvents().slice(before)).toEqual([
+      { type: "text", text: "xy" },
+      { type: "key", key: "backspace" }, // removes the "y" this phone just typed, nothing older
+    ]);
+  }
+
+  it("a batch the PC rejected (INPUT_STALE) pauses live typing: erasing on the phone never sends Backspaces for text the PC may not have", async () => {
+    const ta = await openKeyboard();
+    await typeLive(ta, "abc");
+    expect(allEvents()).toEqual([{ type: "text", text: "abc" }]);
+    await act(async () => {
+      socket.receive({ type: "error", error: { code: "INPUT_STALE", message: "late", retryable: true }, ref_pc_id: PC });
+      await flush();
+    });
+    expect(rt.input.snapshot.phase).toBe("live"); // the session continues; only the batch was dropped
+    expect(screen.getByText("Live typing paused")).toBeInTheDocument();
+    expect(screen.getByText(/PC refused some of what was typed/)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Compose and Send" })).toHaveAttribute("aria-selected", "true");
+    // the customer erases a character in the (now detached) live field: nothing reaches the PC
+    ta.value = "ab";
+    fireEvent.input(ta);
+    await runFrames();
+    expect(backspaces()).toBe(0);
+    await resumeLiveAndCheckFreshModel();
+    expect(allEvents().filter((e) => e.type === "key").length).toBe(1);
+  });
+
+  it("an ack reporting more dropped events pauses live typing the same way", async () => {
+    const ta = await openKeyboard();
+    await typeLive(ta, "abc");
+    const seq = batches()[batches().length - 1]!.seq as number;
+    await act(async () => {
+      socket.receive({ type: "input_ack", pc_id: PC, input_session_id: SESSION_ID, last_seq: seq, accepted_events: 0, dropped_events: 1, held_buttons: [], held_keys: [], at: TS });
+      await flush();
+    });
+    expect(screen.getByText("Live typing paused")).toBeInTheDocument();
+    expect(screen.getByText(/PC reported dropped input/)).toBeInTheDocument();
+    expect(backspaces()).toBe(0);
+    await resumeLiveAndCheckFreshModel();
+  });
+
+  it("a suspended session followed by a fresh Start does not carry the old live text: no Backspace for text typed in the previous session", async () => {
+    const ta = await openKeyboard();
+    await typeLive(ta, "abc");
+    await act(async () => {
+      socket.receive({ type: "input_session", pc_id: PC, input_session_id: SESSION_ID, controller_id: CONTROLLER, event: "suspended", reason: "backpressure", holds_released: 0, at: TS });
+      await flush();
+    });
+    expect(rt.input.snapshot.phase).toBe("suspended");
+    expect(screen.getByText("Live typing paused")).toBeInTheDocument();
+    expect(screen.getByText(/session ended or was restarted/)).toBeInTheDocument();
+    expect(ta.value).toBe("");
+    await userEvent.click(screen.getByRole("button", { name: "Start again" }));
+    await answerStart();
+    expect(screen.getByTestId("keyboard-panel")).toBeInTheDocument(); // the panel stayed mounted
+    expect(screen.getByRole("tab", { name: "Compose and Send" })).toHaveAttribute("aria-selected", "true");
+    expect(backspaces()).toBe(0);
+    await resumeLiveAndCheckFreshModel();
+  });
+
+  it("a session that ends without anything typed resets silently (no pause notice)", async () => {
+    await openKeyboard();
+    await act(async () => {
+      socket.receive({ type: "input_session", pc_id: PC, input_session_id: SESSION_ID, controller_id: CONTROLLER, event: "ended", reason: "lease_expired", holds_released: 0, at: TS });
+      await flush();
+    });
+    expect(screen.queryByText("Live typing paused")).toBeNull();
+    expect(screen.getByRole("tab", { name: "Type live" })).toHaveAttribute("aria-selected", "true");
+  });
+  it("switching from Compose and Send to Type live never carries composer text into the live field (it would be sent on the next keystroke)", async () => {
+    await openKeyboard();
+    await userEvent.click(screen.getByRole("tab", { name: "Compose and Send" }));
+    await userEvent.type(screen.getByTestId("composer"), "draft");
+    await userEvent.click(screen.getByRole("tab", { name: "Type live" }));
+    const ta = screen.getByTestId("live-textarea") as HTMLTextAreaElement;
+    expect(ta.value).toBe("");
+    ta.value = "x";
+    fireEvent.input(ta);
+    await runFrames();
+    expect(allEvents()).toEqual([{ type: "text", text: "x" }]);
   });
 });
