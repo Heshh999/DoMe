@@ -198,16 +198,19 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
             if settings.passphrase
             else ""
         )
+        # Continue comes first in the form (implicit submission with Enter uses the first submit button)
+        # and is shown last with CSS order.
         page = f"""<!doctype html><html><head><meta charset="utf-8"><title>DoMe dev sign-in</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{_PAGE_CSS}</style></head>
 <body><form method="post" action="authorize">{hidden}
+<button type="submit" name="use_typed" value="1" style="order:99">Continue</button>
 <h1 style="margin:0;font-size:20px">Development identity provider</h1>
 <p class="warn">This sign-in exists only on developer machines. It never runs in production.</p>
 {passphrase_field}
 {buttons}
-<label>Or any email<input name="email" type="email" placeholder="you@example.test"></label>
-<button type="submit">Continue</button></form></body></html>"""
+<label>Or any email<input name="email_typed" type="email" placeholder="you@example.test"></label>
+</form></body></html>"""
         return HTMLResponse(page)
 
     def _check_passphrase(supplied: str) -> None:
@@ -224,14 +227,20 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     @app.post("/authorize")
     async def authorize_post(request: Request) -> RedirectResponse:
         form = await request.form()
-        params = {k: str(v) for k, v in form.items() if k not in ("email", "passphrase")}
+        params = {k: str(v) for k, v in form.items() if k not in ("email", "email_typed", "use_typed", "passphrase")}
         _validate_authorize(params)
         _check_passphrase(str(form.get("passphrase") or ""))
-        # The page posts the clicked account button's value and the "any email" box (in that order); an
-        # untouched box is an empty value, so take the first non-empty one rather than the last value.
-        email = next((str(v).strip().lower() for v in form.getlist("email") if str(v).strip()), "")
+        # Two ways to choose who signs in: an account button (name="email") or the "any email" box with
+        # Continue (use_typed=1). Continue is the form's first submit button, so Enter in any field means
+        # "use the typed email" and never silently signs in as the first listed account.
+        if form.get("use_typed") == "1":
+            email = str(form.get("email_typed") or "").strip().lower()
+        else:
+            email = next((str(v).strip().lower() for v in form.getlist("email") if str(v).strip()), "")
+            if not email:
+                email = str(form.get("email_typed") or "").strip().lower()
         if not email or "@" not in email:
-            raise HTTPException(400, "email required")
+            raise HTTPException(400, "choose one of the test accounts, or type an email and tap Continue")
         return _issue_code(params, email)
 
     def _client_auth(request: Request, form: dict[str, str]) -> None:

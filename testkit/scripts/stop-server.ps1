@@ -20,9 +20,11 @@ $exitCode = Invoke-KitMain {
     if (Test-Path $current) { Remove-Item -Force $current }
     Write-Ok 'stopped'
     if ($DeleteData) {
+        # The PC's link pointed into the deleted data: step 2 links it again next time.
+        $linkRecord = Join-Path $script:StateDir 'agent-link.json'
+        if (Test-Path $linkRecord) { Remove-Item -Force $linkRecord }
         Write-Ok 'test data deleted'
-        Write-Note 'This PC still remembers its old link. To start over on the PC too, quit DoMe from the tray'
-        Write-Note 'icon and delete the folder %LOCALAPPDATA%\DoMe (README, "Start over").'
+        Write-Note 'Next time, "2 Start DoMe on this PC.cmd" links this PC again to the new test account.'
     }
     Write-Note 'If DoMe is still running in the tray, right-click its icon and choose Quit DoMe.'
 }

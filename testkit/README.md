@@ -19,21 +19,26 @@ Three double-click files do everything:
 
 - A Windows 10 or 11 PC with internet access.
 - **Docker Desktop**, installed and running (its window says "Engine running").
-  Download: https://www.docker.com/products/docker-desktop/
+  Download: https://www.docker.com/products/docker-desktop/ . Its installer sets up **WSL 2**, which
+  needs virtualization switched on in the PC's BIOS/UEFI (most PCs have it on; Docker Desktop tells
+  you if not) and may ask for a restart.
 - **Chrome or Edge** on the PC (for YouTube control).
 - An **iPhone with Safari** (any phone or browser works; the app is designed for iPhone).
 - About 10 GB of free disk space. The first start takes 5-15 minutes while Docker downloads and
   builds; later starts take about a minute.
-- **uv**, a free tool that installs Python for the DoMe PC program. Step 2 offers to install it for
+- **uv**, a free tool that installs Python for the DoMe PC program. Step 1 offers to install it for
   your Windows user if it is missing (no administrator rights needed).
-- This repository on the PC (cloned with git, or downloaded as a ZIP and extracted).
+- This repository on the PC: cloned with git, or downloaded as a ZIP and **extracted** (the scripts do
+  not run from inside the ZIP). If Windows shows "Windows protected your PC" for a `.cmd` file from
+  the internet, click **More info**, then **Run anyway**.
 
 ## Step 1: start the test server
 
 1. Start Docker Desktop and wait for "Engine running".
-2. Double-click **`1 Start test server.cmd`**.
+2. Double-click **`1 Start test server.cmd`**. The first time, it offers to install uv and prepares
+   the DoMe PC program (1-2 minutes) before building DoMe.
 3. When it finishes, the window shows:
-   - the **app address** (`https://<random words>.trycloudflare.com`),
+   - the **app address** (`https://<random words>.trycloudflare.com/app`),
    - the **sign-in passphrase** (three groups of four characters, new on every start),
    - and a QR code opens in a picture viewer.
 
@@ -41,11 +46,12 @@ You can close this window afterwards; DoMe keeps running in Docker.
 
 ## Step 2: open DoMe on the iPhone and sign in
 
-1. Point the iPhone camera at the QR code (or type the app address into Safari).
-2. Tap **Sign in**. The DoMe **development sign-in page** opens (dark page with a yellow warning).
-3. Type the **passphrase** from the step 1 window, then tap **alice@example.test** (or type any
-   email and tap Continue). The email is only a test name; there is no password.
-4. You are back in the DoMe app. It says the phone is not paired yet; that comes in step 4.
+1. Point the iPhone camera at the QR code (or type the app address into Safari). The DoMe
+   **development sign-in page** opens (dark page with a yellow warning).
+2. Type the **passphrase** from the step 1 window, then tap **alice@example.test** (or type any
+   email and tap Continue). The email is only a test name; there is no password. Use the **same
+   email on the PC** in step 3: the PC and the iPhone must be in the same test account.
+3. You are in the DoMe app. It says the phone is not paired yet; that comes in step 4.
 
 Home Screen: you can add DoMe to the Home Screen (Share, then "Add to Home Screen"). If you do,
 open it from the Home Screen icon and **sign in and pair from inside it**: the Home Screen app may
@@ -64,7 +70,8 @@ not share Safari's storage, so a phone paired in Safari can count as a different
 4. The DoMe icon appears near the clock (it may be hidden under the `^` arrow).
 
 Keep this window open while you test. Closing it, or choosing **Quit DoMe** in the tray menu, stops
-DoMe on the PC.
+DoMe on the PC. Leave the tray's **Start at login** off with the test kit: started that way, DoMe
+would not know the test server's current address.
 
 ## Step 4: pair the iPhone
 
@@ -84,13 +91,16 @@ Everything below **really happens on this PC**.
 
 - **Remote**: Windows volume and mute; play/pause/next for whatever is playing (Spotify, a video).
 - **YouTube** (Remote, YouTube tab): open a video in Chrome or Edge with the extension loaded.
-- **Touchpad** and **Type**: move the mouse, click, scroll, type text into the active window.
+- **Touchpad**: move the mouse, click, scroll and drag. Its **Keyboard** button types text into the
+  active window on the PC.
+- **Type**: write a command in words, for example "Set my PC volume to 35 percent" or "Pause
+  YouTube"; DoMe shows exactly what it will do before sending it.
 - **Apps**: opens apps you approved on the PC. To approve one, open a Command Prompt in the
-  repository folder and run, for example:
-  `pc-agent\.venv\Scripts\dome-agent.exe approve-app notepad C:\Windows\System32\notepad.exe --name Notepad`
+  repository folder and run, for example (Microsoft Edge is on every Windows PC):
+  `pc-agent\.venv\Scripts\dome-agent.exe approve-app edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --name Edge`
   (the tray menu's **Approved apps...** lists them).
-- **Lock, sleep, restart, shut down** (if you granted power control): always asks for confirmation,
-  and it does lock or shut down the PC.
+- **Lock** (happens right away) and **sleep, restart, shut down** (if you granted power control;
+  these always ask for confirmation first). They really lock or shut down the PC.
 - **More -> Devices**: rename or revoke phones, see the PC's status.
 
 Please write down what worked, what did not, and anything confusing. For a problem with the app,
@@ -108,13 +118,12 @@ The temporary addresses (Cloudflare "quick tunnels", no account needed) change e
 server starts, and stop working when you stop it, restart Docker or restart the PC. After a new
 start:
 
-- Open the **new** address on the iPhone (scan the new QR code) and sign in again. A Home Screen icon
-  added earlier still points to the old address: remove it and add the new one.
-- **Pair the iPhone again.** The phone keeps its pairing key per address, so at a new address it is
-  a new phone to DoMe. The free plan allows **2 phones**: when pairing says the device limit is
-  reached, tap **Manage devices** and revoke the phones from earlier runs, then pair again.
-- Run `2 Start DoMe on this PC.cmd` again. The PC stays linked; the script gives the PC program the
-  new address.
+- **It is a new, empty test account.** DoMe knows an account by its sign-in address and email, and
+  the sign-in address changed too.
+- Run `2 Start DoMe on this PC.cmd` again. It notices the new account and **links this PC again**
+  (a browser opens: passphrase, same email as on the iPhone, **Link this PC**).
+- Open the **new** address on the iPhone (scan the new QR code), sign in and **pair again**. A Home
+  Screen icon added earlier still points to the old address: remove it and add the new one.
 
 To avoid all this, use a stable address (next section).
 
@@ -136,14 +145,15 @@ SIGNIN_URL=https://dome-signin.example.com
 ```
 
 `1 Start test server.cmd` then uses these instead of quick tunnels. The app address must be just
-`https://host` (no path). With a stable address you stay signed in across restarts and the phone
-stays paired. Delete the file to go back to quick tunnels.
+`https://host` (no path). With a stable address you keep the same test account, stay signed in
+across restarts and the phone stays paired. Delete the file to go back to quick tunnels.
 
 ## Start over
 
-1. Run `3 Stop test server.cmd` and answer **y** to delete all test data.
-2. Quit DoMe from the tray, then delete the folder `%LOCALAPPDATA%\DoMe` (the PC program's link,
-   pairings, settings and logs).
+1. Run `3 Stop test server.cmd` and answer **y** to delete all test data. The next
+   `2 Start DoMe on this PC.cmd` links this PC again to the new, empty account.
+2. Optional, to also clear the PC program's settings, pairings and logs: quit DoMe from the tray and
+   delete the folder `%LOCALAPPDATA%\DoMe`.
 3. On the iPhone, in the DoMe app: **More -> Settings & help -> Forget this installation** (before
    stopping), or clear the website data for the trycloudflare.com address in Safari settings.
 
@@ -159,15 +169,17 @@ stays paired. Delete the file to go back to quick tunnels.
 | Sign-in says "Too many wrong passphrases" | Wait 10 minutes, or run step 1 again (new passphrase). |
 | "DoMe is already running on this PC" | Right-click the tray icon, **Quit DoMe**, run step 2 again. |
 | The link browser window did not open | Copy the address printed in the step 2 window into a browser on the PC. |
-| YouTube controls stay greyed out | Check that the extension is loaded and switched on, then reload the YouTube tab. To rebuild it, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
-| Pairing says the device limit is reached | Tap **Manage devices**, revoke phones you no longer use, pair again (see "Every start is a new address"). |
-| Anything else | Server logs: open a Command Prompt in the repository folder and run `docker compose -f testkit\docker-compose.yml logs api`. PC program log: `%LOCALAPPDATA%\DoMe\logs\agent.log`. Send these with your notes. |
+| YouTube controls stay greyed out | Check that the extension is loaded and switched on, then reload the YouTube tab. To rebuild it: quit DoMe from the tray, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
+| Pairing says the device limit is reached | The free plan allows 2 phones per account (this happens with a stable address, where the account is kept). Tap **Manage devices**, revoke phones you no longer use, pair again. |
+| The iPhone and the PC do not see each other | Both must be signed in with the same email in the same test account. After a new start, run step 2 again and use the new address on the iPhone. |
+| Anything else | Server logs: in a Command Prompt run `docker logs dome-test-api-1` (sign-in page: `docker logs dome-test-dev-idp-1`). PC program log: `%LOCALAPPDATA%\DoMe\logs\agent.log`. Send these with your notes. |
 
 ## What this is not
 
 - **Not the real sign-in.** The sign-in page is DoMe's development identity provider: no passwords,
   any email works. The only thing keeping strangers out is the passphrase (new on every start,
-  10 wrong tries lock sign-in for 10 minutes). Use test names, not real accounts.
+  10 wrong tries lock sign-in for 10 minutes, for everyone: if that happens without you, run step 1
+  again for new addresses). Use test names, not real accounts.
 - **Public addresses.** Anyone who learns the app address can open the DoMe website and the sign-in
   page. Controlling the PC still needs a signed-in account **and** a phone you approved on the PC,
   but stop the test server when you are not testing.

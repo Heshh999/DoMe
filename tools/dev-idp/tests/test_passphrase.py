@@ -152,3 +152,34 @@ def test_browser_gets_a_readable_refusal_page_and_scripts_keep_json() -> None:
 def test_sign_in_page_fits_a_phone_screen() -> None:
     page = _client("k7m2-x9qp-3wfa").get("/authorize", params=AUTH_PARAMS).text
     assert "box-sizing:border-box" in page and "width=device-width" in page
+
+
+def test_enter_or_continue_uses_the_typed_email_and_a_button_click_uses_its_account() -> None:
+    """Continue is the form's first submit button, so Enter in the email box posts use_typed=1 and never
+    the first account button; clicking an account button signs in as that account even if the box has text."""
+    client = _client("k7m2-x9qp-3wfa")
+    headers = {"content-type": "application/x-www-form-urlencoded"}
+    base = [*AUTH_PARAMS.items(), ("passphrase", "k7m2-x9qp-3wfa")]
+
+    def signed_in_as(form: list[tuple[str, str]]) -> str:
+        r = client.post("/authorize", content=urlencode(form), headers=headers)
+        assert r.status_code == 303, r.text
+        tokens = _redeem(client, r.headers["location"])
+        return str(
+            client.get("/userinfo", headers={"authorization": f"Bearer {tokens['access_token']}"}).json()["email"]
+        )
+
+    assert signed_in_as([*base, ("use_typed", "1"), ("email_typed", " Tester@Example.test ")]) == "tester@example.test"
+    assert (
+        signed_in_as([*base, ("email", "bob@example.test"), ("email_typed", "tester@example.test")])
+        == "bob@example.test"
+    )
+    r = client.post("/authorize", content=urlencode([*base, ("use_typed", "1"), ("email_typed", "")]), headers=headers)
+    assert r.status_code == 400  # Enter in the passphrase box with no email: refused, not "alice"
+
+
+def test_continue_is_the_first_submit_button_on_the_page() -> None:
+    page = _client("k7m2-x9qp-3wfa").get("/authorize", params=AUTH_PARAMS).text
+    first_button = page.index("<button")
+    assert page[first_button:].startswith('<button type="submit" name="use_typed" value="1"')
+    assert 'name="email_typed"' in page

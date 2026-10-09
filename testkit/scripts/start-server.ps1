@@ -44,7 +44,7 @@ $exitCode = Invoke-KitMain {
 
     Write-Step 'Waiting for DoMe to answer on this PC'
     if (-not (Wait-Url 'http://127.0.0.1:18080/healthz' 240)) {
-        Stop-Kit 'DoMe did not start. Run: docker compose -f testkit\docker-compose.yml logs api'
+        Stop-Kit 'DoMe did not start. To see why, run in a Command Prompt: docker logs dome-test-api-1'
     }
     Write-Ok 'DoMe is running'
 
@@ -62,16 +62,18 @@ $exitCode = Invoke-KitMain {
     if ($publicOk) { Write-Ok 'reachable from the internet' }
     else { Write-Warn 'Not reachable yet from this PC. Give it a minute; if your iPhone cannot open it either, see README "If something goes wrong".' }
 
+    # /app goes straight to sign-in (the bare address is the public website).
+    $phoneUrl = $appUrl + '/app'
     $qrPath = Join-Path $script:StateDir 'open-on-iphone.png'
     if (-not $NoQr) {
-        Invoke-Native 'Making the QR code' { & $script:AgentPython (Join-Path $PSScriptRoot 'kit_helper.py') qr $appUrl $qrPath }
+        Invoke-Native 'Making the QR code' { & $script:AgentPython (Join-Path $PSScriptRoot 'kit_helper.py') qr $phoneUrl $qrPath }
         Show-Image $qrPath
     }
 
     Write-Banner 'DoMe test server is running'
     Write-Host ''
     Write-Host '  Open this on your iPhone (Safari):' -ForegroundColor White
-    Write-Host ('      ' + $appUrl) -ForegroundColor Green
+    Write-Host ('      ' + $phoneUrl) -ForegroundColor Green
     if (-not $NoQr) { Write-Host '      (or point the iPhone camera at the QR code that just opened)' }
     Write-Host ''
     Write-Host '  Sign-in passphrase (the sign-in page asks for it):' -ForegroundColor White
@@ -81,8 +83,8 @@ $exitCode = Invoke-KitMain {
     if ($mode -eq 'quick-tunnel') {
         Write-Host '  These addresses stop working when you run "3 Stop test server.cmd", restart Docker or'
         Write-Host '  restart the PC. Starting again gives NEW addresses (see README, "Every start is a new address").'
-        Write-Host '  At a new address the iPhone signs in and pairs again. The free plan allows 2 phones: if'
-        Write-Host '  pairing says the limit is reached, tap "Manage devices" and revoke the old ones.'
+        Write-Host '  A new address is a new, empty test account: step 2 links this PC again, and the iPhone'
+        Write-Host '  opens the new address, signs in and pairs again.'
     }
     Write-Host '  You can close this window; DoMe keeps running in Docker.'
 }

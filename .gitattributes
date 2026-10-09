@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers (deploy/entrypoint.sh is the image's ENTRYPOINT). Git for
+# Windows defaults to core.autocrlf=true, which would check them out with CRLF line endings and the
+# container would fail to start ("/bin/sh^M: not found"). Keep them LF in every checkout.
+*.sh text eol=lf

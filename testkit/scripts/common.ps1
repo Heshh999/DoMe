@@ -154,7 +154,8 @@ function Get-PersistentSecret([string]$Name, [int]$Bytes) {
     Initialize-StateDir
     $path = Join-Path $script:StateDir $Name
     if (Test-Path $path) {
-        $value = (Get-Content -Raw -Path $path).Trim()
+        # [string] turns the $null that Get-Content -Raw returns for an empty file into ''.
+        $value = ([string](Get-Content -Raw -Path $path)).Trim()
         if ($value.Length -ge 32) { return $value }
     }
     $value = New-HexSecret $Bytes
@@ -195,7 +196,7 @@ function Wait-TunnelUrl([string]$Service, [int]$TimeoutSeconds = 90) {
         if ($found.Count -gt 0) { return $found[$found.Count - 1].Value }
         # Older cloudflared: "failed to request quick Tunnel"; 2026.x: "quick tunnel provisioning failed with status 429: ..."
         if ($logs -match 'failed to (request|unmarshal) quick Tunnel|quick tunnel provisioning failed|429 Too Many Requests') {
-            Stop-Kit ("Cloudflare did not create the temporary address for $Service. Wait a minute and run this again. Details: docker compose -f testkit\docker-compose.yml --profile quick-tunnel logs $Service")
+            Stop-Kit ("Cloudflare did not create the temporary address for $Service. Wait a minute and run this again. Details: docker logs dome-test-$Service-1")
         }
         Start-Sleep -Seconds 2
     }
