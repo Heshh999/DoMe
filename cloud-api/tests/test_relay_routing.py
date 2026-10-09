@@ -354,7 +354,12 @@ async def test_queue_depth_and_rate_limit(
     burst = 30  # plans.json free.manual_command_rate_limit.burst (refills at 120/min)
     extra = 3  # tolerate up to 3 tokens refilled while the burst is being sent
     total = burst + extra
-    cids = [await paired.command(online_agent.pc_id, "system.ping") for _ in range(total)]
+    # Sign every envelope first: ES256 signing is the slow part, and doing it inside the burst let the bucket
+    # refill (120/min) on a loaded machine, so the "last one is over budget" assertion depended on CPU speed.
+    signed = [paired.envelope(online_agent.pc_id, "system.ping") for _ in range(total)]
+    cids = [cid for cid, _ in signed]
+    for _, envl in signed:
+        await paired.send_envelope(online_agent.pc_id, envl)
     forwarded = 0
     for _ in range(depth):
         await online_agent.recv_type("command")
