@@ -62,11 +62,20 @@ uv run mypy dome_agent
 uv run ruff check . && uv run ruff format --check .
 ```
 
-Last full run on Linux (2026-10-09): **244 passed, 1 skipped** (the state-directory permission probe
-cannot fail as root), mypy strict clean, ruff clean. New with protocol 1.1: `tests/test_input_session.py`
-(30 tests: lifecycle, ordering/coalescing, replay/stale/forged batches, lease and keepalives, holds and
+Last full run on Linux (2026-10-09, after the input review fixes): **256 passed, 1 skipped** (the
+state-directory permission probe cannot fail as root), mypy strict clean (58 files), ruff check and
+format clean. The review-fix round added 12 tests (phone clock 2 s behind/ahead, relay-leg stall,
+`AgeEstimator` unit, keyboard batches queued across a target change, the 2 s grace continuation, an
+elevated window with a stale/unknown cached foreground, click on a held button, a dispatch outliving the
+bounded wait, a shortcut whose recovery release failed, the Windows shortcut recovery with a scripted
+`_send` double, the same-account other-session refusal) and changed four expectations on purpose: the
+`input.session_start` result no longer carries `window_title`; typing sent right after a target change
+stays blocked until a click; the secure-desktop test drives the fake's new `secure_desktop` flag instead
+of "restricted + no foreground"; `--yes` no longer grants pointer/keyboard. Earlier 1.1 baseline: 244
+passed, 1 skipped. New with protocol 1.1: `tests/test_input_session.py`
+(40 tests incl. the review fixes: lifecycle, ordering/coalescing, replay/stale/forged batches, lease and keepalives, holds and
 every end trigger, target change, ack rate, backpressure, crash recovery, grant_update delivery, content
-hygiene), `tests/test_windows_input_layout.py` (8), `tests/test_single_instance.py` (7), pairing/CLI
+hygiene, clock skew), `tests/test_windows_input_layout.py` (9), `tests/test_single_instance.py` (8), pairing/CLI
 capability prompts (2), power confirmation copy (1), registry handler coverage for the two input actions.
 Expectations changed on purpose: `test_bridge.py::test_incompatible_extension_is_refused` now expects
 `supported == ["1.0", "1.1"]` (the agent announces every MINOR it speaks; see CONTRACT_ISSUES.md #15);

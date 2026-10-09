@@ -89,10 +89,12 @@ _TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 # Pairing codes (dome_protocol.digest): 20 Crockford symbols, typed or displayed with or without separators
-# (the normaliser accepts " -_." and maps I/L -> 1, O -> 0). Candidates are 20 contiguous symbols, or 4-5
-# groups of 4-5 symbols joined by one separator; ``_pairing_code_or_none`` decides.
+# (the normaliser accepts " -_." and maps I/L -> 1, O -> 0). Candidates are 20 contiguous symbols, 4 groups
+# of 5 (the PC's display form) or 5 groups of 4, joined by one consistent separator; ``_mask_pairing_code``
+# decides.
 _PAIRING_CANDIDATES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?<![0-9A-Za-z_-])(?:[0-9A-Za-z]{4,5}[-_. ]){3,4}[0-9A-Za-z]{4,5}(?![0-9A-Za-z_-])"),
+    re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{5}([-_. ])(?:[0-9A-Za-z]{5}\1){2}[0-9A-Za-z]{5}(?![0-9A-Za-z_-])"),
+    re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{4}([-_. ])(?:[0-9A-Za-z]{4}\1){3}[0-9A-Za-z]{4}(?![0-9A-Za-z_-])"),
     re.compile(r"(?<![0-9A-Za-z_-])[0-9A-Za-z]{20}(?![0-9A-Za-z_-])"),
 )
 _CROCKFORD = frozenset("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
