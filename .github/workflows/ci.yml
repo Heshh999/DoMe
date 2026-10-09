@@ -74,7 +74,10 @@ jobs:
       # ---- tools/dev-idp: the cloud-api suite starts it as a real OIDC issuer (no auth bypass) ----
       - name: tools/dev-idp - sync
         working-directory: tools/dev-idp
-        run: uv sync --locked
+        run: uv sync --locked --extra dev
+      - name: tools/dev-idp - pytest (passphrase gate used by testkit/)
+        working-directory: tools/dev-idp
+        run: uv run pytest -q -p no:cacheprovider
 
       # ---- cloud-api: ruff, mypy --strict, integration tests against PostgreSQL + dev-idp ----
       - name: cloud-api - sync

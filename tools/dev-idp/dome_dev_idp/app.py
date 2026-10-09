@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from joserfc import jwt
 from joserfc.jwk import RSAKey
 
@@ -80,11 +80,41 @@ def _sub_for(email: str) -> str:
     return "dev|" + hashlib.sha256(email.lower().encode()).hexdigest()[:24]
 
 
+# Shared by the sign-in page and its error page; box-sizing keeps the card inside a phone screen.
+_PAGE_CSS = """*{box-sizing:border-box}
+body{font:16px system-ui;background:#0b0f14;color:#e6edf3;display:grid;place-items:center;min-height:100vh;margin:0}
+form,main{background:#121821;padding:24px;border-radius:16px;width:min(420px,92vw);display:grid;gap:12px}
+label{display:grid;gap:6px}
+button,input{font:inherit;padding:12px 14px;border-radius:10px;border:1px solid #2a3442;background:#1a2330;color:#e6edf3;width:100%}
+button{cursor:pointer;background:#2563eb;border-color:#2563eb} .warn{color:#f59e0b;font-size:13px}
+a{color:#60a5fa}"""
+
+
+def _error_page(status: int, message: str) -> HTMLResponse:
+    """What a person sees in the browser when sign-in is refused (scripts and tests still get JSON)."""
+    body = (
+        '<!doctype html><html><head><meta charset="utf-8"><title>DoMe dev sign-in</title>'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f"<style>{_PAGE_CSS}</style></head><body><main>"
+        '<h1 style="margin:0;font-size:20px">Sign-in refused</h1>'
+        f"<p>{html.escape(message[:1].upper() + message[1:])}.</p>"
+        '<p><a href="javascript:history.back()">Go back</a> and try again.</p>'
+        "</main></body></html>"
+    )
+    return HTMLResponse(body, status_code=status)
+
+
 def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     settings = settings or DevIdpSettings.from_env()
     state = _State(key=RSAKey.generate_key(2048, parameters={"kid": "dev-idp-" + uuid.uuid4().hex[:8], "use": "sig", "alg": "RS256"}))
     app = FastAPI(title="DoMe development identity provider", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
+
+    @app.exception_handler(HTTPException)
+    async def _refusal(request: Request, exc: HTTPException) -> Response:
+        if "text/html" in request.headers.get("accept", ""):
+            return _error_page(exc.status_code, str(exc.detail))
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
 
     @app.middleware("http")
     async def _dev_only_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -170,10 +200,7 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
         )
         page = f"""<!doctype html><html><head><meta charset="utf-8"><title>DoMe dev sign-in</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font:16px system-ui;background:#0b0f14;color:#e6edf3;display:grid;place-items:center;min-height:100vh;margin:0}}
-form{{background:#121821;padding:24px;border-radius:16px;width:min(420px,92vw);display:grid;gap:12px}}
-button,input{{font:inherit;padding:12px 14px;border-radius:10px;border:1px solid #2a3442;background:#1a2330;color:#e6edf3}}
-button{{cursor:pointer;background:#2563eb;border-color:#2563eb}} .warn{{color:#f59e0b;font-size:13px}}</style></head>
+<style>{_PAGE_CSS}</style></head>
 <body><form method="post" action="authorize">{hidden}
 <h1 style="margin:0;font-size:20px">Development identity provider</h1>
 <p class="warn">This sign-in exists only on developer machines. It never runs in production.</p>

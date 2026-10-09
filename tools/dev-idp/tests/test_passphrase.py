@@ -131,3 +131,24 @@ def test_account_button_wins_over_an_empty_any_email_box() -> None:
         "/authorize", content=urlencode(empty), headers={"content-type": "application/x-www-form-urlencoded"}
     )
     assert r.status_code == 400
+
+
+def test_browser_gets_a_readable_refusal_page_and_scripts_keep_json() -> None:
+    client = _client("k7m2-x9qp-3wfa")
+    form = [*AUTH_PARAMS.items(), ("passphrase", "wrong-one"), ("email", "alice@example.test")]
+    body = urlencode(form)
+    as_browser = client.post(
+        "/authorize",
+        content=body,
+        headers={"content-type": "application/x-www-form-urlencoded", "accept": "text/html,*/*;q=0.8"},
+    )
+    assert as_browser.status_code == 403
+    assert as_browser.headers["content-type"].startswith("text/html")
+    assert "Wrong passphrase." in as_browser.text and "Go back" in as_browser.text
+    as_script = client.post("/authorize", content=body, headers={"content-type": "application/x-www-form-urlencoded"})
+    assert as_script.status_code == 403 and as_script.json() == {"detail": "wrong passphrase"}
+
+
+def test_sign_in_page_fits_a_phone_screen() -> None:
+    page = _client("k7m2-x9qp-3wfa").get("/authorize", params=AUTH_PARAMS).text
+    assert "box-sizing:border-box" in page and "width=device-width" in page
