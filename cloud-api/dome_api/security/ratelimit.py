@@ -72,10 +72,13 @@ class SlidingWindowLimiter:
     def exhausted(self, key: str) -> bool:
         """Whether the key has reached its limit, without recording anything."""
         now = time.monotonic()
-        w = self._windows.setdefault(key, _Window())
-        w.hits = [t for t in w.hits if now - t < self.window]
+        # Prune before looking the key up: pruning drops empty windows, and a window created for
+        # this key just now is empty, so pruning afterwards would delete it under the caller
+        # (allow/hit then index it: KeyError on the first request after five quiet minutes).
         if now - self._last_prune > 300:
             self._prune(now)
+        w = self._windows.setdefault(key, _Window())
+        w.hits = [t for t in w.hits if now - t < self.window]
         return len(w.hits) >= self.limit
 
     def hit(self, key: str) -> None:

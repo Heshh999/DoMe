@@ -16,7 +16,9 @@ import pytest
 from dome_protocol import dumps_compact, loads_strict
 from websockets.exceptions import ConnectionClosed
 
+from dome_api.plans import plan_for
 from dome_api.relay.manager import MAX_AGENT_INPUT_SESSIONS, AgentConn, ConnectionManager
+from dome_api.security.ratelimit import TokenBucketLimiter
 from tests.conftest import (
     AgentSim,
     Browser,
@@ -65,6 +67,18 @@ def _security_kinds(env: Env, account_id: str, kind: str) -> list[tuple[Any, ...
     )
 
 
+async def _await_security_kinds(
+    env: Env, account_id: str, kind: str, at_least: int, timeout: float = 5.0
+) -> list[tuple[Any, ...]]:
+    """Security events are written after the frame is handled; wait for them instead of racing the write."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        rows = _security_kinds(env, account_id, kind)
+        if len(rows) >= at_least or asyncio.get_running_loop().time() > deadline:
+            return rows
+        await asyncio.sleep(0.05)
+
+
 # ----- finding 1: sustained input flood ------------------------------------------------------------
 
 
@@ -85,7 +99,7 @@ async def test_sustained_input_flood_closes_socket_with_one_security_event(
     rate, seq, closed_after = 300.0, 0, None
     started = time.monotonic()
     try:
-        while time.monotonic() - started < 15:
+        while time.monotonic() - started < 30:
             due = int((time.monotonic() - started) * rate)
             try:
                 while seq < due:
@@ -104,8 +118,12 @@ async def test_sustained_input_flood_closes_socket_with_one_security_event(
                 closed_after = time.monotonic() - started
                 break
         assert closed_after is not None, "the flood never closed the socket"
-        # sustained, not instantaneous: the refusal budget holds ~5 s at 2x the rate; at 7.5x it lasts ~2 s
-        assert 1.0 <= closed_after <= 10.0, closed_after
+        # Sustained, not instantaneous. Signing every batch in this process caps how fast the test can flood,
+        # so the deadline follows the rate actually reached: the socket bucket passes 80 + 40/s, the refusal
+        # budget holds 400 and leaks 80/s, so at r batches/s it runs dry after 480 / (r - 120) s (~2.7 s at 300).
+        achieved = seq / closed_after
+        assert achieved > 150, f"only {achieved:.0f} batches/s: this machine cannot flood hard enough to test this"
+        assert 1.0 <= closed_after <= 1.5 * 480 / (achieved - 120) + 1.0, (closed_after, achieved)
         try:
             await ctrl.ws.send(_wire(ctrl, pc, sid, seq + 1))
         except ConnectionClosed as exc:
@@ -118,7 +136,7 @@ async def test_sustained_input_flood_closes_socket_with_one_security_event(
         await asyncio.sleep(0.3)
         forwarded = sum(1 for f in agent_frames if f["type"] == "input_batch")
         assert forwarded <= 80 + 40 * (closed_after + 1), forwarded  # burst + sustained budget, no more
-        throttled = _security_kinds(env, alice.account_id, "controller_throttled")
+        throttled = await _await_security_kinds(env, alice.account_id, "controller_throttled", 1)
         assert len(throttled) == 1, throttled
         assert throttled[0][1]["reason"] == "input_flood" and throttled[0][1]["refused_frames"] > 400
     finally:
@@ -175,6 +193,12 @@ async def test_per_controller_rate_limited_errors_are_throttled_per_socket(
     first = await _input_pair(env, alice, online_agent)
     second = ControllerSim(env, alice, key=first.key, controller_id=first.controller_id)
     await second.connect()
+    # The per-controller budget for this test only: same burst, no refill, so the outcome does not depend on
+    # how fast this machine pushes 160 frames (with refill, a slow run never exhausted it).
+    limiters = env.services.limiters
+    free_plan = plan_for("free")
+    saved_input = dict(limiters._input)  # noqa: SLF001
+    limiters._input[free_plan.id] = TokenBucketLimiter(0, free_plan.input_rate_limit.burst)  # noqa: SLF001
     sid = new_input_session_id()
     wires = (
         [_wire(first, pc, sid, seq) for seq in range(1, 81)],
@@ -198,9 +222,11 @@ async def test_per_controller_rate_limited_errors_are_throttled_per_socket(
             assert len(limited) <= 2, len(limited)  # not one per refused batch
         forwarded = sum(1 for f in agent_frames if f["type"] == "input_batch")
         assert 80 <= forwarded < 160, forwarded
-        rejected = _security_kinds(env, alice.account_id, "input_rejected")
+        rejected = await _await_security_kinds(env, alice.account_id, "input_rejected", 1)
         assert len(rejected) == 1 and rejected[0][1]["reason"] == "RATE_LIMITED"
     finally:
+        limiters._input.clear()  # noqa: SLF001
+        limiters._input.update(saved_input)  # noqa: SLF001
         stop.set()
         await agent_task
         await first.close()
@@ -299,8 +325,8 @@ async def test_agent_rejection_events_are_capped_per_pc(
         await online_agent.grant_update(str(uuid.uuid4()), foreign.kid, ["status", "pointer"])
     await online_agent.send({"type": "ping"})
     await online_agent.recv_type("pong")
-    rejected = _security_kinds(env, alice.account_id, "relay_frame_rejected")
-    throttled = _security_kinds(env, alice.account_id, "relay_events_throttled")
+    rejected = await _await_security_kinds(env, alice.account_id, "relay_frame_rejected", cap)
+    throttled = await _await_security_kinds(env, alice.account_id, "relay_events_throttled", 1)
     assert len(rejected) == cap, len(rejected)
     assert len(throttled) == 1 and throttled[0][1]["first_suppressed"] == "relay_frame_rejected"
 

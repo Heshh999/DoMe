@@ -285,3 +285,26 @@ async def test_command_id_from_another_account_is_a_plain_reuse_conflict(
     finally:
         await bob_phone.close()
         await bob_agent.close()
+
+
+@pytest.mark.parametrize("method", ["allow", "hit"])
+def test_sliding_window_first_request_after_quiet_period_does_not_crash(
+    method: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new key arriving when the five-minute prune is due used to be pruned away under the caller
+    (KeyError -> HTTP 500): found by the test kit, linking a PC more than five minutes after start."""
+    import types
+
+    import dome_api.security.ratelimit as ratelimit
+
+    clock = [1000.0]
+    monkeypatch.setattr(ratelimit, "time", types.SimpleNamespace(monotonic=lambda: clock[0]))
+    limiter = SlidingWindowLimiter(2, 3600)
+    clock[0] += 301
+    if method == "allow":
+        assert limiter.allow("203.0.113.7") is True
+    else:
+        limiter.hit("203.0.113.7")
+    assert limiter.exhausted("203.0.113.7") is False
+    assert limiter.allow("203.0.113.7") is True
+    assert limiter.allow("203.0.113.7") is False
