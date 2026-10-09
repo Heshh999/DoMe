@@ -10,7 +10,7 @@
 //
 // Run:            node brand/scripts/export.mjs          (writes brand/exports/**)
 // Check drift:    node brand/scripts/export.mjs --check  (exit 1 if any export differs from a fresh render)
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateSync, inflateSync } from "node:zlib";
@@ -18,7 +18,6 @@ import { deflateSync, inflateSync } from "node:zlib";
 export const BRAND_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const EXPORTS_DIR = resolve(BRAND_DIR, "exports");
 
-/** Brand colour tokens used by the export plan (kept in sync with BRAND.md by tests/brand.test.mjs). */
 /**
  * Role suffixes that couple the SVG sources to this script. Every id in the sources is file-unique
  * (`dome-icon-tile`, `dome-wordmark-dark-glyph`, ...) so that several brand SVGs can be inlined on one
@@ -31,6 +30,7 @@ export const isTileId = (id) => id !== undefined && TILE_ID_RE.test(id);
 /** @param {string|undefined} id */
 export const isGlyphGroup = (id) => id !== undefined && GLYPH_GROUP_RE.test(id);
 
+/** Brand colour tokens used by the export plan (kept in sync with BRAND.md by tests/brand.test.mjs). */
 export const TOKENS = Object.freeze({
   night: "#0b0f17",
   paper: "#f6f7fb",
@@ -981,13 +981,41 @@ export function verifyExportBytes(entry, bytes) {
 }
 
 /**
- * Writes every export (or, with check=true, compares the decoded pixels of every file on disk against a
- * fresh render; manifest.json is compared as text). Returns a report.
- * @param {{check?: boolean}} [options]
+ * Files under exports/ that the plan no longer produces (e.g. left behind by a rename). Only .png/.ico
+ * files are considered; manifest.json is owned by runExport.
+ * @param {string} [dir]
+ * @returns {string[]} paths relative to exports/, with forward slashes, sorted
  */
-export function runExport({ check = false } = {}) {
+export function orphanedExports(dir = EXPORTS_DIR) {
+  const planned = new Set(EXPORT_PLAN.map((e) => e.out));
+  /** @type {string[]} */
+  const found = [];
+  /** @param {string} sub */
+  const walk = (sub) => {
+    const abs = sub ? resolve(dir, sub) : dir;
+    if (!existsSync(abs)) return;
+    for (const d of readdirSync(abs, { withFileTypes: true })) {
+      const rel = sub ? `${sub}/${d.name}` : d.name;
+      if (d.isDirectory()) walk(rel);
+      else if (/\.(png|ico)$/i.test(d.name) && !planned.has(rel)) found.push(rel);
+    }
+  };
+  walk("");
+  return found.sort();
+}
+
+/**
+ * Writes every export (or, with check=true, compares the decoded pixels of every file on disk against a
+ * fresh render; manifest.json is compared as text). Image files under exports/ that the plan does not
+ * produce are removed on write and reported as drift on check, so a renamed export cannot leave a stale
+ * copy behind for a consumer to pick up.
+ * @param {{check?: boolean, dir?: string}} [options]
+ */
+export function runExport({ check = false, dir = EXPORTS_DIR } = {}) {
   /** @type {string[]} */
   const written = [];
+  /** @type {string[]} */
+  const removed = [];
   /** @type {string[]} */
   const drifted = [];
   /** @type {Record<string, unknown>[]} */
@@ -995,7 +1023,7 @@ export function runExport({ check = false } = {}) {
   for (const entry of EXPORT_PLAN) {
     const bytes = renderEntry(entry);
     const info = verifyExportBytes(entry, bytes);
-    const target = resolve(EXPORTS_DIR, entry.out);
+    const target = resolve(dir, entry.out);
     manifest.push({ file: entry.out, source: entry.source, mode: entry.mode, ...(info.kind === "ico" ? { sizes: info.sizes } : { width: info.width, height: info.height }), ...(entry.background ? { background: entry.background } : {}), ...(entry.color ? { color: entry.color } : {}), ...(entry.glyphScale ? { glyph_scale: entry.glyphScale } : {}) });
     if (check) {
       // pixel equality, not byte equality (see exportsEquivalent)
@@ -1007,14 +1035,22 @@ export function runExport({ check = false } = {}) {
     }
   }
   const manifestText = `${JSON.stringify({ generated_by: "brand/scripts/export.mjs", note: "Regenerate with `node brand/scripts/export.mjs`; `--check` fails on drift.", files: manifest }, null, 2)}\n`;
-  const manifestPath = resolve(EXPORTS_DIR, "manifest.json");
+  const manifestPath = resolve(dir, "manifest.json");
   if (check) {
     if (!existsSync(manifestPath) || readFileSync(manifestPath, "utf8") !== manifestText) drifted.push("manifest.json");
   } else {
+    mkdirSync(dir, { recursive: true });
     writeFileSync(manifestPath, manifestText);
     written.push("manifest.json");
   }
-  return { written, drifted, manifest };
+  for (const orphan of orphanedExports(dir)) {
+    if (check) drifted.push(`${orphan} (not in the export plan)`);
+    else {
+      rmSync(resolve(dir, orphan));
+      removed.push(orphan);
+    }
+  }
+  return { written, drifted, removed, manifest };
 }
 
 /** @param {string[]} argv */
@@ -1030,6 +1066,7 @@ function main(argv) {
     return;
   }
   console.error(`wrote ${report.written.length} files to ${relative(process.cwd(), EXPORTS_DIR) || "."}`);
+  if (report.removed.length) console.error(`removed ${report.removed.length} files no longer in the export plan: ${report.removed.join(", ")}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2));

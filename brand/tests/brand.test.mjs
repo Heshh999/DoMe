@@ -1,9 +1,11 @@
 // Tests for brand/scripts/export.mjs and the SVG sources. Runs under Node's built-in test runner:
 //   cd brand && pnpm test
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { deflateSync } from "node:zlib";
 
 import {
   BRAND_DIR,
@@ -20,6 +22,7 @@ import {
   flattenPathData,
   isGlyphGroup,
   isTileId,
+  orphanedExports,
   parseHexColor,
   parseSvg,
   readIcoDirectory,
@@ -29,7 +32,6 @@ import {
   tileIds,
   verifyExportBytes,
 } from "../scripts/export.mjs";
-import { deflateSync, inflateSync } from "node:zlib";
 
 const SOURCES = ["icon.svg", "icon-dark.svg", "icon-mono.svg", "wordmark.svg", "wordmark-dark.svg"];
 /** @param {string} name */
@@ -475,7 +477,30 @@ test("drift check compares decoded pixels, not compressed bytes: a re-deflated P
   assert.ok(!rebuilt.equals(ico));
   assert.equal(exportsEquivalent(icoEntry, ico, rebuilt), true, "ICO with a re-deflated PNG entry is not drift");
   assert.equal(exportsEquivalent(icoEntry, ico, renderEntry(byOut["favicon/favicon.ico"])), false, "ICO with a different directory is drift");
-  assert.ok(inflateSync(deflateSync(Buffer.from("x"))).equals(Buffer.from("x"))); // zlib imports used
+});
+
+test("a renamed export cannot leave a stale copy behind: orphans fail --check and are removed on write", () => {
+  assert.deepEqual(orphanedExports(), [], "committed exports/ holds only files the plan produces");
+  const dir = mkdtempSync(join(tmpdir(), "dome-brand-"));
+  try {
+    // seed a copy of the committed exports plus a file under the pre-rename name
+    for (const entry of EXPORT_PLAN) {
+      mkdirSync(resolve(dir, entry.out, ".."), { recursive: true });
+      copyFileSync(resolve(BRAND_DIR, "exports", entry.out), resolve(dir, entry.out));
+    }
+    copyFileSync(resolve(BRAND_DIR, "exports", "manifest.json"), resolve(dir, "manifest.json"));
+    writeFileSync(resolve(dir, "windows", "tray-mono-dark-16.png"), renderEntry(EXPORT_PLAN[0]));
+    writeFileSync(resolve(dir, "windows", "notes.txt"), "not an image; left alone");
+    assert.deepEqual(orphanedExports(dir), ["windows/tray-mono-dark-16.png"]);
+    assert.deepEqual(runExport({ check: true, dir }).drifted, ["windows/tray-mono-dark-16.png (not in the export plan)"]);
+    const report = runExport({ dir });
+    assert.deepEqual(report.removed, ["windows/tray-mono-dark-16.png"]);
+    assert.ok(!readdirSync(resolve(dir, "windows")).includes("tray-mono-dark-16.png"));
+    assert.ok(existsSync(resolve(dir, "windows", "notes.txt")), "non-image files are not touched");
+    assert.deepEqual(runExport({ check: true, dir }).drifted, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("committed exports match a fresh render of the sources (run `pnpm export` after editing an SVG)", () => {
