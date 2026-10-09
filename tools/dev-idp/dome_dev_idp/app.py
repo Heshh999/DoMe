@@ -17,8 +17,10 @@ from joserfc.jwk import RSAKey
 
 AUTH_CODE_TTL = 120
 TOKEN_TTL = 3600
-# Passphrase gate (DEV_IDP_PASSPHRASE): after this many wrong passphrases in the window, every sign-in
-# is refused until the window passes. One process serves one tester; a restart clears it.
+# Passphrase gate (DEV_IDP_PASSPHRASE): after this many wrong passphrases in the window, further WRONG ones
+# are answered 429 instead of 403. The right passphrase always works: a global lockout would let anyone who
+# finds the public sign-in address lock the tester out, and 12 random characters (about 59 bits) are not
+# guessable online anyway.
 PASSPHRASE_MAX_FAILURES = 10
 PASSPHRASE_FAILURE_WINDOW = 600
 
@@ -216,13 +218,16 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     def _check_passphrase(supplied: str) -> None:
         if not settings.passphrase:
             return
+        if secrets.compare_digest(supplied.strip().lower().encode(), settings.passphrase.lower().encode()):
+            return
         now = time.monotonic()
         state.passphrase_failures[:] = [t for t in state.passphrase_failures if now - t < PASSPHRASE_FAILURE_WINDOW]
-        if len(state.passphrase_failures) >= PASSPHRASE_MAX_FAILURES:
-            raise HTTPException(429, "too many wrong passphrases; wait 10 minutes or restart the test kit")
-        if not secrets.compare_digest(supplied.strip().lower().encode(), settings.passphrase.lower().encode()):
-            state.passphrase_failures.append(now)
-            raise HTTPException(403, "wrong passphrase")
+        state.passphrase_failures.append(now)
+        if len(state.passphrase_failures) > PASSPHRASE_MAX_FAILURES:
+            raise HTTPException(
+                429, "wrong passphrase, again (many wrong tries recently): use the one in the latest test kit window"
+            )
+        raise HTTPException(403, "wrong passphrase")
 
     @app.post("/authorize")
     async def authorize_post(request: Request) -> RedirectResponse:

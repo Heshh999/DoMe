@@ -93,11 +93,15 @@ def test_dev_user_shortcut_is_refused_when_passphrase_is_set() -> None:
     assert r.status_code == 403
 
 
-def test_repeated_failures_lock_sign_in_even_for_the_right_passphrase() -> None:
+def test_repeated_failures_never_lock_out_the_right_passphrase() -> None:
+    """Anyone who finds the public sign-in address can send wrong passphrases; that must not lock the
+    tester out (the review found a global lockout). Wrong ones beyond the limit are answered 429."""
     client = _client("k7m2-x9qp-3wfa")
     for _ in range(PASSPHRASE_MAX_FAILURES):
         assert _post(client, passphrase="nope").status_code == 403
-    assert _post(client, passphrase="k7m2-x9qp-3wfa").status_code == 429
+    assert _post(client, passphrase="nope").status_code == 429
+    assert _post(client, passphrase="k7m2-x9qp-3wfa").status_code == 303
+    assert _post(client, passphrase="nope").status_code == 429
 
 
 def test_invalid_client_is_rejected_before_the_passphrase_is_checked() -> None:
