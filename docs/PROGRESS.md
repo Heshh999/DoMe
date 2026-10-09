@@ -2,6 +2,45 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
+
+- **`testkit/`**: three double-click scripts for a non-developer on Windows with Docker Desktop.
+  Step 1 runs postgres, the dev identity provider and the api (the real `deploy/Dockerfile` image)
+  behind two Cloudflare quick tunnels or user-provided stable HTTPS addresses, with a per-start sign-in
+  passphrase, and prints a QR code to `/app`. Step 2 prepares the agent from source with uv, builds the
+  extension in Docker and pins its ID with a generated key (the derived ID matched the one Chromium
+  assigned), registers the native host and links the PC, re-linking with a new key whenever the test
+  account changed. Step 3 stops, optionally deleting the data. `testkit/README.md` is the tester's guide.
+- **Rehearsed end to end** on Linux: the kit's own scripts under pwsh 7, a local HTTPS stand-in for the
+  tunnels (stable-address mode), headless Chromium as the phone: wrong passphrase refused, sign-in,
+  `dome-agent link` approved in the browser, the agent connected over wss, pairing by the QR link with
+  equal verification codes, and a Mute from the Remote screen executed by the agent
+  (`windows.set_muted` succeeded) with the new state shown on the phone. Stop with data deletion and a
+  clean restart were exercised too. Evidence tag: integration-tested (Linux); **not** Windows- or
+  iPhone-tested; quick tunnels were not created (blocked by this environment's network policy).
+- **Bugs the rehearsal found and fixed** (each with a test that fails without the fix):
+  - cloud-api: the sliding-window limiter pruned a new key's empty window right after creating it, so
+    the first PC link more than five minutes after start answered HTTP 500.
+  - mobile-app: after pairing, the app kept the previously selected PC; an unlayered global style made
+    Tailwind 4 drop every text/font/min-height utility on buttons, links and inputs (bottom tab labels
+    overflowed at iPhone width); "Open app" was squeezed and cut on phone-width public pages; a
+    device-limit refusal now offers Manage devices.
+  - dev-idp: the empty "any email" box overrode the clicked account; Enter signed in as the first
+    listed account; refusals were raw JSON in the browser; the page overflowed a phone screen.
+- **Independent review** (5 reviewers + 5 adversarial verifiers): confirmed and fixed — a new
+  quick-tunnel address is a new account (PC re-link, data cleared per new address, `dome-agent unlink
+  --new-key` because the service never moves a PC key between accounts); CRLF checkouts of
+  `deploy/entrypoint.sh` on Windows (root `.gitattributes`); a global passphrase lockout anyone could
+  trigger; per-IP limits shared behind cloudflared (`DOME_TRUSTED_PROXIES` for private networks);
+  tunnel containers left retrying after a failure; stable-address normalisation; troubleshooting
+  commands that needed the kit's variables; several README inaccuracies.
+- **Flaky tests made deterministic**: cloud-api input hardening (relay-side counts, awaited security
+  events, pong before refilling) and the mobile-app touchpad suite (answering the right start command,
+  waiting for asynchronous signing). New CI steps: dev-idp tests and the pwsh test-kit checks.
+- Runs: cloud-api 120, pc-agent 257 (+1 skipped), mobile-app 291 in 32 files (typecheck, lint, build
+  clean), dev-idp 14, test-kit checks 28, cross-component `tests/` 23 passed in 243 s.
+- Next: run the kit on a real Windows 11 PC with an iPhone (`docs/HANDOFF.md` §7, item 0).
+
 ## 2026-10-09 — Manual touchpad/keyboard, health, support, single instance and brand built, reviewed and fixed
 
 - Built per component against the 1.1 contract, each reviewed by an independent skeptic who re-ran the

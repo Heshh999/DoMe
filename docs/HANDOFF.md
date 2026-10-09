@@ -13,14 +13,15 @@ repository has been Windows-device-tested or iPhone-tested yet.
 | Area | What exists | Evidence |
 | --- | --- | --- |
 | `shared/protocol` (protocol 1.1, registry 1.1) | Action registry (31 actions, 8 capabilities incl. Free `pointer`/`keyboard`), plans, error codes, JSON Schemas for envelopes, commands, confirmations, relay/bridge frames, the signed manual-input stream (`input_batch`, `input_ack`, `input_session`, `grant_update`), per-action results, entitlement claims, REST bodies incl. support tickets; normative rules in `version.json → rules` (incl. `input_sessions`, `grant_update`, `ai_eligibility`); cross-language fixtures. Changes since 1.0 are additive; 1.0 peers stay compatible and never receive input frames. | unit-tested: `shared/python` 135, `shared/ts` 86; each language verifies the other's signed fixtures |
-| `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in, sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller` with signed hello proof), command lifecycle, plan limits, entitlement assertions, security events, support tickets (Alembic `0002`), and the 1.1 input path: signed `input_batch` routing with per-event-type grant coverage and a per-controller budget, `input_ack`/`input_session` delivery, `grant_update`, agent input rejections routed to the batch's phone. Billing/usage/layout/routine/operator tables exist without routes. | integration-tested against real PostgreSQL + `tools/dev-idp`: 118 tests; ruff, mypy (source and tests) clean |
-| `pc-agent` | The Windows user agent: link, identity, outbound relay client, local authorization, coalescing queue, confirmations, SQLite journal, every registry action, Windows adapters (import-gated), Native Messaging host, tray, control channel, diagnostics, PyInstaller specs; for 1.1: the manual-input session manager (one owner per PC, agent-issued id, PC-side lease watchdog, seq/age/capability checks with a skew-tolerant age estimate, ordered dispatch, held-input release on every end reason, content-free crash recovery), a `SendInput` Windows input adapter, local `pointer`/`keyboard` grants with `grant_update`, single instance per Windows session with `repair`, power confirmation copy about losing remote access. | unit-tested on Linux with the fake platform: 256 tests (+1 skipped as root); ruff + mypy clean; the Windows adapters (SendInput, mutex, secure-desktop detection) are **not yet verified** on a device |
+| `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in, sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller` with signed hello proof), command lifecycle, plan limits, entitlement assertions, security events, support tickets (Alembic `0002`), and the 1.1 input path: signed `input_batch` routing with per-event-type grant coverage and a per-controller budget, `input_ack`/`input_session` delivery, `grant_update`, agent input rejections routed to the batch's phone. Billing/usage/layout/routine/operator tables exist without routes. | integration-tested against real PostgreSQL + `tools/dev-idp`: 120 tests; ruff, mypy (source and tests) clean |
+| `pc-agent` | The Windows user agent: link, identity, outbound relay client, local authorization, coalescing queue, confirmations, SQLite journal, every registry action, Windows adapters (import-gated), Native Messaging host, tray, control channel, diagnostics, PyInstaller specs; for 1.1: the manual-input session manager (one owner per PC, agent-issued id, PC-side lease watchdog, seq/age/capability checks with a skew-tolerant age estimate, ordered dispatch, held-input release on every end reason, content-free crash recovery), a `SendInput` Windows input adapter, local `pointer`/`keyboard` grants with `grant_update`, single instance per Windows session with `repair`, power confirmation copy about losing remote access. | unit-tested on Linux with the fake platform: 257 tests (+1 skipped as root); ruff + mypy clean; the Windows adapters (SendInput, mutex, secure-desktop detection) are **not yet verified** on a device |
 | `browser-extension` | Chrome/Edge MV3: service worker with native port + reconnect alarms, content-script YouTube player adapter (transition-observed Next/Previous, `tab_token` and `expected_video_id` guards, context flags), build-time precompiled validators (MV3 CSP forbids Ajv's `new Function`), popup. | unit-tested with hand-written DOM fixtures: 90 tests; Vite build succeeds; **never loaded in a real browser against youtube.com** |
-| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing (QR/code, verification digits), dashboard with Now Playing, remote, command page, apps, devices with touchpad/keyboard permissions, settings, confirmation modal with power-access copy, billing status, routines preview; for 1.1: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard (commit-once composition, Compose and Send, shortcut palette, never deletes text it did not send), the input session client, Health screen with layered states and one next action each, support ticket submission and status, release notes, brand icons. | unit-tested in jsdom: 287 tests; typecheck, lint and production build clean; **not iPhone-tested** |
+| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing (QR/code, verification digits), dashboard with Now Playing, remote, command page, apps, devices with touchpad/keyboard permissions, settings, confirmation modal with power-access copy, billing status, routines preview; for 1.1: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard (commit-once composition, Compose and Send, shortcut palette, never deletes text it did not send), the input session client, Health screen with layered states and one next action each, support ticket submission and status, release notes, brand icons. | unit-tested in jsdom: 291 tests; typecheck, lint and production build clean; **not iPhone-tested** |
 | `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login + an ES256-signing controller simulator + a fake extension; now also the manual-input scenarios (grant_update, ordering, replay/stale rejections reaching the phone, lease expiry releasing a held button, takeover, revocation, keyboard-only grant, no typed text on disk). | integration-tested (Linux): 23 passed in 227 s (incl. 3 manual-input tests and the load smoke: 400 commands in 10.18 s = 39 cmd/s, p50 986 ms, p95 1199 ms, RSS 208 → 212 MiB) |
-| `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. | unit/smoke-tested |
+| `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. Optional passphrase gate (`DEV_IDP_PASSPHRASE`) for the test kit: the right passphrase always works, wrong ones never lock anyone out; readable refusal page for browsers. | unit-tested: 14 tests (run in CI) |
+| `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. **Quick tunnels, Windows PowerShell 5.1 and a real iPhone not yet verified** |
 | `brand/` | Original DoMe icon and wordmark as editable SVG (light, dark, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (colour tokens, type, sizes, usage). The PWA uses the exports; the tray and installer wiring is pending. | unit-tested: 29 tests and an export drift check; renders not compared against a browser rasterizer |
-| `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | written against the real commands; **not yet verified**: never built, deployed or run on GitHub Actions (no Docker daemon or Fly account here) |
+| `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | written against the real commands; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed, or run on GitHub Actions (no Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
 ## 2. Running everything on a fresh machine
@@ -43,10 +44,12 @@ Tests, per component (each is a standalone package with its own lockfile):
 ```sh
 cd shared/python && uv run pytest -q           # 135
 cd shared/ts && pnpm test                       # 86
-cd cloud-api && uv run pytest -q                # 118 (needs the local PostgreSQL and tools/dev-idp venv)
-cd pc-agent && uv run pytest -q                 # 256 (+1 skipped as root)
+cd cloud-api && uv run pytest -q                # 120 (needs the local PostgreSQL and tools/dev-idp venv)
+cd pc-agent && uv run pytest -q                 # 257 (+1 skipped as root)
 cd browser-extension && pnpm test               # 90
-cd mobile-app && pnpm test                      # 287
+cd mobile-app && pnpm test                      # 291
+cd tools/dev-idp && uv run --extra dev pytest -q  # 14
+pwsh -NoProfile -File testkit/tests/kit.tests.ps1  # 28 test-kit script checks
 cd brand && pnpm check                          # 29 tests + export drift check
 cd tests && uv run pytest -q                    # 23, ~4 min; `-k load` for the load smoke alone
 make lint typecheck                             # ruff / mypy / eslint / tsc across the repo
@@ -108,6 +111,11 @@ unless stated.
 
 ## 4. What has NOT been verified
 
+- **The test kit on its real target**: never run on Windows (Windows PowerShell 5.1, Docker Desktop,
+  the tray, the extension in Chrome/Edge) or with an iPhone. Cloudflare quick tunnels were never
+  created here (this environment's network policy blocks `api.trycloudflare.com`); the address and
+  failure patterns are tested against cloudflared's log wording only. The rehearsal used stable-address
+  mode behind a local HTTPS stand-in.
 - **Windows**: none of `pc-agent/dome_agent/platform/windows/*` (volume via pycaw, media sessions via
   winsdk, app launching, lock, power, start-at-login, native-host registry entries) has run on a
   Windows machine. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the
@@ -158,6 +166,20 @@ unless stated.
   every test means PostgreSQL died, not that the code broke: check `pg.log` for the checkpointer
   PANIC above, restart the cluster, re-run.
 
+- Tailwind 4 puts utilities in a cascade layer, so any **unlayered** rule beats every utility: an
+  unlayered `button, a, input { font: inherit }` silently dropped all text/font/min-height utilities on
+  controls. Element defaults live in `@layer base` (`mobile-app/test/styles-layering.test.ts`).
+- DoMe keys an account by OIDC issuer + subject. In the test kit a new quick-tunnel address is a new
+  issuer, hence a new empty account; the PC must re-link with a **new key** (`dome-agent unlink
+  --new-key`), because the service never moves a PC key between accounts.
+- Tests that assert right after a fixed number of event-loop ticks race real WebCrypto signing (it
+  finishes on a worker thread) and the relay sharing the test's event loop; wait for the work itself
+  (`InputSessionClient.whenSent()`, `waitFor`, a ping/pong round trip, relay-side counts).
+- Docker here uses the `vfs` storage driver (a full copy per layer): repeated image builds fill the
+  session's disk allowance; `docker builder prune -af` and `docker image prune -a` recover it.
+- After a container restart, the test PostgreSQL cluster (`/tmp/pgdata`, owned by `nobody`) must be
+  started again as its owner.
+
 ## 6. Open contract proposals (highest value first)
 
 The contract was frozen for the component builds; these are recorded, not applied. Apply them together
@@ -181,6 +203,8 @@ in a protocol MINOR bump (`shared/protocol/version.json`), regenerate fixtures a
 
 ## 7. Next tasks, in order
 
+0. **Run the test kit for real** (`testkit/README.md`): Windows 11 + Docker Desktop + an iPhone. It is
+   the fastest route to items 1 and 2 below; record what breaks in `docs/PROGRESS.md`.
 1. **Windows device pass**: install Python 3.12 on a Windows 11 machine, `uv sync` in `pc-agent`,
    run `dome-agent link`, register the native host, load the extension unpacked, and work through the
    manual checklists in `pc-agent/README.md` and `browser-extension/README.md` (now including the

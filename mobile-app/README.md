@@ -163,7 +163,7 @@ scripts/         gen-validators.ts, make-icons.mjs
 
 ## Tests
 
-`pnpm test` — **31 files / 287 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
+`pnpm test` — **32 files / 291 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
 network). New in 1.1: `gestures` (tap/double thresholds, finger-count change never clicks, scroll
 without tap, drag lock + End Drag, cancel releases, sensitivity/clamp, guide coverage), `typing`
 (append once, IME commits once in either event order, autocorrect mapping, middle edit → pause,
