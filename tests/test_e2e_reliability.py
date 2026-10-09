@@ -137,5 +137,5 @@ async def test_superseded_then_reconnect_refreshes_state_and_keeps_grants(agent:
     state = await wait_state(phone, agent.pc_id, lambda s: s["remote_enabled"] is True, timeout=15)
     assert state["state"]["extension_connected"] is True
     res = await run_command(phone, agent.pc_id, "system.ping")
-    assert res["state"] == "succeeded" and res["result"]["protocol_version"] == "1.0"
+    assert res["state"] == "succeeded" and res["result"]["protocol_version"] == "1.1"
     assert ext.requests == []
