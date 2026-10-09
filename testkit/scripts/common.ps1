@@ -3,6 +3,10 @@
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+# Docker's animated progress display needs the console window itself; the kit passes program output
+# through PowerShell, and on Windows that fails with "failed to get console: The handle is invalid".
+# Plain text progress works everywhere (also passed as --progress plain below).
+$env:BUILDKIT_PROGRESS = 'plain'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 $script:KitDir = Split-Path -Parent $PSScriptRoot
@@ -176,7 +180,7 @@ function Set-ComposePlaceholders {
 
 function Invoke-Compose([string]$What, [string[]]$Arguments) {
     Set-ComposePlaceholders
-    $all = @('compose', '-f', $script:ComposeFile) + $Arguments
+    $all = @('compose', '-f', $script:ComposeFile, '--progress', 'plain') + $Arguments
     Invoke-Native $What { docker @all }
 }
 

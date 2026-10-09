@@ -2,6 +2,15 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-09 — First test-kit run on the owner's Windows PC
+
+- Step 1 on Windows 11 with Docker Desktop: uv found, agent prepared, test data cleared, both Cloudflare
+  quick tunnels created (first real check of the tunnel path). The build then stopped with
+  `failed to get console: The handle is invalid`: Docker's animated progress display needs the console
+  window, and the kit passes program output through PowerShell. Fix: `--progress plain` on every
+  compose call and on the extension build, plus `BUILDKIT_PROGRESS=plain`. Re-checked here: the start
+  script builds with plain output and the stack comes up. Windows re-run pending.
+
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 
 - **`testkit/`**: three double-click scripts for a non-developer on Windows with Docker Desktop.

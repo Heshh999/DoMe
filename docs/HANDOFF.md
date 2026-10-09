@@ -112,10 +112,14 @@ unless stated.
 ## 4. What has NOT been verified
 
 - **The test kit on its real target**: never run on Windows (Windows PowerShell 5.1, Docker Desktop,
-  the tray, the extension in Chrome/Edge) or with an iPhone. Cloudflare quick tunnels were never
-  created here (this environment's network policy blocks `api.trycloudflare.com`); the address and
-  failure patterns are tested against cloudflared's log wording only. The rehearsal used stable-address
-  mode behind a local HTTPS stand-in.
+  the tray, the extension in Chrome/Edge) or with an iPhone, except for the first Windows run below.
+  Quick tunnels cannot be created in the build environment (its network policy blocks
+  `api.trycloudflare.com`); the rehearsal used stable-address mode behind a local HTTPS stand-in.
+- **First Windows run (2026-10-09, the owner's PC, Docker Desktop)**: step 1 found uv, prepared the
+  agent, cleared test data and **created both quick-tunnel addresses**; the image build then failed
+  with "failed to get console: The handle is invalid" (Docker's animated progress needs the console,
+  and the kit pipes program output through PowerShell). Fixed by plain progress for every compose call
+  and the extension build; awaiting the re-run.
 - **Windows**: none of `pc-agent/dome_agent/platform/windows/*` (volume via pycaw, media sessions via
   winsdk, app launching, lock, power, start-at-login, native-host registry entries) has run on a
   Windows machine. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the

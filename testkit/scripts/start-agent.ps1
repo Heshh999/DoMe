@@ -60,7 +60,7 @@ $exitCode = Invoke-KitMain {
         Write-Note 'Building it with Docker (first time: about 2-4 minutes)'
         if (Test-Path $extensionDir) { Remove-Item -Recurse -Force $extensionDir }
         Invoke-Native 'Building the browser extension' {
-            docker build -f (Join-Path $script:KitDir 'extension.Dockerfile') --output ('type=local,dest=' + $extensionDir) $script:RepoDir
+            docker build --progress plain -f (Join-Path $script:KitDir 'extension.Dockerfile') --output ('type=local,dest=' + $extensionDir) $script:RepoDir
         }
     }
     $previous = $ErrorActionPreference
