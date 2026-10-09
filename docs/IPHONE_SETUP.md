@@ -2,13 +2,15 @@
 
 Status: **pre-release engineering build. The DoMe web app has not been opened on an iPhone yet.**
 The app (`mobile-app/`) is built iPhone-first and its libraries and screens are unit-tested in a
-browser-like test environment (205 tests at the last recorded run, with a fake socket and a fake
-IndexedDB), and the pairing and command paths it uses are integration-tested on Linux with a
-Python stand-in for the phone. Camera scanning, key persistence in Safari, Add to Home Screen,
-and resume after the phone was locked are **not iPhone-tested**. This document describes the flow
+browser-like test environment (287 tests in 31 files at the last run recorded in
+`mobile-app/README.md`, with a fake socket and a fake IndexedDB), and the pairing, command and
+manual-input paths it uses are integration-tested on Linux with a Python stand-in for the phone.
+Camera scanning, key persistence in Safari, Add to Home Screen, resume after the phone was locked,
+touchpad gestures and the phone keyboard (IME, autocorrect, dictation) are **not iPhone-tested**. This document describes the flow
 as the code implements it and marks every iOS-specific behaviour that still needs a real device.
 
-Related: `docs/WINDOWS_INSTALL.md` (the PC side), `docs/TROUBLESHOOTING.md`, `mobile-app/README.md`.
+Related: `docs/WINDOWS_INSTALL.md` (the PC side), `docs/TROUBLESHOOTING.md`, `docs/INPUT_CONTROL.md`
+(touchpad and keyboard in depth), `docs/SUPPORT.md`, `mobile-app/README.md`.
 
 ## 1. What you need
 
@@ -73,8 +75,13 @@ choose *Pair a phone* on the PC again (`mobile-app/KNOWN_ISSUES.md` #4).
 
 The page says "Code accepted. Name this phone and choose what it may do on the PC." Pick a name and
 the capabilities to request: *See status*, *Control YouTube and media*, *Change PC volume*, *Open and
-manage approved apps*, *Lock Windows*, *Sleep, restart, shut down (always confirmed)*. The PC can grant
-a subset. Only a SHA-256 handle of the code, your public key and these choices leave the phone.
+manage approved apps*, *Lock Windows*, *Sleep, restart, shut down (always confirmed)*, *Touchpad: move
+the cursor, click, scroll, drag* and *Keyboard: type text, press keys and shortcuts*. All are requested
+by default and every one except *See status* can be unticked. The PC can grant a subset; touchpad and
+keyboard in particular are granted only if the PC owner ticks them on the PC. The page says why: "Touchpad
+and keyboard input reaches every app of the unlocked Windows session, not only the approved apps —
+exactly like a mouse and keyboard plugged into the PC. …" Only a SHA-256 handle of the code, your
+public key and these choices leave the phone.
 
 ### 3.4 Compare the verification code and approve on the PC
 
@@ -143,7 +150,10 @@ that an installation you have not opened for weeks may need to be paired again.
   Expired / Cancelled / Outcome unknown. "No answer yet" is shown without claiming failure.
 - **Confirmations** for sleep, restart, shutdown and closing an app appear as a modal that names the PC
   and the exact action, with a 60 s countdown. Approve signs the confirmation on this phone; Decline or
-  letting it expire runs nothing.
+  letting it expire runs nothing. Sleep, restart and shutdown add: "This can interrupt or end remote
+  access to the PC. DoMe cannot wake or power it on again remotely in this version, so you will need to
+  be at the PC to restore access."
+- **Every failure** has two links underneath: **Check connection health** (§6B) and **Get help** (§6C).
 - **Text commands** (Command tab) are parsed on the phone with a fixed rule table ("Pause YouTube",
   "Skip this video", "Set my PC volume to 35 percent", "Open Discord", "Lock my computer", "Put my
   computer to sleep" → confirmation). Use the iPhone keyboard's dictation key to speak them; DoMe has no
@@ -153,11 +163,102 @@ that an installation you have not opened for weeks may need to be paired again.
 - **Fullscreen** cannot be started from the phone (browsers require a click on the PC itself); the app
   explains `ACTIVATION_REQUIRED` and offers Theater mode.
 
+## 6A. Touchpad and keyboard
+
+The **Touchpad** tab (`/app/touchpad`) is a free touchpad and keyboard for the selected PC. It needs the
+PC owner to have allowed *touchpad* and/or *keyboard* for this phone on the PC (`docs/WINDOWS_INSTALL.md`
+§4.9); until then the tab says "This phone has no touchpad or keyboard permission on this PC" with the
+steps. Devices shows per PC "Touchpad / keyboard: Allowed: …" or "Not allowed — the PC owner grants it on
+the PC (tray → Paired phones)".
+
+**Starting.** The tab names the PC ("Touchpad for ‹PC›", "In front on ‹PC›: ‹app — window›") and starts
+a session when you open it (**Start touchpad on ‹PC›** if it is idle). The pill shows *Connecting…*,
+then *Live · Windows accepted N* once the PC confirms events — that is Windows accepting the input, not
+proof that an app reacted. If another phone is using the PC's touchpad you are asked to **Take over**
+(its held buttons are released first) or **Wait, try again**. **Stop Input** is always visible.
+
+**Gestures** (the **Gestures** button shows the same table):
+
+| On the phone | On the PC |
+| --- | --- |
+| Slide one finger | Moves the cursor from where it is, like a laptop touchpad |
+| Lift and put the finger down elsewhere | Keeps going from the current cursor position — no jump |
+| Short, still tap | Left click |
+| Two quick taps in the same spot | Double click (two clicks; Windows combines them) — or use **Double** |
+| Two-finger still tap, or **Right** | Right click |
+| Two fingers moving | Scroll (vertical, and horizontal where the app supports it) |
+| **Drag**, then move a finger | Holds the left button while moving; **End Drag** releases it |
+| **Keyboard** | Opens the phone keyboard and the key/shortcut rows |
+
+Adding a second finger never clicks; scrolling, a cancelled touch (a call, rotation, switching apps) and
+ending a drag never add taps. While a drag is held the button turns into a red **End Drag** and the
+page shows "Held on the PC: left button". **Settings** on the tab has *Sensitivity* (0.5–3×) and
+*Scroll direction* (*Natural* or *Standard*), saved on this phone only.
+
+**Keyboard.** First click the field you want on the PC with the touchpad: DoMe cannot see which field
+has focus inside a window ("Typing into: ‹app›" shows only the window). Then:
+
+- **Type live**: type in the box; each committed change is sent once. Return on the iPhone keyboard is
+  sent as Enter. Japanese, Chinese and other input methods send only the final text, never the
+  candidates. If you correct text in the middle, move the caret back, or delete an emoji or accented
+  character, live typing **pauses** with an explanation and nothing is sent or deleted on the PC; fix it
+  on the PC or use Compose and Send, then tap **Type live** again.
+- **Compose and Send**: write the text, then **Send**. "Windows accepted N characters." confirms it; if
+  the PC does not confirm, the panel says "DoMe cannot tell whether this text reached the PC" and offers
+  **Discard** or **Send again** — it never resends by itself. Line breaks in the text are typed as Enter.
+- Keys: Enter, Tab, Esc, ⌫, Del, arrows, Space. Shortcuts: Select all (Ctrl+A), Copy (Ctrl+C), Paste
+  (Ctrl+V), Undo (Ctrl+Z), and **Address bar (Ctrl+L)** only while Chrome or Edge is in front. Copy and
+  Paste use the PC's own clipboard; nothing syncs clipboards between your phone and the PC.
+
+Nothing you type is stored on the phone, in logs or in diagnostics, and it is never sent to an AI
+service. The DoMe service relays it inside TLS; this release does not claim end-to-end encryption.
+
+**When it stops.** Leaving the tab, **Stop Input**, locking the phone, switching apps, choosing another
+PC and signing out stop the session; the PC also stops it on its own after 3 s without traffic and
+releases anything still held. A locked PC, a sign-in screen or an administrator prompt cannot be
+controlled from the phone, by design. Return to the tab and start again; nothing you did while away is
+sent later. Problems: `docs/TROUBLESHOOTING.md` §18.
+
+Evidence: gestures, typing and session handling are unit-/component-tested in jsdom; **not
+iPhone-tested** (Safari pointer-event and keyboard event ordering on a real device are unknown).
+
+## 6B. Connection health
+
+More → **Connection health** (also from every status pill and every failure) checks seven things
+separately — this phone, your account, the PC's connection, remote control on the PC, touchpad/keyboard
+permission, the browser extension and the media target — and gives one next action for each (for
+example **Reconnect this phone**, **Sign in again**, **Open DoMe on the PC**, **Enable remote control on
+the PC**, **Allow touchpad/keyboard on the PC**, **Install or update the extension on the PC**, **Choose a
+media target**). "A green row never implies the others work." When the PC is unreachable it says the
+cause is unknown — asleep, shut down, offline, or DoMe not running — rather than guessing. **Show
+technical details** reveals codes and versions; **Retry** re-checks up to three times per visit and never
+re-sends a command. The first-use walkthrough on the same screen continues at the first step that is not
+done. Details: `docs/TROUBLESHOOTING.md` §17. Evidence: unit-/component-tested; **not iPhone-tested**.
+
+## 6C. Asking for help
+
+**Get help** under a failure (or More → Support) opens the Support page with the category and the error
+code preselected. Self-help topics come first. Signed in, you can send a request: choose the category,
+describe what happened (up to 2000 characters; never include passwords or pairing codes), and optionally
+**Attach redacted diagnostics…** — expand **Review exactly what would be sent** before you decide. They
+contain versions, connection states, error codes and timing, never pairing material, credentials, typed
+text, media titles or URLs.
+
+- **Received — reference DM-XXXXXXXX**: support has the request; keep the reference. **Your requests**
+  lists your requests and their status. A response time is shown only if one has been published for
+  the service; otherwise the page says so.
+- **Not sent**: support did not receive it. Copy the redacted summary and try again later.
+- **Not confirmed**: DoMe cannot tell whether it arrived. Tap **Refresh your requests** first and send
+  again only if it is not listed, so it does not arrive twice.
+
+Details: `docs/SUPPORT.md`. Evidence: component-tested against a fake API; the service side is
+integration-tested; **not iPhone-tested**.
+
 ## 7. Limitations of iOS web apps (what DoMe does not promise)
 
 | Limitation | Effect in DoMe |
 | --- | --- |
-| No background execution: iOS suspends the page and its WebSocket when the screen locks or you switch apps | Nothing runs in the background; the app refreshes state when you return. No command is queued for later. |
+| No background execution: iOS suspends the page and its WebSocket when the screen locks or you switch apps | Nothing runs in the background; the app refreshes state when you return. No command is queued for later. A touchpad session stops when the page is hidden; the PC releases any held drag within about 3 s. |
 | No web push notifications are used | DoMe does not notify you about anything; check the app. |
 | No `BarcodeDetector` in Safari | QR scanning uses the jsQR fallback with `getUserMedia`, which needs camera permission each installation. Typing the code always works. |
 | Site storage can be evicted; home-screen apps and Safari tabs have separate storage | Each installation pairs separately; a cleared installation pairs again (§5). |
@@ -187,6 +288,14 @@ the tag **iPhone-tested**:
    *Online*; no command replays.
 4. With the PC agent and extension running: Next changes the video in a background tab; the result
    shows the transition.
-5. Sleep… → the modal shows the registry wording and the PC's countdown detail; Approve → "Windows
-   accepted the request".
+5. Sleep… → the modal shows the registry wording, the fixed loss-of-access / no-remote-wake copy and
+   the PC's countdown detail; Approve → "Windows accepted the request".
 6. Lighthouse/PWA audit: installability, contrast ≥ 4.5:1, 44 px touch targets, safe-area insets.
+7. Touchpad and keyboard, in Safari **and** in the installed app: every row of `mobile-app/README.md` →
+   "Manual iPhone checklist — touchpad and keyboard" (gestures, drag/End Drag, rotation and backgrounding
+   during a drag, IME, autocorrect, dictation, emoji, Ctrl+L, Compose and Send in airplane mode, takeover,
+   Windows lock/UAC). Record results in `docs/INPUT_CONTROL.md` §10–§11 as well.
+8. Connection health: airplane mode, Wi-Fi → cellular, PC agent quit, browser closed, extension removed,
+   phone revoked — each row shows the matching state and next action, and Retry never repeats an action.
+9. Support: send a request (reference shown), then one in airplane mode ("Not sent" with a copyable
+   summary).
