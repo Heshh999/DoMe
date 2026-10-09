@@ -65,6 +65,11 @@ try {
     $refused = $false
     try { [void](Read-StableAddresses) } catch { $refused = [bool]$_.Exception.Data.Contains('DoMeKit') }
     Check 'APP_URL with a path is refused' $refused $true
+    Set-Content -Path (Join-Path $script:KitDir 'stable-addresses.txt') -Encoding Ascii -Value @(
+        'APP_URL=HTTPS://Dome-Test.Example.com:443', 'SIGNIN_URL=https://Dome-Signin.example.com:8443/realms/dome/')
+    $stable = Read-StableAddresses
+    Check 'APP_URL lower-cased, :443 dropped' $stable.AppUrl 'https://dome-test.example.com'
+    Check 'SIGNIN_URL host lower-cased, other port and path kept' $stable.SigninUrl 'https://dome-signin.example.com:8443/realms/dome'
     $script:KitDir = $saved
 
     # The quick-tunnel address in cloudflared's banner, and its failure lines (old and 2026.x wording).

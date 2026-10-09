@@ -194,6 +194,12 @@ function Get-ComposeOutput([string[]]$Arguments) {
 $script:TunnelUrlPattern = 'https://[a-z0-9]+(-[a-z0-9]+)+\.trycloudflare\.com'
 $script:TunnelFailurePattern = 'failed to (request|unmarshal) quick Tunnel|quick tunnel provisioning failed|429 Too Many Requests'
 
+function Stop-Tunnels {
+    # Both tunnel containers restart on failure; leaving them would keep asking Cloudflare for addresses
+    # (and prolong a rate limit). Best effort: we are already reporting a problem.
+    [void](Get-ComposeOutput @('--profile', 'quick-tunnel', 'rm', '--stop', '--force', 'tunnel-app', 'tunnel-signin'))
+}
+
 function Wait-TunnelUrl([string]$Service, [int]$TimeoutSeconds = 90) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -201,10 +207,13 @@ function Wait-TunnelUrl([string]$Service, [int]$TimeoutSeconds = 90) {
         $found = [regex]::Matches($logs, $script:TunnelUrlPattern)
         if ($found.Count -gt 0) { return $found[$found.Count - 1].Value }
         if ($logs -match $script:TunnelFailurePattern) {
-            Stop-Kit ("Cloudflare did not create the temporary address for $Service. Wait a minute and run this again. Details: docker logs dome-test-$Service-1")
+            $said = @($logs -split "`n" | Where-Object { $_ -match $script:TunnelFailurePattern } | Select-Object -Last 1)
+            Stop-Tunnels
+            Stop-Kit ("Cloudflare did not create a temporary address (it limits how often they can be made). Wait a minute or two and run this again. Cloudflare said: " + ([string]($said -join '')).Trim())
         }
         Start-Sleep -Seconds 2
     }
+    Stop-Tunnels
     Stop-Kit ("No temporary address from $Service after $TimeoutSeconds seconds. Check that this PC can reach the internet (a VPN or company firewall can block Cloudflare tunnels).")
 }
 
@@ -242,8 +251,21 @@ function Read-StableAddresses {
             Stop-Kit "testkit\stable-addresses.txt must contain $key=https://... (see README, 'Stable address')."
         }
     }
-    if ($values['APP_URL'] -notmatch '^https://[^/]+$') { Stop-Kit 'APP_URL must be just https://host[:port] with no path.' }
-    return [pscustomobject]@{ AppUrl = $values['APP_URL']; SigninUrl = $values['SIGNIN_URL'] }
+    $app = ConvertTo-NormalHttpsUrl $values['APP_URL']
+    $signin = ConvertTo-NormalHttpsUrl $values['SIGNIN_URL']
+    if (-not $app -or -not $signin) { Stop-Kit "testkit\stable-addresses.txt: APP_URL and SIGNIN_URL must look like https://host (see README, 'Stable address')." }
+    if ($app -notmatch '^https://[^/]+$') { Stop-Kit 'APP_URL must be just https://host[:port] with no path.' }
+    return [pscustomobject]@{ AppUrl = $app; SigninUrl = $signin }
+}
+
+function ConvertTo-NormalHttpsUrl([string]$Url) {
+    # The api lower-cases its public origin and browsers drop ':443', while the sign-in page compares the
+    # redirect address exactly: hand every component the same spelling.
+    $m = [regex]::Match($Url, '^(?i:https)://([^/:?#\s]+)(?::(\d+))?(/[^?#\s]*)?$')
+    if (-not $m.Success) { return $null }
+    $normal = 'https://' + $m.Groups[1].Value.ToLowerInvariant()
+    if ($m.Groups[2].Success -and $m.Groups[2].Value -ne '443') { $normal += ':' + $m.Groups[2].Value }
+    return ($normal + $m.Groups[3].Value).TrimEnd('/')
 }
 
 function Get-CurrentPath { return (Join-Path $script:StateDir 'current.json') }

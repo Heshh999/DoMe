@@ -94,7 +94,9 @@ $exitCode = Invoke-KitMain {
     if ($linked -and -not (Test-LinkedThrough ([string]$current.signin_url))) {
         Write-Step 'This PC was linked to an earlier test account'
         Write-Note 'A new test address, or deleted test data, means a new test account. Linking this PC again.'
-        Invoke-Native 'Forgetting the earlier test link' { & $script:AgentExe unlink }
+        # --new-key: the earlier account may still own this PC's key, and DoMe never moves a key between
+        # accounts ("already linked to a different account"); a fresh key links cleanly.
+        Invoke-Native 'Forgetting the earlier test link' { & $script:AgentExe unlink --new-key }
         $linked = $false
     }
 

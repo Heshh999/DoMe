@@ -109,7 +109,8 @@ Please write down what worked, what did not, and anything confusing. For a probl
 ## Stopping
 
 - Double-click **`3 Stop test server.cmd`**. It asks whether to delete all test data; answer **N** to
-  keep your test account, linked PC and paired phones for next time.
+  keep your test account, linked PC and paired phones (useful with a stable address; with temporary
+  addresses the next start begins with empty test data anyway).
 - On the PC, right-click the DoMe tray icon and choose **Quit DoMe** (or close the step 2 window).
 
 ## Every start is a new address
@@ -119,7 +120,8 @@ server starts, and stop working when you stop it, restart Docker or restart the 
 start:
 
 - **It is a new, empty test account.** DoMe knows an account by its sign-in address and email, and
-  the sign-in address changed too.
+  the sign-in address changed too. Accounts from earlier addresses can never be signed into again,
+  so step 1 clears the earlier test data each time it opens new addresses.
 - Run `2 Start DoMe on this PC.cmd` again. It notices the new account and **links this PC again**
   (a browser opens: passphrase, same email as on the iPhone, **Link this PC**).
 - Open the **new** address on the iPhone (scan the new QR code), sign in and **pair again**. A Home
@@ -136,6 +138,10 @@ point two hostnames at this PC:
 | --- | --- |
 | app, e.g. `https://dome-test.example.com` | `http://127.0.0.1:18080` |
 | sign-in, e.g. `https://dome-signin.example.com` | `http://127.0.0.1:18081` |
+
+Both hostnames must work from the internet with a normal (publicly trusted) HTTPS certificate: the
+DoMe server in Docker calls the sign-in address itself, so a name that only resolves on your PC, or a
+certificate only your devices trust, makes sign-in fail with "Sign-in is temporarily unavailable".
 
 Then create `testkit\stable-addresses.txt` with:
 
@@ -166,7 +172,7 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 | "No temporary address ... after 90 seconds" | The PC cannot reach Cloudflare. A VPN, company network or firewall can block it; try another network. |
 | The iPhone cannot open the address | New addresses can take a minute to work. Try again; try mobile data instead of Wi-Fi. Make sure the address is from the **latest** start. |
 | Sign-in says "Wrong passphrase" | Use the passphrase from the **latest** step 1 window; it changes on every start. It is also in `testkit\.state\current.json`. |
-| Sign-in says "Too many wrong passphrases" | Wait 10 minutes, or run step 1 again (new passphrase). |
+| Sign-in says "wrong passphrase, again (many wrong tries recently)" | Same as above: the right passphrase always works. If you did not make those tries yourself, someone else has the address: run step 3, then step 1 for new addresses. |
 | "DoMe is already running on this PC" | Right-click the tray icon, **Quit DoMe**, run step 2 again. |
 | The link browser window did not open | Copy the address printed in the step 2 window into a browser on the PC. |
 | YouTube controls stay greyed out | Check that the extension is loaded and switched on, then reload the YouTube tab. To rebuild it: quit DoMe from the tray, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
@@ -177,9 +183,8 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 ## What this is not
 
 - **Not the real sign-in.** The sign-in page is DoMe's development identity provider: no passwords,
-  any email works. The only thing keeping strangers out is the passphrase (new on every start,
-  10 wrong tries lock sign-in for 10 minutes, for everyone: if that happens without you, run step 1
-  again for new addresses). Use test names, not real accounts.
+  any email works. The only thing keeping strangers out is the passphrase: 12 random characters,
+  new on every start, too many combinations to guess. Use test names, not real accounts.
 - **Public addresses.** Anyone who learns the app address can open the DoMe website and the sign-in
   page. Controlling the PC still needs a signed-in account **and** a phone you approved on the PC,
   but stop the test server when you are not testing.

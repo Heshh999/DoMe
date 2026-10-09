@@ -28,6 +28,12 @@ $exitCode = Invoke-KitMain {
         $signinUrl = $stable.SigninUrl
         $mode = 'stable'
     } else {
+        # A new sign-in address is a new test account, and accounts from earlier addresses can never be
+        # signed into again: start from an empty database instead of piling them up.
+        Write-Step 'Starting from empty test data (new addresses mean a new test account)'
+        Invoke-Compose 'Clearing earlier test data' @('--profile', 'quick-tunnel', 'down', '-v')
+        Remove-LinkRecord
+        Write-Ok 'done'
         Write-Step 'Opening two temporary HTTPS addresses (Cloudflare quick tunnels, no account needed)'
         Invoke-Compose 'Starting the tunnels' @('--profile', 'quick-tunnel', 'up', '-d', '--force-recreate', 'tunnel-app', 'tunnel-signin')
         $appUrl = Wait-TunnelUrl 'tunnel-app'

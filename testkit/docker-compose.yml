@@ -84,6 +84,11 @@ services:
       DOME_OIDC_CLIENT_ID: dome-test
       DOME_OIDC_CLIENT_SECRET: ${DOME_TEST_CLIENT_SECRET:?run 1 Start test server.cmd}
       DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH: /app/run/entitlement-ed25519.pem
+      # Every request arrives from the cloudflared container (or, with stable addresses, from Docker's
+      # gateway). Trust the client address they forward so per-address rate limits apply to each real
+      # client, not to everyone at once. Only private Docker networks can reach the api: its port is
+      # published on 127.0.0.1 only.
+      DOME_TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       DOME_LOG_LEVEL: INFO
     ports:
       - "127.0.0.1:18080:8080"
