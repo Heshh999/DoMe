@@ -35,3 +35,25 @@ modified; each item records the workaround used here.
    `loadsStrict` with `PAYLOAD_TOO_LARGE` rather than `MALFORMED_MESSAGE`; the relay-frame schema
    bounds the string at 4096 so this only matters for a misbehaving relay. The PWA treats both codes as
    "invalid challenge: nothing to show".
+
+6. **`input.session_start` params default.** `actions.json` declares `takeover` with `default: false`,
+   and `buildCommandPayload` applies schema defaults, so every start carries `params.takeover=false`
+   even when the phone sends `{}`. Harmless (the agent treats absent and false alike) but worth knowing
+   when reading relay logs; the PWA test asserts the applied default.
+
+7. **`support_ticket_response` is a bare `$ref`.** The generated TypeScript has no
+   `SupportTicketResponse` type (the alias collapses to `SupportTicket`); `api.ts` types the 201/200
+   bodies as `rest.SupportTicket`. Validation still uses the `support_ticket_response` definition name.
+
+8. **Input errors reuse the `error` frame with `ref_pc_id`.** The relay-frames schema documents
+   `ref_pc_id` as "required for subscription errors"; input-batch rejections (INPUT_*, RATE_LIMITED,
+   PC_OFFLINE/PC_RECONNECTING) arrive in the same shape, so a controller cannot tell a refused
+   subscription from a rejected batch by shape alone. The PWA routes by code (DECISIONS 30).
+   Suggested (minor): a dedicated `input_error{input_session_id, seq?, error}` frame.
+
+9. **`agent_input_ack.held_keys` items are free strings (maxLength 32)** while `input_event.key` is
+   an enum. The PWA renders held keys as text only. Suggested: reuse the key enum plus modifier names.
+
+10. **No `NO_ANSWER` code exists** for a command that got neither ack nor result within the local
+    deadline; the PWA uses a client-only `NO_ANSWER` in `labels.ts` (like `NETWORK`, item 4) for the
+    touchpad start that times out.

@@ -42,3 +42,37 @@ Items from the review that were recorded rather than fully closed, plus residual
    `signing_out` until the page navigates to `/` (which it does right after `Runtime.signOut`
    resolves). If a browser blocked that navigation the customer would see the "Signing out" screen
    until reload; no path through the app sets `signing_out` without the navigation that follows.
+
+9. **Double tap over a slow link.** Two quick taps are two clicks combined by Windows' double-click
+   timer (DECISIONS 22). When relay latency jitter spreads them beyond the PC's double-click time, the
+   PC sees two single clicks. Workaround: the Double button. Not device-tested.
+
+10. **Live typing pauses on legitimate edits.** Any edit that is not at the end of what this phone sent
+    in the current run, or that removes an emoji/combining cluster, switches to Compose and Send with an
+    explanation (DECISIONS 25). This is deliberate (never guess at the PC field) but means autocorrect
+    that rewrites an earlier word, or moving the caret in the textarea, pauses live mode.
+
+11. **Nothing here is iPhone-tested or Windows-device-tested.** The gesture machine, typing mapper and
+    session client are unit/component-tested in jsdom with fake sockets and timers. Real Safari
+    pointer-event semantics (pointercancel on system gestures, lost capture on rotation, keyboard
+    `beforeinput` ordering with IME/dictation/autocorrect), real relay latency and real Windows
+    acceptance are not verified; see README "Manual iPhone checklist".
+
+12. **Touchpad sensitivity is relative only.** Cursor motion is `dx·sensitivity` in desktop pixels;
+    there is no acceleration curve and no per-monitor awareness (the agent injects relative motion,
+    which Windows applies across the real topology). Mixed-DPI feel is unverified.
+
+13. **Foreground-app context is window-level.** The keyboard panel shows `pc_state.foreground_app`
+    (process/title/browser) from the agent's 30 s state frames and from the session start result; a
+    window change between frames is detected by the PC (INPUT_TARGET_CHANGED) before the phone shows
+    it. Field-level focus is never shown because it is not observable.
+
+14. **Support tickets list is fetched on page load only** (and after a successful submission); there
+    is no polling for status changes. Operators' answers appear on the next visit.
+
+15. **Health "Retry" budget is per page visit.** The 3-attempt bound resets when the page is
+    re-opened; it exists to stop a spinner loop, not to rate-limit the relay (which has its own limits).
+
+16. **Brand exports are copied, not regenerated, by `pnpm gen:icons`.** If `brand/icon.svg` changes,
+    run `node brand/scripts/export.mjs` from the repository root first (it writes `brand/exports/`),
+    then `pnpm gen:icons` here; the script refuses exports whose manifest source is not `icon.svg`.

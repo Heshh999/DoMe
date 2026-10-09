@@ -130,3 +130,97 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     known, else `null` so the socket opens unbound. The relay binds the socket to the paired controller
     only after verifying the proof (`rules.controller_socket_identity`); a bare kid, which every
     account member can read from the device list, is no longer enough to observe this phone's PCs.
+
+22. **Double tap = two immediate clicks (protocol 1.1 touchpad).** The gesture machine never delays a
+    tap's click to find out whether a second tap follows (that would add the whole double-tap window,
+    300 ms, to every single click), and it never sends the `double_click` primitive after a click it
+    already sent (click + double_click = three presses, which selects a paragraph in many editors).
+    Two quick taps therefore become two `pointer_button click` events and Windows' own double-click
+    time (500 ms default) combines them; the machine marks the second one `double` so tests and the UI
+    can see the threshold (300 ms, 24 px). A real `double_click` primitive is offered as the
+    **Double** button under the surface. Not device-tested: on a slow link the second click can arrive
+    late and count as a single click (KNOWN_ISSUES 9).
+
+23. **Drag mode is a drag lock.** Entering Drag mode presses the left button on the next touch and the
+    hold survives lifting the finger, so the customer can reposition across a large distance; only
+    End Drag, Stop Input, leaving the page, pointercancel/lost capture/rotation/hidden, or the PC
+    ending the session release it. The surface shows a conspicuous "DRAG MODE — holding the left
+    button" state the whole time. The release path never produces a click.
+
+24. **One finger → two fingers never clicks; after a two-finger gesture nothing clicks or moves until
+    every finger is up.** The machine discards the first finger's pending tap when a second arrives
+    (`two`), completes a right click only when both fingers were down ≤ 250 ms and nearly still
+    (`two_release`), and otherwise settles silently (`two_settling`), so the finger left behind after a
+    scroll cannot jump the cursor or tap.
+
+25. **Live typing maps only edits at the end of what this phone sent, with certain deletions.**
+    `LiveTyping.known` is the text committed to the PC in this run — never a mirror of the PC field.
+    An edit is forwarded only when it touches the end of `known` and every removed code unit is a
+    plain BMP character (no surrogates, combining marks, variation selectors, ZWJ, Indic/Thai/Hangul
+    jamo clusters). Everything else pauses live entry and switches to Compose and Send with the
+    reason; the phone never sends Ctrl+A/Backspace to "repair" text it cannot see (spec §10A B). IME
+    compositions commit once at compositionend by diffing against `known`, so a trailing or leading
+    `input` event (iOS ordering varies) sends nothing twice.
+
+26. **Enter is a key, never a newline.** `beforeinput` with `insertLineBreak`/`insertParagraph` is
+    prevented and sent as `key enter`; a Backspace in an empty textarea is sent as `key backspace`
+    only when nothing of ours could have been deleted instead. Nothing is submitted after text on its
+    own.
+
+27. **Compose and Send success = the PC's `input_ack` covering that batch's seq.** The client's
+    `awaitAck(seq)` resolves `accepted` when `last_seq ≥ seq` without new drops, `dropped` when the
+    cumulative drop counter rose meanwhile (the batch may or may not have been among them), `timeout`
+    after 3 s, `ended` when the session stopped first. Only `accepted` clears the buffer; every other
+    outcome keeps the text in memory in a review state with Discard / Send again, and nothing is ever
+    resent automatically. Acceptance means Windows accepted the events, which the copy says; whether
+    the field changed is only visible on the PC.
+
+28. **Keepalive and flush cadence.** Pointer motion is coalesced into the pending queue and flushed
+    once per animation frame (`requestAnimationFrame`, injectable for tests); batches are capped at
+    the PC's `max_batch_events` (≤ 64) and split in order; signing is serialised so `seq` is strictly
+    increasing even though WebCrypto is async. An empty batch goes out every ~1 s while nothing else
+    was sent (lease 3 s). A pending frame is dropped, never sent late, when the session ends, is
+    suspended, the page hides, the PC switches or the socket drops.
+
+29. **`input.session_start`/`stop` reuse the command path; stop during sign-out keeps an identity.**
+    `Runtime.signOut` enters `signing_out` first (DECISIONS 7) which empties the session store, yet the
+    `input.session_stop` that releases the PC's held input must still be signed for the account it
+    belongs to, so `Runtime.identity()` keeps the last account id for exactly the `signing_out`
+    window. Stops are sent before the socket closes and never awaited for a result.
+
+30. **INPUT_* and RATE_LIMITED error frames with `ref_pc_id` go to the input client, not to the
+    subscription state.** The contract reuses the error frame (no command id exists for a batch); the
+    runtime asks the input client first and only then treats a `ref_pc_id` error as a refused
+    subscription (GRANT_MISSING). Fatal codes (INPUT_SESSION_EXPIRED/REQUIRED, PC_OFFLINE/RECONNECTING
+    while live) end the session; INPUT_SUSPENDED suspends it; the rest are shown as a dismissible
+    notice while the session continues.
+
+31. **Health screen diagnoses observable state only.** `assessHealth` is pure over the stores: phone
+    connectivity, account session, PC relay connection (an unreachable PC is "cause unknown"), local
+    remote-control/lock state, manual-input grant (+ `input_restricted`), extension, media target —
+    each with exactly one next action (PC-side actions are instructions, not buttons that pretend to
+    act). Retry is bounded to 3 attempts and only nudges the socket and refreshes inventories; it
+    never resends a command. The walkthrough returns to the first undone step.
+
+32. **Support form only when signed in; failure never claims receipt.** The public Support page keeps
+    self-help for everyone and shows the form after `GET /v1/session` succeeds (the POST needs the CSRF
+    token). The category comes from the help link (`?category=…&code=…`, validated against the enum
+    and `^[A-Z_]+$`). Diagnostics are attached only after the customer opened the preview; the text is
+    bounded to 32 768 characters by dropping the oldest log entries first. A failed POST shows "Not
+    sent", the redacted summary in a copyable textarea and a Try again — no reference, no "received".
+
+33. **Upgrade copy lives in one component.** `ProExplanation` is rendered only by the Routines and
+    Custom remotes pages (both reached deliberately from More), names the selected benefit, is
+    dismissible and never mentions connectivity. `UpgradeAndHealth.test.tsx` renders Dashboard,
+    Remote, Touchpad, Devices, Health and the shell (online and offline) and asserts no upgrade copy.
+    `recoverySteps` for plan-limit codes still mentions Pro (a plan state, not a repair for a fault).
+
+34. **Brand icons are copied from `brand/exports`, not re-rendered here.** `scripts/make-icons.mjs`
+    now points at `brand/icon.svg` as the favicon source and installs the brand's committed PNG/ICO
+    renders of that same SVG (checked against `brand/exports/manifest.json`), because re-running the
+    brand export script would write outside `mobile-app/`. The manifest gains the 192 px maskable icon;
+    `index.html` gains PNG/ICO favicon links.
+
+35. **Log redaction gains `text`/`composer`/`events`/`key(s)`.** No call site logs typed content; the
+    regex (`^text$|_text$|composer|^events$|^key$|^keys$`) guarantees it would not survive if one did.
+    `context` is deliberately not matched (`^text$` anchors) so YouTube tab contexts stay loggable.
