@@ -81,6 +81,8 @@ $exitCode = Invoke-KitMain {
     if ($mode -eq 'quick-tunnel') {
         Write-Host '  These addresses stop working when you run "3 Stop test server.cmd", restart Docker or'
         Write-Host '  restart the PC. Starting again gives NEW addresses (see README, "Every start is a new address").'
+        Write-Host '  At a new address the iPhone signs in and pairs again. The free plan allows 2 phones: if'
+        Write-Host '  pairing says the limit is reached, tap "Manage devices" and revoke the old ones.'
     }
     Write-Host '  You can close this window; DoMe keeps running in Docker.'
 }

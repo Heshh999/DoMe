@@ -105,8 +105,8 @@ $exitCode = Invoke-KitMain {
     Write-Host ''
     Write-Host '  Look for the DoMe icon near the clock (it may be under the ^ arrow).'
     Write-Host '  To pair your iPhone: right-click the icon -> "Pair a phone...", then in the DoMe app on'
-    Write-Host '  the iPhone: Devices -> Pair a PC, scan the code IN THE APP (or type it), compare the'
-    Write-Host '  6-digit numbers and approve on this PC.'
+    Write-Host '  the iPhone: More -> Devices -> Pair with a PC. Scan the code IN THE APP (or type it),'
+    Write-Host '  compare the 6-digit numbers and approve on this PC.'
     Write-Host ''
     Write-Host '  Keep this window open while testing. Closing it (or Quit DoMe in the tray) stops DoMe.' -ForegroundColor Yellow
     Write-Host ''

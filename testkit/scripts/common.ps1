@@ -193,7 +193,8 @@ function Wait-TunnelUrl([string]$Service, [int]$TimeoutSeconds = 90) {
         $logs = Get-ComposeOutput @('--profile', 'quick-tunnel', 'logs', '--no-color', $Service)
         $found = [regex]::Matches($logs, 'https://[a-z0-9]+(-[a-z0-9]+)+\.trycloudflare\.com')
         if ($found.Count -gt 0) { return $found[$found.Count - 1].Value }
-        if ($logs -match 'failed to (request|unmarshal) quick Tunnel|429 Too Many Requests') {
+        # Older cloudflared: "failed to request quick Tunnel"; 2026.x: "quick tunnel provisioning failed with status 429: ..."
+        if ($logs -match 'failed to (request|unmarshal) quick Tunnel|quick tunnel provisioning failed|429 Too Many Requests') {
             Stop-Kit ("Cloudflare did not create the temporary address for $Service. Wait a minute and run this again. Details: docker compose -f testkit\docker-compose.yml --profile quick-tunnel logs $Service")
         }
         Start-Sleep -Seconds 2
