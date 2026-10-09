@@ -12,6 +12,7 @@ import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { Button, Card, Notice } from "../../components/ui.tsx";
 import { APP_VERSION, buildDiagnostics, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
 import { useDevicesStore } from "../../store/devices.ts";
+import { useInputStore } from "../../store/input.ts";
 import { useLiveStore } from "../../store/live.ts";
 import { useSessionStore } from "../../store/session.ts";
 
@@ -42,6 +43,7 @@ export function SettingsPage() {
       commands: live.commands,
       sessionPresent: session !== null,
       plan: session?.plan ?? null,
+      input: useInputStore.getState().session,
     });
     downloadJson(`dome-diagnostics-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`, report);
   };
@@ -137,15 +139,14 @@ export function SettingsPage() {
 
       <Card>
         <h2 className="font-semibold">Support</h2>
+        <p className="text-sm text-text-muted mt-1">
+          Send a request from the <Link to="/support" className="text-accent font-semibold">Support page</Link> (you can attach the redacted diagnostics after reviewing them), or check <Link to="/app/health" className="text-accent font-semibold">Connection health</Link> first.
+        </p>
         {SUPPORT_URL ? (
           <a href={SUPPORT_URL} className="tap mt-2 inline-flex items-center rounded-control border border-border px-4 text-sm font-medium" rel="noopener noreferrer" target="_blank">
-            Contact support
+            Contact support directly
           </a>
-        ) : (
-          <p className="text-sm text-text-muted mt-1">
-            A support contact has not been configured for this deployment yet. See <Link to="/support" className="text-accent font-semibold">Support</Link> for self-help steps.
-          </p>
-        )}
+        ) : null}
       </Card>
 
       <Card>

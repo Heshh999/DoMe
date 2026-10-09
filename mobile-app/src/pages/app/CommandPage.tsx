@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
+import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, inputClass, Notice, Steps } from "../../components/ui.tsx";
 import { parseIntent } from "../../lib/intents.ts";
@@ -100,6 +101,7 @@ export function CommandPage() {
         <Notice tone="danger" title="Not sent">
           <p>{errorMessage(sendError)}</p>
           <Steps steps={recoverySteps(sendError.code)} />
+          <FailureLinks code={sendError.code} />
           <Button size="md" variant="ghost" onClick={clearError}>
             Dismiss
           </Button>

@@ -15,6 +15,7 @@ import type { CommandRecord } from "../lib/commands.ts";
 import { describeChallenge } from "../lib/confirmations.ts";
 import { secondsUntil } from "../lib/format.ts";
 import type { LabelContext } from "../lib/labels.ts";
+import { isPowerAction, POWER_CONFIRMATION_COPY } from "../lib/power.ts";
 import { Button, Notice } from "./ui.tsx";
 import { Sheet } from "./Sheet.tsx";
 
@@ -28,13 +29,6 @@ export interface ConfirmationModalProps {
   /** Local dismissal (no frame is sent). Required for the escape hatch; when absent, Close is not shown. */
   onDismiss?: () => void;
   now?: () => Date;
-}
-
-/** Fixed copy for every Sleep / Restart / Shutdown confirmation (spec §10). */
-export const POWER_CONFIRMATION_COPY = "This can interrupt or end remote access to the PC. DoMe cannot wake or power it on again remotely in this version, so you will need to be at the PC to restore access.";
-
-export function isPowerAction(action: string): boolean {
-  return action === "power.sleep" || action === "power.restart" || action === "power.shutdown";
 }
 
 export function ConfirmationModal({ record, pcName, labels, connected = true, onRespond, onDismiss, now = () => new Date() }: ConfirmationModalProps) {

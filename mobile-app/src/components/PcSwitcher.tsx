@@ -49,9 +49,11 @@ export function PcSwitcher({ pc, live }: { pc: rest.Pc | undefined; live: LivePc
         )}
         <p className="text-xs text-text-muted truncate">{c.detail}</p>
       </div>
-      <Pill tone={c.tone} pulse={c.pulse}>
-        {c.label}
-      </Pill>
+      <Link to="/app/health" aria-label={`Connection health: ${c.label}`} className="shrink-0">
+        <Pill tone={c.tone} pulse={c.pulse}>
+          {c.label}
+        </Pill>
+      </Link>
     </div>
   );
 }

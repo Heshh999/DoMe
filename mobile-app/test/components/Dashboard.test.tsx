@@ -31,7 +31,7 @@ describe("Dashboard", () => {
   it("offline PC: shows Offline with last seen and disables every consequential control", () => {
     useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: TS });
     renderDashboard();
-    expect(screen.getByText("Office PC")).toBeInTheDocument();
+    expect(screen.getAllByText("Office PC").length).toBeGreaterThanOrEqual(1); // PC switcher and the Now Playing panel both name the PC
     expect(screen.getByText("Offline")).toBeInTheDocument();
     expect(screen.getByText(/Commands are not stored for later/)).toBeInTheDocument();
     for (const name of ["Next video", "Back 10 s", "Lock Windows", "Sleep…"]) expect(screen.getByRole("button", { name })).toBeDisabled();

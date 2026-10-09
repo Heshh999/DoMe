@@ -5,6 +5,7 @@
 import type { CommandRecord } from "../lib/commands.ts";
 import { describeAction, errorMessage, lifecycleLabel, recoverySteps, type LabelContext } from "../lib/labels.ts";
 import { outcomeTone, resultSummary } from "../lib/outcome.ts";
+import { FailureLinks } from "./FailureLinks.tsx";
 import { Pill, Steps } from "./ui.tsx";
 
 export function CommandOutcome({ record, pcName, labels, compact = false }: { record: CommandRecord; pcName: string | null; labels?: LabelContext; compact?: boolean }) {
@@ -37,6 +38,7 @@ export function CommandOutcome({ record, pcName, labels, compact = false }: { re
                   <Steps steps={steps} />
                 </div>
               ) : null}
+              <FailureLinks code={err.code} className="mt-1" />
             </div>
           ) : null}
           {record.noAnswer && !record.terminal ? <p className="text-sm text-text-muted">The PC has not answered yet. This does not mean it failed — check the PC’s state before sending it again.</p> : null}

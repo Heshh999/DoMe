@@ -4,7 +4,7 @@
  * customers and the only identifiers shown are PC and phone names.
  */
 import { useEffect } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
 
 import { loginUrl } from "../lib/api.ts";
 import { errorMessage } from "../lib/labels.ts";
@@ -22,6 +22,7 @@ import { getRuntime } from "./runtime.ts";
 const TABS: Array<{ to: string; label: string; icon: string; end?: boolean }> = [
   { to: "/app", label: "Home", icon: "⌂", end: true },
   { to: "/app/remote", label: "Remote", icon: "▶" },
+  { to: "/app/touchpad", label: "Touchpad", icon: "▭" },
   { to: "/app/command", label: "Type", icon: "⌨" },
   { to: "/app/apps", label: "Apps", icon: "▦" },
   { to: "/app/more", label: "More", icon: "⋯" },
@@ -104,7 +105,12 @@ function RelayBanner() {
   if (status === "reconnecting" || status === "connecting") {
     return (
       <Notice tone="warning">
-        <p>{status === "connecting" ? "Connecting to DoMe…" : "Connection to DoMe lost — reconnecting. PC status is not current."}</p>
+        <p>
+          {status === "connecting" ? "Connecting to DoMe…" : "Connection to DoMe lost — reconnecting. PC status is not current."}{" "}
+          <Link to="/app/health" className="text-accent font-semibold underline">
+            Connection health
+          </Link>
+        </p>
       </Notice>
     );
   }
@@ -166,7 +172,7 @@ export function AppShell() {
           <Outlet />
         </div>
         <nav aria-label="Main" className="fixed bottom-0 inset-x-0 border-t border-border bg-bg-elevated/95 backdrop-blur supports-[backdrop-filter]:bg-bg-elevated/80 pb-[var(--safe-bottom)]">
-          <ul className="max-w-lg mx-auto grid grid-cols-5">
+          <ul className="max-w-lg mx-auto grid grid-cols-6">
             {TABS.map((t) => (
               <li key={t.to}>
                 <NavLink to={t.to} end={t.end ?? false} className={({ isActive }) => `tap flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] text-[11px] font-semibold ${isActive ? "text-accent" : "text-text-muted"}`}>

@@ -1,9 +1,8 @@
 /** Routines: a Pro preview. Nothing here runs or is saved until paid launch; no checkout exists yet. */
-import { Link } from "react-router";
-
 import { PLANS } from "@dome/protocol";
 
-import { Card, Notice, Pill } from "../../components/ui.tsx";
+import { ProExplanation } from "../../components/ProExplanation.tsx";
+import { Card, Pill } from "../../components/ui.tsx";
 import { useSessionStore } from "../../store/session.ts";
 
 const EXAMPLES = [
@@ -22,14 +21,11 @@ export function RoutinesPage() {
         <h1 className="text-2xl font-bold tracking-tight">Routines</h1>
         <Pill tone="info">{pro.display_name}</Pill>
       </div>
-      <Notice tone="info" title={enabled ? "Routines are not available in this version yet" : `Available with ${pro.display_name} at paid launch`}>
+      <ProExplanation benefit={enabled ? "Running one-tap routines (not available in this version yet)" : "One-tap routines"}>
         <p>
-          A routine runs up to {pro.routine_max_steps} approved actions in order on one PC, within {pro.routine_max_seconds} seconds, and stops at the first error. Every step is checked by the PC at run time, and nothing that needs a confirmation (closing apps, sleep, restart, shutdown) can be part of a routine.
+          A routine runs up to {pro.routine_max_steps} approved actions in order on one PC, within {pro.routine_max_seconds} seconds, and stops at the first error. Every step is checked by the PC at run time, and nothing that needs a confirmation (closing apps, sleep, restart, shutdown) or manual touchpad/keyboard input can be part of a routine.
         </p>
-        <p>
-          There is nothing to buy yet — see <Link to="/app/billing" className="text-accent font-semibold underline">Billing</Link> for your current plan.
-        </p>
-      </Notice>
+      </ProExplanation>
       <h2 className="font-semibold">Example routines</h2>
       <ul className="space-y-3" aria-label="Example routines (preview)">
         {EXAMPLES.map((r) => (

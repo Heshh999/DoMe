@@ -51,6 +51,9 @@ export function PublicLayout() {
             <Link to="/support" className="tap inline-flex items-center hover:text-text">
               Support
             </Link>
+            <Link to="/release-notes" className="tap inline-flex items-center hover:text-text">
+              Release notes
+            </Link>
           </nav>
         </div>
       </footer>

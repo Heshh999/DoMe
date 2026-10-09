@@ -31,7 +31,20 @@ from dome_api.relay.controller_ws import controller_endpoint
 from dome_api.relay.lifecycle import Sweeper
 from dome_api.relay.manager import ConnectionManager
 from dome_api.relay.router import RateLimiters
-from dome_api.routes import account, agent, agent_link, auth, commands, controllers, grants, health, pairing, pcs, plans
+from dome_api.routes import (
+    account,
+    agent,
+    agent_link,
+    auth,
+    commands,
+    controllers,
+    grants,
+    health,
+    pairing,
+    pcs,
+    plans,
+    support,
+)
 from dome_api.security.headers import RequestLogMiddleware, SecurityHeadersMiddleware, build_csp
 from dome_api.security.proxy import TrustedProxyMiddleware
 from dome_api.security.ratelimit import SlidingWindowLimiter
@@ -71,7 +84,7 @@ def _build_services(settings: Settings) -> Services:
         registry=load_registry(),
         schemas=load_schemas(),
         relay=relay,
-        limiters=RateLimiters(settings),
+        limiters=RateLimiters(settings, load_registry()),
         link_start_limiter=SlidingWindowLimiter(settings.rate_link_start_per_hour, 3600),
         pairing_claim_account_limiter=SlidingWindowLimiter(settings.rate_pairing_claim_per_account, 900),
         pairing_claim_ip_limiter=SlidingWindowLimiter(settings.rate_pairing_claim_per_ip, 900),
@@ -79,6 +92,7 @@ def _build_services(settings: Settings) -> Services:
         agent_token_limiter=SlidingWindowLimiter(settings.rate_agent_token_per_minute, 60),
         link_code_account_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_account, 900),
         link_code_ip_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_ip, 900),
+        support_ticket_limiter=SlidingWindowLimiter(settings.rate_support_tickets_per_hour, 3600),
     )
 
 
@@ -125,6 +139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         grants.router,
         commands.router,
         plans.router,
+        support.router,
     ):
         app.include_router(router, prefix="/v1")
     app.include_router(health.router)

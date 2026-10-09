@@ -45,3 +45,11 @@ export function powerRequestNotice(request: { action: string; at: string }, evid
   if (evidence === "accepted") return `Windows accepted the ${verb} request ${when}; the PC then disconnected. DoMe cannot confirm whether it completed.`;
   return `A ${verb} was requested ${when}. The PC has since disconnected; DoMe cannot tell whether it ran.`;
 }
+
+/** Fixed copy for every Sleep / Restart / Shutdown confirmation (spec §10). */
+export const POWER_CONFIRMATION_COPY = "This can interrupt or end remote access to the PC. DoMe cannot wake or power it on again remotely in this version, so you will need to be at the PC to restore access.";
+
+export function isPowerAction(action: string): boolean {
+  return action === "power.sleep" || action === "power.restart" || action === "power.shutdown";
+}
+

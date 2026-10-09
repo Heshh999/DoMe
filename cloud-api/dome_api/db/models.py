@@ -47,6 +47,19 @@ PAIRING_STATES = ("open", "claimed", "approved", "declined", "expired")
 SEVERITIES = ("info", "notice", "warning", "critical")
 ACTORS = ("account", "pc", "controller", "system")
 PLATFORMS = ("windows", "development")
+SUPPORT_TICKET_STATUSES = ("received", "in_review", "answered", "closed")
+SUPPORT_CATEGORIES = (
+    "connection",
+    "pairing",
+    "media",
+    "input",
+    "apps",
+    "power",
+    "install",
+    "billing",
+    "account",
+    "other",
+)
 
 
 def _enum_check(column: str, values: tuple[str, ...], name: str) -> CheckConstraint:
@@ -405,6 +418,34 @@ class SupportDiagnostic(Base):
     redacted_bundle: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = created_at_col()
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SupportTicket(Base):
+    """Customer-initiated support request (spec section 11A). ``diagnostics_redacted`` is the customer-reviewed
+    bundle after the server's own redaction pass; the table never carries pairing material, credentials,
+    typed text or media titles, and no row can make anything execute on a PC."""
+
+    __tablename__ = "support_tickets"
+    __table_args__ = (
+        _enum_check("status", SUPPORT_TICKET_STATUSES, "ck_support_tickets_status"),
+        _enum_check("category", SUPPORT_CATEGORIES, "ck_support_tickets_category"),
+        Index("ix_support_tickets_account_created", "account_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    reference: Mapped[str] = mapped_column(String(11), nullable=False, unique=True)
+    category: Mapped[str] = mapped_column(String(16), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    diagnostics_redacted: Mapped[str | None] = mapped_column(Text)
+    app_version: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="received")
+    answer: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = created_at_col()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class PendingDeletion(Base):

@@ -62,6 +62,6 @@ describe("code normalisation and input parsing", () => {
     expect(defaultControllerName("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)")).toBe("iPhone");
     expect(defaultControllerName("Mozilla/5.0 (Linux; Android 14)")).toBe("Android phone");
     expect(defaultControllerName("something else")).toBe("This phone");
-    expect(ALL_CAPABILITIES).toEqual(["status", "media", "volume", "apps", "lock", "power"]);
+    expect(ALL_CAPABILITIES).toEqual(["status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard"]); // protocol 1.1: pointer/keyboard requested by default, granted by the PC owner
   });
 });

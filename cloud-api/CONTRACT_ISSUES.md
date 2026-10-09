@@ -47,3 +47,26 @@ next protocol MINOR bump.
     `"dome-link|" + kid + "|" + <server nonce or RFC 3339 minute>` with its ES256 key (same envelope
     encoding as commands) — which the backend verifies with `dome_protocol.signing` before storing the
     row; once every shipped agent sends it, make it required.
+11. **`check_command_window` reports `COMMAND_EXPIRED` for an expired `input_batch`.** The shared
+    `verify_and_parse_input_batch` reuses the command window helper, so a batch outside its 5 s window raises
+    `COMMAND_EXPIRED` although `errors.json` has `INPUT_STALE` for exactly this case. Workaround: the relay
+    translates that one code (DECISIONS #30). Proposed: have the library raise `INPUT_STALE` (or accept an
+    `expired_code` argument) for input batches so every component reports the same code.
+12. **No relay → agent frame for "the controller's socket is gone".** `rules.input_sessions` names "the relay
+    losing the controller's socket" as a trigger that ends the session with reason `controller_disconnected`
+    "when the relay reports it", but `relay_to_agent` contains no such frame. Workaround: none on the relay;
+    the agent's lease (`input_lease_seconds`) ends the session. Proposed: `relay_to_agent_controller_gone
+    {type: "controller_gone", controller_id, connection_id, at}`, sent when the last socket bound to a
+    controller that owns a live session closes.
+13. **No way for a controller to learn its grant changed except by re-reading REST.** After `grant_update` the
+    PC receives `grants_snapshot`, but `relay_to_controller` has no "grant changed" frame; the relay re-sends
+    `pc_status` as a nudge (DECISIONS #34). Proposed: an optional `capabilities` array on `pc_status_event`, or
+    a dedicated `grant_changed{pc_id, capabilities}` frame.
+14. **`rules.input_sessions` says the relay keeps "NO security event per accepted batch" but is silent on
+    rejections.** Implemented as at most one `input_rejected` event per minute per controller (bounded by the
+    per-socket cap as well). Proposed: state the bound in the rule so phones and the security log agree on what
+    a burst of rejections looks like.
+15. **`support_ticket_request.diagnostics` (≤ 32768 chars) exceeds the service's generic 16 KiB REST body
+    limit.** Not a contract defect, but worth noting: the support endpoint reads up to 48 KiB. Proposed: a
+    `limits.max_rest_body_bytes` (or a per-def hint) so clients and servers size buffers from one place.
+

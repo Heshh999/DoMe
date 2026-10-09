@@ -26,6 +26,7 @@ import pytest
 import uvicorn
 from dome_protocol import (
     build_hello_proof_payload,
+    build_input_batch_payload,
     dumps_compact,
     format_rfc3339,
     generate_pairing_code,
@@ -55,6 +56,15 @@ REPO = Path(__file__).resolve().parents[2]
 DEV_IDP_BIN = REPO / "tools" / "dev-idp" / ".venv" / "bin" / "dome-dev-idp"
 TEST_DB_URL = os.environ.get("DOME_TEST_DATABASE_URL", "postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329")
 RECV_TIMEOUT = 5.0
+# Both simulators announce 1.0 and 1.1 by default (the registry is 1.1); tests that need a 1.0-only peer pass
+# ``protocol_versions=("1.0",)`` explicitly.
+DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1")
+
+
+def new_input_session_id() -> str:
+    """A fresh agent-style input_session_id (22 base64url characters)."""
+    sid: str = b64url_encode(secrets.token_bytes(16))
+    return sid[:22]
 
 
 def free_port() -> int:
@@ -440,7 +450,7 @@ class AgentSim:
         return self.token
 
     async def connect(
-        self, *, protocol_versions: tuple[str, ...] = ("1.0",), expect_snapshot: bool = True
+        self, *, protocol_versions: tuple[str, ...] = DEFAULT_PROTOCOL_VERSIONS, expect_snapshot: bool = True
     ) -> dict[str, Any]:
         self.ws = await connect(
             self.env.ws_base + "/ws/agent",
@@ -556,6 +566,59 @@ class AgentSim:
         await self.send(frame)
         return frame
 
+    # --- manual input (protocol 1.1, agent side) ---
+    async def input_session(
+        self,
+        input_session_id: str,
+        controller_id: str,
+        event: str = "started",
+        reason: str = "started",
+        *,
+        holds_released: int = 0,
+    ) -> dict[str, Any]:
+        frame = {
+            "type": "input_session",
+            "pc_id": self.pc_id,
+            "input_session_id": input_session_id,
+            "controller_id": controller_id,
+            "event": event,
+            "reason": reason,
+            "holds_released": holds_released,
+            "at": format_rfc3339(now_utc()),
+        }
+        await self.send(frame)
+        return frame
+
+    async def input_ack(
+        self,
+        input_session_id: str,
+        last_seq: int,
+        *,
+        accepted: int = 0,
+        dropped: int = 0,
+        held_buttons: list[str] | None = None,
+        held_keys: list[str] | None = None,
+    ) -> dict[str, Any]:
+        frame = {
+            "type": "input_ack",
+            "pc_id": self.pc_id,
+            "input_session_id": input_session_id,
+            "last_seq": last_seq,
+            "accepted_events": accepted,
+            "dropped_events": dropped,
+            "held_buttons": held_buttons or [],
+            "held_keys": held_keys or [],
+            "at": format_rfc3339(now_utc()),
+        }
+        await self.send(frame)
+        return frame
+
+    async def grant_update(self, controller_id: str, kid: str, capabilities: list[str]) -> None:
+        """The PC owner changed a controller's capabilities locally (rules.grant_update)."""
+        await self.send(
+            {"type": "grant_update", "controller_id": controller_id, "kid": kid, "capabilities": capabilities}
+        )
+
     # --- pairing (PC side) ---
     async def start_pairing(self) -> tuple[str, dict[str, Any]]:
         code = generate_pairing_code()
@@ -669,6 +732,7 @@ class ControllerSim:
         proof: bool | dict[str, Any] = True,
         kid: str | None = None,
         expect_ack: bool = True,
+        protocol_versions: tuple[str, ...] = DEFAULT_PROTOCOL_VERSIONS,
     ) -> dict[str, Any]:
         """Open the socket and say hello. ``proof=True`` signs a fresh proof with this installation's key;
         a dict is sent verbatim (tests forge/replay); ``False`` sends a bare kid. ``kid`` overrides the
@@ -682,7 +746,7 @@ class ControllerSim:
             "component": "controller",
             "kid": kid or self.kid,
             "component_version": "0.1.0-test",
-            "protocol_versions": ["1.0"],
+            "protocol_versions": list(protocol_versions),
             "registry_version": REGISTRY.registry_version,
         }
         if proof is True:
@@ -760,6 +824,48 @@ class ControllerSim:
 
     async def send_envelope(self, pc_id: str, env: dict[str, Any], kind: str = "command") -> None:
         await self.send({"type": kind, "pc_id": pc_id, "envelope": env})
+
+    # --- manual input (protocol 1.1, phone side) ---
+    def input_envelope(
+        self,
+        pc_id: str,
+        input_session_id: str,
+        seq: int,
+        events: list[dict[str, Any]],
+        *,
+        issued_at: Any = None,
+        lifetime: int | None = None,
+        controller_id: str | None = None,
+        account_id: str | None = None,
+        key: Any = None,
+    ) -> dict[str, Any]:
+        """A signed ``input_batch_payload`` envelope. ``lifetime`` overrides the contract window (tests forge
+        over-long windows); ``key``/``controller_id``/``account_id`` forge the binding."""
+        payload = build_input_batch_payload(
+            account_id=account_id or self.browser.account_id,
+            controller_id=controller_id or self.controller_id or str(uuid.uuid4()),
+            target_pc_id=pc_id,
+            input_session_id=input_session_id,
+            seq=seq,
+            events=events,
+            now=issued_at,
+            registry=REGISTRY,
+        )
+        if lifetime is not None:
+            from datetime import timedelta
+
+            issued = issued_at or now_utc()
+            payload["expires_at"] = format_rfc3339(issued + timedelta(seconds=lifetime))
+        env: dict[str, Any] = sign_payload(key or self.key, dumps_compact(payload)).to_dict()
+        return env
+
+    async def input_batch(
+        self, pc_id: str, input_session_id: str, seq: int, events: list[dict[str, Any]], **kw: Any
+    ) -> dict[str, Any]:
+        """Send one signed ``input_batch`` frame for ``pc_id``; returns the envelope that went on the wire."""
+        env = self.input_envelope(pc_id, input_session_id, seq, events, **kw)
+        await self.send({"type": "input_batch", "pc_id": pc_id, "envelope": env})
+        return env
 
     async def close(self) -> None:
         if self.ws is not None:

@@ -7,6 +7,7 @@ import { useState } from "react";
 
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
+import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, IconButton, Notice, Steps } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
@@ -138,6 +139,9 @@ export function RemotePage() {
                 Fullscreen
               </Button>
             </div>
+            {tab?.has_previous === false ? <p className="text-xs text-text-muted mt-2 text-left">No previous video in this player, so Previous is unavailable.</p> : null}
+            {tab?.has_next === false ? <p className="text-xs text-text-muted mt-2 text-left">This player reports no next video, so Next is unavailable.</p> : null}
+            {tab?.ad_showing ? <p className="text-xs text-text-muted mt-2 text-left">An ad is playing: seeking and skipping apply to the ad context and may be refused. DoMe does not skip ads.</p> : null}
             <p className="text-xs text-text-faint mt-2 text-left">Browsers usually block fullscreen started from another device; DoMe reports honestly when that happens. Theater mode works without that restriction.</p>
           </Card>
 
@@ -197,6 +201,7 @@ export function RemotePage() {
         <Notice tone="danger" title="Not sent">
           <p>{errorMessage(sendError)}</p>
           <Steps steps={recoverySteps(sendError.code)} />
+          <FailureLinks code={sendError.code} />
           <Button size="md" variant="ghost" onClick={clearError}>
             Dismiss
           </Button>

@@ -5,7 +5,9 @@ import { useSessionStore } from "../../store/session.ts";
 
 const ITEMS = [
   { to: "/app/devices", title: "Devices", text: "PCs, paired phones, permissions, pairing" },
+  { to: "/app/health", title: "Connection health", text: "What works, what does not, and the next step" },
   { to: "/app/routines", title: "Routines", text: "One-tap sequences (DoMe Pro preview)" },
+  { to: "/app/layouts", title: "Custom remotes", text: "Your own layouts (DoMe Pro preview)" },
   { to: "/app/billing", title: "Billing", text: "Your plan and limits" },
   { to: "/app/settings", title: "Settings & help", text: "Connection check, install on iPhone, diagnostics, sign out" },
 ];

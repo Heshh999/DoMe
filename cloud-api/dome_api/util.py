@@ -43,17 +43,18 @@ def parse_uuid(value: str) -> uuid.UUID:
     return parsed
 
 
-async def strict_body(request: Request, rest_def: str) -> dict[str, Any]:
+async def strict_body(request: Request, rest_def: str, *, max_bytes: int = MAX_REST_BODY_BYTES) -> dict[str, Any]:
     """Read the raw body, parse it with the strict parser and validate it against
-    ``rest.schema.json#/$defs/<rest_def>``. Nothing from the body is used before this passes."""
+    ``rest.schema.json#/$defs/<rest_def>``. Nothing from the body is used before this passes.
+    ``max_bytes`` is raised only by endpoints whose contract body is larger (support diagnostics)."""
     ctype = request.headers.get("content-type", "")
     if not ctype.split(";")[0].strip().lower() == "application/json":
         raise ApiError(400, "MALFORMED_MESSAGE", "Content-Type must be application/json")
     raw = await request.body()
-    if len(raw) > MAX_REST_BODY_BYTES:
+    if len(raw) > max_bytes:
         raise ApiError(413, "PAYLOAD_TOO_LARGE")
     try:
-        parsed = loads_strict(raw, max_bytes=MAX_REST_BODY_BYTES, require_object=True)
+        parsed = loads_strict(raw, max_bytes=max_bytes, require_object=True)
         load_schemas().validate_rest(rest_def, parsed)
     except Exception as exc:  # ProtocolError carries the code; anything else is malformed
         code = getattr(exc, "code", "MALFORMED_MESSAGE")

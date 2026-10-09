@@ -36,6 +36,8 @@ class Plan:
     ai_transcription_minutes_per_period: int
     manual_command_rate_limit: RateLimit
     coalescable_command_rate_limit: RateLimit
+    # signed input_batch frames per controller (rules.input_sessions); identical for every plan
+    input_rate_limit: RateLimit
 
     @property
     def is_default_plan(self) -> bool:
@@ -117,6 +119,11 @@ def _rate(obj: dict[str, Any]) -> RateLimit:
     return RateLimit(per_minute=int(obj["per_minute"]), burst=int(obj["burst"]))
 
 
+def _rate_per_second(obj: dict[str, Any]) -> RateLimit:
+    """plans.json expresses the input budget per second; the limiter works per minute."""
+    return RateLimit(per_minute=int(obj["batches_per_second"]) * 60, burst=int(obj["burst"]))
+
+
 @lru_cache(maxsize=1)
 def catalog() -> PlanCatalog:
     with (contract_dir() / "plans.json").open("r", encoding="utf-8") as fh:
@@ -136,6 +143,7 @@ def catalog() -> PlanCatalog:
             ai_transcription_minutes_per_period=int(body["ai_transcription_minutes_per_period"]),
             manual_command_rate_limit=_rate(body["manual_command_rate_limit"]),
             coalescable_command_rate_limit=_rate(body["coalescable_command_rate_limit"]),
+            input_rate_limit=_rate_per_second(body["input_rate_limit"]),
         )
     if _FREE_PLAN_ID not in plans:
         raise RuntimeError("plans.json must define the default plan")

@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     # Failed user_code lookups (unknown / expired code) per 15 minutes before 429 (RFC 8628 section 5.1).
     rate_link_code_failures_per_account: int = Field(default=10, ge=1, description="per 15 minutes")
     rate_link_code_failures_per_ip: int = Field(default=10, ge=1, description="per 15 minutes")
+    # Support tickets (spec section 11A): per-account creation budget per hour, and the response expectation
+    # shown to customers ONLY when the founder configured one (never a default promise).
+    rate_support_tickets_per_hour: int = Field(default=10, ge=1)
+    support_response_expectation: str = Field(default="", max_length=200)
     static_dir: Path | None = None
     log_level: str = "INFO"
 

@@ -8,6 +8,7 @@ logged as paths only by the request-logging middleware; this module never receiv
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from collections.abc import Mapping, MutableMapping
 from typing import Any
@@ -72,6 +73,55 @@ def redact(value: Any, *, _depth: int = 0) -> Any:
     if isinstance(value, list | tuple | set | frozenset):
         return [redact(v, _depth=_depth + 1) for v in value]
     return value
+
+
+# Token-shaped substrings inside free text (support diagnostics, customer messages): JWT-like triples,
+# bearer/basic authorization values, Stripe-style prefixed keys, and long base64url/hex runs such as
+# access tokens, PC credentials, pairing code hashes and controller kids. Ordinary prose never matches.
+_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9_.=+/-]{16,}"),
+    re.compile(r"\b[sr]k_(live|test)_[A-Za-z0-9]{8,}\b"),
+    re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])"),
+)
+
+
+def redact_text(text: str) -> str:
+    """Mask token-shaped substrings in free text (the structural :func:`redact` only knows key names)."""
+    out = text
+    for pattern in _TEXT_PATTERNS:
+        out = pattern.sub(REDACTED, out)
+    return out
+
+
+def _redact_strings(value: Any, *, _depth: int = 0) -> Any:
+    if _depth > 12:
+        return REDACTED
+    if isinstance(value, Mapping):
+        return {str(k): _redact_strings(v, _depth=_depth + 1) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_redact_strings(v, _depth=_depth + 1) for v in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
+def redact_diagnostics(text: str) -> str:
+    """Redact a customer-submitted diagnostics bundle before it is stored.
+
+    JSON text gets the structural key redaction (``token``, ``code_hash``, ``title``, ...) *and* the
+    token-pattern pass over every remaining string; anything that is not JSON gets the pattern pass only.
+    The output is text again (compact JSON when the input was JSON)."""
+    import json
+
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return redact_text(text)
+    if not isinstance(parsed, dict | list):
+        return redact_text(text)
+    cleaned = _redact_strings(redact(parsed))
+    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False, sort_keys=False)
 
 
 def redaction_processor(_logger: Any, _method: str, event_dict: MutableMapping[str, Any]) -> MutableMapping[str, Any]:

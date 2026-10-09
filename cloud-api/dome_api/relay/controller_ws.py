@@ -36,6 +36,7 @@ from dome_api.relay.router import (
     reject_throttled,
     resolve_controller_record,
     route_command,
+    route_input_batch,
 )
 from dome_api.relay.ws_http import deny_upgrade
 from dome_api.security.origin import origin_allowed
@@ -93,6 +94,8 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
             await ws.close(code=CLOSE_PROTOCOL_ERROR)
             return
         conn = ControllerConn(ws, session_id, account_id, hello["kid"])
+        # Protocol 1.1 frames (input_batch, input_ack, input_session) only flow to and from peers that announced 1.1.
+        conn.supports_input = protocol_compatible("1.1", tuple(hello["protocol_versions"]))
         proof = hello.get("proof")
         proof_error: ProtocolError | None = None
         async with svc.db() as db:
@@ -185,6 +188,23 @@ async def _loop(
                 await conn.close(CLOSE_PROTOCOL_ERROR)
                 return
             continue
+        kind = frame["type"]
+        if kind == "input_batch":
+            # The input stream has its own pre-database bucket (rules.input_sessions: 40 batches/s), far above the
+            # command bucket. Refusals are RATE_LIMITED errors at most once per second per socket and never close
+            # the socket: a phone that overshoots the budget while dragging must keep its session.
+            if not limiters.input_frames.allow(bucket_key):
+                now = utcnow()
+                if conn.input_throttle_notified is None or (now - conn.input_throttle_notified).total_seconds() >= 1:
+                    conn.input_throttle_notified = now
+                    await conn.send(
+                        frames.error_frame(
+                            "RATE_LIMITED", "Too many input batches; slow down", ref_pc_id=frame["pc_id"]
+                        )
+                    )
+                continue
+            await route_input_batch(svc, mgr, limiters, conn, frame)
+            continue
         # Per-socket inbound budget, before any database work: a flood of well-formed frames is answered
         # from memory and, after ``burst`` refusals, the socket is closed (4000) with one security event.
         if not limiters.frames.allow(bucket_key):
@@ -203,7 +223,6 @@ async def _loop(
                 await conn.close(CLOSE_PROTOCOL_ERROR)
                 return
             continue
-        kind = frame["type"]
         if kind == "ping":
             await conn.send({"type": "pong", **({"t": frame["t"]} if "t" in frame else {})})
         elif kind == "pong":

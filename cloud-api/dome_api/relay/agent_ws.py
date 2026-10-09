@@ -78,6 +78,7 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
             )
             await conn.close(CLOSE_PROTOCOL_ERROR)
             return
+        conn.supports_input = protocol_compatible("1.1", tuple(hello["protocol_versions"]))
         await conn.send(frames.hello_ack(conn.connection_id, pc_id=pc_id))
         await mgr.register_agent(conn)
         mgr.release_slot()  # the registered socket is counted from here on
@@ -184,6 +185,12 @@ async def _loop(ws: WebSocket, svc: Services, mgr: ConnectionManager, conn: Agen
             await _on_pairing_decision(svc, mgr, conn, frame)
         elif kind == "revoke_controller":
             await _on_revoke_controller(mgr, conn, frame)
+        elif kind == "input_ack":
+            await _on_input_ack(mgr, conn, frame)
+        elif kind == "input_session":
+            await _on_input_session(mgr, conn, frame)
+        elif kind == "grant_update":
+            await _on_grant_update(mgr, conn, frame)
         elif kind == "error":
             log.warning("agent.error_frame", pc_id=str(conn.pc_id), code=frame["error"].get("code"))
         await mgr.touch_pc_last_seen(conn.pc_id, conn.last_seen)
@@ -446,3 +453,115 @@ async def _on_revoke_controller(mgr: ConnectionManager, conn: AgentConn, frame: 
     await mgr.apply_controller_revocation(
         controller_id, reason="grant_revoked", pc_ids=[conn.pc_id], revoked_pc_id=conn.pc_id
     )
+
+
+# ----- protocol 1.1: manual input (rules.input_sessions, rules.grant_update) -----------------------
+
+
+async def _on_input_ack(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    """Forward to every 1.1 socket of the controller that owns the session. The owner is whatever the agent
+    announced in ``input_session`` (the agent issues session ids and is the authority on ownership); an ack for
+    a session the agent never announced on this connection is dropped, never guessed."""
+    if frame["pc_id"] != str(conn.pc_id):
+        await conn.send(frames.error_frame("TARGET_PC_MISMATCH", "input_ack names another PC"))
+        return
+    owner = conn.input_sessions.get(frame["input_session_id"])
+    if owner is None:
+        log.info("input_ack.unknown_session", pc_id=str(conn.pc_id))
+        return
+    await mgr.send_input_frame_to_controller(owner, frame)
+
+
+async def _on_input_session(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    """Session lifecycle: remember (or forget) the owner, deliver to the owner's sockets and to the PC's
+    subscribers so other phones see ownership change. The controller must belong to this PC's account."""
+    if frame["pc_id"] != str(conn.pc_id):
+        await conn.send(frames.error_frame("TARGET_PC_MISMATCH", "input_session names another PC"))
+        return
+    controller_id = uuid.UUID(frame["controller_id"])
+    session_id: str = frame["input_session_id"]
+    known = conn.input_sessions.get(session_id)
+    if known != controller_id:
+        async with mgr.db() as db:
+            ctrl = await db.get(Controller, controller_id)
+        if ctrl is None or ctrl.account_id != conn.account_id:
+            log.warning("input_session.foreign_controller", pc_id=str(conn.pc_id))
+            await mgr.security_event(
+                account_id=conn.account_id,
+                kind="relay_frame_rejected",
+                severity="warning",
+                actor="pc",
+                subject_id=conn.pc_id,
+                detail={"frame": "input_session", "reason": "controller_not_in_account"},
+            )
+            return
+    if frame["event"] == "ended":
+        conn.input_sessions.pop(session_id, None)
+    else:
+        conn.input_sessions[session_id] = controller_id
+    await mgr.send_input_frame_to_controller(controller_id, frame)
+    await mgr.broadcast_to_subscribers(conn.pc_id, frame, validate=False, input_frame=True)
+
+
+async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    """``rules.grant_update``: the PC owner changed a controller's capabilities locally. The relay replaces the
+    live grant's list with exactly the given one (widen or narrow), audits it and re-pushes the snapshot. The
+    controller must belong to this PC's account, carry the stated kid and hold a live grant on this PC."""
+    controller_id = uuid.UUID(frame["controller_id"])
+    capabilities = sorted(set(frame["capabilities"]))
+    async with mgr.db() as db:
+        async with db.begin():
+            ctrl = await db.get(Controller, controller_id)
+            if ctrl is None or ctrl.account_id != conn.account_id or ctrl.kid != frame["kid"] or ctrl.revoked_at:
+                log.info("grant_update.ignored", pc_id=str(conn.pc_id), reason="controller")
+                events.record(
+                    db,
+                    account_id=conn.account_id,
+                    kind="relay_frame_rejected",
+                    severity="warning",
+                    actor="pc",
+                    subject_id=conn.pc_id,
+                    detail={"frame": "grant_update", "reason": "controller_not_in_account"},
+                )
+                return
+            grant = await db.scalar(
+                select(Grant)
+                .where(
+                    Grant.controller_id == controller_id,
+                    Grant.pc_id == conn.pc_id,
+                    Grant.account_id == conn.account_id,
+                    Grant.revoked_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if grant is None:
+                log.info("grant_update.ignored", pc_id=str(conn.pc_id), reason="no_live_grant")
+                events.record(
+                    db,
+                    account_id=conn.account_id,
+                    kind="relay_frame_rejected",
+                    severity="warning",
+                    actor="pc",
+                    subject_id=conn.pc_id,
+                    detail={"frame": "grant_update", "reason": "no_live_grant"},
+                )
+                return
+            before = sorted(set(grant.capabilities))
+            grant.capabilities = capabilities
+            events.record(
+                db,
+                account_id=conn.account_id,
+                kind="grant_updated",
+                severity="notice",
+                actor="pc",
+                subject_id=controller_id,
+                detail={
+                    "pc_id": str(conn.pc_id),
+                    "capabilities": capabilities,
+                    "added": sorted(set(capabilities) - set(before)),
+                    "removed": sorted(set(before) - set(capabilities)),
+                },
+            )
+    await mgr.push_grants_snapshot(conn.pc_id)
+    # subscribers re-read the PC: pc_status is the frame every phone already handles as "refresh this PC"
+    await mgr.broadcast_pc_status(conn.pc_id)

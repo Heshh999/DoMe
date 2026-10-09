@@ -48,7 +48,7 @@ interface Finger {
   travelled: number;
 }
 
-type Phase = "idle" | "one_pending" | "one_moving" | "two" | "two_settling" | "drag";
+type Phase = "idle" | "one_pending" | "one_moving" | "two" | "two_release" | "two_settling" | "drag";
 
 function clamp(v: number): number {
   return Math.max(-MOTION_MAX, Math.min(MOTION_MAX, v));
@@ -62,6 +62,8 @@ export class GestureMachine {
   private leftHeld = false;
   private lastTap: { at: number; x: number; y: number } | null = null;
   private twoMoved = false;
+  /** In two_release: the first finger lifted quickly and nothing moved, so a quick second lift is a right click. */
+  private twoTapCandidate = false;
   private remX = 0;
   private remY = 0;
   private scrollAccX = 0;
@@ -140,7 +142,7 @@ export class GestureMachine {
     this.fingers.set(id, { id, startX: x, startY: y, lastX: x, lastY: y, downAt: t, travelled: 0 });
     const n = this.fingers.size;
     if (n === 1) {
-      if (this.phase === "two_settling") return; // a stray re-touch while settling: ignore until all are up
+      if (this.phase === "two_settling" || this.phase === "two_release") return; // a stray re-touch while settling: ignore until all are up
       if (this.dragMode) {
         this.press();
         this.phase = "drag";
@@ -235,9 +237,19 @@ export class GestureMachine {
           this.lastTap = null;
           return;
         }
-        // one of two fingers lifted: whatever remains must not click or move the cursor
-        this.phase = "two_settling";
+        // one of two fingers lifted: whatever remains must not move the cursor; a quick lift of the
+        // second finger completes the two-finger tap (right click), anything else settles silently.
+        this.twoTapCandidate = !this.twoMoved && t - f.downAt <= this.opts.tapMaxMs;
+        this.phase = "two_release";
         this.twoLastCentroid = null;
+        return;
+      }
+      case "two_release": {
+        if (this.fingers.size > 0) return;
+        const quick = this.twoTapCandidate && t - f.downAt <= this.opts.tapMaxMs && f.travelled <= this.opts.tapMaxMove;
+        this.phase = "idle";
+        this.lastTap = null;
+        if (quick) this.out.push({ type: "click", button: "right", double: false });
         return;
       }
       case "two_settling":
@@ -292,3 +304,16 @@ export class GestureMachine {
     this.out.push({ type: "scroll", dx: clamp(nx * sign), dy: clamp(ny * sign) });
   }
 }
+
+/** The short gesture guide (spec §10A A table), rendered by components/GestureGuide.tsx. */
+export const GESTURES: Array<{ phone: string; pc: string }> = [
+  { phone: "Slide one finger", pc: "Moves the cursor from where it is, like a laptop touchpad" },
+  { phone: "Lift and put the finger down elsewhere", pc: "Keeps going from the current cursor position — no jump" },
+  { phone: "Short, still tap", pc: "Left click" },
+  { phone: "Two quick taps in the same spot", pc: "Double click (two clicks; Windows combines them)" },
+  { phone: "Two-finger still tap, or the Right Click button", pc: "Right click" },
+  { phone: "Two fingers moving", pc: "Scroll (vertical, and horizontal where the app supports it)" },
+  { phone: "Drag mode, then move a finger", pc: "Holds the left button while moving; End Drag releases it" },
+  { phone: "Keyboard button", pc: "Opens the phone keyboard and the key/shortcut rows" },
+];
+

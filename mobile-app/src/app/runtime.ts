@@ -33,6 +33,8 @@ export interface RuntimeOptions {
   inputTimers?: InputTimers;
   /** Testing: replace requestAnimationFrame for the input flush. */
   scheduleFrame?: (fn: () => void) => unknown;
+  /** Testing: clock for the input client (issued_at, keepalive cadence). */
+  inputNow?: () => Date;
 }
 
 /** How often the live store's clock advances so the 75 s freshness rule is re-evaluated without a frame. */
@@ -74,11 +76,7 @@ export class Runtime {
     this.commands = new CommandService({
       send: (frame) => this.relay.send(frame),
       connected: () => this.relay.isOpen,
-      identity: () => {
-        const accountId = useSessionStore.getState().session?.account.id ?? null;
-        const controllerId = this.relay.controllerId;
-        return accountId && controllerId ? { accountId, controllerId } : null;
-      },
+      identity: () => this.identity(),
       keyPair: () => getOrCreateKeyPair(),
       onChange: (record) => useLiveStore.getState().upsertCommand(record),
     });
@@ -86,16 +84,13 @@ export class Runtime {
       sendBatch: (frame) => this.relay.sendInputBatch(frame),
       sendCommand: (input) => this.commands.send({ pcId: input.pcId, action: input.action, params: input.params, target: null, source: input.source }),
       onceSettled: (commandId) => this.commands.onceSettled(commandId),
-      identity: () => {
-        const accountId = useSessionStore.getState().session?.account.id ?? null;
-        const controllerId = this.relay.controllerId;
-        return accountId && controllerId ? { accountId, controllerId } : null;
-      },
+      identity: () => this.identity(),
       keyPair: () => getOrCreateKeyPair(),
       connected: () => this.relay.isOpen,
       onChange: (state) => useInputStore.getState().setSession(state),
       ...(options.inputTimers ? { timers: options.inputTimers } : {}),
       ...(options.scheduleFrame ? { scheduleFrame: options.scheduleFrame, cancelFrame: () => undefined } : {}),
+      ...(options.inputNow ? { now: options.inputNow } : {}),
     });
     this.relay.on("status", (status, detail) => {
       live.setRelay(status, detail?.error ?? null);
@@ -116,6 +111,20 @@ export class Runtime {
       void setStoredControllerId(id).catch(() => undefined);
     });
     this.relay.on("frame", (frame) => this.onFrame(frame));
+  }
+
+  /**
+   * Account + controller for signing. During a customer-initiated sign-out the session store is already
+   * empty (`signing_out`), yet the `input.session_stop` that releases the PC's held input must still be
+   * signed for the account it belongs to: the last known account id is kept for exactly that window.
+   */
+  private lastAccountId: string | null = null;
+  private identity(): { accountId: string; controllerId: string } | null {
+    const session = useSessionStore.getState();
+    const accountId = session.session?.account.id ?? (session.status === "signing_out" ? this.lastAccountId : null);
+    if (session.session) this.lastAccountId = session.session.account.id;
+    const controllerId = this.relay.controllerId;
+    return accountId && controllerId ? { accountId, controllerId } : null;
   }
 
   /** Connect once the session is known; idempotent. */
@@ -206,6 +215,7 @@ export class Runtime {
     }
     this.commands.reset();
     this.input.reset();
+    this.lastAccountId = null;
     useLiveStore.getState().reset();
     useDevicesStore.getState().reset();
     configureApi({ csrfToken: null });

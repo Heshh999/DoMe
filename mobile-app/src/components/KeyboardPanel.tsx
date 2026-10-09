@@ -13,7 +13,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { AckOutcome, ForegroundApp, InputEvent as ProtoEvent, InputSessionState } from "../lib/input.ts";
+import type { AckOutcome, InputEvent as ProtoEvent, InputSessionState } from "../lib/input.ts";
+import { foregroundLabel } from "../lib/inputStatus.ts";
 import { recoverySteps } from "../lib/labels.ts";
 import { LiveTyping, PAUSE_EXPLANATION, splitText, TEXT_EVENT_MAX, type TypingCommit } from "../lib/typing.ts";
 import { Button, Notice, Steps } from "./ui.tsx";
@@ -40,13 +41,6 @@ const KEYS: Array<{ key: Extract<ProtoEvent, { type: "key" }>["key"]; label: str
   { key: "arrow_down", label: "↓", aria: "Arrow down" },
   { key: "arrow_right", label: "→", aria: "Arrow right" },
 ];
-
-export function foregroundLabel(app: ForegroundApp | null): string {
-  if (!app) return "Foreground window unknown";
-  const browser = app.browser === "chrome" ? "Chrome" : app.browser === "edge" ? "Edge" : app.browser === "other" ? "Browser" : null;
-  const name = browser ?? app.process_name.replace(/\.exe$/i, "");
-  return app.window_title ? `${name} — ${app.window_title}` : name;
-}
 
 export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: KeyboardPanelProps) {
   const [mode, setMode] = useState<Mode>("live");

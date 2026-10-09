@@ -6,6 +6,7 @@
 import { PROTOCOL_VERSION, REGISTRY_VERSION } from "@dome/protocol";
 
 import type { CommandRecord } from "./commands.ts";
+import type { InputSessionState } from "./input.ts";
 import { recentLogs, type LogEntry } from "./log.ts";
 import { detectQrSupport } from "./qr.ts";
 import type { RelayStatus } from "./relay.ts";
@@ -21,6 +22,8 @@ export interface DiagnosticsInput {
   commands: CommandRecord[];
   sessionPresent: boolean;
   plan: string | null;
+  /** Manual-input session summary (phase, counts, codes — never events or text). */
+  input?: InputSessionState;
 }
 
 export interface DiagnosticsReport {
@@ -32,7 +35,26 @@ export interface DiagnosticsReport {
   pcs: DiagnosticsInput["pcs"];
   selected_pc_id: string | null;
   commands: Array<{ command_id: string; pc_id: string; action: string; state: string; origin: string | null; error_code: string | null; duration_ms: number | null; created_at: string; no_answer: boolean }>;
+  input: { phase: string; pc_id: string | null; pointer: boolean; keyboard: boolean; seq: number; batches_sent: number; last_ack_seq: number | null; accepted_events: number | null; dropped_events: number | null; problem_code: string | null; end_reason: string | null } | null;
   log: LogEntry[];
+}
+
+/** Support-ticket size limit for the diagnostics text (rest.schema.json support_ticket_request.diagnostics). */
+export const DIAGNOSTICS_TEXT_MAX = 32768;
+
+/** The report as JSON text within the ticket limit: log entries are dropped oldest-first until it fits. */
+export function diagnosticsText(report: DiagnosticsReport): string {
+  let r: DiagnosticsReport = report;
+  let text = JSON.stringify(r, null, 1);
+  while (text.length > DIAGNOSTICS_TEXT_MAX && r.log.length > 0) {
+    r = { ...r, log: r.log.slice(Math.ceil(r.log.length / 4)) };
+    text = JSON.stringify(r, null, 1);
+  }
+  if (text.length > DIAGNOSTICS_TEXT_MAX) {
+    r = { ...r, commands: r.commands.slice(0, 5), log: [] };
+    text = JSON.stringify(r, null, 1);
+  }
+  return text.slice(0, DIAGNOSTICS_TEXT_MAX);
 }
 
 export function isStandalone(): boolean {
@@ -69,6 +91,21 @@ export function buildDiagnostics(input: DiagnosticsInput): DiagnosticsReport {
       created_at: new Date(c.createdAt).toISOString(),
       no_answer: c.noAnswer,
     })),
+    input: input.input
+      ? {
+          phase: input.input.phase,
+          pc_id: input.input.pcId,
+          pointer: input.input.pointer,
+          keyboard: input.input.keyboard,
+          seq: input.input.seq,
+          batches_sent: input.input.batchesSent,
+          last_ack_seq: input.input.lastAck?.lastSeq ?? null,
+          accepted_events: input.input.lastAck?.acceptedEvents ?? null,
+          dropped_events: input.input.lastAck?.droppedEvents ?? null,
+          problem_code: input.input.problem?.code ?? null,
+          end_reason: input.input.endReason,
+        }
+      : null,
     log: recentLogs(),
   };
 }

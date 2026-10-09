@@ -5,6 +5,8 @@ import { BillingPage } from "../pages/app/BillingPage.tsx";
 import { CommandPage } from "../pages/app/CommandPage.tsx";
 import { DashboardPage } from "../pages/app/DashboardPage.tsx";
 import { DevicesPage } from "../pages/app/DevicesPage.tsx";
+import { HealthPage } from "../pages/app/HealthPage.tsx";
+import { LayoutsPage } from "../pages/app/LayoutsPage.tsx";
 import { LinkPage } from "../pages/app/LinkPage.tsx";
 import { MorePage } from "../pages/app/MorePage.tsx";
 import { PairPage } from "../pages/app/PairPage.tsx";
@@ -12,12 +14,14 @@ import { PairRedirect } from "../pages/app/PairRedirect.tsx";
 import { RemotePage } from "../pages/app/RemotePage.tsx";
 import { RoutinesPage } from "../pages/app/RoutinesPage.tsx";
 import { SettingsPage } from "../pages/app/SettingsPage.tsx";
+import { TouchpadPage } from "../pages/app/TouchpadPage.tsx";
 import { DownloadPage } from "../pages/public/DownloadPage.tsx";
 import { FaqPage } from "../pages/public/FaqPage.tsx";
 import { LandingPage } from "../pages/public/LandingPage.tsx";
 import { NotFoundPage } from "../pages/public/NotFoundPage.tsx";
 import { PricingPage } from "../pages/public/PricingPage.tsx";
 import { PrivacyPage } from "../pages/public/PrivacyPage.tsx";
+import { ReleaseNotesPage } from "../pages/public/ReleaseNotesPage.tsx";
 import { SupportPage } from "../pages/public/SupportPage.tsx";
 import { TermsPage } from "../pages/public/TermsPage.tsx";
 import { AppShell, RequireSession } from "./AppShell.tsx";
@@ -32,6 +36,7 @@ export const router = createBrowserRouter([
       { path: "/faq", element: <FaqPage /> },
       { path: "/download", element: <DownloadPage /> },
       { path: "/support", element: <SupportPage /> },
+      { path: "/release-notes", element: <ReleaseNotesPage /> },
       { path: "/privacy", element: <PrivacyPage /> },
       { path: "/terms", element: <TermsPage /> },
     ],
@@ -42,6 +47,9 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "remote", element: <RemotePage /> },
+      { path: "touchpad", element: <TouchpadPage /> },
+      { path: "health", element: <HealthPage /> },
+      { path: "layouts", element: <LayoutsPage /> },
       { path: "command", element: <CommandPage /> },
       { path: "apps", element: <AppsPage /> },
       { path: "routines", element: <RoutinesPage /> },

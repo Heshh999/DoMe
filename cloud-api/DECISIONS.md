@@ -113,3 +113,49 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     `COMMAND_EXPIRED` are reserved for commands that were never forwarded. The agent's re-sent results
     (`rules.late_results`) correct the unknown outcome exactly once, including the `PC_OFFLINE` verdict
     for queued commands it dropped.
+28. **Protocol 1.1 frames flow only between peers that announced 1.1** (`rules.controller_socket_identity`:
+    "1.0 peers never receive them"). Each socket records whether its `hello.protocol_versions` covers 1.1.
+    A 1.0 controller sending `input_batch` gets `PROTOCOL_INCOMPATIBLE`; a batch for a PC whose agent
+    announced only 1.0 is refused with `PROTOCOL_INCOMPATIBLE` ("the PC's DoMe agent needs an update") instead
+    of being written to a socket that would reject it as malformed; `input_ack` / `input_session` skip 1.0
+    sockets. The test harness announces both versions by default.
+29. **Input batches have their own pre-database bucket and never close the socket for overshooting.** The
+    command frame bucket (600/min) would starve a 40 batches/s touchpad, so `input_batch` frames are charged
+    to a per-socket bucket sized from `version.json → limits.input_batches_per_second` with the plan burst,
+    then to the per-controller `plans.input_rate_limit` bucket once verified. Refusals are `RATE_LIMITED`
+    error frames at most once per second per socket; unlike command floods they do not count toward the
+    4000 close, because a phone that briefly overshoots while dragging must keep its session (spec §10A:
+    bounded queues, no delayed backlog — dropped batches are simply not forwarded).
+30. **`COMMAND_EXPIRED` from the shared window check is reported as `INPUT_STALE` for batches.** The library's
+    `check_command_window` speaks in command terms; for a stream the contract's own code for "delayed too
+    long to deliver safely" is `INPUT_STALE`, which is what the phone copy expects. Other codes
+    (`SIGNATURE_INVALID`, `CONTROLLER_MISMATCH`, `ACCOUNT_MISMATCH`, `MALFORMED_MESSAGE`, `CLOCK_SKEW`,
+    `PROTOCOL_INCOMPATIBLE`) pass through unchanged.
+31. **Relay-side replay guard per socket.** `rules.input_sessions` makes the agent's strictly-increasing `seq`
+    the authoritative check, but the relay keeps the highest forwarded `seq` per `input_session_id` on each
+    controller socket (bounded to 8 sessions) and drops a repeat with `INPUT_SEQUENCE_INVALID`, so a replayed
+    batch costs the PC nothing. It is per socket (a second socket of the same phone is not cross-checked) and
+    says nothing about ownership — session ids are fresh random 22-character strings.
+32. **Input-session ownership is learned only from the agent.** `input_ack` carries no controller id; the
+    relay maps `input_session_id → controller_id` from the agent's `input_session` frames (the agent issues
+    ids and owns sessions) and forgets it on `ended`. A batch's own `controller_id` is never used to learn
+    ownership (a non-owner could otherwise redirect acks to itself by guessing an id). An ack for an unknown
+    session is dropped and logged. `input_session` frames naming a controller outside the PC's account are
+    refused with a `relay_frame_rejected` event; other frames of the PC are unaffected.
+33. **Support diagnostics are redacted structurally and by pattern; the message gets the pattern pass too.**
+    The log redactor knows key names, but a customer may paste a token under a harmless key or into the free
+    text. `redact_diagnostics` parses JSON, applies the key rules, then masks token-shaped substrings (JWT
+    triples, `Bearer …`, Stripe-style keys, base64url/hex runs ≥ 32 chars) in every string; non-JSON text gets
+    the pattern pass only. The key rule for `code` (pairing codes) also masks an `error.code` field inside a
+    bundle — accepted: the top-level `error_code` field of the ticket carries the error the customer saw.
+34. **`grant_update` nudges subscribers with `pc_status`.** The contract has no "your grant changed" frame for
+    controllers; every phone already treats `pc_status` as "re-read this PC", which makes it refresh
+    `GET /v1/pcs/{id}/grants`. The PC gets the authoritative `grants_snapshot`.
+35. **Support ticket budget counts successes.** `svc.support_ticket_limiter` is checked before the body is
+    read (so a flood costs no parsing) but only *charged* after the row is durable; malformed submissions do
+    not eat the hour's budget. A reference collision (randomly impossible in practice) is retried five times
+    and then answered `503 SERVICE_UNAVAILABLE`, never a fabricated reference.
+36. **The input `error` frames carry `ref_pc_id` exactly as subscription errors do.** `rules.terminal_result`
+    reserves `error` frames for situations without a command id; a batch has none, so no `result` is ever
+    emitted for it and the controller correlates by PC (and by the session it is driving).
+

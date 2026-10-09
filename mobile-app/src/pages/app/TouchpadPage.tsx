@@ -11,12 +11,13 @@ import { Link } from "react-router";
 import { useInputSession, useMyGrant, useSelectedPc } from "../../app/hooks.ts";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { GestureGuide } from "../../components/GestureGuide.tsx";
-import { foregroundLabel, KeyboardPanel } from "../../components/KeyboardPanel.tsx";
+import { KeyboardPanel } from "../../components/KeyboardPanel.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { TouchpadSurface } from "../../components/TouchpadSurface.tsx";
-import { Button, Notice, Pill, Steps, type Tone } from "../../components/ui.tsx";
+import { Button, Notice, Pill, Steps } from "../../components/ui.tsx";
 import { GestureMachine, type GestureOutput } from "../../lib/gestures.ts";
-import { type InputEvent, type InputSessionState } from "../../lib/input.ts";
+import type { InputEvent } from "../../lib/input.ts";
+import { foregroundLabel, sessionStatus } from "../../lib/inputStatus.ts";
 import { errorMessage, INPUT_SCOPE_EXPLANATION, recoverySteps } from "../../lib/labels.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
@@ -30,26 +31,6 @@ function toEvent(o: GestureOutput): InputEvent {
       return { type: "pointer_button", button: o.button, action: "click" };
     case "button":
       return { type: "pointer_button", button: o.button, action: o.action };
-  }
-}
-
-export function sessionStatus(s: InputSessionState, now: number): { label: string; tone: Tone; pulse: boolean } {
-  switch (s.phase) {
-    case "live": {
-      const ackAge = s.lastAck ? now - s.lastAck.receivedAt : null;
-      if (s.lastAck && ackAge !== null && ackAge < 4000) return { label: `Live · Windows accepted ${s.lastAck.acceptedEvents}`, tone: "success", pulse: false };
-      return { label: s.batchesSent > 0 ? "Live · waiting for the PC" : "Connected", tone: "info", pulse: true };
-    }
-    case "starting":
-      return { label: "Connecting…", tone: "info", pulse: true };
-    case "suspended":
-      return { label: "Paused", tone: "warning", pulse: false };
-    case "ended":
-      return { label: "Ended", tone: "warning", pulse: false };
-    case "failed":
-      return { label: "Not connected", tone: "danger", pulse: false };
-    default:
-      return { label: "Not connected", tone: "neutral", pulse: false };
   }
 }
 
@@ -96,16 +77,25 @@ export function TouchpadPage() {
     [client, machine],
   );
   // A session that ended for any reason lets the page start again deliberately, not automatically.
-  useEffect(() => {
-    if (session.phase === "ended" || session.phase === "failed" || session.phase === "suspended") {
-      started.current = null;
+  // Drag/held indicators are reset during render (previous-render comparison); the machine itself is
+  // an external system and is reset in the effect.
+  const sessionOver = session.phase === "ended" || session.phase === "failed" || session.phase === "suspended";
+  const [seenPhase, setSeenPhase] = useState(session.phase);
+  if (session.phase !== seenPhase) {
+    setSeenPhase(session.phase);
+    if (sessionOver) {
       setDragMode(false);
       setLeftHeld(false);
+    }
+  }
+  useEffect(() => {
+    if (sessionOver) {
+      started.current = null;
       machine.cancel();
       machine.setDragMode(false);
       machine.take();
     }
-  }, [session.phase, machine]);
+  }, [sessionOver, machine]);
 
   const drain = useCallback(() => {
     for (const o of machine.take()) client.enqueue(toEvent(o));

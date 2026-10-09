@@ -14,7 +14,7 @@ import { Button, Card, Field, inputClass, Notice, Pill, Spinner, Steps } from ".
 import { api, ApiError } from "../../lib/api.ts";
 import { getControllerIdentity, KeyStorageError, setStoredControllerId } from "../../lib/controllerKey.ts";
 import { secondsUntil } from "../../lib/format.ts";
-import { capabilityLabel, errorMessage, recoverySteps } from "../../lib/labels.ts";
+import { capabilityLabel, INPUT_SCOPE_EXPLANATION, errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { errorSummary, log } from "../../lib/log.ts";
 import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation, takeScanAgainHint } from "../../lib/pairing.ts";
 import { CameraError, detectQrSupport, startQrScanner, type QrScanner } from "../../lib/qr.ts";
@@ -247,6 +247,7 @@ export function PairPage() {
                   </li>
                 ))}
               </ul>
+              <p className="text-xs text-text-muted mt-2">Touchpad and keyboard are requested by default; the PC owner decides on the PC what this phone actually gets. {INPUT_SCOPE_EXPLANATION}</p>
             </fieldset>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3">

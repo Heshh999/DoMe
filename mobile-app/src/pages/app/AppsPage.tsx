@@ -7,6 +7,7 @@ import { useEffect, useRef } from "react";
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { getRuntime } from "../../app/runtime.ts";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
+import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, EmptyState, Notice, Pill, Steps } from "../../components/ui.tsx";
 import { errorMessage, recoverySteps } from "../../lib/labels.ts";
@@ -117,6 +118,7 @@ export function AppsPage() {
         <Notice tone="danger" title="Not sent">
           <p>{errorMessage(sendError)}</p>
           <Steps steps={recoverySteps(sendError.code)} />
+          <FailureLinks code={sendError.code} />
           <Button size="md" variant="ghost" onClick={clearError}>
             Dismiss
           </Button>

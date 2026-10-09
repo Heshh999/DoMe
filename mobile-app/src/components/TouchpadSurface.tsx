@@ -21,9 +21,11 @@ export interface TouchpadSurfaceProps {
 export function TouchpadSurface({ machine, onOutput, disabled, dragActive, label, compact = false }: TouchpadSurfaceProps) {
   const ref = useRef<HTMLDivElement>(null);
   const machineRef = useRef(machine);
-  machineRef.current = machine;
   const outputRef = useRef(onOutput);
-  outputRef.current = onOutput;
+  useEffect(() => {
+    machineRef.current = machine;
+    outputRef.current = onOutput;
+  });
 
   useEffect(() => {
     const el = ref.current;

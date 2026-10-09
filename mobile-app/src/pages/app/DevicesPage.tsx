@@ -10,7 +10,7 @@ import type { rest } from "@dome/protocol";
 import { api, ApiError } from "../../lib/api.ts";
 import { getControllerIdentity, KeyStorageError } from "../../lib/controllerKey.ts";
 import { absoluteTime, relativeTime } from "../../lib/format.ts";
-import { capabilityLabel, errorMessage } from "../../lib/labels.ts";
+import { capabilityLabel, errorMessage, INPUT_SCOPE_EXPLANATION, isInputCapability } from "../../lib/labels.ts";
 import { connectionOf } from "../../lib/connection.ts";
 import { Button, Card, EmptyState, inputClass, Notice, Pill } from "../../components/ui.tsx";
 import { useDevicesStore } from "../../store/devices.ts";
@@ -212,7 +212,10 @@ export function DevicesPage() {
                 <dd>{live?.state ? (live.state.remote_enabled ? "On" : "Off (tray icon on the PC)") : pc.remote_enabled_reported === undefined ? "Unknown" : pc.remote_enabled_reported ? "On (last report)" : "Off (last report)"}</dd>
                 <dt className="text-text-muted">This phone may</dt>
                 <dd>{mine ? mine.capabilities.map(capabilityLabel).join(", ") : grants.length === 0 && !grantsByPc[pc.id] ? "…" : "Nothing — not paired with this PC"}</dd>
+                <dt className="text-text-muted">Touchpad / keyboard</dt>
+                <dd data-testid={`input-perm-${pc.id}`}>{mine ? (mine.capabilities.some(isInputCapability) ? `Allowed: ${mine.capabilities.filter(isInputCapability).map((c) => (c === "pointer" ? "touchpad" : "keyboard")).join(" and ")}` : "Not allowed — the PC owner grants it on the PC (tray → Paired phones)") : "—"}</dd>
               </dl>
+              {grants.some((g) => g.capabilities.some(isInputCapability)) ? <p className="mt-2 text-xs text-text-muted">{INPUT_SCOPE_EXPLANATION}</p> : null}
               {grants.length > 0 ? (
                 <details className="mt-3 text-sm">
                   <summary className="cursor-pointer text-text-muted">
@@ -227,6 +230,7 @@ export function DevicesPage() {
                             <span className="font-medium">{ctrl?.display_name ?? "Phone"}</span>
                             {ctrl?.id === thisController?.id ? <span className="text-accent"> (this phone)</span> : null}
                             <span className="block text-xs text-text-muted">{g.capabilities.map(capabilityLabel).join(", ")}</span>
+                            {g.capabilities.some(isInputCapability) ? <span className="block text-xs text-warning">Manual input: reaches every app of the unlocked session</span> : null}
                           </span>
                           <ConfirmButton label="Revoke" confirmLabel="Revoke access" onConfirm={() => run(() => api.revokeGrant(g.id))} />
                         </li>

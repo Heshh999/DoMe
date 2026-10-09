@@ -1,17 +1,7 @@
 /** The short gesture guide (spec §10A A table), shown from the Touchpad page. */
+import { GESTURES } from "../lib/gestures.ts";
 import { Button } from "./ui.tsx";
 import { Sheet } from "./Sheet.tsx";
-
-export const GESTURES: Array<{ phone: string; pc: string }> = [
-  { phone: "Slide one finger", pc: "Moves the cursor from where it is, like a laptop touchpad" },
-  { phone: "Lift and put the finger down elsewhere", pc: "Keeps going from the current cursor position — no jump" },
-  { phone: "Short, still tap", pc: "Left click" },
-  { phone: "Two quick taps in the same spot", pc: "Double click (two clicks; Windows combines them)" },
-  { phone: "Two-finger still tap, or the Right Click button", pc: "Right click" },
-  { phone: "Two fingers moving", pc: "Scroll (vertical, and horizontal where the app supports it)" },
-  { phone: "Drag mode, then move a finger", pc: "Holds the left button while moving; End Drag releases it" },
-  { phone: "Keyboard button", pc: "Opens the phone keyboard and the key/shortcut rows" },
-];
 
 export function GestureGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (

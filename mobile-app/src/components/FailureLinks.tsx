@@ -4,14 +4,7 @@
  */
 import { Link } from "react-router";
 
-import { supportCategoryFor } from "../lib/labels.ts";
-
-export function supportLink(code: string | null | undefined): string {
-  const params = new URLSearchParams();
-  params.set("category", supportCategoryFor(code));
-  if (code && /^[A-Z_]+$/.test(code)) params.set("code", code);
-  return `/support?${params.toString()}`;
-}
+import { supportLink } from "../lib/support.ts";
 
 export function FailureLinks({ code, className = "" }: { code: string | null | undefined; className?: string }) {
   return (

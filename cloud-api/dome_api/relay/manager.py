@@ -95,6 +95,8 @@ class AgentConn(_Conn):
         "snapshot_sent",
         "last_seen_written",
         "remote_enabled_reported",
+        "supports_input",
+        "input_sessions",
     )
 
     def __init__(self, ws: WebSocket, pc_id: uuid.UUID, account_id: uuid.UUID) -> None:
@@ -106,6 +108,10 @@ class AgentConn(_Conn):
         self.snapshot_sent = False
         self.last_seen_written: datetime | None = None
         self.remote_enabled_reported: bool | None = None
+        # the agent announced protocol 1.1 (rules.controller_socket_identity: 1.0 peers never see input frames)
+        self.supports_input = False
+        # live manual-input sessions as the AGENT reported them (input_session frames): id -> owning controller
+        self.input_sessions: dict[str, uuid.UUID] = {}
 
     async def send(self, frame: dict[str, Any], *, validate: bool = True) -> bool:
         if validate:
@@ -114,7 +120,17 @@ class AgentConn(_Conn):
 
 
 class ControllerConn(_Conn):
-    __slots__ = ("session_id", "kid", "controller_id", "subs", "throttle_violations", "events_suppressed")
+    __slots__ = (
+        "session_id",
+        "kid",
+        "controller_id",
+        "subs",
+        "throttle_violations",
+        "events_suppressed",
+        "supports_input",
+        "input_throttle_notified",
+        "input_seq",
+    )
 
     def __init__(self, ws: WebSocket, session_id: uuid.UUID, account_id: uuid.UUID, kid: str) -> None:
         super().__init__(ws, account_id)
@@ -124,6 +140,14 @@ class ControllerConn(_Conn):
         self.subs: set[uuid.UUID] = set()
         self.throttle_violations = 0  # inbound frames refused by the per-socket bucket
         self.events_suppressed = 0  # security-event rows not written because the per-socket cap was hit
+        self.supports_input = False  # hello announced protocol 1.1
+        self.input_throttle_notified: datetime | None = None  # last RATE_LIMITED error sent for input_batch floods
+        self.input_seq: dict[str, int] = {}  # input_session_id -> highest seq forwarded on this socket (bounded)
+
+    def remember_input_seq(self, input_session_id: str, seq: int) -> None:
+        if input_session_id not in self.input_seq and len(self.input_seq) >= 8:
+            del self.input_seq[next(iter(self.input_seq))]  # oldest session first; ids are fresh per session
+        self.input_seq[input_session_id] = seq
 
     async def send(self, frame: dict[str, Any], *, validate: bool = True) -> bool:
         if validate:
@@ -326,11 +350,23 @@ class ConnectionManager:
             sent = await conn.send(frame, validate=validate) or sent
         return sent
 
-    async def broadcast_to_subscribers(self, pc_id: uuid.UUID, frame: dict[str, Any], *, validate: bool = True) -> None:
+    async def broadcast_to_subscribers(
+        self, pc_id: uuid.UUID, frame: dict[str, Any], *, validate: bool = True, input_frame: bool = False
+    ) -> None:
+        """``input_frame`` marks protocol 1.1 frames, which 1.0 sockets never receive."""
         for conn_id in list(self.subs.get(pc_id, ())):
             conn = self.controllers.get(conn_id)
-            if conn is not None:
+            if conn is not None and (conn.supports_input or not input_frame):
                 await conn.send(frame, validate=validate)
+
+    async def send_input_frame_to_controller(self, controller_id: uuid.UUID, frame: dict[str, Any]) -> int:
+        """Deliver an input_ack / input_session frame to every protocol-1.1 socket bound to the controller.
+        Returns the number of sockets written."""
+        n = 0
+        for conn in self.controller_conns(controller_id):
+            if conn.supports_input and await conn.send(frame, validate=False):
+                n += 1
+        return n
 
     # ----- PC status -----------------------------------------------------------------------------
     async def pc_status_frame(self, pc_id: uuid.UUID, db: AsyncSession | None = None) -> dict[str, Any] | None:

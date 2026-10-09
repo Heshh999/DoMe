@@ -17,6 +17,95 @@ late-result correction, revoke_controller, pairing_request delivery), command li
 health, security headers/CSP, static PWA serving, structlog JSON with redaction. Stripe endpoints
 (Phase C) are **not** implemented; their tables exist in migration 0001 so the schema is complete.
 
+Protocol 1.1 (spec §10A, §11A): the signed manual-input stream (`input_batch` routing, `input_ack` /
+`input_session` delivery), `grant_update` from the PC owner, pairing with the `pointer` / `keyboard`
+capabilities, and support tickets (migration 0002). See "Manual input (protocol 1.1)" and "Support
+tickets" below. Evidence tags follow spec §17: everything here is **integration-tested** against a real
+PostgreSQL and simulated agents/phones; nothing in this component is Windows-device-tested or
+iPhone-tested, and the relay cannot verify that a batch it forwarded was injected on the PC.
+
+## Manual input (protocol 1.1)
+
+Rules: `shared/protocol/version.json → rules.input_sessions`, `rules.grant_update`. The relay is the
+*verify-and-forward* half; the agent owns sessions, sequence, age budget and injection.
+
+**Controller → relay `input_batch`** (`relay/router.route_input_batch`, integration-tested):
+
+1. envelope `kid` must equal the socket's kid, else `UNKNOWN_KEY` and close 4003 (as for commands) —
+   the only input rejection that closes the socket;
+2. the socket must have announced protocol 1.1 in `hello` (`PROTOCOL_INCOMPATIBLE` otherwise) and be
+   bound to a paired, non-revoked controller (`GRANT_MISSING` / `CONTROLLER_REVOKED`);
+3. `verify_and_parse_input_batch` with the controller's key record: signature over the exact bytes,
+   `input_batch_payload` schema (≤ 64 events, bounded motion/text), controller/account binding, the 5 s
+   window (`INPUT_STALE` when outside it — the shared library's `COMMAND_EXPIRED` is translated, DECISIONS
+   #30), over-long windows are `MALFORMED_MESSAGE`;
+4. `payload.target_pc_id == frame.pc_id` (`TARGET_PC_MISMATCH`); a `seq` this socket already forwarded for
+   the same session is `INPUT_SEQUENCE_INVALID` (relay-side replay guard; the agent's check stays
+   authoritative);
+5. controller enabled under the plan (`CONTROLLER_PLAN_DISABLED`), PC on the account (`ACCOUNT_MISMATCH`)
+   and enabled (`PC_PLAN_DISABLED`);
+6. a live grant whose capabilities cover `VerifiedInputBatch.required_capabilities` — `pointer_*` need
+   `pointer`, `text`/`key`/`shortcut` need `keyboard`; a grant with neither refuses even an empty
+   keepalive (`INPUT_NOT_PERMITTED`, `detail.missing` lists what is absent; a mixed batch is refused whole);
+7. per-controller token bucket from `plans.json → input_rate_limit` (40 batches/s, burst 80; identical for
+   every plan) → `RATE_LIMITED`;
+8. agent online (`PC_OFFLINE`), past its first snapshot (`PC_RECONNECTING`) and announcing 1.1
+   (`PROTOCOL_INCOMPATIBLE`: the PC needs an agent update);
+9. forward `{type: input_batch, envelope, relay{received_at, connection_id}}` with the envelope **verbatim**.
+
+No `commands` row, no result, no security event and no log line per accepted batch; the content of
+`text` events is never logged (rejections log the error code and ids only). Rejections are `error` frames
+with `ref_pc_id` (no command id exists) and at most one `input_rejected` security event per minute per
+controller, further bounded by the per-socket event cap. Before any database work, `input_batch` frames are
+charged to their own per-socket bucket (`version.json → limits.input_batches_per_second`, burst = plan
+burst) instead of the command frame bucket; a flood is answered with `RATE_LIMITED` at most once per second
+and never closes the socket (a phone that overshoots while dragging keeps its session).
+
+Commands now check the grant with `ActionSpec.satisfied_by`, so `input.session_start` /
+`input.session_stop` run on a keyboard-only grant as well as a pointer-only one (integration-tested).
+
+**Agent → relay** (`relay/agent_ws`, integration-tested):
+
+- `input_ack` → every protocol-1.1 socket of the controller that owns the session. The owner is what the
+  agent announced in `input_session` (the agent issues session ids); an ack for a session the agent never
+  announced on this connection is dropped, never guessed.
+- `input_session` → the owner's sockets **and** the PC's subscribers (other phones see ownership change);
+  `ended` forgets the owner mapping. The named controller must belong to the PC's account
+  (`relay_frame_rejected` event otherwise).
+- `grant_update{controller_id, kid, capabilities}` → the controller must belong to the PC's account with
+  that kid and hold a live grant on this PC; the grant row's capabilities are replaced with exactly the
+  given list (widen or narrow), a `grant_updated` security event records `added` / `removed`, a fresh
+  `grants_snapshot` is pushed to the PC and subscribers get a `pc_status` nudge. `GET /v1/pcs/{id}/grants`
+  shows the new list. `grant_update` cannot create a grant or touch another PC's grant.
+- `pc_state.foreground_app`, `pc_state.input_session`, `pc_state.input_restricted` pass through unchanged
+  with the `state` frame (schema-validated on receipt).
+- 1.0 peers never receive 1.1 frames: `input_ack` / `input_session` skip sockets that announced only 1.0.
+
+**Pairing**: `requested_capabilities` may include `pointer` and `keyboard`; granted = PC's list ∩ requested as
+before. Existing grants never gain them implicitly (`rules.grant_update`).
+
+**Not verifiable here** (not yet verified): that a forwarded batch is injected, the real relay latency budget
+on the public path, and the phone/agent halves — see `pc-agent/` and `mobile-app/`.
+
+## Support tickets
+
+Spec §11A, smallest practical flow (`routes/support.py`, migration `0002_support_tickets`,
+integration-tested):
+
+| Route | Behaviour |
+| --- | --- |
+| `POST /v1/support/tickets` | session + CSRF + exact Origin; body `support_ticket_request` (category, message ≤ 2000, optional `error_code`, `diagnostics` ≤ 32 KiB text, `app_version`); 10 per hour per account (`DOME_RATE_SUPPORT_TICKETS_PER_HOUR`, `429 RATE_LIMITED`); `201 support_ticket_response` with `reference` `DM-XXXXXXXX` (Crockford base32) and `status: received`. |
+| `GET /v1/support/tickets` | the account's own tickets, newest first, ≤ 50 (`support_tickets_response`). |
+| `GET /v1/support/tickets/{id}` | own ticket or 404 (another account's id is indistinguishable from a missing one). |
+
+Before storage the diagnostics text goes through the log redactor twice over: the structural key rules
+(`token`, `code_hash`, `title`, `access_token`, …; JSON input) and a token-pattern pass over every string
+(JWT-like triples, `Bearer …`, Stripe-style keys, base64url/hex runs ≥ 32 characters) — the message gets
+the pattern pass as well (DECISIONS #33). `response_expectation` is present only when
+`DOME_SUPPORT_RESPONSE_EXPECTATION` is configured; there is no default promise. No support route can
+execute, queue or forward anything to a PC, and operators have no route yet (`KNOWN_ISSUES.md` #6). A
+failed write is a 5xx, never a reference: the client must not claim receipt without one.
+
 ## Setup
 
 Prerequisites: Python 3.12+, `uv`, PostgreSQL 16, and `tools/dev-idp` for local sign-in.
@@ -74,6 +163,8 @@ misconfiguration stops the process with a plain error.
 | `DOME_RATE_PAIRING_CLAIM_PER_ACCOUNT` / `DOME_RATE_PAIRING_CLAIM_PER_IP` | `5` / `5` | Pairing claims per 15 minutes (each failure is a `pairing_failed` security event). |
 | `DOME_RATE_LOGIN_PER_MINUTE` / `DOME_RATE_AGENT_TOKEN_PER_MINUTE` | `60` / `30` | Login starts and credential→token exchanges per client IP. |
 | `DOME_RATE_LINK_CODE_FAILURES_PER_ACCOUNT` / `DOME_RATE_LINK_CODE_FAILURES_PER_IP` | `10` / `10` | Failed `user_code` lookups (unknown, expired or decided codes on `GET/approve/deny /v1/agent-link/{user_code}`) per 15 minutes before `429` (RFC 8628 §5.1); each counted failure is a `link_code_lookup_failed` security event. |
+| `DOME_RATE_SUPPORT_TICKETS_PER_HOUR` | `10` | Support tickets one account may create per hour. |
+| `DOME_SUPPORT_RESPONSE_EXPECTATION` | `` | Customer-facing response expectation (≤ 200 chars) returned with tickets **only** when set by the founder (spec §11A). Unset = the field is absent. |
 | `DOME_STATIC_DIR` | unset | Built PWA directory to serve at `/` (SPA fallback to `index.html`). |
 | `DOME_LOG_LEVEL` | `INFO` | structlog level. JSON output except in `development`. |
 | `DOME_STRIPE_*`, `DOME_AI_*` | blank / false | Declared for Phase C/E; billing endpoints are not implemented yet (`GET /v1/plans` reports `billing_enabled: false`). |
@@ -114,10 +205,17 @@ library, agents and controllers are simulated with real ES256 keys from `dome_pr
 ```sh
 # once: PostgreSQL on /tmp:54329 (make db-start from the root) and cd tools/dev-idp && uv sync
 cd cloud-api
-uv run pytest -q                 # creates dome_test_<random>, runs alembic upgrade head, drops it afterwards
+uv run pytest -q -p no:cacheprovider   # creates dome_test_<random>, runs alembic upgrade head, drops it afterwards
 uv run ruff check . && uv run ruff format --check .
 uv run mypy dome_api tests
 ```
+
+Current counts (2026-10-09, protocol 1.1 build): **106 passed** (89 from the 1.0 build, all unchanged in
+expectation, plus 13 in `tests/test_input_routing.py` and 4 in `tests/test_support_tickets.py`); mypy
+strict clean on 60 files; ruff clean. The harness (`tests/conftest.py`, shared with the repository-level
+`tests/`) gained `ControllerSim.input_envelope` / `input_batch`, `AgentSim.input_ack` / `input_session` /
+`grant_update`, `new_input_session_id()` and a `protocol_versions` parameter on both `connect()`s; both
+simulators now announce `("1.0", "1.1")` by default. No existing test's expectation changed.
 
 `DOME_TEST_DATABASE_URL` (default `postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329`) names the
 server and credentials; the database part is replaced by the per-session random name. Every REST
@@ -133,7 +231,9 @@ frame against `relay-frames.schema.json`.
   in-flight commands `outcome_unknown` / `expired` (start-up sweep) and agents reconnect with backoff.
 - Logs are JSON on stderr. Keys such as `token`, `pc_credential`, `code_hash`, `challenge_text`,
   `payload`, `sig`, `title`, `email` and anything ending in `_token/_secret/_code/_credential/_key`
-  are redacted; URLs are logged as paths only.
+  are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
+  beyond the error code), so typed text exists only in transit through this process.
+- Migrations: `0001_initial`, `0002_support_tickets`. `dome-api` applies them at start-up.
 - Request log lines carry the matched route template and a masked path: a device-link `user_code`
   never appears (`/v1/agent-link/{user_code}/approve`); query strings are never logged.
 - Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: no-referrer`,

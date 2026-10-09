@@ -38,3 +38,5 @@ class Services:
     # failed user_code lookups (unknown/expired) per account and per IP, 15-minute windows
     link_code_account_limiter: SlidingWindowLimiter
     link_code_ip_limiter: SlidingWindowLimiter
+    # support ticket creation per account, one-hour window
+    support_ticket_limiter: SlidingWindowLimiter

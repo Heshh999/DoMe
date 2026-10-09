@@ -12,10 +12,12 @@ from typing import Any
 from dome_protocol import (
     KeyRecord,
     ProtocolError,
+    Registry,
     VerifiedCommand,
     loads_strict,
     parse_rfc3339,
     verify_and_parse_command,
+    verify_and_parse_input_batch,
 )
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -23,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.db.models import PC, Account, Command, Controller, Grant
 from dome_api.logging import get_logger
-from dome_api.plans import Plan, plan_for
+from dome_api.plans import Plan, catalog, plan_for
 from dome_api.relay import frames
 from dome_api.relay.manager import CLOSE_REVOKED, AgentConn, ConnectionManager, ControllerConn, InFlight
 from dome_api.security.ratelimit import SlidingWindowLimiter, TokenBucketLimiter
@@ -56,19 +58,31 @@ class RateLimiters:
     * ``frames``: one token bucket per controller *socket*, applied to every inbound frame before any
       database work, so an authenticated flood is cut at the socket;
     * ``events``: a cap on security-event rows a single socket may write per minute, so rejections
-      cannot grow ``security_events`` without bound.
+      cannot grow ``security_events`` without bound;
+    * ``input_frames``: the pre-database bucket for ``input_batch`` frames per socket (the ordinary frame
+      bucket is sized for commands and would starve a touchpad); sustained rate from
+      ``version.json → limits.input_batches_per_second``, burst = the largest plan burst;
+    * per-plan ``input_rate_limit`` buckets keyed by controller id (``rules.input_sessions``), applied once
+      the batch verified;
+    * ``input_rejections``: at most one ``input_rejected`` security event per minute per controller.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, registry: Registry | None = None) -> None:
         self._manual: dict[str, TokenBucketLimiter] = {}
         self._coalescable: dict[str, TokenBucketLimiter] = {}
+        self._input: dict[str, TokenBucketLimiter] = {}
         self.frames = TokenBucketLimiter(
             settings.relay_controller_frames_per_minute, settings.relay_controller_frame_burst
         )
         self.events = SlidingWindowLimiter(settings.relay_security_events_per_connection_per_minute, 60)
+        per_second = int((registry.limits if registry is not None else {}).get("input_batches_per_second", 40))
+        burst = max(p.input_rate_limit.burst for p in catalog().plans.values())
+        self.input_frames = TokenBucketLimiter(per_second * 60, burst)
+        self.input_rejections = SlidingWindowLimiter(1, 60)
 
     def forget_connection(self, conn: ControllerConn) -> None:
         self.frames.forget(str(conn.connection_id))
+        self.input_frames.forget(str(conn.connection_id))
 
     def allow(self, plan: Plan, controller_id: uuid.UUID, *, coalescable: bool) -> bool:
         table = self._coalescable if coalescable else self._manual
@@ -76,6 +90,13 @@ class RateLimiters:
         if limiter is None:
             rl = plan.coalescable_command_rate_limit if coalescable else plan.manual_command_rate_limit
             limiter = table[plan.id] = TokenBucketLimiter(rl.per_minute, rl.burst)
+        return limiter.allow(str(controller_id))
+
+    def allow_input(self, plan: Plan, controller_id: uuid.UUID) -> bool:
+        limiter = self._input.get(plan.id)
+        if limiter is None:
+            rl = plan.input_rate_limit
+            limiter = self._input[plan.id] = TokenBucketLimiter(rl.per_minute, rl.burst)
         return limiter.allow(str(controller_id))
 
 
@@ -212,7 +233,9 @@ async def route_command(
                     Grant.revoked_at.is_(None),
                 )
             )
-            if grant is None or cmd.spec.capability not in set(grant.capabilities):
+            # ``satisfied_by``: the action's capability or any alternate (input.session_start runs on a
+            # keyboard-only grant as well as a pointer-only one).
+            if grant is None or not cmd.spec.satisfied_by(grant.capabilities):
                 raise Rejection("GRANT_MISSING")
             # duplicate / reuse handling (rules.duplicate_command) — before anything that consumes budget.
             # Scoped to the account: a command id that lives in another tenant is invisible here and only
@@ -287,6 +310,119 @@ async def route_command(
         await _reject(mgr, limiters, conn, pc_id_str, command_id, rej, received_at)
 
 
+async def route_input_batch(
+    svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]
+) -> None:
+    """``rules.input_sessions`` (2), relay half: verify the controller's signature with the socket's key
+    record, bind the batch to this socket's controller and account, require a live grant covering every
+    event type, the PC online and past its first snapshot, the per-controller input budget, then forward the
+    envelope verbatim. No ``commands`` row is written and nothing about the content is logged. Rejections are
+    ``error`` frames with ``ref_pc_id`` and never close the socket, except a kid mismatch (UNKNOWN_KEY, 4003)."""
+    pc_id_str: str = frame["pc_id"]
+    envelope = frame["envelope"]
+    received_at = utcnow()
+    try:
+        if envelope.get("kid") != conn.kid:
+            raise Rejection("UNKNOWN_KEY", "Envelope kid does not match this connection", close=True)
+        if not conn.supports_input:
+            raise Rejection("PROTOCOL_INCOMPATIBLE", "Announce protocol 1.1 in hello to send input")
+        if conn.controller_id is None:
+            raise Rejection("GRANT_MISSING", "This connection is not bound to a paired controller")
+        async with svc.db() as db:
+            ctrl, record = await resolve_controller_record(db, conn)
+            if ctrl is None or record is None:
+                raise Rejection("UNKNOWN_KEY", close=True)
+            if ctrl.revoked_at is not None:
+                raise Rejection("CONTROLLER_REVOKED")
+            try:
+                batch = verify_and_parse_input_batch(
+                    envelope,
+                    lambda kid: record if kid == conn.kid else None,
+                    registry=svc.registry,
+                    schemas=svc.schemas,
+                )
+                required = batch.required_capabilities
+            except ProtocolError as exc:
+                # the shared window check speaks in command terms; for a stream the honest code is INPUT_STALE
+                code = "INPUT_STALE" if exc.code == "COMMAND_EXPIRED" else exc.code
+                raise Rejection(code, exc.message, detail=exc.detail or None) from None
+            if batch.target_pc_id != pc_id_str:
+                raise Rejection("TARGET_PC_MISMATCH")
+            # Defence in depth against replay on this socket: the agent's seq check is authoritative
+            # (rules.input_sessions), but a batch this socket already forwarded for the same session is dropped here.
+            last = conn.input_seq.get(batch.input_session_id)
+            if last is not None and batch.seq <= last:
+                raise Rejection("INPUT_SEQUENCE_INVALID")
+            pc_id = uuid.UUID(pc_id_str)
+            account = await db.get(Account, conn.account_id)
+            plan = plan_for(account.plan if account else None)
+            if ctrl.id not in await mgr.plan_enabled_controller_ids(db, conn.account_id, plan):
+                raise Rejection("CONTROLLER_PLAN_DISABLED")
+            pc = await db.get(PC, pc_id)
+            if pc is None or pc.deleted_at is not None or pc.account_id != conn.account_id:
+                raise Rejection("ACCOUNT_MISMATCH", "No such PC on this account")
+            if not pc.enabled:
+                raise Rejection("PC_PLAN_DISABLED")
+            grant = await db.scalar(
+                select(Grant).where(
+                    Grant.controller_id == ctrl.id,
+                    Grant.pc_id == pc.id,
+                    Grant.account_id == conn.account_id,
+                    Grant.revoked_at.is_(None),
+                )
+            )
+            if grant is None:
+                raise Rejection("GRANT_MISSING")
+            held = set(grant.capabilities)
+            if not ({"pointer", "keyboard"} & held) or not required <= held:
+                raise Rejection("INPUT_NOT_PERMITTED", detail={"missing": sorted(required - held)})
+        if not limiters.allow_input(plan, ctrl.id):
+            raise Rejection("RATE_LIMITED")
+        agent = mgr.agent_for(pc_id)
+        if agent is None:
+            raise Rejection("PC_OFFLINE")
+        if not agent.snapshot_sent:
+            raise Rejection("PC_RECONNECTING")
+        if not agent.supports_input:
+            raise Rejection("PROTOCOL_INCOMPATIBLE", "The PC's DoMe agent needs an update for touchpad and keyboard")
+        forwarded = {
+            "type": "input_batch",
+            "envelope": envelope,
+            "relay": {"received_at": ts_required(received_at), "connection_id": str(conn.connection_id)},
+        }
+        if not await agent.send(forwarded, validate=False):
+            raise Rejection("PC_OFFLINE")
+        conn.remember_input_seq(batch.input_session_id, batch.seq)
+    except Rejection as rej:
+        await _reject_input(mgr, limiters, conn, pc_id_str, rej)
+
+
+async def _reject_input(
+    mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, pc_id: str, rej: Rejection
+) -> None:
+    error = frames.error_object(rej.code, rej.message, detail=rej.detail)
+    await conn.send(
+        {"type": "error", "error": error, "ref_pc_id": pc_id}
+        if _UUID_RE.match(pc_id)
+        else {"type": "error", "error": error}
+    )
+    log.info("input_batch.rejected", code=rej.code, controller_id=str(conn.controller_id), pc_id=pc_id)
+    # Bursty by nature (a phone keeps sending while a grant is gone): one event per minute per controller on
+    # top of the per-socket cap, so the security log shows the fact without a row per batch.
+    key = str(conn.controller_id or conn.connection_id)
+    if limiters.input_rejections.allow(key):
+        await audited_event(
+            mgr,
+            limiters,
+            conn,
+            kind="input_rejected",
+            severity="notice" if rej.code in ("PC_OFFLINE", "PC_RECONNECTING", "RATE_LIMITED") else "warning",
+            detail={"reason": rej.code, "pc_id": pc_id},
+        )
+    if rej.close:
+        await conn.close(CLOSE_REVOKED)
+
+
 async def reject_throttled(mgr: ConnectionManager, conn: ControllerConn, frame: dict[str, Any]) -> None:
     """Answer a frame the per-socket bucket refused without touching the database: a ``command`` still
     ends with a ``result`` when its id is readable (DECISIONS #7), anything else gets an ``error``."""
@@ -357,5 +493,6 @@ __all__ = [
     "reject_throttled",
     "resolve_controller_record",
     "route_command",
+    "route_input_batch",
     "IN_FLIGHT_STATES",
 ]
