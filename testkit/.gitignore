@@ -1,0 +1,3 @@
+# Per-PC state written by the scripts: secrets, current addresses, the built extension and its key.
+.state/
+stable-addresses.txt

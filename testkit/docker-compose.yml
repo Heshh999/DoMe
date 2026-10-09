@@ -1,0 +1,104 @@
+# DoMe test kit: the whole DoMe service on your own PC, reachable from your iPhone over HTTPS.
+#
+# Do not run this file by hand; "1 Start test server.cmd" (scripts/start-server.ps1) does it,
+# because it must first learn the two temporary public addresses and then hand them to the
+# services. Every ${...:?} value below is set by that script.
+#
+#   postgres       database (kept in the "dome-test_pgdata" volume between runs)
+#   dev-idp        the development sign-in page (tools/dev-idp), locked with a passphrase
+#   api            DoMe service + relay + the phone app (deploy/Dockerfile)
+#   tunnel-app     Cloudflare quick tunnel  https://<random>.trycloudflare.com -> api
+#   tunnel-signin  Cloudflare quick tunnel  https://<random>.trycloudflare.com -> dev-idp
+#
+# Quick tunnels need no Cloudflare account; their address changes every time they start.
+# Nothing here is a production configuration (testkit/README.md, "What this is not").
+
+name: dome-test
+
+x-tunnel: &tunnel
+  image: cloudflare/cloudflared:2026.9.1
+  profiles: ["quick-tunnel"]
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dome
+      POSTGRES_PASSWORD: dome
+      POSTGRES_DB: dome_test
+    # No published port: only the api container reaches the database.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dome -d dome_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  dev-idp:
+    build:
+      context: ../tools/dev-idp
+      dockerfile_inline: |
+        FROM python:3.12-slim-bookworm
+        COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /bin/uv
+        ENV UV_PYTHON_DOWNLOADS=never UV_PYTHON=/usr/local/bin/python3.12 UV_LINK_MODE=copy
+        WORKDIR /idp
+        COPY pyproject.toml uv.lock README.md ./
+        COPY dome_dev_idp ./dome_dev_idp
+        RUN uv sync --locked
+        USER nobody
+        CMD ["/idp/.venv/bin/dome-dev-idp"]
+    environment:
+      DEV_IDP_BIND: 0.0.0.0:8081
+      DEV_IDP_ISSUER: ${DOME_TEST_SIGNIN_URL:?run 1 Start test server.cmd}
+      DEV_IDP_CLIENT_ID: dome-test
+      DEV_IDP_CLIENT_SECRET: ${DOME_TEST_CLIENT_SECRET:?run 1 Start test server.cmd}
+      DEV_IDP_REDIRECT_URI: ${DOME_TEST_APP_URL:?run 1 Start test server.cmd}/v1/auth/callback
+      DEV_IDP_PASSPHRASE: ${DOME_TEST_PASSPHRASE:?run 1 Start test server.cmd}
+    ports:
+      # Loopback only (troubleshooting, or your own HTTPS forwarding; see README "Stable address").
+      - "127.0.0.1:18081:8081"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VITE_DOME_RELEASE_CHANNEL: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dev-idp:
+        condition: service_started
+    environment:
+      # development: lets the container create its own entitlement signing key on first start.
+      DOME_ENV: development
+      DOME_PUBLIC_ORIGIN: ${DOME_TEST_APP_URL:?run 1 Start test server.cmd}
+      DOME_API_BIND: 0.0.0.0:8080
+      DOME_DATABASE_URL: postgresql+psycopg://dome:dome@postgres:5432/dome_test
+      DOME_SESSION_SECRET: ${DOME_TEST_SESSION_SECRET:?run 1 Start test server.cmd}
+      DOME_OIDC_ISSUER: ${DOME_TEST_SIGNIN_URL:?run 1 Start test server.cmd}
+      DOME_OIDC_CLIENT_ID: dome-test
+      DOME_OIDC_CLIENT_SECRET: ${DOME_TEST_CLIENT_SECRET:?run 1 Start test server.cmd}
+      DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH: /app/run/entitlement-ed25519.pem
+      DOME_LOG_LEVEL: INFO
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - api-run:/app/run
+    restart: unless-stopped
+
+  tunnel-app:
+    <<: *tunnel
+    command: ["tunnel", "--no-autoupdate", "--url", "http://api:8080"]
+
+  tunnel-signin:
+    <<: *tunnel
+    command: ["tunnel", "--no-autoupdate", "--url", "http://dev-idp:8081"]
+
+volumes:
+  pgdata:
+  api-run:

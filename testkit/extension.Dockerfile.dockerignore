@@ -1,0 +1,10 @@
+# Context is the repository root; only the extension and the shared TypeScript library are needed.
+*
+!shared/protocol
+!shared/ts
+!browser-extension
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+**/*.tsbuildinfo
