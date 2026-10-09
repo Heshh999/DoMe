@@ -1,11 +1,12 @@
 /** React hooks over the stores and runtime used by every app page. */
 import { useCallback, useMemo, useState } from "react";
 
-import type { JsonValue } from "@dome/protocol";
+import type { JsonValue, rest } from "@dome/protocol";
 
 import type { CommandRecord } from "../lib/commands.ts";
 import type { LabelContext } from "../lib/labels.ts";
 import { useDevicesStore } from "../store/devices.ts";
+import { useInputStore } from "../store/input.ts";
 import { EMPTY_LIVE_PC, isFresh, useLiveStore, withTimeStaleness, type LivePc } from "../store/live.ts";
 import { describeSendError, getRuntime } from "./runtime.ts";
 
@@ -74,4 +75,22 @@ export function useSend(pcId: string | null) {
 
 export function useLastCommandFor(pcId: string | null): CommandRecord | null {
   return useLiveStore((s) => (pcId ? (s.commands.find((c) => c.pcId === pcId) ?? null) : null));
+}
+
+/** The live manual-input session (store mirror) plus the grant this phone holds on the selected PC. */
+export function useInputSession() {
+  const session = useInputStore((s) => s.session);
+  const prefs = useInputStore((s) => s.prefs);
+  const setPrefs = useInputStore((s) => s.setPrefs);
+  return { session, prefs, setPrefs, client: getRuntime().input };
+}
+
+/** This phone's grant on `pcId` from the REST inventory (null while unknown or when not paired with that PC). */
+export function useMyGrant(pcId: string | null): rest.Grant | null | undefined {
+  const grants = useDevicesStore((s) => (pcId ? s.grantsByPc[pcId] : undefined));
+  const controllers = useDevicesStore((s) => s.controllers);
+  const controllerId = useLiveStore((s) => s.controllerId);
+  if (!pcId || grants === undefined) return undefined;
+  if (!controllerId) return controllers.length === 0 ? undefined : null;
+  return grants.find((g) => g.controller_id === controllerId) ?? null;
 }

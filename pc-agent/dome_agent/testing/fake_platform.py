@@ -302,7 +302,9 @@ class FakeInput:
         self._inject("shortcut", name)
 
     def release(self, buttons: set[str], keys: set[str]) -> int:
-        self.st.input_events.append(InputRecord("release", (tuple(sorted(buttons)), tuple(sorted(keys))), time.monotonic()))
+        self.st.input_events.append(
+            InputRecord("release", (tuple(sorted(buttons)), tuple(sorted(keys))), time.monotonic())
+        )
         released = 0
         for b in buttons:
             if b in self.st.held_buttons:

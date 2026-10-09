@@ -531,7 +531,9 @@ class WindowsInput:
             if needed.value == 0:
                 return None
             buffer = ctypes.create_string_buffer(needed.value)
-            if not advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, buffer, needed.value, ctypes.byref(needed)):
+            if not advapi32.GetTokenInformation(
+                token, TOKEN_INTEGRITY_LEVEL, buffer, needed.value, ctypes.byref(needed)
+            ):
                 return None
             # TOKEN_MANDATORY_LABEL { SID_AND_ATTRIBUTES Label { PSID Sid; DWORD Attributes; } }
             sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p)).contents.value

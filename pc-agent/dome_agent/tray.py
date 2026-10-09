@@ -8,7 +8,9 @@ agent works on servers, in CI and on Linux without a display. pystray/tkinter/Pi
 lazily so importing this module never needs a display.
 
 Menu: status line · **Disable/Enable remote control** (local flag; no remote frame can change it) ·
-Pair a phone… · Approved apps… · Start at login · Reconnect · Diagnostics… · Quit.
+Stop manual input · Paired phones ▸ (per phone: Allow touchpad / Allow keyboard, with the broad-scope
+explanation on first enable) · Pair a phone… · Approved apps… · Start at login · Reconnect ·
+Diagnostics… · Quit. ``show_main`` (second launch of DoMe) opens the status window and notifies.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .logsetup import get_logger
+from .pairing import INPUT_CAPABILITIES, INPUT_SCOPE_EXPLANATION
 from .settings import Settings
 from .ui import PairingApproval, PairingDisplay, StatusView
 
@@ -147,6 +150,14 @@ class TrayUI:
     def show_pairing_request(self, approval: PairingApproval) -> None:
         self._tk.post(lambda: self._open_approval_window(approval))
 
+    def show_main(self) -> None:
+        """Second launch of DoMe: bring the status window up and say so (spec §10 single instance)."""
+        self.notify("DoMe is already running", "DoMe is running in this session; here is its status.")
+        if self.agent is None:
+            return
+        text = _status_text(self.agent)
+        self._tk.post(lambda: self._show_text_window("DoMe", text))
+
     def pairing_finished(self, pairing_id: str, decision: str) -> None:
         def _close() -> None:
             win = self._approval_windows.pop(pairing_id, None)
@@ -225,15 +236,28 @@ class TrayUI:
         )
         tk.Label(win, text="Check that the phone shows this code:", font=("Segoe UI", 10)).pack(padx=16, pady=(12, 2))
         tk.Label(win, text=approval.verification_code, font=("Consolas", 26, "bold")).pack(padx=16, pady=2)
-        tk.Label(
-            win, text="Requested permissions: " + ", ".join(approval.requested_capabilities), font=("Segoe UI", 10)
-        ).pack(padx=16, pady=(8, 12))
+        base = [c for c in approval.requested_capabilities if c not in INPUT_CAPABILITIES]
+        tk.Label(win, text="Requested permissions: " + ", ".join(base), font=("Segoe UI", 10)).pack(
+            padx=16, pady=(8, 4)
+        )
+        input_vars: dict[str, Any] = {}
+        requested_input = [c for c in INPUT_CAPABILITIES if c in approval.requested_capabilities]
+        if requested_input:
+            tk.Label(win, text=INPUT_SCOPE_EXPLANATION, wraplength=420, justify="left", font=("Segoe UI", 9)).pack(
+                padx=16, pady=(4, 4)
+            )
+            labels = {"pointer": "Allow touchpad / mouse (pointer)", "keyboard": "Allow keyboard"}
+            for cap in requested_input:
+                var = tk.BooleanVar(value=False)  # off until the PC owner ticks it (spec §10A-D)
+                input_vars[cap] = var
+                tk.Checkbutton(win, text=labels[cap], variable=var, font=("Segoe UI", 10)).pack(anchor="w", padx=24)
         buttons = tk.Frame(win)
-        buttons.pack(padx=16, pady=(0, 16))
+        buttons.pack(padx=16, pady=(8, 16))
 
         def approve() -> None:
             if self.agent is not None and self.agent.pairing is not None:
-                self._call(self.agent.pairing.approve(approval.pairing_id))
+                granted = base + [cap for cap, var in input_vars.items() if bool(var.get())]
+                self._call(self.agent.pairing.approve(approval.pairing_id, granted))
 
         def decline() -> None:
             if self.agent is not None and self.agent.pairing is not None:
@@ -331,6 +355,59 @@ class TrayUI:
             path = write_bundle(self.settings, self.agent.status())
             self.notify("DoMe diagnostics saved", str(path))
 
+        def stop_input(icon: Any, item: Any) -> None:
+            if self.agent is not None:
+                self._call(self.agent.input.end("stopped"))
+
+        def phones_menu() -> Any:
+            """One submenu per paired phone with checkable 'Allow touchpad' / 'Allow keyboard' items."""
+            items: list[Any] = []
+            if self.agent is None:
+                return pystray.Menu(pystray.MenuItem("(no agent)", None, enabled=False))
+            for g in self.agent.store.list_grants():
+                items.append(
+                    pystray.MenuItem(f"{g.display_name} ({g.controller_id[:8]}…)", _phone_menu(g.controller_id))
+                )
+            if not items:
+                items.append(pystray.MenuItem("(no paired phones)", None, enabled=False))
+            return pystray.Menu(*items)
+
+        def _phone_menu(controller_id: str) -> Any:
+            def checked(cap: str) -> Callable[[Any], bool]:
+                def _checked(_: Any) -> bool:
+                    if self.agent is None:
+                        return False
+                    g = self.agent.store.get_grant(controller_id)
+                    return bool(g is not None and cap in g.capabilities)
+
+                return _checked
+
+            def toggle(cap: str) -> Callable[[Any, Any], None]:
+                def _toggle(icon: Any, item: Any) -> None:
+                    if self.agent is None:
+                        return
+                    enabling = not checked(cap)(None)
+                    if enabling:
+                        self.notify("DoMe — manual input", INPUT_SCOPE_EXPLANATION)
+                    self._call(
+                        self.agent.update_grant_capabilities(
+                            controller_id, add=[cap] if enabling else [], remove=[] if enabling else [cap]
+                        )
+                    )
+
+                return _toggle
+
+            return pystray.Menu(
+                pystray.MenuItem("Allow touchpad", toggle("pointer"), checked=checked("pointer")),
+                pystray.MenuItem("Allow keyboard", toggle("keyboard"), checked=checked("keyboard")),
+                pystray.MenuItem(
+                    "What this allows…",
+                    lambda icon, item: self._tk.post(
+                        lambda: self._show_text_window("Touchpad and keyboard access", INPUT_SCOPE_EXPLANATION)
+                    ),
+                ),
+            )
+
         def quit_app(icon: Any, item: Any) -> None:
             if self.agent is not None:
                 self.agent.request_stop()
@@ -340,6 +417,8 @@ class TrayUI:
             pystray.MenuItem(status_item, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(toggle_label, toggle_remote),
+            pystray.MenuItem("Stop manual input", stop_input),
+            pystray.MenuItem("Paired phones", phones_menu()),
             pystray.MenuItem("Pair a phone…", pair),
             pystray.MenuItem("Approved apps…", apps),
             pystray.MenuItem("Start at login", toggle_startup, checked=startup_checked),
@@ -359,6 +438,32 @@ class TrayUI:
         self._icon = pystray.Icon("DoMe", _icon_image(_COLOURS["offline"]), "DoMe", menu=self._menu())
         self._icon.run()
         agent_thread.join(timeout=10)
+
+
+def _status_text(agent: Any) -> str:
+    status = agent.status()
+    ident = status.get("identity", {})
+    lines = [
+        f"DoMe agent {status.get('agent_version')} (pid {__import__('os').getpid()})",
+        f"PC: {ident.get('pc_name')}  linked: {ident.get('linked')}",
+        f"connection: {status.get('connection')}  remote control: {'on' if status['store'].get('remote_enabled') else 'OFF'}",
+        f"extension: {status.get('extension_connected')}",
+        "",
+        "Paired phones:",
+    ]
+    for g in status.get("grants", []):
+        if g.get("revoked_at"):
+            continue
+        lines.append(f"  {g.get('display_name')}: {', '.join(g.get('capabilities', []))}")
+    session = (status.get("input") or {}).get("session")
+    if session:
+        lines.append("")
+        lines.append(
+            f"Manual input session: {session['state']} (pointer={session['pointer']}, keyboard={session['keyboard']})"
+        )
+    lines.append("")
+    lines.append("Use the tray menu for pairing, permissions, Disable remote control and Quit.")
+    return "\n".join(lines)
 
 
 def startup_command() -> str:

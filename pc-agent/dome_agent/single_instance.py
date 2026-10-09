@@ -41,29 +41,19 @@ ERROR_ALREADY_EXISTS = 183
 def current_session_id() -> str:
     """Windows logon session id of this process; ``""`` elsewhere."""
     if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
+        from .platform.windows.instance import current_session_id as _win_session
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        session = wintypes.DWORD(0)
-        if kernel32.ProcessIdToSessionId(kernel32.GetCurrentProcessId(), ctypes.byref(session)):
-            return str(int(session.value))
-        return "unknown"
+        return _win_session()
     return ""
 
 
 def session_id_of_pid(pid: int) -> str | None:
-    """Windows logon session of another process (None when it cannot be determined / not Windows)."""
+    """Windows logon session of another process (None when it cannot be determined; ``""`` off Windows)."""
     if sys.platform != "win32":
         return ""
-    import ctypes
-    from ctypes import wintypes
+    from .platform.windows.instance import session_id_of_pid as _win_session_of
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    session = wintypes.DWORD(0)
-    if kernel32.ProcessIdToSessionId(int(pid), ctypes.byref(session)):
-        return str(int(session.value))
-    return None
+    return _win_session_of(pid)
 
 
 def mutex_name(session_id: str) -> str:
@@ -100,14 +90,16 @@ class InstanceLock:
         self.pid_path = state_dir / PID_FILENAME
         self._fh: Any = None
         self._mutex: Any = None
+        self._wrote_pid = False
         self.held = False
 
     @classmethod
-    def acquire(cls, state_dir: Path) -> InstanceLock | None:
+    def acquire(cls, state_dir: Path, *, probe: bool = False) -> InstanceLock | None:
+        """``probe=True`` only tests whether the lock is free (no pid file is written or removed)."""
         lock = cls(state_dir)
-        return lock if lock._try_acquire() else None
+        return lock if lock._try_acquire(probe=probe) else None
 
-    def _try_acquire(self) -> bool:
+    def _try_acquire(self, *, probe: bool) -> bool:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         if sys.platform == "win32":
             ok = self._acquire_mutex()
@@ -116,24 +108,19 @@ class InstanceLock:
         if not ok:
             return False
         self.held = True
-        self._write_pid()
+        self._wrote_pid = False
+        if not probe:
+            self._write_pid()
+            self._wrote_pid = True
         return True
 
     def _acquire_mutex(self) -> bool:
-        import ctypes
-        from ctypes import wintypes
+        from .platform.windows.instance import acquire_mutex
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
-        kernel32.CreateMutexW.restype = wintypes.HANDLE
-        ctypes.set_last_error(0)
-        handle = kernel32.CreateMutexW(None, False, mutex_name(current_session_id()))
-        err = ctypes.get_last_error()
-        if not handle:
-            log.error("CreateMutexW failed", error=err)
-            return False
-        if err == ERROR_ALREADY_EXISTS:
-            kernel32.CloseHandle(handle)
+        handle, err = acquire_mutex(mutex_name(current_session_id()))
+        if handle is None:
+            if err != ERROR_ALREADY_EXISTS:
+                log.error("CreateMutexW failed", error=err)
             return False
         self._mutex = handle
         return True
@@ -163,8 +150,9 @@ class InstanceLock:
         if not self.held:
             return
         self.held = False
-        with contextlib.suppress(OSError):
-            self.pid_path.unlink()
+        if self._wrote_pid:
+            with contextlib.suppress(OSError):
+                self.pid_path.unlink()
         if self._fh is not None:
             import fcntl
 
@@ -173,9 +161,9 @@ class InstanceLock:
             self._fh.close()
             self._fh = None
         if self._mutex is not None:
-            import ctypes
+            from .platform.windows.instance import close_handle
 
-            ctypes.WinDLL("kernel32").CloseHandle(self._mutex)
+            close_handle(self._mutex)
             self._mutex = None
 
 
@@ -219,8 +207,8 @@ def _probe_permissions(state_dir: Path) -> str | None:
 
 
 def _lock_held_by_other(state_dir: Path) -> bool:
-    """Non-destructive probe: acquire-and-release when free; False when WE could take it."""
-    lock = InstanceLock.acquire(state_dir)
+    """Non-destructive probe: acquire-and-release when free (no pid file touched); False when WE could take it."""
+    lock = InstanceLock.acquire(state_dir, probe=True)
     if lock is None:
         return True
     lock.release()
@@ -250,8 +238,10 @@ def inspect(state_dir: Path, *, control_timeout: float = 2.0) -> InstanceReport:
     from .control import ControlClient, ControlError
 
     try:
-        ControlClient(state_dir, timeout=control_timeout).call("ping")
+        pong = ControlClient(state_dir, timeout=control_timeout).call("ping")
         report.control_responding = True
+        if report.running_pid is None and isinstance(pong, dict) and isinstance(pong.get("pid"), int):
+            report.running_pid = int(pong["pid"])
     except ControlError:
         report.control_responding = False
     if not report.control_responding and sys.platform != "win32":
@@ -263,13 +253,15 @@ def inspect(state_dir: Path, *, control_timeout: float = 2.0) -> InstanceReport:
 def describe(report: InstanceReport) -> str:
     pid = f" (pid {report.running_pid})" if report.running_pid else ""
     if report.permission_problem:
-        return f"Permission problem: {report.permission_problem}. Run `dome-agent repair` or fix the folder permissions."
+        return (
+            f"Permission problem: {report.permission_problem}. Run `dome-agent repair` or fix the folder permissions."
+        )
     if report.other_session_conflict:
         return (
             f"DoMe is running in another Windows session{pid} (session {report.other_session}); this session has "
             "no agent. Sign in to that session to use it, or start DoMe here to run one per session."
         )
-    if report.lock_held_by_other and report.control_responding:
+    if report.control_responding:
         return f"DoMe is already running in this session{pid} and responding."
     if report.lock_held_by_other and not report.control_responding:
         return (
@@ -298,7 +290,7 @@ def repair(state_dir: Path, *, host_path: Path | None, dev_extension_id: str) ->
         return out
     out.append("state directory writable: ok")
     report = inspect(state_dir)
-    if report.lock_held_by_other and report.control_responding:
+    if report.control_responding:
         out.append(f"running agent found (pid {report.running_pid}); left running")
     elif report.lock_held_by_other:
         out.append(

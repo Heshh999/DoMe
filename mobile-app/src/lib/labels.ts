@@ -42,6 +42,8 @@ const TITLES: Record<ActionName, string> = {
   "power.restart": "Restart",
   "power.shutdown": "Shut down",
   "power.cancel": "Cancel countdown",
+  "input.session_start": "Start touchpad/keyboard",
+  "input.session_stop": "Stop touchpad/keyboard",
 };
 
 export function actionTitle(action: string): string {
@@ -124,6 +126,10 @@ export function describeAction(action: string, params: Record<string, unknown>, 
       return `Shut down the PC${countdown(params)}`;
     case "power.cancel":
       return "Cancel the pending power countdown";
+    case "input.session_start":
+      return params.takeover ? "Take over the touchpad and keyboard on the PC" : "Start the touchpad and keyboard on the PC";
+    case "input.session_stop":
+      return "Stop the touchpad and keyboard";
   }
 }
 
@@ -141,8 +147,32 @@ export function capabilityLabel(cap: string): string {
     apps: "Open and manage approved apps",
     lock: "Lock Windows",
     power: "Sleep, restart, shut down (always confirmed)",
+    pointer: "Touchpad: move the cursor, click, scroll, drag",
+    keyboard: "Keyboard: type text, press keys and shortcuts",
   };
   return labels[cap] ?? cap;
+}
+
+/** True for the two manual-input capabilities whose reach is every app of the unlocked session. */
+export function isInputCapability(cap: string): boolean {
+  return cap === "pointer" || cap === "keyboard";
+}
+
+/** Fixed, spec-mandated explanation of the manual-input permission (spec §10A D). */
+export const INPUT_SCOPE_EXPLANATION = "Touchpad and keyboard input reaches every app of the unlocked Windows session, not only the approved apps — exactly like a mouse and keyboard plugged into the PC. The approved-app list limits structured app actions; it is not a sandbox around manual input. The PC owner grants and removes these permissions on the PC itself (DoMe tray → Paired phones).";
+
+/** Which support category a help link should preselect for an error code. */
+export function supportCategoryFor(code: string | null | undefined): "connection" | "pairing" | "media" | "input" | "apps" | "power" | "install" | "billing" | "account" | "other" {
+  if (!code) return "other";
+  if (code.startsWith("INPUT_")) return "input";
+  if (code.startsWith("PAIRING_") || code === "CONTROLLER_REVOKED" || code === "UNKNOWN_KEY" || code === "GRANT_MISSING" || code === "SIGNATURE_INVALID") return "pairing";
+  if (code.startsWith("PC_") || code === "NETWORK" || code === "OUTCOME_UNKNOWN" || code === "COMMAND_EXPIRED" || code === "PROTOCOL_INCOMPATIBLE" || code === "RATE_LIMITED" || code === "QUEUE_FULL") return "connection";
+  if (code.startsWith("EXTENSION_") || code.startsWith("TARGET_") || code.startsWith("TAB_") || code === "BROWSER_NOT_RUNNING" || code === "UNSUPPORTED_CONTEXT" || code === "ACTIVATION_REQUIRED") return "media";
+  if (code.startsWith("APP_") || code === "CLOSE_REFUSED" || code === "FOCUS_DENIED") return "apps";
+  if (code.startsWith("POWER_") || code.startsWith("CONFIRMATION_")) return "power";
+  if (code.startsWith("ENTITLEMENT_") || code.startsWith("BILLING_") || code.endsWith("_PLAN_DISABLED") || code === "DEVICE_LIMIT_REACHED") return "billing";
+  if (code === "UNAUTHENTICATED" || code === "FORBIDDEN") return "account";
+  return "other";
 }
 
 export function connectionLabel(conn: relayFrames.PcConnectionState | "unknown"): string {
@@ -192,6 +222,7 @@ export function errorMessage(error: { code: string; message?: string } | null | 
   if (error.code === "FORBIDDEN") return "This request was not allowed.";
   if (error.code === "LINK_EXPIRED") return "The link code expired or was already used. Start again on the PC.";
   if (error.code === "LINK_DENIED") return "Linking this PC was declined.";
+  if (error.code === "NO_ANSWER") return "The PC did not answer in time. Nothing is known to have run.";
   return "Something went wrong. Try again.";
 }
 
@@ -266,6 +297,26 @@ export function recoverySteps(code: string): string[] {
       return ["Sign in again to continue.", "Your paired PCs stay paired; signing in does not require pairing again."];
     case "PROTOCOL_INCOMPATIBLE":
       return ["Update the DoMe agent on the PC and reload this app so both speak the same version."];
+    case "INPUT_NOT_PERMITTED":
+      return ["On the PC, open the DoMe tray menu → Paired phones and allow Touchpad and/or Keyboard for this phone.", "Existing pairings do not get these permissions automatically; only the PC owner can add them, on the PC.", "Then open the touchpad here again."];
+    case "INPUT_SESSION_OWNED":
+      return ["Another phone is using the touchpad on this PC right now.", "Choose Take over to end its session (its held buttons are released first), or wait until it stops."];
+    case "INPUT_SESSION_REQUIRED":
+    case "INPUT_SESSION_EXPIRED":
+      return ["Tap Start on the touchpad to connect again.", "Nothing you did while disconnected is sent later."];
+    case "INPUT_SUSPENDED":
+      return ["The connection fell behind, so pending input was discarded rather than played back late.", "Tap Start to begin a fresh session."];
+    case "INPUT_STALE":
+    case "INPUT_SEQUENCE_INVALID":
+      return ["Some input arrived too late or out of order and was dropped; nothing was replayed.", "Keep going — if it repeats, check the connection under Health."];
+    case "INPUT_RESTRICTED":
+      return ["Windows is showing a protected screen (lock screen, sign-in or an administrator prompt), where remote input is not allowed by design.", "Finish that screen on the PC itself, then continue."];
+    case "INPUT_INJECTION_FAILED":
+      return ["Windows did not accept that input. An elevated (administrator) window in front can cause this.", "Click a normal window on the PC and try again."];
+    case "INPUT_TARGET_CHANGED":
+      return ["The window in front of the PC changed, so remaining keys were not pressed into the wrong window.", "Check what is in front on the PC, click where you want to type, then continue."];
+    case "NO_ANSWER":
+      return ["The PC did not answer in time.", "Check the PC shows Online under Health, then try again."];
     default:
       return [];
   }

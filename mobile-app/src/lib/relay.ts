@@ -212,6 +212,18 @@ export class RelayClient {
     this.sendRaw(frame);
   }
 
+  /**
+   * The manual-input stream (protocol 1.1): a `controller_input_batch` frame whose envelope the
+   * InputSessionClient already signed over a validated `input_batch_payload`. Validated once more as
+   * a `controller_to_relay` frame here, like every other outbound frame; requires a bound socket.
+   */
+  sendInputBatch(frame: relayFrames.ControllerInputBatch): void {
+    if (!this.isOpen) throw new ProtocolError("PC_RECONNECTING", "not connected to DoMe", true);
+    if (!this._controllerId) throw new ProtocolError("UNKNOWN_KEY", "This phone is not paired yet.");
+    if (frame.type !== "input_batch") throw new ProtocolError("MALFORMED_MESSAGE", "not an input_batch frame");
+    this.sendRaw(frame);
+  }
+
   private sendRaw(frame: relayFrames.ControllerToRelay): void {
     schemas.validateFrame("controller_to_relay", frame);
     const text = JSON.stringify(frame);

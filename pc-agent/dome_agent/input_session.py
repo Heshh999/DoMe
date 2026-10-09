@@ -130,18 +130,20 @@ class _DispatchOutcome:
     target_changed: bool = False
 
 
-def coalesce_events(events: Iterable[dict[str, Any]], motion_max: int = 1 << 20) -> list[dict[str, Any]]:
+def coalesce_events(events: Iterable[dict[str, Any]], motion_max: int = 1 << 20) -> list[tuple[dict[str, Any], int]]:
     """Sum ADJACENT ``pointer_move`` events; never merge across a button, scroll, text, key or shortcut
-    event; preserve order. Zero-motion results are dropped (nothing to inject)."""
-    out: list[dict[str, Any]] = []
+    event; preserve order. Returns ``(event, number_of_original_events)`` pairs so acks count what the
+    phone sent. A zero-motion result is kept (counted, nothing injected)."""
+    out: list[tuple[dict[str, Any], int]] = []
     for ev in events:
-        if ev.get("type") == "pointer_move" and out and out[-1].get("type") == "pointer_move":
-            dx = max(-motion_max, min(motion_max, int(out[-1]["dx"]) + int(ev["dx"])))
-            dy = max(-motion_max, min(motion_max, int(out[-1]["dy"]) + int(ev["dy"])))
-            out[-1] = {"type": "pointer_move", "dx": dx, "dy": dy}
+        if ev.get("type") == "pointer_move" and out and out[-1][0].get("type") == "pointer_move":
+            prev, n = out[-1]
+            dx = max(-motion_max, min(motion_max, int(prev["dx"]) + int(ev["dx"])))
+            dy = max(-motion_max, min(motion_max, int(prev["dy"]) + int(ev["dy"])))
+            out[-1] = ({"type": "pointer_move", "dx": dx, "dy": dy}, n + 1)
             continue
-        out.append(dict(ev))
-    return [ev for ev in out if not (ev.get("type") == "pointer_move" and ev["dx"] == 0 and ev["dy"] == 0)]
+        out.append((dict(ev), 1))
+    return out
 
 
 class InputSessionManager:
@@ -502,24 +504,25 @@ class InputSessionManager:
         out = _DispatchOutcome()
         coalesced = coalesce_events(events)
         skip_keyboard = False
-        for index, ev in enumerate(coalesced):
+        for index, (ev, n) in enumerate(coalesced):
             if not session.live:  # retired meanwhile: stop immediately, nothing more is pressed
-                out.dropped += 1
+                out.dropped += n
                 continue
             kind = ev["type"]
             try:
                 if kind in KEYBOARD_EVENTS:
                     if skip_keyboard:
-                        out.dropped += 1
+                        out.dropped += n
                         continue
                     if not self._target_still_in_front(session):
                         skip_keyboard = True
                         out.target_changed = True
                         out.errors.append(("INPUT_TARGET_CHANGED", ""))
-                        out.dropped += 1
+                        out.dropped += n
                         continue
                 if kind == "pointer_move":
-                    adapter.move(int(ev["dx"]), int(ev["dy"]))
+                    if ev["dx"] or ev["dy"]:
+                        adapter.move(int(ev["dx"]), int(ev["dy"]))
                 elif kind == "pointer_scroll":
                     adapter.scroll(int(ev["dx"]), int(ev["dy"]))
                 elif kind == "pointer_button":
@@ -547,10 +550,10 @@ class InputSessionManager:
                         self._persist_holds(session)
                 else:
                     raise ProtocolError("MALFORMED_MESSAGE", f"unknown input event type {kind}")
-                out.accepted += 1
+                out.accepted += n
             except ProtocolError as exc:
                 # One failed event drops the rest of the batch: nothing runs out of order.
-                out.dropped += len(coalesced) - index
+                out.dropped += sum(count for _ev, count in coalesced[index:])
                 out.errors.append((exc.code, exc.message))
                 break
         return out

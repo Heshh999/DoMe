@@ -7,11 +7,13 @@ import { buildHelloProofPayload, ProtocolError, signHelloProof, type JsonValue, 
 
 import { api, ApiError, configureApi, API_ORIGIN } from "../lib/api.ts";
 import { CommandService, type CommandRecord } from "../lib/commands.ts";
+import { InputSessionClient, type InputTimers } from "../lib/input.ts";
 import { clearAccountState, deleteInstallationKey, getControllerIdentity, getOrCreateKeyPair, setStoredControllerId } from "../lib/controllerKey.ts";
 import { APP_VERSION } from "../lib/diagnostics.ts";
 import { errorSummary, log } from "../lib/log.ts";
 import { RelayClient, relayUrl, type RelayClientOptions, type RelayStatus } from "../lib/relay.ts";
 import { useDevicesStore } from "../store/devices.ts";
+import { useInputStore } from "../store/input.ts";
 import { useLiveStore } from "../store/live.ts";
 import { useSessionStore } from "../store/session.ts";
 
@@ -27,6 +29,10 @@ export interface RuntimeOptions {
   relay?: Partial<RelayClientOptions>;
   /** Testing: override the store clock interval (ms). */
   clockIntervalMs?: number;
+  /** Testing: timers for the input-session keepalive / ack waits. */
+  inputTimers?: InputTimers;
+  /** Testing: replace requestAnimationFrame for the input flush. */
+  scheduleFrame?: (fn: () => void) => unknown;
 }
 
 /** How often the live store's clock advances so the 75 s freshness rule is re-evaluated without a frame. */
@@ -35,6 +41,8 @@ export const CLOCK_INTERVAL_MS = 5_000;
 export class Runtime {
   readonly relay: RelayClient;
   readonly commands: CommandService;
+  /** Manual touchpad/keyboard stream (protocol 1.1). Pages use it only through `useInputSession`. */
+  readonly input: InputSessionClient;
   private started = false;
   private detach: Array<() => void> = [];
   private readonly clockIntervalMs: number;
@@ -74,6 +82,21 @@ export class Runtime {
       keyPair: () => getOrCreateKeyPair(),
       onChange: (record) => useLiveStore.getState().upsertCommand(record),
     });
+    this.input = new InputSessionClient({
+      sendBatch: (frame) => this.relay.sendInputBatch(frame),
+      sendCommand: (input) => this.commands.send({ pcId: input.pcId, action: input.action, params: input.params, target: null, source: input.source }),
+      onceSettled: (commandId) => this.commands.onceSettled(commandId),
+      identity: () => {
+        const accountId = useSessionStore.getState().session?.account.id ?? null;
+        const controllerId = this.relay.controllerId;
+        return accountId && controllerId ? { accountId, controllerId } : null;
+      },
+      keyPair: () => getOrCreateKeyPair(),
+      connected: () => this.relay.isOpen,
+      onChange: (state) => useInputStore.getState().setSession(state),
+      ...(options.inputTimers ? { timers: options.inputTimers } : {}),
+      ...(options.scheduleFrame ? { scheduleFrame: options.scheduleFrame, cancelFrame: () => undefined } : {}),
+    });
     this.relay.on("status", (status, detail) => {
       live.setRelay(status, detail?.error ?? null);
       if (status !== "open") {
@@ -81,6 +104,8 @@ export class Runtime {
         // A pending confirmation's countdown is not backed by a live connection any more; the modal
         // says so and offers Close instead of pretending Approve/Decline will reach the PC.
         this.commands.markConnectionLost();
+        // The input stream is gone with the socket; the PC's lease releases anything still held.
+        this.input.onConnectionLost();
       } else {
         this.commands.markConnectionRestored();
       }
@@ -102,8 +127,16 @@ export class Runtime {
         useLiveStore.getState().markAllStale();
         this.relay.nudge();
         void useDevicesStore.getState().refresh();
+      } else {
+        // Backgrounded: a held drag or key must not outlive the screen. Stop the input session now
+        // (the PC's 3 s lease would end it anyway, but not before releasing is wanted).
+        void this.input.stop("hidden");
       }
     };
+    // Switching the selected PC ends the session on the old one before anything can target the new one.
+    const unsubscribePc = useDevicesStore.subscribe((s, prev) => {
+      if (s.selectedPcId !== prev.selectedPcId && this.input.snapshot.pcId && this.input.snapshot.pcId !== s.selectedPcId) void this.input.stop("pc_switch");
+    });
     const onOnline = () => {
       useLiveStore.getState().markAllStale();
       this.relay.nudge();
@@ -113,7 +146,7 @@ export class Runtime {
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     const clock = setInterval(() => useLiveStore.getState().tick(), this.clockIntervalMs);
-    this.detach.push(() => document.removeEventListener("visibilitychange", onVisible), () => window.removeEventListener("online", onOnline), () => window.removeEventListener("offline", onOffline), () => clearInterval(clock));
+    this.detach.push(() => document.removeEventListener("visibilitychange", onVisible), () => window.removeEventListener("online", onOnline), () => window.removeEventListener("offline", onOffline), () => clearInterval(clock), unsubscribePc);
     this.relay.connect();
   }
 
@@ -157,6 +190,7 @@ export class Runtime {
    */
   async signOut(options: { forgetInstallation?: boolean } = {}): Promise<void> {
     useSessionStore.getState().beginSignOut();
+    await this.input.stop("sign_out");
     this.relay.close();
     if (options.forgetInstallation) {
       try {
@@ -171,6 +205,7 @@ export class Runtime {
       if (!(e instanceof ApiError && (e.status === 401 || e.code === "UNAUTHENTICATED"))) log.warn("logout.failed", errorSummary(e));
     }
     this.commands.reset();
+    this.input.reset();
     useLiveStore.getState().reset();
     useDevicesStore.getState().reset();
     configureApi({ csrfToken: null });
@@ -185,6 +220,7 @@ export class Runtime {
     for (const d of this.detach) d();
     this.detach = [];
     this.started = false;
+    this.input.reset();
     this.relay.close();
   }
 
@@ -196,8 +232,17 @@ export class Runtime {
         return;
       case "state":
         live.onState(frame);
+        if (frame.pc_id === this.input.snapshot.pcId) this.input.setForegroundApp(frame.state.foreground_app ?? null);
+        return;
+      case "input_ack":
+      case "input_session":
+        if (!this.input.handleFrame(frame)) log.info("relay.input_frame_for_unknown_session", { type: frame.type });
         return;
       case "error":
+        // INPUT_* / RATE_LIMITED errors name the PC (ref_pc_id) but concern the input stream, not the
+        // subscription: the input client consumes them. Everything else with ref_pc_id is a refused
+        // subscription (e.g. GRANT_MISSING).
+        if (this.input.handleFrame(frame)) return;
         if (frame.ref_pc_id) live.onSubscribeRefused(frame.ref_pc_id, frame.error.code);
         else log.warn("relay.error_frame", { code: frame.error.code });
         return;

@@ -250,3 +250,29 @@ async def test_confirmation_rechecks_pc_plan_before_queueing(harness: AgentHarne
     res = await harness.result(cid)
     assert res["state"] == "failed" and res["error"]["code"] == "PC_PLAN_DISABLED"
     assert harness.fake.count("power_sleep") == 0
+
+
+async def test_power_confirmation_copy_states_access_loss_and_no_remote_wake(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    """Spec §10 / §17.25: the phone shows display.detail verbatim, so the agent's copy must say that the
+    action can interrupt or end remote access and that V1 has no remote wake, within the schema bound."""
+    from dome_protocol import loads_strict
+
+    from dome_agent.authz import power_confirmation_detail
+
+    for action in ("power.sleep", "power.restart", "power.shutdown"):
+        env = controller.command(action, {"countdown_seconds": 5}, lifetime=90)
+        cid = payload_of(env)["command_id"]
+        await harness.send_command(env)
+        req = await harness.relay.expect("confirmation_required", command_id=cid)
+        detail = loads_strict(req["challenge_text"])["display"]["detail"]
+        assert (
+            "interrupt or end remote access" in detail
+            and "no remote wake in V1" in detail
+            and "5 s countdown" in detail
+        )
+        assert len(detail) <= 200 and detail == power_confirmation_detail(action, 5)
+        await harness.relay.send({"type": "cancel", "command_id": cid, "controller_id": controller.controller_id})
+        await harness.result(cid)
+    assert len(power_confirmation_detail("power.shutdown", 60)) <= 200

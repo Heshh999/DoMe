@@ -118,7 +118,12 @@ def revoke_controller_frame(controller_id: str, kid: str, reason: str = "local_r
 def grant_update_frame(controller_id: str, kid: str, capabilities: list[str]) -> dict[str, Any]:
     """``rules.grant_update``: the PC owner changed a controller's capabilities locally; the relay replaces
     the grant's list with exactly this one."""
-    return {"type": "grant_update", "controller_id": controller_id, "kid": kid, "capabilities": list(dict.fromkeys(capabilities))}
+    return {
+        "type": "grant_update",
+        "controller_id": controller_id,
+        "kid": kid,
+        "capabilities": list(dict.fromkeys(capabilities)),
+    }
 
 
 def input_ack_frame(

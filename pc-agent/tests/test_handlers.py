@@ -88,6 +88,8 @@ CASES: list[tuple[str, dict[str, Any], str | None]] = [
     ("power.sleep", {"countdown_seconds": 0}, None),
     ("power.restart", {"countdown_seconds": 0}, None),
     ("power.shutdown", {"countdown_seconds": 0}, None),
+    ("input.session_start", {}, None),
+    ("input.session_stop", {"input_session_id": "A" * 22}, None),
 ]
 
 
@@ -122,6 +124,20 @@ async def test_handler_success_result_validates(
         assert res["result"]["focused"] is True
     if action == "windows.set_volume":
         assert res["result"] == {"value": 25, "muted": False}
+    if action == "input.session_start":
+        assert res["result"]["pointer"] and res["result"]["keyboard"] and len(res["result"]["input_session_id"]) == 22
+    if action == "input.session_stop":
+        assert res["result"] == {"stopped": False, "released_holds": 0}  # unknown id: idempotent no-op
+
+
+def test_input_actions_are_human_only() -> None:
+    registry = load_registry()
+    for name in ("input.session_start", "input.session_stop"):
+        spec = registry.get(name)
+        assert spec.ai_eligible is False and spec.routine_allowed is False
+        assert (
+            spec.satisfied_by(("keyboard",)) and spec.satisfied_by(("pointer",)) and not spec.satisfied_by(("status",))
+        )
 
 
 async def test_youtube_request_fullscreen_reports_activation_required(

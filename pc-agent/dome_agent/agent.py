@@ -485,15 +485,22 @@ class Agent:
             return
         if vb.target_pc_id != self.identity.pc_id:
             self._security_event("input_identity_mismatch", {"code": "TARGET_PC_MISMATCH"})
-            await self._send({"type": "error", "error": self.registry.make_error("TARGET_PC_MISMATCH").to_frame_error()})
+            await self._send(
+                {"type": "error", "error": self.registry.make_error("TARGET_PC_MISMATCH").to_frame_error()}
+            )
             await self._count_mismatch()
             return
         if not self._snapshot_received:
             await self._send({"type": "error", "error": self.registry.make_error("PC_RECONNECTING").to_frame_error()})
             return
-        blocker = self._input_grant_blocker(vb.key.controller_id, vb.required_capabilities)
+        blocker = self._input_grant_blocker(vb.key.controller_id)
         if blocker is not None:
-            if blocker.code in ("PC_REMOTE_DISABLED", "CONTROLLER_REVOKED", "PC_PLAN_DISABLED", "CONTROLLER_PLAN_DISABLED"):
+            if blocker.code in (
+                "PC_REMOTE_DISABLED",
+                "CONTROLLER_REVOKED",
+                "PC_PLAN_DISABLED",
+                "CONTROLLER_PLAN_DISABLED",
+            ):
                 await self.input.end_for_controller(
                     vb.key.controller_id, "remote_disabled" if blocker.code == "PC_REMOTE_DISABLED" else "grant_removed"
                 )
@@ -501,8 +508,10 @@ class Agent:
             return
         await self.input.handle_batch(vb)
 
-    def _input_grant_blocker(self, controller_id: str, needed: set[str]) -> ProtocolError | None:
-        """Authorization steps 3-4 for a batch: local switch, plan state, live grant, event-type coverage."""
+    def _input_grant_blocker(self, controller_id: str) -> ProtocolError | None:
+        """Authorization steps 3-4 for a batch: local switch, plan state, live grant. Event-type coverage
+        (``INPUT_NOT_PERMITTED``) is the session manager's check so the drop is counted in the acks; the
+        session's pointer/keyboard flags always mirror the grant's effective capabilities."""
         store = self.store
         if not store.remote_enabled:
             return self.registry.make_error("PC_REMOTE_DISABLED")
@@ -513,23 +522,26 @@ class Agent:
             return self.registry.make_error("CONTROLLER_REVOKED")
         if grant.snapshot_status != "active":
             return self.registry.make_error("CONTROLLER_PLAN_DISABLED")
-        effective = set(grant.effective_capabilities(store.current_snapshot_id()))
-        if not needed <= effective:
-            return self.registry.make_error("INPUT_NOT_PERMITTED")
         return None
 
-    async def update_grant_capabilities(self, controller_id: str, *, add: Iterable[str] = (), remove: Iterable[str] = ()) -> Any:
+    async def update_grant_capabilities(
+        self, controller_id: str, *, add: Iterable[str] = (), remove: Iterable[str] = ()
+    ) -> Any:
         """The PC owner changed a phone's pointer/keyboard permission locally (tray / CLI). The local
         list is authoritative at once (effective = local ∩ snapshot); the relay is told with
         ``grant_update`` (journaled until written; re-sent after the next snapshot when offline)."""
         add_set, remove_set = set(add), set(remove)
         unknown = (add_set | remove_set) - set(INPUT_CAPABILITIES)
         if unknown:
-            raise ProtocolError("INVALID_PARAMETERS", f"only pointer/keyboard can be changed here, not {sorted(unknown)}")
+            raise ProtocolError(
+                "INVALID_PARAMETERS", f"only pointer/keyboard can be changed here, not {sorted(unknown)}"
+            )
         grant = self.store.get_grant(controller_id)
         if grant is None or grant.revoked:
             return None
-        caps = [c for c in grant.capabilities if c not in remove_set] + [c for c in INPUT_CAPABILITIES if c in add_set and c not in grant.capabilities]
+        caps = [c for c in grant.capabilities if c not in remove_set] + [
+            c for c in INPUT_CAPABILITIES if c in add_set and c not in grant.capabilities
+        ]
         try:
             row = self.store.update_grant_capabilities(controller_id, caps)
         except ValueError as exc:
@@ -729,7 +741,7 @@ class Agent:
 
     def _control_ops(self) -> dict[str, Callable[[dict[str, Any]], Coroutine[Any, Any, Any]]]:
         async def ping(_: dict[str, Any]) -> dict[str, Any]:
-            return {"pong": True, "version": __version__}
+            return {"pong": True, "version": __version__, "pid": os.getpid()}
 
         async def status(_: dict[str, Any]) -> dict[str, Any]:
             return self.status()

@@ -50,7 +50,9 @@ class StateAggregator:
         self._last: dict[str, Any] | None = None
         self.session_locked_override: bool | None = None  # tests / fake platform
         self.emitted = 0
-        self.input: InputSessionManager | None = None  # bound by the agent: foreground_app / input_session / input_restricted
+        self.input: InputSessionManager | None = (
+            None  # bound by the agent: foreground_app / input_session / input_restricted
+        )
 
     # ----- lifecycle --------------------------------------------------------------------------------
     def start(self, emit: Emitter) -> None:

@@ -2,7 +2,9 @@
  * Redacting in-memory logger. Nothing here persists; the ring buffer feeds the customer-initiated
  * diagnostics download (Settings → Diagnostics). Field values whose key looks like a secret or like
  * untrusted display text (tokens, codes, pairing material, challenge text, payloads, media titles,
- * e-mail) are replaced before they are stored or printed.
+ * e-mail) are replaced before they are stored or printed. Typed keyboard content (`text`, `composer`,
+ * input `events`/`key`) is dropped the same way: no call site passes it, and the regex guarantees it
+ * would not survive if one did.
  */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -18,7 +20,7 @@ export interface LogEntry {
  * codes (api.error, command.result, invalid_frame_dropped) that diagnostics exist to show. Pairing
  * material has explicit names.
  */
-const REDACT_KEY = /(token|pairing_code|code_hash|user_code|verification|secret|challenge|payload|^sig$|signature|title|artist|detail|email|csrf|jwk|cookie|password|display_name|nonce|url)/i;
+const REDACT_KEY = /(token|pairing_code|code_hash|user_code|verification|secret|challenge|payload|^sig$|signature|title|artist|detail|email|csrf|jwk|cookie|password|display_name|nonce|url|^text$|_text$|composer|^events$|^key$|^keys$)/i;
 const MAX_ENTRIES = 120;
 const MAX_STRING = 160;
 

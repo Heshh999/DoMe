@@ -11,14 +11,20 @@
     approve-app ID PATH     approve a local .exe for remote launch/focus/close
     remove-app ID           remove an approval
     revoke CONTROLLER_ID    revoke a paired phone locally
+    grant CONTROLLER_ID [--pointer] [--keyboard] [--remove-pointer] [--remove-keyboard]
+                            allow/withdraw manual touchpad (pointer) / keyboard input for a paired phone
+    stop-input              end the live manual-input session on this PC and release what it holds
     install-native-host     register the Chrome/Edge native-messaging manifest (per user)
     uninstall-native-host
+    repair                  re-register the native host and clean stale local endpoints; keeps identity,
+                            credential, grants and approved apps; never kills a process
     reconnect               manual reconnect (after another agent superseded this one)
     diagnostics             write a redacted diagnostics bundle
     version
 
-Commands that need the running agent use the local control channel; status/enable/disable/approve-app
-fall back to the local store when the agent is not running.
+``run`` is single-instance per Windows user session: a second launch asks the running agent to show
+its window and exits. Commands that need the running agent use the local control channel;
+status/enable/disable/approve-app/revoke/grant fall back to the local store when the agent is not running.
 """
 
 from __future__ import annotations
@@ -66,6 +72,39 @@ def cmd_run(args: argparse.Namespace) -> int:
     settings = _settings(args)
     configure_logging(settings.log_level, settings.log_path)
     headless = settings.headless or bool(args.headless)
+    from .single_instance import InstanceLock
+
+    lock = InstanceLock.acquire(settings.state_dir)
+    if lock is None:
+        return _second_launch(settings)
+    try:
+        return _run_locked(args, settings, headless)
+    finally:
+        lock.release()
+
+
+def _second_launch(settings: Settings) -> int:
+    """Another agent of this user session holds the instance lock (spec §10): bring it up instead of
+    competing with it. Never terminates anything."""
+    from .control import ControlError
+    from .single_instance import inspect
+
+    try:
+        shown = _control(settings).call("show")
+        pid = shown.get("pid")
+        print(f"DoMe is already running in this session (pid {pid}); its window was brought up. Nothing else started.")
+        log.info("second launch: running instance asked to show itself", pid=pid)
+        return 0
+    except ControlError as exc:
+        report = inspect(settings.state_dir)
+        print(report.message)
+        if report.lock_held_by_other and not report.control_responding:
+            print(f"(control channel: {exc.code}) Run `dome-agent repair` to check the local endpoints.")
+        log.warning("second launch: lock held but the running instance did not answer", code=exc.code)
+        return 1
+
+
+def _run_locked(args: argparse.Namespace, settings: Settings, headless: bool) -> int:
     log.info(
         "dome-agent starting",
         version=__version__,
@@ -198,10 +237,30 @@ def _wait_for_request(ctl: Any, pairing_id: str, deadline: float) -> dict[str, A
 
 
 def _print_pending(pending: dict[str, Any]) -> None:
+    from .pairing import INPUT_CAPABILITIES, INPUT_SCOPE_EXPLANATION
+
     print("\nA phone claimed this code.")
     print(f"  Name shown by the phone (untrusted): {pending['display_name']}")
     print(f"  Requested permissions: {', '.join(pending['requested_capabilities'])}")
+    if any(c in INPUT_CAPABILITIES for c in pending["requested_capabilities"]):
+        print(f"\n  About touchpad/keyboard: {INPUT_SCOPE_EXPLANATION}")
     print(f"\n  Check that the phone shows this verification code:  {pending['verification_code']}\n")
+
+
+def _choose_capabilities(pending: dict[str, Any], assume_yes: bool) -> list[str]:
+    """The requested non-input capabilities are granted with the approval; pointer and keyboard are
+    offered one by one so the PC owner decides explicitly (spec §10A-D). ``--yes`` grants all requested."""
+    from .pairing import INPUT_CAPABILITIES
+
+    requested = list(pending["requested_capabilities"])
+    if assume_yes:
+        return requested
+    granted = [c for c in requested if c not in INPUT_CAPABILITIES]
+    labels = {"pointer": "touchpad / mouse (pointer)", "keyboard": "keyboard (typing, keys, shortcuts)"}
+    for cap in INPUT_CAPABILITIES:
+        if cap in requested and _confirm(f"  Allow {labels[cap]} for this phone? [y/N] ", False):
+            granted.append(cap)
+    return granted
 
 
 def _confirm(prompt: str, assume_yes: bool) -> bool:
@@ -251,8 +310,9 @@ def cmd_pair(args: argparse.Namespace) -> int:
         ctl.call("pair_decline", pairing_id=pending["pairing_id"])
         print("Declined.")
         return 1
-    result = ctl.call("pair_approve", pairing_id=pending["pairing_id"])
-    print(f"Approved '{result['display_name']}'. The phone can control this PC now.")
+    granted = _choose_capabilities(pending, args.yes)
+    result = ctl.call("pair_approve", pairing_id=pending["pairing_id"], capabilities=granted)
+    print(f"Approved '{result['display_name']}' with: {', '.join(granted)}. The phone can control this PC now.")
     return 0
 
 
@@ -271,7 +331,8 @@ def cmd_pair_approve(args: argparse.Namespace) -> int:
         if not _confirm("Approve this phone? [y/N] ", args.yes):
             print("Not approved.")
             return 1
-        result = ctl.call("pair_approve", pairing_id=args.pairing_id, capabilities=args.capabilities)
+        granted = args.capabilities if args.capabilities is not None else _choose_capabilities(pending, args.yes)
+        result = ctl.call("pair_approve", pairing_id=args.pairing_id, capabilities=granted)
     except ControlError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return 1
@@ -325,11 +386,24 @@ def cmd_status(args: argparse.Namespace) -> int:
             }
         finally:
             store.close()
+    from .single_instance import inspect
+
+    instance = inspect(settings.state_dir) if not status["agent_running"] else None
+    if instance is not None:
+        status["instance"] = instance.as_dict()
     if args.json:
         _print(status)
         return 0
     ident = status.get("identity", {})
     print(f"DoMe agent {status.get('agent_version')} — {'running' if status['agent_running'] else 'not running'}")
+    if instance is not None and (
+        instance.lock_held_by_other
+        or instance.permission_problem
+        or instance.other_session_conflict
+        or instance.control_endpoint_stale
+        or instance.pid_file_stale
+    ):
+        print(f"  INSTANCE: {instance.message}")
     print(f"  linked: {ident.get('linked')}  pc_id: {ident.get('pc_id')}  name: {ident.get('pc_name')}")
     if status["agent_running"]:
         print(
@@ -342,6 +416,14 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(f"  CONFIGURATION ERROR: {status['configuration_error']}")
         if status.get("pending_revocations"):
             print(f"  revocations not yet delivered to the service: {len(status['pending_revocations'])}")
+        if status.get("pending_grant_updates"):
+            print(f"  permission changes not yet delivered to the service: {len(status['pending_grant_updates'])}")
+        session = (status.get("input") or {}).get("session")
+        if session:
+            print(
+                f"  manual input: {session['state']} for {session['controller_id']} (pointer={session['pointer']}, "
+                f"keyboard={session['keyboard']}, held={session['held_buttons'] + session['held_keys']})"
+            )
     print(f"  remote control: {'ENABLED' if status['store'].get('remote_enabled') else 'disabled'}")
     print(f"  paired phones: {len([g for g in status.get('grants', []) if not g.get('revoked_at')])}")
     for g in status.get("grants", []):
@@ -450,6 +532,81 @@ def cmd_revoke(args: argparse.Namespace) -> int:
             return 0
     print("Revoked." if ok else "No such controller.")
     return 0 if ok else 1
+
+
+def cmd_grant(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    from .control import ControlError
+    from .pairing import INPUT_SCOPE_EXPLANATION
+
+    add = [c for c, flag in (("pointer", args.pointer), ("keyboard", args.keyboard)) if flag]
+    remove = [c for c, flag in (("pointer", args.remove_pointer), ("keyboard", args.remove_keyboard)) if flag]
+    if not add and not remove:
+        print("error: nothing to change (use --pointer/--keyboard/--remove-pointer/--remove-keyboard)", file=sys.stderr)
+        return 2
+    if set(add) & set(remove):
+        print("error: a capability cannot be added and removed at once", file=sys.stderr)
+        return 2
+    if add:
+        print(f"About touchpad/keyboard access: {INPUT_SCOPE_EXPLANATION}\n")
+    try:
+        result = _control(settings).call("grant", controller_id=args.controller_id, add=add, remove=remove)
+        caps = result["capabilities"]
+        pending = bool(result.get("pending_relay_update"))
+    except ControlError as exc:
+        if exc.code != "AGENT_NOT_RUNNING":
+            print(f"error: {exc.message}", file=sys.stderr)
+            return 1
+        from .store import Store
+
+        store = Store(settings.db_path)
+        try:
+            grant = store.get_grant(args.controller_id)
+            if grant is None or grant.revoked:
+                print("error: no active paired phone with that controller id", file=sys.stderr)
+                return 1
+            caps_list = [c for c in grant.capabilities if c not in remove] + [
+                c for c in add if c not in grant.capabilities
+            ]
+            try:
+                row = store.update_grant_capabilities(args.controller_id, caps_list)
+            except ValueError as exc2:
+                print(f"error: {exc2}", file=sys.stderr)
+                return 1
+            assert row is not None
+            caps = list(row.capabilities)
+        finally:
+            store.close()
+        pending = True
+        print(
+            "The agent is not running, so the DoMe service has NOT been told yet: it sends grant_update when it connects."
+        )
+    print(f"Permissions for {args.controller_id}: {', '.join(caps)}" + (" (service update pending)" if pending else ""))
+    return 0
+
+
+def cmd_stop_input(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    from .control import ControlError
+
+    try:
+        result = _control(settings).call("input_stop")
+    except ControlError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 1
+    print(f"Manual input stopped; released {result['released_holds']} held button(s)/key(s).")
+    return 0
+
+
+def cmd_repair(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    from .single_instance import repair
+
+    host_path = Path(args.host_path).resolve() if args.host_path else None
+    for line in repair(settings.state_dir, host_path=host_path, dev_extension_id=settings.dev_extension_id):
+        print(line)
+    print("Repair finished. Pairing, grants and approved apps were preserved; nothing was terminated.")
+    return 0
 
 
 def cmd_reconnect(args: argparse.Namespace) -> int:
@@ -605,6 +762,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("revoke", help="revoke a paired phone locally")
     p.add_argument("controller_id")
     p.set_defaults(fn=cmd_revoke)
+
+    p = sub.add_parser("grant", help="allow or withdraw manual touchpad/keyboard input for a paired phone")
+    p.add_argument("controller_id")
+    p.add_argument("--pointer", action="store_true", help="allow touchpad / mouse input")
+    p.add_argument("--keyboard", action="store_true", help="allow keyboard input")
+    p.add_argument("--remove-pointer", action="store_true")
+    p.add_argument("--remove-keyboard", action="store_true")
+    p.set_defaults(fn=cmd_grant)
+
+    sub.add_parser("stop-input", help="end the live manual-input session and release held input").set_defaults(
+        fn=cmd_stop_input
+    )
+
+    p = sub.add_parser("repair", help="re-register the native host and clean stale endpoints (keeps pairing)")
+    p.add_argument("--host-path", help="path to dome-native-host(.exe)")
+    p.set_defaults(fn=cmd_repair)
 
     p = sub.add_parser("install-native-host", help="register the browser native-messaging host")
     p.add_argument("--host-path", help="path to dome-native-host(.exe)")

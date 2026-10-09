@@ -220,7 +220,26 @@ export class CommandService {
     for (const h of this.timers.values()) (this.deps.timers ?? globalTimers).clearTimeout(h);
     this.timers.clear();
     this.records.clear();
+    for (const w of this.settledWaiters.values()) for (const resolve of w) resolve(null);
+    this.settledWaiters.clear();
   }
+
+  /**
+   * Resolves once the record is terminal or flagged "no answer yet" (null when the record is unknown or
+   * dropped by reset()). Used by the input-session client for `input.session_start`.
+   */
+  onceSettled(commandId: string): Promise<CommandRecord | null> {
+    const record = this.records.get(commandId);
+    if (!record) return Promise.resolve(null);
+    if (record.terminal || record.noAnswer) return Promise.resolve({ ...record });
+    return new Promise((resolve) => {
+      const list = this.settledWaiters.get(commandId) ?? [];
+      list.push(resolve);
+      this.settledWaiters.set(commandId, list);
+    });
+  }
+
+  private readonly settledWaiters = new Map<string, Array<(r: CommandRecord | null) => void>>();
 
   private onAck(frame: relayFrames.AgentAck): boolean {
     const record = this.records.get(frame.command_id);
@@ -328,6 +347,13 @@ export class CommandService {
       if (oldest) this.records.delete(oldest.commandId);
     }
     this.deps.onChange({ ...record });
+    if (record.terminal || record.noAnswer) {
+      const waiters = this.settledWaiters.get(record.commandId);
+      if (waiters) {
+        this.settledWaiters.delete(record.commandId);
+        for (const resolve of waiters) resolve({ ...record });
+      }
+    }
   }
 }
 

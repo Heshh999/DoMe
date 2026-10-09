@@ -7,7 +7,8 @@ import { ProtocolError, formatPairingCode, normalizePairingCode, pairingCodeHand
 
 export { formatPairingCode, normalizePairingCode, pairingCodeHandle, pairingVerificationCode };
 
-export const ALL_CAPABILITIES: readonly Capability[] = ["status", "media", "volume", "apps", "lock", "power"];
+/** Requested by default at pairing time (the PC owner decides what is actually granted, on the PC). */
+export const ALL_CAPABILITIES: readonly Capability[] = ["status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard"];
 
 /**
  * Accept what a QR scan or a paste produces: `https://<app>/pair#code=XXXXX-XXXXX-XXXXX-XXXXX`, the

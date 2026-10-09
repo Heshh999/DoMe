@@ -147,7 +147,6 @@ class Controller:
         }
         return self.sign(payload, key=key)
 
-
     def input_batch(
         self,
         input_session_id: str,
