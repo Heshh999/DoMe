@@ -492,7 +492,8 @@ against the JWKS; `tests/test_e2e_security.py`: client state cannot unlock Pro);
 Commands are durable, journaled, one-result-each and live up to 30 s. Cursor motion and typing
 are different: tens of small events per second that lose their value within a second and are
 dangerous to replay. Protocol 1.1 therefore adds a **bounded, signed, non-journaled stream** next
-to the command path (`rules.input_sessions`, `docs/design/input-control.md`). Only the session
+to the command path (`rules.input_sessions`, `docs/design/input-control.md`; customer-facing behaviour, gestures
+and compatibility in `docs/INPUT_CONTROL.md`). Only the session
 lifecycle (`input.session_start`, `input.session_stop`) uses commands. The events use the stream.
 
 ```

@@ -14,6 +14,9 @@ Windows-device-tested or iPhone-tested.** The Windows input adapter
 Windows desktop, and the phone keyboard handling has never run in a real iPhone Safari or installed
 PWA. Mocks cannot establish either (spec §10A F); every statement about what Windows or iOS does is the
 design intent, checked only through test doubles. Tested compatibility on devices: **none** (§11).
+"Integration-tested" for `pc-agent/tests` means the real agent code with a fake relay and a fake input
+adapter (the pc-agent README's definition); for `tests/` and `cloud-api/tests` it means the real relay
+and PostgreSQL, with the real agent process or simulated agents and phones.
 
 Related: `docs/TROUBLESHOOTING.md` §17–§18 (input help), `docs/WINDOWS_INSTALL.md` §4.9 (granting),
 `docs/IPHONE_SETUP.md` §6A (the touchpad and keyboard screens), `docs/SECURITY.md` (threat model).
@@ -214,8 +217,8 @@ journal, and it is cleared after an acknowledged send or when the panel is left.
 
 | Control | Event | Windows |
 | --- | --- | --- |
-| Enter, Tab, Esc, ⌫ (Backspace), Del, ← ↑ ↓ →, Space | `key{enter|tab|escape|backspace|delete|arrow_*|space}` | one press and release of the virtual key; arrows and Delete carry `KEYEVENTF_EXTENDEDKEY` (the contract also allows `home`, `end`, `page_up`, `page_down`, which the panel does not show) |
-| Select all / Copy / Paste / Undo | `shortcut{ctrl_a|ctrl_c|ctrl_v|ctrl_z}` | `VK_CONTROL` down, key down/up, `VK_CONTROL` up in one `SendInput` call |
+| Enter, Tab, Esc, ⌫ (Backspace), Del, ← ↑ ↓ →, Space | `key` with `enter`, `tab`, `escape`, `backspace`, `delete`, `arrow_*`, `space` | one press and release of the virtual key; arrows and Delete carry `KEYEVENTF_EXTENDEDKEY` (the contract also allows `home`, `end`, `page_up`, `page_down`, which the panel does not show) |
+| Select all / Copy / Paste / Undo | `shortcut` with `ctrl_a`, `ctrl_c`, `ctrl_v`, `ctrl_z` | `VK_CONTROL` down, key down/up, `VK_CONTROL` up in one `SendInput` call |
 | **Address bar** (Ctrl+L) | `shortcut{ctrl_l}` | as above; the button is shown **only** while `foreground_app.browser` is set (Chrome or Edge in front) and is labelled as the browser address-bar shortcut (**component-tested**) |
 
 The modifier is always released: if the shortcut call inserted only part of its events, the adapter
@@ -546,7 +549,7 @@ Every end follows the same order (`InputSessionManager._end`):
 | `controller_disconnected` | the agent's relay socket dropped or was superseded (4001) | agent | released; the frame cannot be delivered over the dead socket (`pc-agent/KNOWN_ISSUES.md` #12) |
 | `session_locked` | Windows locked | watchdog (1 s poll) | released as soon as Windows permits |
 | `secure_desktop` | lock/sign-in/UAC secure desktop | watchdog (1 s poll) | released as soon as Windows permits |
-| `remote_disabled` | local **Disable remote control** | watchdog, and on the next batch | released |
+| `remote_disabled` | local **Disable remote control** (tray or `DoMe.exe disable`) | agent at once; also the watchdog and the next batch | released |
 | `agent_restart` | the agent stops (Quit, update restart) — or crashed and started again | agent shutdown, or start-up recovery | released at shutdown; after a crash, at the next start-up from `input_holds.json` |
 | `backpressure` (event `suspended`) | dispatch fell behind the 1 s age budget | agent worker | released at suspension; a fresh start is required |
 | `pc_switch` | defined by the contract | — | not emitted today (§5.6) |

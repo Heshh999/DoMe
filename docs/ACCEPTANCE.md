@@ -13,23 +13,30 @@ only to what the named test actually exercises; "integration-tested" here always
 processes and real signatures, with the Windows OS adapters replaced by `dome_agent/testing/fake_platform.py`
 and the browser by `dome_agent/testing/fake_extension.py`*.
 
-Note on the working tree: `shared/protocol/version.json`, `errors.json` and
-`relay-frames.schema.json` carry uncommitted edits (controller `hello` proof of possession and a
-stricter late-result re-send rule) made after the test runs recorded below; the component code and
-tests have not been updated for them yet. The counts below are from the last full runs on 2026-10-08
-(`docs/HANDOFF.md`, `docs/PROGRESS.md`) and must be re-run after that change lands.
+Update of 2026-10-09 (protocol 1.1, spec §10A/§11A): scenarios 18–25 were added, and the
+inventory below was re-run on this Linux build machine while this update was written. The
+controller `hello` proof of possession that the previous note called pending has since been
+implemented and tested (cloud-api `tests/test_hello_proof.py`). Since the component READMEs were
+written, the contract and all three components gained routing of manual-input rejection reasons to
+the batch's phone (`error_frame.ref_input_session_id` / `ref_controller_id`; cloud-api
+`tests/test_input_routing.py::test_agent_input_rejections_reach_only_the_batch_controller`).
+`pc-agent/README.md`, `pc-agent/KNOWN_ISSUES.md` #13 and `pc-agent/CONTRACT_ISSUES.md` #11 still
+describe the earlier state, in which the relay only logged those frames. Every manual-input
+statement here is at most **integration-tested** with the fake input adapter. The Windows input
+adapter and the real phone keyboard are **not yet verified** by definition.
 
 ## 1. Test inventory (what the tags refer to)
 
-| Suite | Command | Last recorded run (2026-10-09, Linux) | What it proves |
+| Suite | Command | Last recorded run (2026-10-09, Linux, re-run for this update) | What it proves |
 | --- | --- | --- | --- |
-| `shared/python` | `cd shared/python && uv run pytest -q` | 132 passed | strict JSON, ES256 envelopes over exact bytes, registry/schema validation, pairing derivations; verifies the TypeScript fixtures |
-| `shared/ts` | `cd shared/ts && pnpm test` | 84 passed | the same in TypeScript; verifies the Python fixtures |
-| `cloud-api` | `cd cloud-api && uv run pytest -q` | 89 passed (PostgreSQL 16 + `tools/dev-idp` + uvicorn in-process); ruff, mypy clean | REST, OIDC login, sessions, linking, pairing, relay routing/lifecycle, abuse limits, security fixes; every REST body validated against `rest.schema.json` |
-| `pc-agent` | `cd pc-agent && uv run pytest -q` | 194 passed; ruff, mypy clean | authorization order, executor, confirmations, bridge framing, relay client, store/journal, handlers, link/pairing, CLI, processes |
-| `browser-extension` | `cd browser-extension && pnpm test` (`pnpm check` adds tsc, eslint, build) | 90 passed in 7 files; build produced `dist/` | manifest, frames, worker, player adapter on six DOM fixtures, content entry; bundle smoke-run with `eval` disabled |
-| `mobile-app` | `cd mobile-app && pnpm test` (`pnpm check`) | 206 passed in 21 files; typecheck, lint, build clean | protocol facade parity, intents, keys, pairing, commands, confirmations, relay client, api, stores, components |
-| `tests/` (cross-component) | `cd tests && uv run pytest -q` | 20 passed in 191 s (2026-10-09) | real `dome-agent` process + real relay + real PostgreSQL + real OIDC login + ES256 controller simulator + fake extension; includes the load smoke |
+| `shared/python` | `cd shared/python && uv run pytest -q` | 135 passed | strict JSON, ES256 envelopes over exact bytes, registry/schema validation, pairing derivations, input-batch builder/verifier, `satisfied_by`; verifies the TypeScript fixtures |
+| `shared/ts` | `cd shared/ts && pnpm test` | 86 passed in 7 files | the same in TypeScript; verifies the Python fixtures |
+| `cloud-api` | `cd cloud-api && uv run pytest -q` | 118 passed in 88 s (PostgreSQL 16 + `tools/dev-idp` + uvicorn in-process). Ruff and mypy were not re-run here; the component README records them clean | REST, OIDC login, sessions, hello proof, linking, pairing, relay routing/lifecycle, abuse limits, security fixes, input routing and hardening, `grant_update`, support tickets; every REST body validated against `rest.schema.json` |
+| `pc-agent` | `cd pc-agent && uv run pytest -q` | 256 passed, 1 skipped in 207 s (the skip is the state-directory permission probe, which cannot fail as root). Ruff and mypy are recorded clean in the component README and were not re-run here | authorization order, executor, confirmations, bridge framing, relay client, store/journal, handlers, link/pairing, CLI, processes, input sessions (40 tests), Windows input structure layouts (9), single instance (8) |
+| `browser-extension` | `cd browser-extension && pnpm test` (`pnpm check` adds tsc, eslint, build) | 90 passed in 7 files | manifest, frames, worker, player adapter on six DOM fixtures, content entry; bundle smoke-run with `eval` disabled |
+| `mobile-app` | `cd mobile-app && pnpm test` (`pnpm check`) | 287 passed in 31 files. The component README records typecheck, lint and build clean; they were not re-run here | protocol facade parity, intents, keys, pairing, commands, confirmations, relay client, api, stores, components, gestures, typing, input session client, health, support, Now Playing, power copy, upgrade experience |
+| `brand` | `cd brand && node --test "tests/**/*.test.mjs"`; `node scripts/export.mjs --check` | 29 passed; "brand exports up to date (26 files + manifest.json)" | SVG subset parser, rasterizer, PNG/ICO writers, export drift. No browser or OS renderer, no device |
+| `tests/` (cross-component) | `cd tests && uv run pytest -q` | 23 passed in 226 s (the 20 earlier tests plus the 3 in `test_e2e_input.py`); load-smoke numbers from this run were not captured (see Scenario 17 for the recorded run) | real `dome-agent` process + real relay + real PostgreSQL + real OIDC login + ES256 controller simulator + fake extension + fake input adapter; includes the load smoke and `test_e2e_input.py` (scenarios 18–20) |
 
 Reproduce: `make setup && make db-start db-create`, then the commands above (`docs/HANDOFF.md` §2).
 
@@ -252,6 +259,213 @@ declared `DOME_RELAY_MAX_CONNECTIONS` with the API process's RSS and CPU recorde
 (b) keep 20 real or simulated agents connected for 24 h, restart the service once, and record
 reconnect time distribution and memory. Publish test conditions and results here (spec §16).
 
+### Scenario 18 — A real phone moves the Windows cursor, clicks, double-clicks, right-clicks, scrolls and drags across supported monitors without accidental extra clicks or stuck holds
+
+| Evidence now | Tag |
+| --- | --- |
+| Gesture state machine. A tap of ≤ 250 ms within ≤ 10 px is a left click. A second tap within 300 ms and 24 px is marked double. Going from one finger to two never clicks. A two-finger still tap is a right click, and two-finger movement scrolls without a tap. Drag lock with End Drag. Cancel releases. Sensitivity with fractional carry, clamped to ±4096. `mobile-app/test/gestures.test.ts` | unit-tested |
+| Touchpad page in jsdom. The session starts on entry. Tap, move and right click behave as above. The live pill follows `input_ack`. Drag / End Drag / `pointercancel` release correctly. A two-finger tap with the implicit `lostpointercapture` gives exactly one right click. Capture lost by a still-down finger produces no click and releases the drag. Idle reset. `mobile-app/test/components/TouchpadPage.test.tsx` | unit-tested (jsdom, not Safari) |
+| Batches. `seq` strictly increasing, adjacent motion summed but never across a click, ≤ 64 events, keepalive about every second. `mobile-app/test/input.test.ts` | unit-tested |
+| Agent dispatch. Events run in order; only adjacent `pointer_move`s are summed; held-button bookkeeping; a click on a held button clears the hold. `pc-agent/tests/test_input_session.py::test_coalescing_sums_only_adjacent_motion`, `::test_ordering_and_coalescing_through_the_adapter`, `::test_click_on_a_held_button_clears_the_hold` (fake input adapter) | unit-tested |
+| `SendInput` structures and builders. Exact 32/64-bit `INPUT`/`MOUSEINPUT`/`KEYBDINPUT` layouts, relative `MOUSEEVENTF_MOVE`, wheel × `WHEEL_DELTA`. `pc-agent/tests/test_windows_input_layout.py::test_structure_layouts_match_win32`, `::test_mouse_builders` (fixed-width ctypes on Linux; no Windows DLL was called) | unit-tested |
+| The relay forwards a batch verbatim, with no `commands` row and no per-batch security event. `cloud-api/tests/test_input_routing.py::test_input_batch_forwarded_verbatim_without_command_row_or_per_batch_event` | integration-tested |
+| Real agent process. A signed batch with motion, a held left button, text and Enter is accepted in order (`held_buttons == ["left"]`). The PC-side lease then expires on its own and releases the held button. `tests/test_e2e_input.py::test_input_needs_a_local_grant_then_streams_in_order_and_releases_on_lease_expiry`. See the run record under Scenario 20 | integration-tested (Linux, fake input adapter); run record under Scenario 20 |
+
+**Outstanding:** On Windows 10/11 with a phone granted pointer and keyboard, run
+`pc-agent/README.md` checklist rows "SendInput on a real desktop" and "Multi-monitor / mixed DPI".
+Use two monitors: one at 150 %, one placed left of or above the primary. Check that:
+- the cursor crosses every edge following the real topology;
+- motion is never clamped to one display;
+- `input_ack.held_buttons` shows `["left"]` during a drag.
+
+Record the observed pointer-acceleration ratio ("Enhance pointer precision", pc-agent
+`KNOWN_ISSUES.md` #6). On an iPhone, in both Safari and the installed PWA, run the
+`mobile-app/README.md` "Manual iPhone checklist" gesture table:
+- slide;
+- tap;
+- two quick taps, and the Double button (mobile-app `KNOWN_ISSUES.md` #9: relay jitter can split
+  a double tap);
+- two-finger tap, including the first finger lifting early;
+- two-finger scroll in natural and standard direction;
+- Drag → End Drag;
+- rotation, an incoming call and an app switch during a drag;
+- Stop Input.
+
+Record as **Windows-device-tested** + **iPhone-tested** with the Windows build, monitor layout, iOS
+version and PWA/Safari mode.
+
+### Scenario 19 — Click and type into real YouTube/Google search, a supported browser address bar and a desktop editor; input/composition, correction, Enter, focus changes and Compose and Send work on supported real phones
+
+| Evidence now | Tag |
+| --- | --- |
+| Live typing mapper: appended text is sent once, and an IME commits once in either event order. Autocorrect of the last word becomes backspaces plus text. A middle edit, or deleting an emoji, surrogate pair or combining mark, pauses instead of guessing. Bare Backspace is handled. Text is split into ≤ 256-character events without cutting a grapheme. `mobile-app/test/typing.test.ts` | unit-tested |
+| Keyboard panel: commit once; Enter only as an explicit key; IME candidates never sent; middle edit → Compose and Send; Ctrl+L only when `foreground_app.browser` is set; an acknowledged Compose and Send clears the buffer and an unacknowledged one enters review with no automatic resend; INPUT_STALE, a dropped-events ack, or a suspend-then-restart pauses live typing and sends no Backspace for earlier text; composer text never leaks into the live field. `mobile-app/test/components/TouchpadPage.test.tsx` "KeyboardPanel" | unit-tested (jsdom) |
+| Unicode and keys on the PC side: surrogate pairs kept together; newlines and tabs rendered as Enter/Tab; key and shortcut tables cover the contract; a failed shortcut releases the letter and CTRL. `pc-agent/tests/test_windows_input_layout.py::test_utf16_chunks_keep_surrogate_pairs_together`, `::test_text_segments_render_newlines_as_enter_and_tabs_as_tab`, `::test_key_and_shortcut_tables_cover_the_contract`, `::test_failed_shortcut_releases_the_letter_and_ctrl`, `::test_browser_detection_and_foreground_result_shape` | unit-tested (builders only) |
+| Focus changes: a changed foreground window blocks text/key/shortcut until a click, a fresh start, or a batch issued ≥ 2 s later; batches already queued across the change are not typed. `pc-agent/tests/test_input_session.py::test_target_change_stops_typing_until_the_customer_continues`, `::test_keyboard_batches_queued_across_a_target_change_are_not_typed`, `::test_typing_issued_well_after_a_target_change_continues` | unit-tested (fake foreground) |
+| A keyboard-only grant types but cannot move the pointer, through the real agent process. `tests/test_e2e_input.py::test_keyboard_only_grant_cannot_move_the_pointer` | integration-tested (fake input adapter) |
+
+**Outstanding:** On Windows with Chrome and Edge, click each target field from the touchpad, type,
+and press Enter deliberately:
+- Google search, and YouTube's search box;
+- Ctrl+L into the address bar (the button must be absent while Notepad is in front);
+- Notepad: text, Backspace, arrows, Ctrl+A/C/V/Z.
+
+Check that `héllo 😀` arrives intact and that CTRL is never left down (`pc-agent/README.md` "SendInput
+on a real desktop"). Switch the PC's foreground window during live typing: typing must stop
+(`INPUT_TARGET_CHANGED`) and nothing may land in the new window until a click. On an iPhone, run the
+`mobile-app/README.md` "Keyboard varieties" table:
+- plain typing;
+- autocorrect of the last word, and of an earlier word;
+- a Japanese or Chinese IME, including composition cancel;
+- dictation;
+- emoji, accents and non-Latin text;
+- Compose and Send with airplane mode before Send (review state, no automatic resend);
+- weak cellular.
+
+Record as **Windows-device-tested** + **iPhone-tested**, with the keyboard and IME names.
+
+### Scenario 20 — Manual-input permission/revocation, lease expiry, disconnect, stale events, switching PCs/controllers, lock/UAC restrictions and Stop Input preserve the §10A boundary and release injected holds; no typed content enters logs, persistent queues or AI requests
+
+| Evidence now | Tag |
+| --- | --- |
+| Permission. Existing pairings have no input capability (`GRANT_MISSING` / `INPUT_NOT_PERMITTED`). Grants are added only locally: pairing checkboxes, explicit CLI prompts, and `pair --yes` does not grant input. `grant_update` is sent, re-sent after being offline, and widens then narrows at the relay with snapshots following. A grant for a foreign or unrelated controller is refused. Grant coverage is checked per event type. `pc-agent/tests/test_input_session.py::test_no_input_capability_is_grant_missing`, `::test_grant_update_is_sent_and_resent_offline`, `::test_grant_control_op_and_cli`, `tests/test_link_pairing.py::test_pairing_approval_offers_pointer_and_keyboard_explicitly`, `::test_cli_capability_prompt_is_explicit`; `cloud-api/tests/test_input_routing.py::test_grant_update_widens_then_narrows_with_snapshots_and_rest`, `::test_grant_update_for_foreign_or_unrelated_controller_is_refused`, `::test_grant_coverage_per_event_type`, `::test_pointer_only_grant_refuses_text` | unit-tested (pc-agent), integration-tested (cloud-api) |
+| End triggers release holds. Covered: lease expiry, keepalives, stop (idempotent), takeover (holds released first), same-phone restart, snapshot and local revocation, grant narrowing/removal, lock, secure desktop (an elevated window only restricts), remote disable, relay disconnect (old id never replayed), agent stop, crash recovery from `input_holds.json`, a dispatch outliving the bounded wait. `pc-agent/tests/test_input_session.py` (the tests named in `docs/SECURITY.md` T18, T20) | unit-tested (fake input adapter, fake relay) |
+| Stale, forged and replayed batches. Replayed `seq`, stale age, forged or misaddressed envelopes, phone clock 2 s behind or ahead, relay-leg stall, backpressure suspension. `pc-agent/tests/test_input_session.py::test_replayed_seq_and_stale_batches_are_dropped`, `::test_forged_and_misaddressed_batches_are_rejected`, `::test_phone_clock_skew_neither_kills_input_nor_hides_a_stall`, `::test_relay_received_at_bounds_the_relay_to_agent_leg`, `::test_backpressure_suspends_and_discards`; `cloud-api/tests/test_input_routing.py::test_forged_replayed_stale_batches_are_errors_and_keep_the_socket`, `::test_input_batch_kid_mismatch_closes_like_commands`, `tests/test_input_hardening.py` (flood close, overshoot kept, `PC_RECONNECTING` before the first snapshot) | unit-tested, integration-tested |
+| Rejection reasons reach only the batch's controller (`error{ref_pc_id, ref_input_session_id}`); acks reach owner sockets; session events also reach subscribers. `cloud-api/tests/test_input_routing.py::test_agent_input_rejections_reach_only_the_batch_controller`, `::test_acks_reach_owner_sockets_and_session_events_reach_subscribers`; phone routing `mobile-app/test/input.test.ts` "INPUT_* error frames with ref_pc_id go to the input client…" | integration-tested, unit-tested |
+| Switching PCs and controllers on the phone: stop on page hidden, PC switch, sign-out and lost socket; takeover prompt. `mobile-app/test/input.test.ts`, `TouchpadPage.test.tsx` | unit-tested |
+| No typed content in logs or storage. A sentinel string is searched in the agent's log file, stdout, security events, status, diagnostics, state frames, SQLite and the recovery file. `pc-agent/tests/test_input_session.py::test_text_content_never_appears_in_logs_or_persisted_state`. The phone logger drops typed text: `mobile-app/test/input.test.ts`, `test/log.test.ts`. The relay keeps no command row per batch (test above). Support diagnostics redaction: `cloud-api/tests/test_support_tickets.py`. AI exclusion: `pc-agent/tests/test_handlers.py::test_input_actions_are_human_only` (no AI path exists anywhere) | unit-tested, integration-tested |
+| Cross-component, with the real agent process (`tests/test_e2e_input.py`, 3 tests): local grant via `grant_update`, an ordered stream, replay and stale refusal, lease release of a held button, retired-session refusal, one owner per PC with explicit takeover, revocation ending the session, keyboard-only grant, the typed marker absent from relay rows and agent files | integration-tested (Linux, fake input adapter) — run record below |
+
+Run record for `tests/test_e2e_input.py` on this machine, 2026-10-09 (`cd tests && uv run pytest -q test_e2e_input.py`):
+- Early in the session, while the harness was still being edited, three runs failed:
+  `test_input_needs_a_local_grant_then_streams_in_order_and_releases_on_lease_expiry` failed all
+  three at its `started`-frame assertion, because the frame arrived before the command result and
+  the helper discarded it. `test_one_owner_per_pc_takeover_and_revocation_end_the_session` failed
+  in one of the three.
+- After the test file was updated, the full `tests/` suite passed (23 passed), and two further runs
+  of `test_e2e_input.py` gave 3 passed each.
+
+These runs are the evidence. They use the fake input adapter inside the real agent process: they
+prove the protocol path, ordering, permission and release logic. They do not prove Windows
+injection.
+
+**Outstanding:** On Windows and an iPhone, run these `pc-agent/README.md` checklist rows: "UAC /
+lock refusal", "Clock skew", "Tray grants", "Crash recovery", "Second launch". Run the
+`mobile-app/README.md` table "Rotation, backgrounding, network loss": airplane mode during a drag, a
+key hold and a Compose and Send. The hold must be released within about 3 s, and nothing stale may
+be injected after reconnecting. Also run:
+- a second phone taking over;
+- Windows lock and a UAC prompt while live;
+- an elevated Task Manager in front (keyboard refused `INPUT_RESTRICTED`, clicking elsewhere
+  clears it);
+- Stop Input from the phone and from the tray (*Stop manual input*).
+
+Switching PCs needs two enabled PCs, which the Free plan does not allow (1 PC), so test it on a Pro
+account or with the plan set by SQL in staging. After the run, check `%LOCALAPPDATA%\DoMe\logs\agent.log`,
+the relay logs and a diagnostics bundle for the typed test string. Record as **Windows-device-tested**
++ **iPhone-tested**.
+
+### Scenario 21 — The health screen diagnoses only observable states and offers appropriate recovery for an unavailable agent, expired authentication, missing extension, phone Wi-Fi/cellular changes, background/resume, browser restart, revoked controller and unavailable target; reconnecting never repeats an uncertain action
+
+| Evidence now | Tag |
+| --- | --- |
+| `assessHealth` across its seven layers, each with one next action. An unreachable PC has an unknown cause. A refused subscription asks the customer to pair. Remote control off or locked, a missing input grant, a restricted screen, and the PC's input-session owner compared with *this* phone's controller id are each mapped. The extension layer notes that only YouTube needs it. The target layer covers a single tab, two playing tabs, a closed tab and an unattached tab. The walkthrough returns to the first undone step and completes with the first verified media action. `mobile-app/test/health.test.ts` | unit-tested |
+| Health page: every layer has a status pill and one action, details sit behind a control, and V1 requirements are stated. Retries are bounded to 3 and end in the support path, and a retry never re-sends a command. `mobile-app/test/components/UpgradeAndHealth.test.tsx` "HealthPage" | unit-tested (jsdom) |
+| Relay and agent facts the screen relies on: `pc_status` online/reconnecting/offline with last seen; revocation closes the socket with `revoked`; an offline PC never executes a backlog; a crash mid-command gives `outcome_unknown` and no re-execution. `cloud-api/tests/test_relay_lifecycle.py`, `tests/test_e2e_reliability.py`, `tests/test_e2e_security.py` | integration-tested |
+
+**Outstanding:** On a real iPhone and Windows PC, produce each state in spec §11A. For each case,
+record the state the Health screen shows, the action it offers, and that nothing was re-executed:
+
+| Case | How to produce it |
+| --- | --- |
+| PC agent unavailable | quit DoMe from the tray |
+| Phone network loss | airplane mode |
+| Wi-Fi → cellular | change networks while the app is open |
+| PWA background/resume | send the PWA to the background for 2 minutes, then return |
+| Expired authentication | revoke the session from another browser |
+| Extension missing | disable the extension |
+| Browser restart | restart the browser |
+| Revoked controller | revoke the phone from the tray |
+| Unavailable target | close the selected YouTube tab |
+
+Mark each row **iPhone-tested** / **Windows-device-tested** individually, as §11A requires.
+
+### Scenario 22 — Repeated agent/installer launches, crash/update restarts and relevant Windows-session conflicts preserve a single intended user-session instance, pairing where safe and permission boundaries without killing unrelated processes
+
+| Evidence now | Tag |
+| --- | --- |
+| Instance lock and its reports. Covered: the lock is exclusive and releasable; a second launch asks the running instance to show itself; a silent instance points to `repair`; a stale lock or endpoint is reported and repaired; a permission problem is reported distinctly; `repair` preserves identity, credential, grants and approved apps while the agent keeps running; the `show` op reports the pid; the same account's agent in another Windows session is refused (injected session ids). `pc-agent/tests/test_single_instance.py` (8 tests) | unit-tested; integration-tested for `show`/`repair` against a running agent |
+| Restart keeps structured-command deduplication: a kill during execution gives `outcome_unknown` and exactly one effect. `tests/test_e2e_reliability.py`, `pc-agent/tests/test_store.py` | integration-tested |
+| Crash recovery for manual input: holds are released at start-up and the old session id is rejected. `pc-agent/tests/test_input_session.py::test_crash_recovery_releases_holds_and_rejects_old_session` | unit-tested |
+
+**Outstanding:** On Windows, run the `pc-agent/README.md` rows "Second launch", "Repair" and "Crash
+recovery":
+- start `DoMe.exe` twice;
+- suspend the agent in Process Explorer and confirm that `run` reports "not responding" and that
+  `repair` does not kill it;
+- sign in to a second session of the same Windows account (RDS) and confirm the refusal;
+- confirm that another Windows account runs its own agent.
+
+The installer launch and the update restart **cannot be checked yet**, because no installer or
+updater exists (Scenario 16). The Windows mutex and `ProcessIdToSessionId` paths are **not yet
+verified**.
+
+### Scenario 23 — Now Playing and actual control agree across multiple YouTube tabs, supported browser/profile instances, a separate music app, a closed target and PC focus on an unrelated app
+
+| Evidence now | Tag |
+| --- | --- |
+| The Now Playing panel shows PC, browser/profile, title and state. Two playing tabs ask for a choice and are never replaced by the Windows media session. A music app is shown with its app name. A closed tab falls back only with an explanation. Stale state is never shown as live. The YouTube pause goes to the tab target, not to `media.*`. `mobile-app/test/components/NowPlaying.test.tsx`; target resolution `mobile-app/test/targets.test.ts` | unit-tested |
+| Two tabs require an explicit target. Tab identity is preserved: `TARGET_CHANGED`, `TARGET_GONE`, `TAB_NOT_CONTROLLABLE`. Background-tab control works while focus is elsewhere (fake extension). `tests/test_e2e_youtube.py::test_pause_seek_player_volume_and_two_tabs`, `::test_target_identity_is_preserved` | integration-tested |
+
+**Outstanding:** On Windows, with the elements below open, focus Notepad on the PC. Then, from the
+phone, check that the target shown before each action is the one that changes, for Pause, Next and
+volume. Record as **Windows-device-tested** + **iPhone-tested**.
+
+Set-up: two YouTube tabs in Chrome, a second Chrome profile and Edge with the extension, and
+Spotify or another media-session app.
+
+| Case | Expected |
+| --- | --- |
+| Two tabs playing at once | the phone asks for a choice |
+| Selected tab closed | nothing else is controlled silently |
+| YouTube controls while Spotify plays | Spotify is never touched |
+
+### Scenario 24 — A Free customer can onboard, use media and touchpad/keyboard controls, reconnect and obtain help without upgrade interruptions; deliberate Pro selections show a clear, dismissible explanation
+
+| Evidence now | Tag |
+| --- | --- |
+| No upgrade copy on Dashboard, Remote, Touchpad, Devices or Health, also while the PC is offline. No banner or dialog on load, and the Touchpad tab is present. Routines and Custom remotes show a dismissible explanation that names the benefit and never claims to fix connectivity. `mobile-app/test/components/UpgradeAndHealth.test.tsx` "Upgrade experience (spec §12)" | unit-tested (jsdom) |
+| Touchpad/keyboard and media are Free in the plan contract, with an identical `input_rate_limit` on Free and Pro. `shared/protocol/plans.json`. The relay enforces the per-controller input budget read from the plan: `cloud-api/tests/test_input_routing.py::test_input_rate_budget_per_controller` | integration-tested |
+| Editing client state cannot unlock Pro. `tests/test_e2e_security.py` (Scenario 13) | integration-tested |
+
+**Outstanding:** On a real iPhone, with a Free account and a Windows PC, go through: onboarding
+(link, pair, first verified media action), repeated media actions, touchpad and typing, airplane-mode
+reconnect, and the Support page. Record that no upgrade prompt appears at any point. Open Routines
+deliberately and dismiss the explanation. Record as **iPhone-tested**. The Pro side of the spec
+check (checkout, entitlement after purchase) cannot be exercised: no checkout exists (Scenario 12).
+
+### Scenario 25 — Published download failures, interrupted installation/recovery, keyboard-only setup, failed support submission, successful ticket receipt and redacted diagnostics behave truthfully (§11A); power confirmations state the resulting loss of access and the absence of V1 remote wake
+
+| Evidence now | Tag |
+| --- | --- |
+| Support tickets. Account-scoped create, list and get; a body with a typed-text input event, a YouTube URL and pairing codes is redacted before storage; session, CSRF and valid body are required; 10 per hour per account, held under 40 concurrent posts; a reference collision is retried. `cloud-api/tests/test_support_tickets.py` (6 tests) | integration-tested |
+| Support page. Category and code are preselected from the help link; the body is contract-valid with reviewed diagnostics; a 201 shows the reference; a 4xx shows "Not sent" with a copyable redacted summary. A 5xx, an unreadable 201 or a network failure shows "Not confirmed", and "Refresh your requests" comes before any resend. When signed out, nothing is sent. `mobile-app/test/components/SupportPage.test.tsx`, `test/support.test.ts` | unit-tested (jsdom) |
+| The download page states that the official Windows download is not yet published; release notes say pre-release with no device verification. `mobile-app/test/components/UpgradeAndHealth.test.tsx` | unit-tested |
+| Power confirmation copy. The agent's challenge detail says the action can interrupt or end remote access and that there is no remote wake in V1. The phone adds the same fixed copy to every Sleep/Restart/Shutdown confirmation, and a non-power confirmation does not get it. `pc-agent/tests/test_confirmations.py::test_power_confirmation_copy_states_access_loss_and_no_remote_wake`, `mobile-app/test/components/PowerConfirmation.test.tsx` | unit-tested |
+| Keyboard-only PC setup: `dome-agent link`, `pair`, `pair-approve`, `grant` and `repair` are CLI commands usable without a mouse (`pc-agent/tests/test_control_cli_misc.py`, `test_link_pairing.py`). Tray/tkinter keyboard navigation is not tested | unit-tested (CLI only) |
+
+**Outstanding:** The broken-download-path and interrupted-installation checks **cannot be run**:
+there is no published download and no installer (Scenario 16, `docs/WINDOWS_INSTALL.md`). Run these:
+- **Keyboard-only setup.** On Windows with only a keyboard: link, pair (tray window or CLI) and
+  approve locally. Record whether the tray menu and the tkinter approval window are fully
+  keyboard-navigable.
+- **Support, on staging from an iPhone.** Submit a ticket and confirm the `DM-…` reference. Submit
+  one with the network cut at Send and confirm "Not confirmed", then refresh the list.
+- **Redacted diagnostics.** Inspect the stored `support_tickets.diagnostics_redacted` row for typed
+  text, URLs and pairing codes.
+- **Power copy.** Open Sleep/Restart/Shutdown confirmations on the iPhone and check the
+  loss-of-access and no-remote-wake copy (`mobile-app/README.md` "Confirmation on device").
+
 ## 3. Phase A deliverables (spec §18) — evidence
 
 | Deliverable | What exists | Evidence |
@@ -259,7 +473,7 @@ reconnect time distribution and memory. Publish test conditions and results here
 | Workspace inspected, existing code preserved | `docs/PROGRESS.md` "Phase A foundation"; component builds resumed WIP rather than rewriting (`docs/HANDOFF.md` §8) | n/a |
 | Concrete auth/hosting approach | ADR-0001: OIDC Authorization Code + PKCE via Authlib; device-code-shaped PC linking; non-extractable WebCrypto controller keys; Fly.io as the (reversible) target | decision record |
 | Concise architecture decision record | `docs/adr/0001-foundational-decisions.md` (D1–D10) | n/a |
-| Action contracts and tenancy boundaries | `shared/protocol/` (29 actions, 6 capabilities, schemas, `version.json → rules`); `account_id` on every owned table and query | unit-tested (`shared/*` 210 tests); integration-tested (Scenario 5) |
+| Action contracts and tenancy boundaries | `shared/protocol/` (32 actions and 8 capabilities since protocol 1.1, schemas, `version.json → rules`); `account_id` on every owned table and query | unit-tested (`shared/*` 221 tests on 2026-10-09); integration-tested (Scenario 5) |
 | Thin authenticated relay/agent/extension path | `cloud-api` relay, `pc-agent` relay client + bridge, `browser-extension` worker | integration-tested (`tests/test_e2e_youtube.py`) with a fake extension and fake platform |
 | Real Next/Pause first | `youtube.next` with an observed transition and `youtube.set_paused` through the real agent process | integration-tested (Linux); **not yet verified** in a real browser |
 | No real PC dispatch endpoint before authentication and authorization | `/ws/agent` requires a bearer PC token and refuses any `Origin`; `/ws/controller` requires a session cookie, exact `Origin` and a bound `kid`; every command is signature-verified and grant-checked before forwarding | integration-tested (`test_relay_routing.py::test_agent_socket_auth_rules`, `::test_controller_socket_requires_session_and_exact_origin`, `::test_hello_without_known_kid_cannot_subscribe_or_command`, `::test_rejection_rules_each_become_a_relay_result`) |
@@ -274,9 +488,14 @@ reconnect time distribution and memory. Publish test conditions and results here
 | Deterministic text parsing | `mobile-app/src/lib/intents.ts`: ordered rule table, number words, clarifications, injection rejection, no AI | unit-tested (`intents.test.ts`, 30+ cases incl. the spec §13 table) | — |
 | Mobile onboarding | Sign-in, PC link approval page, pairing by QR/code with verification code, Devices, Settings/help, Billing status, public pages | unit-tested (components); production build clean | Lighthouse/PWA audit and the `mobile-app/README.md` manual table on an iPhone (**iPhone-tested**) |
 | Truthful state/error handling | Lifecycle labels, *Not delivered* vs *Failed*, no-answer flag, stale-state disabling (75 s), offline screen, power-request evidence rule, recovery steps per code | unit-tested (`Dashboard.test.tsx`, `commands.test.ts`, `power.test.ts`); integration-tested for the agent/relay side (Scenarios 9, 10) | resume behaviour on iOS Safari |
-| Permission/replay failure tests | Scenarios 5–8 | integration-tested | re-run after the pending contract change |
+| Permission/replay failure tests | Scenarios 5–8 | integration-tested | — (re-run 2026-10-09 with the hello-proof change in place) |
+| Human-directed touchpad/keyboard with explicit grants and bounded input sessions | Protocol 1.1 in all components: local `pointer`/`keyboard` grants + `grant_update`, signed `input_batch` stream, single owner + takeover, 3 s lease, held-input release, `SendInput` adapter, gesture machine, live typing + Compose and Send | unit-tested; integration-tested with the fake input adapter (Scenarios 18–20) | `SendInput` on Windows (**Windows-device-tested**) and phone keyboards (**iPhone-tested**), scenarios 18–20 |
+| Input-recovery failure tests | lease expiry, every end trigger, crash recovery, stale/replayed/forged batches, backpressure, target change | unit-tested (pc-agent), integration-tested (cloud-api, `tests/test_e2e_input.py`) | network loss during drag/key hold/text send on devices (Scenario 20) |
+| Layered connection health and guided recovery | `/app/health`, `lib/health.ts`, failure links to Health and Support | unit-tested | spec §11A cases on devices (Scenario 21) |
+| Single-instance agent | named mutex / `flock`, `show`, distinct reports, `repair` | unit- and integration-tested on Linux | Windows mutex and second-session refusal (Scenario 22) |
+| Clear media targets and power-state explanations | Now Playing, target resolution, power copy in agent and phone | unit-tested | Scenario 23 on devices; Scenario 25 power copy on an iPhone |
 | Development installer packaged | PyInstaller specs for `DoMe.exe` and `dome-native-host.exe`; no MSI/MSIX | **not yet verified** (never built) | build on Windows; choose a packaging tool (`docs/WINDOWS_INSTALL.md` §9) |
-| Real-device evidence | none | **not yet verified** | Scenarios 1, 2, 3, 7, 9, 10, 11, 16 device checks above |
+| Real-device evidence | none | **not yet verified** | Scenarios 1, 2, 3, 7, 9, 10, 11, 16 and 18–25 device checks above, including the actual phone keyboard and the Windows input adapter |
 
 ## 5. Required documents (spec §18) — status
 
@@ -291,9 +510,12 @@ reconnect time distribution and memory. Publish test conditions and results here
 | `docs/COST_MODEL.md`, `docs/DATA_RETENTION.md` | exist (assumptions dated; no purge job implemented) |
 | `docs/WINDOWS_INSTALL.md`, `docs/IPHONE_SETUP.md` | exist (as implemented; device steps unverified) |
 | `docs/TROUBLESHOOTING.md`, operational guidance (`docs/OPERATIONS.md`) | exist (this pass) |
-| `docs/ACCEPTANCE.md` | this file |
+| `docs/INPUT_CONTROL.md` (manual-input permissions, gesture mapping, session protocol, focus, recovery, tested compatibility) | exists |
+| `docs/SUPPORT.md` (submission/status, redaction, response expectation, known issues/release history) | exists |
+| Original logo/icon assets and a concise brand specification | `brand/` (five SVG sources, 26 exports, `brand/BRAND.md`); the PWA uses the exports; tray/installer wiring pending (`brand/KNOWN_ISSUES.md`) |
+| `docs/ACCEPTANCE.md` | this file (scenarios 18–25 added 2026-10-09) |
 | `docs/PROGRESS.md`, `docs/HANDOFF.md` | exist |
-| Lockfiles, migrations, `.env.example`, build/test commands | `uv.lock` ×5, `pnpm-lock.yaml` ×3, Alembic `0001`, `.env.example`, `Makefile` — exist |
+| Lockfiles, migrations, `.env.example`, build/test commands | `uv.lock` ×5, `pnpm-lock.yaml` ×3, Alembic `0001` and `0002_support_tickets`, `.env.example`, `Makefile` — exist |
 | CI configuration without secrets | **missing at the time of writing** (`.github/workflows/` is empty); `docs/HANDOFF.md` and `README.md` refer to `ci.yml` as written but not run — reconcile when it lands |
 
 ## 6. Engineering targets (spec §16) — measured, not claimed
@@ -302,6 +524,7 @@ reconnect time distribution and memory. Publish test conditions and results here
 | --- | --- |
 | Median button-to-observed-result < 500 ms, p95 < 1.5 s on a documented healthy network | **unmeasured**. The only latency numbers are the loopback load smoke above (p50 1314 ms under 40-way contention inside one test process), which measures neither a device nor a network. |
 | Modest idle agent memory/CPU | **unmeasured** on Windows; the agent is not built. |
+| Manual-input responsiveness: age ≤ 1 s at dispatch, bounded queues, no delayed backlog under a pointer burst on a loaded relay, Free equal to Pro (spec §10A F) | **unmeasured** on a real network or device. What exists: the budget, backpressure suspension and identical plan rate are integration-tested for correctness (cloud-api `tests/test_input_hardening.py`, pc-agent `test_backpressure_suspends_and_discards`); no latency or throughput number has been recorded for the input path. |
 | Reconnect within a documented bounded interval | Bound documented: agent 1 → 60 s full-jitter backoff, PWA 1 → 30 s ±30 %, extension 1 → 60 s. **unit-tested** (`pc-agent/tests/test_relay_client.py::test_backoff_grows_and_is_jittered`, `mobile-app/test/relay.test.ts`, `browser-extension/test/background.test.ts`); wall-clock measurement **not yet verified**. |
 
 ## 7. How to record device evidence

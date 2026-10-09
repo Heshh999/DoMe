@@ -496,7 +496,7 @@ Also on the screen:
 
 - **Retry** re-checks this phone's connection and asks the PC for its current state. "It never re-sends
   a command: an action whose outcome is unknown stays unknown until the PC reports." Retries are bounded
-  to **3 per visit** (`HealthPage.tsx::MAX_RETRIES`); after that the screen says "Retrying further will
+  to **3 per visit** (`mobile-app/src/pages/app/HealthPage.tsx::MAX_RETRIES`); after that the screen says "Retrying further will
   not change anything by itself. Check the PC directly, then contact support with your redacted
   diagnostics." (§22).
 - **Last verified result**: the last command on this PC for which the phone saw the PC's terminal result.

@@ -9,7 +9,9 @@ claimed. Where a control is designed but not implemented, this document says so.
 Protocol 1.1 (spec §10A, updated 2026-10-09) adds Free manual touchpad and keyboard input. Its
 threats are T16–T21. T22 covers the single-instance agent from spec §10. The Windows input adapter
 (`SendInput`) and the real phone keyboard have **not** been exercised on a device, so every
-statement about their real-world behaviour is **not yet verified**.
+statement about their real-world behaviour is **not yet verified**. The customer-facing permission
+and recovery behaviour is described in `docs/INPUT_CONTROL.md`; scenario evidence is in
+`docs/ACCEPTANCE.md` scenarios 18–22.
 
 Companion documents: `docs/ARCHITECTURE.md` (trust and data boundaries, flows),
 `docs/PROTOCOL.md` (the wire contract), `docs/adr/0001-foundational-decisions.md`,

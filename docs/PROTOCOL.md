@@ -714,7 +714,8 @@ receives a 1.1 frame: the relay skips sockets that announced only 1.0 for `input
 it may send `input_batch` (otherwise `PROTOCOL_INCOMPATIBLE`), and a PC whose agent announced only
 1.0 refuses input with `PROTOCOL_INCOMPATIBLE` (the PC needs an agent update). The PWA offers
 `["1.1"]`. The agent announces `["1.0", "1.1"]`. Normative text: `version.json → rules.input_sessions`,
-`rules.grant_update`, `rules.ai_eligibility`. Design brief: `docs/design/input-control.md`.
+`rules.grant_update`, `rules.ai_eligibility`. Design brief: `docs/design/input-control.md`. Gesture mapping,
+focus behaviour and tested compatibility: `docs/INPUT_CONTROL.md`.
 
 ### 17.1 What 1.1 adds
 
