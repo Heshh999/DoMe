@@ -99,8 +99,9 @@ def test_permission_problem_is_distinct(settings: Settings) -> None:
 
 
 async def test_repair_preserves_identity_credential_grants_and_apps(
-    harness: AgentHarness, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    harness: AgentHarness, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("DOME_AGENT_DEV_EXTENSION_ID", "a" * 32)  # a manifest needs at least one extension id
     state_dir = harness.settings.state_dir
     identity_before = (state_dir / "identity.json").read_text()
     credential_before = harness.agent.identity.read_credential()

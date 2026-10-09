@@ -214,3 +214,54 @@ async def test_pairing_via_control_channel(harness: AgentHarness, fake_api: Fake
     # status never leaks the code
     status = await asyncio.to_thread(ctl.call, "status")
     assert started["code"] not in str(status)
+
+
+async def test_pairing_approval_offers_pointer_and_keyboard_explicitly(
+    harness: AgentHarness, fake_api: FakeApi
+) -> None:
+    """Spec §10A-D: the requested input capabilities are granted only when the PC owner picks them; the
+    decision frame and the local grant carry exactly the chosen list."""
+    agent = harness.agent
+    assert agent.pairing is not None
+    session = await agent.pairing.start()
+    phone = Controller(fake_api.account_id, fake_api.pc_id, display_name="Touch phone")
+    await harness.relay.send(
+        {
+            "type": "pairing_request",
+            "pairing_id": session.pairing_id,
+            "code_hash": session.code_hash,
+            "controller_display_name": phone.display_name,
+            "public_jwk": phone.jwk,
+            "kid": phone.kid,
+            "requested_capabilities": ["status", "media", "pointer", "keyboard"],
+            "expires_at": session.expires_at,
+        }
+    )
+    for _ in range(100):
+        if agent.pairing.pending_requests():
+            break
+        await asyncio.sleep(0.02)
+    pending = agent.pairing.pending_requests()[0]
+    assert pending.requested_capabilities == ("status", "media", "pointer", "keyboard")
+    await agent.pairing.approve(session.pairing_id, ["status", "media", "keyboard"])  # owner declined the touchpad
+    decision = await harness.relay.expect("pairing_decision")
+    assert decision["granted_capabilities"] == ["status", "media", "keyboard"]
+    grant = agent.store.get_grant_by_kid(phone.kid)
+    assert grant is not None and grant.capabilities == ("status", "media", "keyboard")
+
+
+def test_cli_capability_prompt_is_explicit(monkeypatch: Any, capsys: Any) -> None:
+    from dome_agent import cli
+
+    pending = {
+        "display_name": "Phone",
+        "requested_capabilities": ["status", "pointer", "keyboard"],
+        "verification_code": "123456",
+    }
+    answers = iter(["y", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    assert cli._choose_capabilities(pending, False) == ["status", "pointer"]  # noqa: SLF001
+    assert cli._choose_capabilities(pending, True) == ["status", "pointer", "keyboard"]  # noqa: SLF001
+    cli._print_pending(pending)  # noqa: SLF001
+    out = capsys.readouterr().out
+    assert "every app of the unlocked Windows session" in out and "not a sandbox" in out

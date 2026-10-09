@@ -628,11 +628,11 @@ async def test_grant_update_is_sent_and_resent_offline(harness: AgentHarness, co
     assert "keyboard" in frame["capabilities"]
     await harness.wait_snapshot_applied()
     assert harness.agent.status()["pending_grant_updates"] == []
+    pointer_only = await second_phone(harness, controller, ("pointer",))
     with pytest.raises(Exception, match="at least one capability"):
-        await harness.agent.update_grant_capabilities(
-            controller.controller_id,
-            remove=["pointer", "keyboard", "status", "media", "volume", "apps", "lock", "power"],
-        )
+        await harness.agent.update_grant_capabilities(pointer_only.controller_id, remove=["pointer"])
+    with pytest.raises(Exception, match="only pointer/keyboard"):
+        await harness.agent.update_grant_capabilities(controller.controller_id, remove=["status"])
 
 
 async def test_grant_control_op_and_cli(
