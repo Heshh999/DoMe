@@ -118,12 +118,10 @@ async def test_sustained_input_flood_closes_socket_with_one_security_event(
                 closed_after = time.monotonic() - started
                 break
         assert closed_after is not None, "the flood never closed the socket"
-        # Sustained, not instantaneous. Signing every batch in this process caps how fast the test can flood,
-        # so the deadline follows the rate actually reached: the socket bucket passes 80 + 40/s, the refusal
-        # budget holds 400 and leaks 80/s, so at r batches/s it runs dry after 480 / (r - 120) s (~2.7 s at 300).
-        achieved = seq / closed_after
-        assert achieved > 150, f"only {achieved:.0f} batches/s: this machine cannot flood hard enough to test this"
-        assert 1.0 <= closed_after <= 1.5 * 480 / (achieved - 120) + 1.0, (closed_after, achieved)
+        # Sustained, not instantaneous (~2.7 s when the relay keeps up with 300/s). No tight wall-clock
+        # ceiling: the relay shares this event loop and lags the sender on a busy machine, so the budget
+        # itself is checked below from the relay's own count of refused frames.
+        assert 1.0 <= closed_after <= 25.0, closed_after
         try:
             await ctrl.ws.send(_wire(ctrl, pc, sid, seq + 1))
         except ConnectionClosed as exc:
@@ -138,7 +136,11 @@ async def test_sustained_input_flood_closes_socket_with_one_security_event(
         assert forwarded <= 80 + 40 * (closed_after + 1), forwarded  # burst + sustained budget, no more
         throttled = await _await_security_kinds(env, alice.account_id, "controller_throttled", 1)
         assert len(throttled) == 1, throttled
-        assert throttled[0][1]["reason"] == "input_flood" and throttled[0][1]["refused_frames"] > 400
+        # The refusal budget holds 400 and leaks 80/s: the socket closes once it is spent, not before and
+        # not much after (the relay can only have been flooded for as long as the client was sending).
+        refused = throttled[0][1]["refused_frames"]
+        assert throttled[0][1]["reason"] == "input_flood"
+        assert 400 < refused <= 400 + 80 * (closed_after + 1) + 1, (refused, closed_after)
     finally:
         stop.set()
         await agent_task
@@ -164,6 +166,11 @@ async def test_moderate_input_overshoot_keeps_the_socket(env: Env, alice: Browse
                 seq += 1
                 await ctrl.ws.send(_wire(ctrl, pc, sid, seq))
             await asyncio.sleep(0.005)
+        # The relay works through the burst at its own pace and lags the sender on a busy machine. A ping is
+        # answered in order on this socket, so its pong means every burst batch was handled; only then does
+        # the pause below refill the budget (otherwise queued burst batches would spend it first).
+        await ctrl.send({"type": "ping"})
+        await ctrl.recv_type("pong", timeout=30)
         await asyncio.sleep(1.1)
         seq += 1
         await ctrl.ws.send(_wire(ctrl, pc, sid, seq))  # still open and still forwarding
