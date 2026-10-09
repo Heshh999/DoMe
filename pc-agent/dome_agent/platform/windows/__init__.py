@@ -3,7 +3,7 @@
 Each module talks to the actual OS API named in docs/design/pc-agent.md (pycaw/IAudioEndpointVolume,
 winsdk GlobalSystemMediaTransportControls, pywin32 window control, LockWorkStation,
 SetSuspendState / InitiateSystemShutdownExW without forcing apps, HKCU Run key, HKCU native
-messaging manifests). They cannot be executed in the Linux build environment; see README.md →
+messaging manifests, SendInput for manual touchpad/keyboard input). They cannot be executed in the Linux build environment; see README.md →
 "Windows verification checklist" for the manual steps.
 """
 
@@ -18,6 +18,7 @@ def build_windows_platform() -> PlatformSet:
     if sys.platform != "win32":  # pragma: no cover - defensive
         raise RuntimeError("Windows adapters requested on a non-Windows host")
     from .apps import WindowsApps
+    from .input import WindowsInput
     from .media import WindowsMedia
     from .nativehost import WindowsNativeHostRegistrar
     from .power import WindowsPower
@@ -34,6 +35,7 @@ def build_windows_platform() -> PlatformSet:
         power=WindowsPower(),
         startup=WindowsStartup(),
         native_host=WindowsNativeHostRegistrar(),
+        input=WindowsInput(),
     )
 
 

@@ -41,7 +41,15 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 Sender = Callable[[dict[str, Any]], Awaitable[bool]]
-CAPABILITIES = ("status", "media", "volume", "apps", "lock", "power")
+CAPABILITIES = ("status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard")
+INPUT_CAPABILITIES = ("pointer", "keyboard")
+# Shown wherever the PC owner grants pointer/keyboard (pairing approval, tray, CLI) — spec §10A-D.
+INPUT_SCOPE_EXPLANATION = (
+    "Touchpad (pointer) and Keyboard let this phone move the mouse, click, scroll and type into whatever is in "
+    "front on this PC, in every app of the unlocked Windows session, not only the approved apps. The approved-app "
+    "list restricts structured app actions; it is not a sandbox around a real mouse and keyboard. Only the phone "
+    "you approve can use them, only while you keep remote control on, and you can switch them off here at any time."
+)
 
 
 @dataclass(slots=True)

@@ -32,7 +32,7 @@ def _load() -> None:
     if _LOADED:
         return
     _LOADED = True
-    from . import apps, media, power, system, volume, windows, youtube  # noqa: F401  (registration side effects)
+    from . import apps, input, media, power, system, volume, windows, youtube  # noqa: F401  (registration side effects)
 
 
 def handler_for(action: str) -> Handler:

@@ -14,6 +14,29 @@ from typing import Literal, Protocol
 PlatformName = Literal["windows", "unsupported", "fake"]
 MediaStatus = Literal["playing", "paused", "stopped", "changing", "closed", "opened", "unknown"]
 MediaControl = Literal["play", "pause", "next", "previous"]
+PointerButton = Literal["left", "right", "middle"]
+ButtonAction = Literal["down", "up", "click", "double_click"]
+BrowserKind = Literal["chrome", "edge", "other"]
+
+POINTER_BUTTONS: tuple[str, ...] = ("left", "right", "middle")
+BUTTON_ACTIONS: tuple[str, ...] = ("down", "up", "click", "double_click")
+NAMED_KEYS: tuple[str, ...] = (
+    "enter",
+    "tab",
+    "escape",
+    "backspace",
+    "delete",
+    "space",
+    "arrow_up",
+    "arrow_down",
+    "arrow_left",
+    "arrow_right",
+    "home",
+    "end",
+    "page_up",
+    "page_down",
+)
+SHORTCUTS: tuple[str, ...] = ("ctrl_a", "ctrl_c", "ctrl_v", "ctrl_z", "ctrl_l")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +87,82 @@ class AppWindow:
             "minimized": self.minimized,
             "foreground": self.foreground,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ForegroundApp:
+    """What the PC has in front, as far as the agent can observe (``relay-frames#/$defs/foreground_app``).
+
+    ``window_id``/``pid`` identify the window for the input session's target-change check and are never
+    sent; ``window_title`` is untrusted display data and is never logged. ``elevated`` is None when the
+    agent could not determine the foreground process's integrity level (reported as unknown, never
+    guessed). Field-level focus inside the window is not observable and is never claimed."""
+
+    process_name: str
+    window_title: str = ""
+    browser: BrowserKind | None = None
+    elevated: bool | None = None
+    window_id: str = ""
+    pid: int = 0
+
+    @property
+    def identity(self) -> tuple[str, int]:
+        return (self.window_id, self.pid)
+
+    def as_result(self) -> dict[str, object]:
+        out: dict[str, object] = {"process_name": self.process_name[:64]}
+        if self.window_title:
+            out["window_title"] = self.window_title[:200]
+        if self.browser is not None:
+            out["browser"] = self.browser
+        if self.elevated is not None:
+            out["elevated"] = bool(self.elevated)
+        return out
+
+
+class InputAdapter(Protocol):
+    """Manual pointer/keyboard injection (spec §10A). Every method is synchronous and blocking.
+
+    Failures are ``ProtocolError`` with ``INPUT_INJECTION_FAILED`` (the OS accepted fewer events than
+    requested), ``INPUT_RESTRICTED`` (access denied while the adapter can see a protected desktop /
+    locked session / elevated foreground) or ``PLATFORM_UNSUPPORTED``. The adapter never claims UIPI
+    from a return value alone."""
+
+    def move(self, dx: int, dy: int) -> None:
+        """Relative cursor motion in desktop pixels (never clamped to one display)."""
+        ...
+
+    def button(self, button: str, action: str) -> None:
+        """``left|right|middle`` × ``down|up|click|double_click``."""
+        ...
+
+    def scroll(self, dx: int, dy: int) -> None:
+        """Wheel notches; ``dy > 0`` scrolls content up (wheel away from the user), ``dx > 0`` right."""
+        ...
+
+    def text(self, text: str) -> None:
+        """Literal Unicode text, one key down/up per UTF-16 code unit, surrogate pairs kept together."""
+        ...
+
+    def key(self, key: str) -> None:
+        """One press-and-release of a named key (``NAMED_KEYS``)."""
+        ...
+
+    def shortcut(self, name: str) -> None:
+        """A tested CTRL shortcut (``SHORTCUTS``); the modifier is always released afterwards."""
+        ...
+
+    def release(self, buttons: set[str], keys: set[str]) -> int:
+        """Release exactly these buttons/keys (the ones this agent injected); returns how many were released."""
+        ...
+
+    def foreground(self) -> ForegroundApp | None:
+        """The foreground window's process/title/browser/elevation, or None when unknown."""
+        ...
+
+    def input_restricted(self) -> bool:
+        """True when injection is known to be refused: locked session, secure desktop, elevated foreground."""
+        ...
 
 
 class VolumeAdapter(Protocol):
@@ -154,6 +253,7 @@ class PlatformSet:
     power: PowerAdapter
     startup: StartupAdapter
     native_host: NativeHostRegistrar
+    input: InputAdapter
     notes: list[str] = field(default_factory=list)
 
     @property

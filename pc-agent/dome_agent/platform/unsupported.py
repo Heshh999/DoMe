@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dome_protocol import ProtocolError
 
-from .protocol import AppWindow, MediaSession, PlatformSet, VolumeState
+from .protocol import AppWindow, ForegroundApp, MediaSession, PlatformSet, VolumeState
 
 
 def _unsupported(what: str) -> ProtocolError:
@@ -106,6 +106,41 @@ class UnsupportedNativeHost:
         raise _unsupported("native messaging host registration")
 
 
+class UnsupportedInput:
+    """Manual input needs SendInput: every injection call fails with PLATFORM_UNSUPPORTED (development
+    runs on Linux/macOS without ``DOME_AGENT_PLATFORM=fake``). Observation calls answer honestly
+    "unknown" / "not restricted" instead of inventing a foreground window."""
+
+    def move(self, dx: int, dy: int) -> None:
+        raise _unsupported("manual pointer input")
+
+    def button(self, button: str, action: str) -> None:
+        raise _unsupported("manual pointer input")
+
+    def scroll(self, dx: int, dy: int) -> None:
+        raise _unsupported("manual pointer input")
+
+    def text(self, text: str) -> None:
+        raise _unsupported("manual keyboard input")
+
+    def key(self, key: str) -> None:
+        raise _unsupported("manual keyboard input")
+
+    def shortcut(self, name: str) -> None:
+        raise _unsupported("manual keyboard input")
+
+    def release(self, buttons: set[str], keys: set[str]) -> int:
+        if not buttons and not keys:
+            return 0
+        raise _unsupported("manual input release")
+
+    def foreground(self) -> ForegroundApp | None:
+        return None
+
+    def input_restricted(self) -> bool:
+        return False
+
+
 def build_unsupported_platform() -> PlatformSet:
     return PlatformSet(
         name="unsupported",
@@ -116,6 +151,7 @@ def build_unsupported_platform() -> PlatformSet:
         power=UnsupportedPower(),
         startup=UnsupportedStartup(),
         native_host=UnsupportedNativeHost(),
+        input=UnsupportedInput(),
         notes=[
             "Non-Windows host: Windows-only actions answer PLATFORM_UNSUPPORTED; YouTube control via the browser bridge works."
         ],

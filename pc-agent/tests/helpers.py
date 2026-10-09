@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from dome_protocol import (
+    build_input_batch_payload,
     challenge_digest,
     dumps_compact,
     format_rfc3339,
@@ -22,7 +23,7 @@ from dome_protocol.keys import b64url_encode
 from dome_agent.identity import Identity, LinkRecord
 from dome_agent.store import Store
 
-ALL_CAPS = ("status", "media", "volume", "apps", "lock", "power")
+ALL_CAPS = ("status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard")
 
 
 def nonce() -> str:
@@ -145,6 +146,38 @@ class Controller:
             "nonce": nonce(),
         }
         return self.sign(payload, key=key)
+
+
+    def input_batch(
+        self,
+        input_session_id: str,
+        seq: int,
+        events: list[dict[str, Any]],
+        *,
+        issued_at: Any = None,
+        key: Any = None,
+        controller_id: str | None = None,
+        target_pc_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Signed ``input_batch`` envelope (rules.input_sessions)."""
+        payload = build_input_batch_payload(
+            account_id=self.account_id,
+            controller_id=controller_id or self.controller_id,
+            target_pc_id=target_pc_id or self.pc_id,
+            input_session_id=input_session_id,
+            seq=seq,
+            events=events,
+            now=issued_at,
+        )
+        return self.sign(payload, key=key)
+
+
+def relay_input_batch_frame(envelope: dict[str, Any], connection_id: str | None = None) -> dict[str, Any]:
+    return {
+        "type": "input_batch",
+        "envelope": envelope,
+        "relay": {"received_at": format_rfc3339(now_utc()), "connection_id": connection_id or str(uuid.uuid4())},
+    }
 
 
 def relay_command_frame(envelope: dict[str, Any], connection_id: str | None = None) -> dict[str, Any]:

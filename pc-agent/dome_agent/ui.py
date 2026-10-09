@@ -54,6 +54,10 @@ class AgentUI(Protocol):
 
     def update_status(self, status: StatusView) -> None: ...
 
+    def show_main(self) -> None:
+        """A second launch asked the running instance to come to the front (spec §10 single instance)."""
+        ...
+
 
 class NullUI:
     """Headless: everything is reachable through the control channel / CLI instead."""
@@ -71,6 +75,9 @@ class NullUI:
         return None
 
     def update_status(self, status: StatusView) -> None:
+        return None
+
+    def show_main(self) -> None:
         return None
 
 

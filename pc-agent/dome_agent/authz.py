@@ -8,7 +8,7 @@
     logged as local security events and counted for ``rules.mismatch_handling``
  3. local ``remote_enabled`` (→ PC_REMOTE_DISABLED), snapshot ``pc_enabled`` (→ PC_PLAN_DISABLED),
     controller status (→ CONTROLLER_PLAN_DISABLED)
- 4. capability ∈ local ∩ snapshot (→ GRANT_MISSING)
+ 4. the action's capability — or one of its ``alternate_capabilities`` — ∈ local ∩ snapshot (→ GRANT_MISSING)
     Steps 3-4 are :meth:`Authorizer.recheck_grant` and are re-applied when a confirmation arrives,
     right before execution and whenever a new ``grants_snapshot`` lands.
  5. journal: identical duplicate → re-emit; same id, different bytes → COMMAND_ID_REUSED; new → row
@@ -186,10 +186,9 @@ class Authorizer:
             return self._err("CONTROLLER_REVOKED")
         if grant.snapshot_status != "active":
             return self._err("CONTROLLER_PLAN_DISABLED")
-        if vc.spec.capability not in grant.effective_capabilities(store.current_snapshot_id()):
-            return self._err(
-                "GRANT_MISSING", f"This phone does not have the '{vc.spec.capability}' permission on this PC."
-            )
+        if not vc.spec.satisfied_by(grant.effective_capabilities(store.current_snapshot_id())):
+            accepted = " or ".join(f"'{c}'" for c in vc.spec.accepted_capabilities)
+            return self._err("GRANT_MISSING", f"This phone does not have the {accepted} permission on this PC.")
         return None
 
     async def precheck(self, vc: VerifiedCommand) -> ProtocolError | None:
@@ -247,7 +246,7 @@ class Authorizer:
             return f"Close {app.display_name if app else vc.target['app_id']}"[:200]
         if vc.spec.name.startswith("power."):
             seconds = int(vc.params.get("countdown_seconds", 10))
-            return f"{seconds} second countdown, cancellable from the phone"[:200]
+            return power_confirmation_detail(vc.spec.name, seconds)
         return ""
 
     def _replay_frames(self, state: str, frame: dict[str, Any] | None, vc: VerifiedCommand) -> list[dict[str, Any]]:
@@ -269,6 +268,21 @@ class Authorizer:
     ) -> Decision:
         err = error if isinstance(error, ProtocolError) else self._err(error, message)
         return Decision("rejected", command=vc, command_id=vc.command_id, error=err, journaled=journaled)
+
+
+POWER_VERBS = {"power.sleep": "Sleeping", "power.restart": "Restarting", "power.shutdown": "Shutting down"}
+
+
+def power_confirmation_detail(action: str, countdown_seconds: int) -> str:
+    """``challenge.display.detail`` for power actions (spec §10, §17.25). The phone shows it verbatim, so
+    it states plainly that remote access can be interrupted or end and that V1 has no remote wake.
+    Bounded to the schema's 200 characters."""
+    verb = POWER_VERBS.get(action, "This")
+    text = (
+        f"{countdown_seconds} s countdown, cancellable from the phone. {verb} can interrupt or end remote access "
+        "to this PC. DoMe cannot wake it or turn it on again remotely (no remote wake in V1)."
+    )
+    return text[:200]
 
 
 def _peek_command_id(envelope: Any) -> str | None:

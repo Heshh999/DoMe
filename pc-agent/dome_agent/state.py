@@ -17,6 +17,7 @@ from .logsetup import get_logger
 
 if TYPE_CHECKING:
     from .bridge.server import BridgeServer
+    from .input_session import InputSessionManager
     from .platform.protocol import PlatformSet
     from .store import Store
 
@@ -49,6 +50,7 @@ class StateAggregator:
         self._last: dict[str, Any] | None = None
         self.session_locked_override: bool | None = None  # tests / fake platform
         self.emitted = 0
+        self.input: InputSessionManager | None = None  # bound by the agent: foreground_app / input_session / input_restricted
 
     # ----- lifecycle --------------------------------------------------------------------------------
     def start(self, emit: Emitter) -> None:
@@ -108,6 +110,11 @@ class StateAggregator:
             if pending
             else None
         )
+        if self.input is not None:
+            try:
+                state.update(await self.input.state_fields())
+            except Exception as exc:  # noqa: BLE001 - never lose a state frame over a foreground probe
+                log.debug("input state fields failed", error=exc.__class__.__name__)
         load_schemas().validate_def("relay-frames", "pc_state", state)
         self._last = state
         return state

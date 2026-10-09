@@ -12,6 +12,8 @@ Tables (see docs/design/pc-agent.md → "Local state"):
 * ``pending_power``  at most one armed power countdown
 * ``pending_revocations`` local revocations the relay has not acknowledged receiving yet
                      (``revoke_controller`` is re-sent after every ``grants_snapshot`` until it is written)
+* ``pending_grant_updates`` local capability changes (pointer/keyboard) the relay has not received yet,
+                     keyed by kid (``grant_update`` is re-sent after every ``grants_snapshot`` until written)
 * ``security_events`` bounded local security log for diagnostics
 
 All methods are synchronous and protected by one re-entrant lock; every call is an indexed point
@@ -110,6 +112,10 @@ CREATE TABLE IF NOT EXISTS pending_revocations (
     kid           TEXT NOT NULL,
     reason        TEXT NOT NULL,
     created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pending_grant_updates (
+    kid        TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS security_events (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,6 +360,44 @@ class Store:
                     (controller_id, row.kid, reason, format_rfc3339(now_utc())),
                 )
         return row
+
+    def update_grant_capabilities(self, controller_id: str, capabilities: Iterable[str]) -> GrantRow | None:
+        """The PC owner changed a controller's capabilities locally (``rules.grant_update``). The local
+        list is the only source of capabilities; the relay is told through ``grant_update`` (journaled in
+        ``pending_grant_updates`` until the frame was written). Returns the updated row, None if unknown
+        or revoked. An empty list is refused: revoke instead."""
+        caps = tuple(dict.fromkeys(capabilities))
+        if not caps:
+            raise ValueError("a grant needs at least one capability; revoke the phone instead")
+        with self._tx():
+            row = self.get_grant(controller_id)
+            if row is None or row.revoked:
+                return None
+            self._conn.execute(
+                "UPDATE grants SET capabilities = ? WHERE controller_id = ?", (json.dumps(list(caps)), controller_id)
+            )
+            self._conn.execute(
+                "INSERT INTO pending_grant_updates(kid, created_at) VALUES (?, ?) ON CONFLICT(kid) DO UPDATE SET created_at = excluded.created_at",
+                (row.kid, format_rfc3339(now_utc())),
+            )
+        return self.get_grant(controller_id)
+
+    def pending_grant_updates(self) -> list[GrantRow]:
+        """Grants whose local capability change the relay has not received yet (non-revoked, by kid)."""
+        with self._lock:
+            rows = self._conn.execute("SELECT kid FROM pending_grant_updates ORDER BY created_at").fetchall()
+        out: list[GrantRow] = []
+        for r in rows:
+            grant = self.get_grant_by_kid(r["kid"])
+            if grant is None or grant.revoked:
+                self.clear_pending_grant_update(r["kid"])
+                continue
+            out.append(grant)
+        return out
+
+    def clear_pending_grant_update(self, kid: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM pending_grant_updates WHERE kid = ?", (kid,))
 
     def pending_revocations(self) -> list[PendingRevocationRow]:
         with self._lock:

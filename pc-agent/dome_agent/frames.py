@@ -113,3 +113,51 @@ def pairing_decision_frame(pairing_id: str, decision: str, kid: str, granted: li
 
 def revoke_controller_frame(controller_id: str, kid: str, reason: str = "local_revocation") -> dict[str, Any]:
     return {"type": "revoke_controller", "controller_id": controller_id, "kid": kid, "reason": reason}
+
+
+def grant_update_frame(controller_id: str, kid: str, capabilities: list[str]) -> dict[str, Any]:
+    """``rules.grant_update``: the PC owner changed a controller's capabilities locally; the relay replaces
+    the grant's list with exactly this one."""
+    return {"type": "grant_update", "controller_id": controller_id, "kid": kid, "capabilities": list(dict.fromkeys(capabilities))}
+
+
+def input_ack_frame(
+    pc_id: str,
+    input_session_id: str,
+    *,
+    last_seq: int,
+    accepted_events: int,
+    dropped_events: int,
+    held_buttons: list[str],
+    held_keys: list[str],
+) -> dict[str, Any]:
+    """``agent_input_ack``: Windows accepted these events (never an observed application effect)."""
+    return {
+        "type": "input_ack",
+        "pc_id": pc_id,
+        "input_session_id": input_session_id,
+        "last_seq": max(0, int(last_seq)),
+        "accepted_events": max(0, int(accepted_events)),
+        "dropped_events": max(0, int(dropped_events)),
+        "held_buttons": sorted(held_buttons)[:3],
+        "held_keys": sorted(held_keys)[:16],
+        "at": now_text(),
+    }
+
+
+def input_session_frame(
+    pc_id: str, input_session_id: str, controller_id: str, *, event: str, reason: str, holds_released: int
+) -> dict[str, Any]:
+    """``agent_input_session``: started / suspended / ended with the reason and the holds released."""
+    if event not in ("started", "suspended", "ended"):
+        raise ValueError(event)
+    return {
+        "type": "input_session",
+        "pc_id": pc_id,
+        "input_session_id": input_session_id,
+        "controller_id": controller_id,
+        "event": event,
+        "reason": reason,
+        "holds_released": max(0, int(holds_released)),
+        "at": now_text(),
+    }

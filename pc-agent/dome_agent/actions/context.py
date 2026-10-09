@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ..approved_apps import ApprovedApps
     from ..bridge.server import BridgeServer
     from ..identity import Identity
+    from ..input_session import InputSessionManager
     from ..platform.protocol import PlatformSet
     from ..state import StateAggregator
     from ..store import Store
@@ -31,6 +32,7 @@ class AgentServices:
     power: PowerManager
     identity: Identity
     apps: ApprovedApps
+    input: InputSessionManager
 
 
 @dataclass(slots=True)

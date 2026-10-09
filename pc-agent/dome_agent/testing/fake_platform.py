@@ -13,7 +13,26 @@ from pathlib import Path
 
 from dome_protocol import ProtocolError
 
-from ..platform.protocol import AppWindow, MediaControl, MediaSession, MediaStatus, PlatformSet, VolumeState
+from ..platform.protocol import (
+    NAMED_KEYS,
+    SHORTCUTS,
+    AppWindow,
+    ForegroundApp,
+    MediaControl,
+    MediaSession,
+    MediaStatus,
+    PlatformSet,
+    VolumeState,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class InputRecord:
+    """One recorded injection call: ``name`` in move|button|scroll|text|key|shortcut|release."""
+
+    name: str
+    args: tuple[object, ...]
+    at: float  # time.monotonic() when the fake adapter was called
 
 
 @dataclass
@@ -34,12 +53,27 @@ class FakeState:
     start_at_login: bool = False
     next_pid: int = 1000
     calls: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
+    # ----- manual input (FakeInput) -----
+    input_events: list[InputRecord] = field(default_factory=list)  # ordered, timestamped
+    foreground_app: ForegroundApp | None = None  # settable "what is in front"
+    input_restricted: bool = False  # settable restriction flag (secure desktop / UAC)
+    input_fail: str | None = None  # error code raised by the next injection calls (None = succeed)
+    input_fail_remaining: int = 0  # how many calls fail (0 with input_fail set = every call)
+    input_delay_seconds: float = 0.0  # blocking delay per injection call (backpressure tests)
+    held_buttons: set[str] = field(default_factory=set)  # readable held set
+    held_keys: set[str] = field(default_factory=set)
 
     def record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
 
     def count(self, name: str) -> int:
         return sum(1 for n, _ in self.calls if n == name)
+
+    def input_names(self) -> list[str]:
+        return [r.name for r in self.input_events]
+
+    def input_count(self, name: str) -> int:
+        return sum(1 for r in self.input_events if r.name == name)
 
     def add_session(
         self,
@@ -222,6 +256,70 @@ class FakeStartup:
         self.st.start_at_login = enabled
 
 
+class FakeInput:
+    """Records every injection in order with timestamps, keeps the held set, honours the settable
+    foreground app / restriction flag / injected failures. Never touches a real desktop."""
+
+    def __init__(self, st: FakeState) -> None:
+        self.st = st
+
+    def _inject(self, name: str, *args: object) -> None:
+        if self.st.input_delay_seconds:
+            time.sleep(self.st.input_delay_seconds)
+        if self.st.input_fail:
+            code = self.st.input_fail
+            if self.st.input_fail_remaining > 0:
+                self.st.input_fail_remaining -= 1
+                if self.st.input_fail_remaining == 0:
+                    self.st.input_fail = None
+            raise ProtocolError(code, f"fake platform refused {name}")
+        self.st.input_events.append(InputRecord(name, args, time.monotonic()))
+
+    def move(self, dx: int, dy: int) -> None:
+        self._inject("move", int(dx), int(dy))
+
+    def button(self, button: str, action: str) -> None:
+        self._inject("button", button, action)
+        if action == "down":
+            self.st.held_buttons.add(button)
+        elif action in ("up", "click", "double_click"):
+            self.st.held_buttons.discard(button)
+
+    def scroll(self, dx: int, dy: int) -> None:
+        self._inject("scroll", int(dx), int(dy))
+
+    def text(self, text: str) -> None:
+        self._inject("text", text)
+
+    def key(self, key: str) -> None:
+        if key not in NAMED_KEYS:
+            raise ProtocolError("MALFORMED_MESSAGE", f"unknown key {key!r}")
+        self._inject("key", key)
+
+    def shortcut(self, name: str) -> None:
+        if name not in SHORTCUTS:
+            raise ProtocolError("MALFORMED_MESSAGE", f"unknown shortcut {name!r}")
+        self._inject("shortcut", name)
+
+    def release(self, buttons: set[str], keys: set[str]) -> int:
+        self.st.input_events.append(InputRecord("release", (tuple(sorted(buttons)), tuple(sorted(keys))), time.monotonic()))
+        released = 0
+        for b in buttons:
+            if b in self.st.held_buttons:
+                self.st.held_buttons.discard(b)
+            released += 1
+        for k in keys:
+            self.st.held_keys.discard(k)
+            released += 1
+        return released
+
+    def foreground(self) -> ForegroundApp | None:
+        return self.st.foreground_app
+
+    def input_restricted(self) -> bool:
+        return self.st.input_restricted or self.st.locked
+
+
 class FakeNativeHost:
     def __init__(self, st: FakeState) -> None:
         self.st = st
@@ -246,6 +344,7 @@ def build_fake_platform(state: FakeState | None = None) -> PlatformSet:
         power=FakePower(st),
         startup=FakeStartup(st),
         native_host=FakeNativeHost(st),
+        input=FakeInput(st),
         notes=["FAKE platform adapters active (DOME_AGENT_PLATFORM=fake): no real PC action happens"],
     )
     return ps
