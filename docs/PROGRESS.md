@@ -2,6 +2,31 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-09 — Consolidated spec (8 October) adopted; protocol 1.1 contract for manual input
+
+- The founder's consolidated prompt replaces `docs/spec/MASTER_PROMPT.md`. New Free-beta scope: manual
+  touchpad/keyboard input with explicit per-controller permissions and a bounded input-session
+  protocol (§10A), connection health and guided recovery (§11A), one agent per Windows user session
+  (§10), media-target clarity (§9), power-confirmation copy about losing remote access (§10),
+  support submission/status and download/help flows (§11A), the upgrade-experience rules (§12),
+  brand assets (§11), scenarios 18–25 (§17) and the documents INPUT_CONTROL.md and SUPPORT.md (§18).
+- Contract (protocol 1.1, registry 1.1, additive; 1.0 peers stay compatible): capabilities `pointer`
+  and `keyboard`; actions `input.session_start` (either capability via `alternate_capabilities`) and
+  `input.session_stop`; `ai_eligible` on every action (false for the human-only input actions); the
+  signed `input_batch` stream (≤ 64 events, strictly increasing `seq`, 5 s window) with
+  `input_ack` (Windows acceptance only, ≤ 4/s) and `input_session` lifecycle frames;
+  `grant_update` so the PC owner can add or remove the new capabilities for an existing phone;
+  `pc_state.foreground_app / input_session / input_restricted`; `INPUT_*` error codes; limits and the
+  identical Free/Pro `input_rate_limit`; normative `rules.input_sessions`, `rules.grant_update`,
+  `rules.ai_eligibility`; support-ticket REST bodies. Both shared libraries gained builders/verifiers
+  and `satisfied_by` / `capabilitySatisfied`; types and validators regenerated.
+- Tests: `shared/python` 135, `shared/ts` 86, `cloud-api` 89, `pc-agent` 193 (+1 deliberately failing
+  until the input handlers exist), `mobile-app` 206, `browser-extension` 90. **Evidence tag:
+  unit-tested.** `docs/design/input-control.md` is the builders' brief.
+- Next: component builds (pc-agent input adapter and session manager, cloud-api routing and support
+  tickets, mobile-app touchpad/keyboard/health/support, brand), reviews and fixes, integration tests,
+  documents.
+
 ## 2026-10-09 — Cross-component security review and the two fixes it forced
 
 - An independent reviewer read every seam (relay ↔ phone, relay ↔ agent, agent ↔ extension, the
