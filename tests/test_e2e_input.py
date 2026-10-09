@@ -67,8 +67,8 @@ async def test_input_needs_a_local_grant_then_streams_in_order_and_releases_on_l
     sid = session["input_session_id"]
     assert session["pointer"] is True and session["keyboard"] is True
     assert session["lease_seconds"] >= 1 and session["max_batch_events"] <= 64
-    started = await phone.recv_type("input_session", input_session_id=sid)
-    assert started["event"] == "started" and started["controller_id"] == phone.controller_id
+    # the `started` frame can arrive before the command result (run_command skips it while waiting), so the
+    # session is proven live by the first ack below rather than by frame order
 
     # 3. A batch with motion, a held button, literal text and a key is accepted by the (fake) OS in order.
     await phone.input_batch(
@@ -86,18 +86,26 @@ async def test_input_needs_a_local_grant_then_streams_in_order_and_releases_on_l
     ack = await _ack(phone, sid, 1)
     assert ack["accepted_events"] >= 4 and ack["held_buttons"] == ["left"], ack
 
-    # 4. A replayed sequence number is dropped; the session continues with the next one.
+    # 4. A replayed sequence number is refused (the relay drops it as defence in depth before the PC's own
+    #    authoritative check); the phone is told why and the session continues with the next one.
+    accepted_before = ack["accepted_events"]
     await phone.input_batch(agent.pc_id, sid, 1, [{"type": "key", "key": "escape"}])
+    err = await phone.recv_type("error", timeout=10)
+    assert err["error"]["code"] == "INPUT_SEQUENCE_INVALID" and err["ref_pc_id"] == agent.pc_id, err
     await phone.input_batch(agent.pc_id, sid, 2, [{"type": "pointer_scroll", "dx": 0, "dy": -1}])
     ack = await _ack(phone, sid, 2)
-    assert ack["last_seq"] == 2 and ack["dropped_events"] >= 1, ack
+    assert ack["last_seq"] == 2 and ack["accepted_events"] == accepted_before + 1, ack  # the escape never ran
 
-    # 5. A batch older than the input-age budget (but inside its signed window) is discarded, not played back.
+    # 5. A batch older than the input-age budget (but inside its signed window) is discarded by the PC, not played
+    #    back; the rejection reaches this phone with the session it named.
     before = ack["accepted_events"]
     await phone.input_batch(agent.pc_id, sid, 3, [{"type": "key", "key": "tab"}], issued_at=now_utc() - timedelta(seconds=2))
+    err = await phone.recv_type("error", timeout=10)
+    assert err["error"]["code"] == "INPUT_STALE" and err.get("ref_input_session_id") == sid, err
+    assert "ref_controller_id" not in err
     await phone.input_batch(agent.pc_id, sid, 4, [])  # keepalive
     ack = await _ack(phone, sid, 4)
-    assert ack["accepted_events"] == before, ack
+    assert ack["accepted_events"] == before and ack["dropped_events"] >= 1, ack
 
     # 6. The phone goes quiet with the left button held: the PC-side lease expires on its own, the session is
     #    retired first and the held button is released (no stuck drag).
