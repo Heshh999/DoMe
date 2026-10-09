@@ -23,15 +23,17 @@ export function PublicLayout() {
       <header className="border-b border-border">
         <div className="max-w-3xl mx-auto px-4 pt-[calc(var(--safe-top)+0.5rem)] pb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <Logo />
-          <nav aria-label="Site" className="flex items-center gap-1 overflow-x-auto">
+          {/* On phones "Open app" stays on the logo row and the links get their own scrollable row;
+              from sm up all of it sits on one row, links before the button. */}
+          <Link to="/app" className="tap inline-flex shrink-0 items-center whitespace-nowrap px-3.5 rounded-control bg-accent text-on-accent text-sm font-semibold sm:order-last">
+            Open app
+          </Link>
+          <nav aria-label="Site" className="flex w-full items-center gap-1 overflow-x-auto sm:ml-auto sm:w-auto">
             {NAV.map((n) => (
-              <NavLink key={n.to} to={n.to} className={({ isActive }) => `tap inline-flex items-center px-3 text-sm font-medium rounded-control ${isActive ? "text-accent" : "text-text-muted hover:text-text"}`}>
+              <NavLink key={n.to} to={n.to} className={({ isActive }) => `tap inline-flex shrink-0 items-center whitespace-nowrap px-3 text-sm font-medium rounded-control ${isActive ? "text-accent" : "text-text-muted hover:text-text"}`}>
                 {n.label}
               </NavLink>
             ))}
-            <Link to="/app" className="tap inline-flex items-center px-3.5 rounded-control bg-accent text-on-accent text-sm font-semibold ml-1">
-              Open app
-            </Link>
           </nav>
         </div>
       </header>
