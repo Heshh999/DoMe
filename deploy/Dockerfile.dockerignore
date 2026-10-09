@@ -1,0 +1,40 @@
+# Applies to builds that use deploy/Dockerfile (BuildKit picks up <Dockerfile>.dockerignore next
+# to the Dockerfile; fly.toml points at it with [build].ignorefile). The build context is the
+# repository root; only shared/protocol, shared/python, shared/ts, mobile-app, cloud-api and
+# deploy/entrypoint.sh are needed.
+
+# Everything not needed by the image
+.git
+.github
+docs
+pc-agent
+browser-extension
+tests
+tools
+shared/python/tests
+cloud-api/tests
+mobile-app/test
+mobile-app/dist
+mobile-app/dev-dist
+shared/ts/test
+Makefile
+README.md
+**/*.md
+
+# Local state, secrets, build output
+.env
+.env.*
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.vite
+**/coverage
+**/*.tsbuildinfo
+**/.dome-dev-state
+**/*.pem
+!shared/protocol/fixtures/*.pem
+.pgdata

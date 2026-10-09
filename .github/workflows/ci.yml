@@ -1,0 +1,259 @@
+# DoMe continuous integration: every suite that runs without a Windows PC, an iPhone or a real
+# browser. Commands are the ones documented in each component's README / Makefile.
+#
+# STATUS: written against the real commands and validated locally with actionlint; it has NOT
+# yet run on GitHub Actions. No secrets are used or needed: the suites run against a PostgreSQL
+# service container and the in-repository development identity provider (tools/dev-idp).
+#
+# Actions are pinned to the commit of a release tag that was resolved on 2026-10-09
+# (`git ls-remote --tags`); the comment carries the tag.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"      # same release that produced the uv.lock files
+  PNPM_VERSION: "10.28.0"    # same release that produced the pnpm-lock.yaml files (lockfileVersion 9.0)
+  PYTHON_VERSION: "3.12"     # pc-agent requires <3.13 (Windows library compatibility, ADR-0001 D9)
+  NODE_VERSION: "22"
+  FORCE_COLOR: "1"
+  # The Python test harnesses create and drop a random dome_test_<hex> database on this server
+  # (cloud-api/tests/conftest.py), so the role needs CREATEDB; the service container's user is a superuser.
+  DOME_TEST_DATABASE_URL: postgresql+psycopg://dome:dome@127.0.0.1:5432/dome_test
+
+jobs:
+  python:
+    name: Python (shared/python, cloud-api, pc-agent)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dome
+          POSTGRES_PASSWORD: dome
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dome"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      # ---- shared/python: strict JSON, ES256 envelopes, registry/schema validation, fixtures ----
+      - name: shared/python - sync
+        working-directory: shared/python
+        run: uv sync --locked --extra dev
+      - name: shared/python - pytest
+        working-directory: shared/python
+        run: uv run pytest -q
+
+      # ---- tools/dev-idp: the cloud-api suite starts it as a real OIDC issuer (no auth bypass) ----
+      - name: tools/dev-idp - sync
+        working-directory: tools/dev-idp
+        run: uv sync --locked
+
+      # ---- cloud-api: ruff, mypy --strict, integration tests against PostgreSQL + dev-idp ----
+      - name: cloud-api - sync
+        working-directory: cloud-api
+        run: uv sync --locked --extra dev
+      - name: cloud-api - ruff
+        working-directory: cloud-api
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: cloud-api - mypy
+        working-directory: cloud-api
+        run: uv run mypy dome_api tests
+      - name: cloud-api - alembic models and migration in sync
+        working-directory: cloud-api
+        env:
+          # The service container's default database; the pytest harness creates its own databases.
+          DOME_DATABASE_URL: postgresql+psycopg://dome:dome@127.0.0.1:5432/postgres
+        run: |
+          uv run alembic -c alembic.ini upgrade head
+          uv run alembic -c alembic.ini check
+      - name: cloud-api - pytest (real PostgreSQL, real OIDC login, uvicorn in-process)
+        working-directory: cloud-api
+        run: uv run pytest -q -p no:cacheprovider
+
+      # ---- pc-agent: Linux with the explicitly isolated fake platform; Windows adapters are NOT verified here ----
+      - name: pc-agent - sync
+        working-directory: pc-agent
+        run: uv sync --locked --extra dev
+      - name: pc-agent - ruff
+        working-directory: pc-agent
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: pc-agent - mypy
+        working-directory: pc-agent
+        run: uv run mypy
+      - name: pc-agent - pytest
+        working-directory: pc-agent
+        run: uv run pytest -q -p no:cacheprovider
+
+  node:
+    name: Node (shared/ts, mobile-app, browser-extension)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Node (pnpm store cache keyed on the three lockfiles)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            shared/ts/pnpm-lock.yaml
+            mobile-app/pnpm-lock.yaml
+            browser-extension/pnpm-lock.yaml
+
+      # ---- shared/ts: the linked @dome/protocol library; both apps depend on it via link:../shared/ts ----
+      - name: shared/ts - install
+        working-directory: shared/ts
+        run: pnpm install --frozen-lockfile
+      - name: shared/ts - generated types match the frozen schemas
+        working-directory: shared/ts
+        run: |
+          pnpm gen:types
+          git diff --exit-code -- src/generated
+      - name: shared/ts - typecheck
+        working-directory: shared/ts
+        run: pnpm typecheck
+      - name: shared/ts - test (incl. verifying the Python-signed fixtures)
+        working-directory: shared/ts
+        run: pnpm test
+
+      # ---- mobile-app: iPhone-first PWA (jsdom tests; nothing here is iPhone-tested) ----
+      - name: mobile-app - install
+        working-directory: mobile-app
+        run: pnpm install --frozen-lockfile
+      - name: mobile-app - typecheck
+        working-directory: mobile-app
+        run: pnpm typecheck
+      - name: mobile-app - lint
+        working-directory: mobile-app
+        run: pnpm lint
+      - name: mobile-app - test
+        working-directory: mobile-app
+        run: pnpm test
+      - name: mobile-app - build
+        working-directory: mobile-app
+        env:
+          VITE_DOME_RELEASE_CHANNEL: ci
+        run: pnpm build
+
+      # ---- browser-extension: MV3 extension (DOM-fixture tests; never loaded in a real browser here) ----
+      - name: browser-extension - install
+        working-directory: browser-extension
+        run: pnpm install --frozen-lockfile
+      - name: browser-extension - typecheck
+        working-directory: browser-extension
+        run: pnpm typecheck
+      - name: browser-extension - lint
+        working-directory: browser-extension
+        run: pnpm lint
+      - name: browser-extension - test
+        working-directory: browser-extension
+        run: pnpm test
+      - name: browser-extension - build
+        working-directory: browser-extension
+        run: pnpm build
+
+  integration:
+    name: Integration (tests/ - real agent process + relay + PostgreSQL + OIDC login)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dome
+          POSTGRES_PASSWORD: dome
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dome"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: tools/dev-idp - sync (the suite starts it as the OIDC issuer)
+        working-directory: tools/dev-idp
+        run: uv sync --locked
+
+      - name: tests - sync (installs dome-protocol, dome-api and dome-agent from the repository)
+        working-directory: tests
+        run: uv sync --locked
+
+      # Evidence tag for this job: integration-tested (Linux, fake platform, fake extension).
+      # Last local run: 20 passed in 214 s. The load smoke prints numbers; it is not a pass/fail promise.
+      - name: tests - pytest
+        working-directory: tests
+        run: uv run pytest -q -p no:cacheprovider
+
+  container:
+    name: Container image builds (deploy/Dockerfile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Builds the API + PWA image from the repository root; nothing is pushed anywhere.
+      - name: docker build
+        run: docker build --file deploy/Dockerfile --tag dome-api:ci .
+
+      # The image must start far enough to validate its configuration: with no database and a
+      # non-development DOME_ENV the entrypoint must refuse to invent a signing key (exit 2), and
+      # with a development env `dome-api` must fail on the missing database, not on anything else.
+      - name: image refuses to invent a signing key outside development
+        run: |
+          set +e
+          docker run --rm -e DOME_ENV=staging dome-api:ci true
+          code=$?
+          set -e
+          test "$code" -eq 2

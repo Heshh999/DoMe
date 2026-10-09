@@ -1,0 +1,97 @@
+# DoMe local stack for machines that have Docker: PostgreSQL 16 + the development-only OIDC issuer
+# + the API image (API, relay and the built PWA on http://localhost:8080).
+#
+# This repository was developed WITHOUT Docker (none was available); this file is validated with
+# `docker compose config` only and has not been brought up. The documented non-Docker path in the
+# root README (`make db-start db-create`, `make dev-idp`, `make api`, `make pwa`) is the one that
+# was exercised. Report anything that differs.
+#
+# One-time host setup: the browser and the API must agree on the OIDC issuer URL, so the issuer is
+# addressed as http://dev-idp:8081 from both. Add to your hosts file (/etc/hosts or
+# C:\Windows\System32\drivers\etc\hosts):
+#     127.0.0.1  dev-idp
+#
+#   docker compose -f deploy/docker-compose.dev.yml up --build
+#   open http://localhost:8080  (sign in as alice@example.test / bob@example.test on the dev issuer)
+#
+# Nothing here is a production configuration: the session secret below is a public string, the
+# issuer is the development stub, and the entitlement signing key is generated inside the api
+# container on first start (DOME_ENV=development only; see deploy/entrypoint.sh).
+
+name: dome-dev
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dome
+      POSTGRES_PASSWORD: dome
+      POSTGRES_DB: dome_dev
+    ports:
+      # Same host port as the Makefile's local cluster so `.env.example` values keep working for
+      # host-side tools; `DOME_TEST_DATABASE_URL=postgresql+psycopg://dome:dome@localhost:54329/dome_test`
+      # lets the pytest suites use this container (they create and drop their own databases).
+      - "54329:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dome -d dome_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  dev-idp:
+    # tools/dev-idp: development-only OpenID Connect issuer. Never deployed; has no production mode.
+    build:
+      context: ../tools/dev-idp
+      dockerfile_inline: |
+        FROM python:3.12-slim-bookworm
+        COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /bin/uv
+        ENV UV_PYTHON_DOWNLOADS=never UV_PYTHON=/usr/local/bin/python3.12 UV_LINK_MODE=copy
+        WORKDIR /idp
+        COPY pyproject.toml uv.lock README.md ./
+        COPY dome_dev_idp ./dome_dev_idp
+        RUN uv sync --locked
+        USER nobody
+        CMD ["/idp/.venv/bin/dome-dev-idp"]
+    environment:
+      DEV_IDP_BIND: 0.0.0.0:8081
+      DEV_IDP_ISSUER: http://dev-idp:8081
+      DEV_IDP_CLIENT_ID: dome-dev
+      DEV_IDP_CLIENT_SECRET: dome-dev-secret
+      DEV_IDP_REDIRECT_URI: http://localhost:8080/v1/auth/callback
+    ports:
+      - "8081:8081"
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VITE_DOME_RELEASE_CHANNEL: dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dev-idp:
+        condition: service_started
+    environment:
+      DOME_ENV: development
+      DOME_PUBLIC_ORIGIN: http://localhost:8080
+      DOME_API_BIND: 0.0.0.0:8080
+      DOME_DATABASE_URL: postgresql+psycopg://dome:dome@postgres:5432/dome_dev
+      DOME_SESSION_SECRET: compose-development-only-session-secret-not-for-production
+      DOME_OIDC_ISSUER: http://dev-idp:8081
+      DOME_OIDC_CLIENT_ID: dome-dev
+      DOME_OIDC_CLIENT_SECRET: dome-dev-secret
+      DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH: /app/run/entitlement-ed25519.pem
+      DOME_LOG_LEVEL: INFO
+    ports:
+      - "8080:8080"
+    volumes:
+      # Keeps the generated development signing key across restarts (otherwise every restart
+      # rotates it and connected agents re-fetch the JWKS).
+      - api-run:/app/run
+
+volumes:
+  pgdata:
+  api-run:

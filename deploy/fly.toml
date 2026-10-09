@@ -1,0 +1,103 @@
+# DoMe cloud-api + relay on Fly.io (ADR-0001 D2: Fly.io, single region to start; reversible).
+#
+# STATUS: written against the Fly.io configuration reference (superfly/docs, fly.toml reference,
+# read 2026-10-09) but NOT YET DEPLOYED - nothing in this file is verified against a live Fly app.
+# Values marked PLACEHOLDER must be replaced per environment (one Fly app per environment:
+# dome-api-staging, dome-api-prod). No secret belongs in this file; see deploy/README.md "Secrets".
+#
+# Deploy from the repository root (build context = repository root, see deploy/Dockerfile):
+#   fly deploy --config deploy/fly.toml --dockerfile deploy/Dockerfile .
+
+app = "dome-api-staging"          # PLACEHOLDER: the Fly app name for this environment
+primary_region = "ams"            # PLACEHOLDER: pick the region closest to the first customers
+
+# Draining: uvicorn is started with timeout_graceful_shutdown=20 (cloud-api/dome_api/cli.py), so
+# the kill timeout must be longer than 20 s. Agents reconnect with backoff; commands in flight at
+# shutdown are marked outcome_unknown/expired by the start-up sweep of the new process.
+kill_signal = "SIGTERM"
+kill_timeout = "30s"              # Fly maximum is 300 s
+
+# Small VMs page under memory pressure before the OOM killer acts; 256 MB swap is a safety margin,
+# not a capacity plan (see docs/COST_MODEL.md for the sizing assumptions).
+swap_size_mb = 256
+
+[build]
+  # Paths are relative to the fly.toml location by flyctl's own rule; passing --dockerfile on the
+  # command line (as above) removes the ambiguity. ignorefile keeps node_modules/.venv/.env out.
+  dockerfile = "Dockerfile"
+  ignorefile = "Dockerfile.dockerignore"
+  [build.args]
+    VITE_DOME_RELEASE_CHANNEL = "staging"   # PLACEHOLDER: "production" for the production app
+    VITE_DOME_SUPPORT_URL = ""              # PLACEHOLDER: mailto:/https: shown on Support pages
+
+[deploy]
+  # Migrations run once, in a temporary machine, before the new version starts; the app process
+  # is then started with --skip-migrations (start-up still refuses to run unless the schema is at
+  # head). Forward-only: Alembic downgrades are not part of the rollback procedure (README).
+  release_command = "alembic -c alembic.ini upgrade head"
+  # One machine, in-memory connection manager (ADR-0001 D1): a deploy means a brief relay restart.
+  # "rolling" with a single machine is a restart; do not switch to multiple machines without the
+  # Redis seam (cloud-api/KNOWN_ISSUES.md #2).
+  strategy = "rolling"
+
+[processes]
+  app = "dome-api --skip-migrations"
+
+# Non-sensitive configuration only. Secrets (DOME_SESSION_SECRET, DOME_OIDC_CLIENT_SECRET,
+# DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64, DATABASE_URL, Stripe keys) are set with `fly secrets set`
+# and take precedence over [env] values of the same name.
+[env]
+  DOME_ENV = "staging"                                      # PLACEHOLDER: "production" for prod
+  DOME_PUBLIC_ORIGIN = "https://dome-api-staging.fly.dev"   # PLACEHOLDER: the exact https origin the PWA is served from
+  DOME_API_BIND = "0.0.0.0:8080"                            # must match internal_port and the image HEALTHCHECK
+  DOME_LOG_LEVEL = "INFO"
+  DOME_STATIC_DIR = "/app/static"
+  DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH = "/app/run/entitlement-ed25519.pem"
+  DOME_OIDC_ISSUER = "https://idp.example.com"              # PLACEHOLDER: Auth0 tenant / Keycloak realm issuer URL (https)
+  DOME_OIDC_CLIENT_ID = "dome-staging"                      # PLACEHOLDER: the relying-party client id registered at the issuer
+  DOME_OIDC_REDIRECT_PATH = "/v1/auth/callback"
+  DOME_OIDC_SCOPES = "openid email profile"
+  DOME_RELAY_MAX_CONNECTIONS = "5000"                       # design assumption; keep above the concurrency hard_limit below
+  DOME_RELAY_MAX_FRAME_BYTES = "65536"
+  DOME_RELAY_PER_PC_QUEUE_DEPTH = "16"
+  # DOME_TRUSTED_PROXIES is REQUIRED in staging/production and intentionally NOT given a value here:
+  # it is the address range the Fly proxy connects FROM as seen by this process (expected to be the
+  # private 6PN range, e.g. "fdaa::/16"). Verify it on the first machine with
+  # `fly ssh console -C "ss -tn"` and then set it with `fly secrets set` or add it here. A wrong value
+  # makes every per-IP abuse limit and every stored ip_hash attacker-chosen; "*" is refused by the API.
+  # The process refuses to start until it is set (cloud-api/dome_api/settings.py).
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Long-lived WebSockets from every PC agent: machines must never be stopped by the proxy.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ["app"]
+
+  # Each agent and each phone holds one WebSocket, so capacity is counted in connections, not
+  # requests. hard_limit below DOME_RELAY_MAX_CONNECTIONS so the proxy stops routing before the
+  # API starts refusing upgrades with 503. Design assumptions, not load-tested on Fly.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 4000
+    hard_limit = 4800
+
+  # /healthz: 200 when the database round-trip works, 503 (degraded) otherwise.
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/healthz"
+    protocol = "http"
+
+[[vm]]
+  # Starting size (docs/COST_MODEL.md assumption). The relay is I/O bound; measure RSS under the
+  # load smoke (tests/test_load_smoke.py: ~215 MiB RSS with 40 agents + 40 controllers + the test
+  # process itself) before going smaller.
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
