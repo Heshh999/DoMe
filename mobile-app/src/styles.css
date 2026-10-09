@@ -102,20 +102,25 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* Every interactive control is at least 44x44 CSS px. */
-button,
-[role="button"],
-input[type="range"],
-a.tap,
-select {
-  min-height: 44px;
-}
-button,
-a,
-input,
-select,
-textarea {
-  font: inherit;
+/* Element defaults sit in the base layer so utilities on the same element win: in Tailwind 4 an
+   unlayered rule beats every utility, which silently dropped text-*, font-* and min-h-* classes on
+   buttons, links and inputs (11px tab labels rendered at 16px and overflowed on phones).
+   Every interactive control is still at least 44x44 CSS px unless a utility asks for more. */
+@layer base {
+  button,
+  [role="button"],
+  input[type="range"],
+  a.tap,
+  select {
+    min-height: 44px;
+  }
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
 }
 
 :focus-visible {
