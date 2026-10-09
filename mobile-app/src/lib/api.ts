@@ -160,5 +160,11 @@ export const api = {
   linkDeny: (userCode: string) => apiRequest<void>("POST", `/v1/agent-link/${encodeURIComponent(userCode)}/deny`, { responseBody: null }),
 
   commands: () => apiRequest<rest.CommandsResponse>("GET", "/v1/commands", { responseBody: "commands_response" }),
+
+  // Support (spec §11A): the only path by which anything leaves the phone for support staff, and only
+  // what the customer typed plus the diagnostics bundle they reviewed.
+  supportTicketCreate: (body: rest.SupportTicketRequest) => apiRequest<rest.SupportTicketResponse>("POST", "/v1/support/tickets", { responseBody: "support_ticket_response", requestBody: "support_ticket_request", body }),
+  supportTickets: () => apiRequest<rest.SupportTicketsResponse>("GET", "/v1/support/tickets", { responseBody: "support_tickets_response" }),
+  supportTicket: (id: string) => apiRequest<rest.SupportTicketResponse>("GET", `/v1/support/tickets/${encodeURIComponent(id)}`, { responseBody: "support_ticket_response" }),
   securityEvents: () => apiRequest<rest.SecurityEventsResponse>("GET", "/v1/account/security-events", { responseBody: "security_events_response" }),
 };

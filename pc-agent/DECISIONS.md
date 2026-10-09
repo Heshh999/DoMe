@@ -102,3 +102,69 @@
     half-open socket never reached the relay, which by then has told the phone `outcome_unknown` and
     accepts one correction per command. This also delivers the `failed/PC_OFFLINE` verdict for queued
     commands dropped at disconnect, so the phone learns that nothing ran.
+22. **Input sessions retire the id before anything is released** (`InputSessionManager._end`): state →
+    `ended`, id into the retired ring (64 ids), queue cleared, the in-flight dispatch (a worker thread)
+    awaited for up to 2 s, THEN `release(held_buttons, held_keys)`, THEN `input_session{ended}`. A
+    delayed batch for a retired id gets `INPUT_SESSION_EXPIRED` and can never press anything again;
+    the dispatch thread also re-checks `session.live` before every event.
+23. **Acks count the phone's events, not the coalesced injections.** `coalesce_events` returns
+    `(event, n)` pairs so `accepted_events` / `dropped_events` match what the controller sent (its own
+    bookkeeping) while adjacent motion is still one `SendInput` call.
+24. **Event-type coverage (`INPUT_NOT_PERMITTED`) is the manager's check**, using the session's
+    pointer/keyboard flags that always mirror the grant's effective capabilities
+    (`apply_capabilities` on every snapshot and every local change). The agent applies steps 3-4
+    (remote switch, plan state, live grant) first. This way the drop is counted in the acks instead of
+    vanishing in an error frame.
+25. **Target change stops typing once, then the customer continues.** The spec forbids silently
+    stealing focus and asks to stop pending text when the known target changes; it does not ask the
+    agent to keep refusing forever. After one `INPUT_TARGET_CHANGED` the new foreground identity becomes
+    the target (the phone shows it via `pc_state.foreground_app`); a user-directed click re-captures it
+    immediately. Pointer events in the same batch still run (ordering preserved).
+26. **`\n`, `\r\n` and `\t` inside a text event are rendered as the Enter / Tab keys**, everything else
+    as `KEYEVENTF_UNICODE` code units. `WM_CHAR` U+000A/U+0009 are not accepted by ordinary edit
+    controls; rendering them as the key the customer would press keeps the text literal. The phone
+    sends an explicit Enter key event anyway.
+27. **Secure desktop ends the session; an elevated foreground window only restricts.** The watchdog
+    ends with `secure_desktop` when `input_restricted()` is true and the foreground is unknown or not
+    elevated (lock screen, UAC/consent desktop); an elevated window in front keeps the session alive
+    (the customer can click elsewhere), reports `pc_state.input_restricted` and makes injections fail
+    `INPUT_RESTRICTED`.
+28. **A suspended session releases its holds immediately** (a stuck drag must not wait for the lease),
+    keeps its id answering `INPUT_SUSPENDED`, and is ended by the lease watchdog (`lease_expired`) or
+    replaced by the next `input.session_start`. Backpressure is measured as dispatch lag (monotonic time
+    since the batch was accepted), not as the controller's `issued_at`: the receipt check already
+    bounded the latter, and the rule speaks of dispatch falling behind.
+29. **A start from the controller that already owns the session is a restart**: the old session ends
+    with reason `stopped` (there is no `restarted` reason; `pc_switch` is what the PWA sends as a stop
+    before leaving, see CONTRACT_ISSUES.md #9) and its holds are released before the new id exists.
+30. **Error frames for dropped batches are rate-limited to one per code per second per session**; the
+    counts travel in the acks (≤ 4/s). Forty stale batches per second would otherwise produce forty
+    error frames per second on the controller socket.
+31. **One failed injection drops the rest of its batch.** Continuing after a failed event would run the
+    remainder out of order relative to what failed; the next batch starts clean. Failed `down` events
+    are not recorded as holds.
+32. **The instance lock lives in `cmd_run`, not in `Agent.start()`**, so tests and embedded agents can
+    construct an `Agent` without taking it; the control op `ping` reports the pid so `status`/`repair`
+    can name a running instance even when the pid file is missing; the inspection probe acquires the
+    lock with `probe=True` (no pid file written or removed).
+33. **Local grant changes are journaled by kid** (`pending_grant_updates`): a provisional controller
+    (`pending-<kid>`) cannot be named to the relay until the first snapshot resolves its id, after
+    which the pending `grant_update` is sent with the real id. `grant_update.capabilities` has
+    `minItems: 1`, so withdrawing the last capability is refused: revoke the phone instead.
+34. **Power confirmation detail** (`authz.power_confirmation_detail`): "N s countdown, cancellable from
+    the phone. Sleeping/Restarting/Shutting down can interrupt or end remote access to this PC. DoMe
+    cannot wake it or turn it on again remotely (no remote wake in V1)." — ≤ 200 characters, shown
+    verbatim by the phone.
+35. **Relay disconnect ends the session with `controller_disconnected`; agent stop with
+    `agent_restart`.** The frame for the disconnect case cannot be delivered (the socket is gone) and
+    is sent best-effort; the phone learns it from the relay's own disconnect handling and the id is
+    retired locally so no reconnect can replay it.
+36. **`input.session_start` refuses `PLATFORM_UNSUPPORTED` in the handler** because the registry's
+    availability list for it lacks `windows` (CONTRACT_ISSUES.md #8): a session that can never inject
+    must not be started.
+37. **The crash-recovery file carries the session and controller ids** (no content) so the restarted
+    agent can send `input_session{ended, agent_restart, holds_released}` after its first snapshot; if
+    the release itself fails the file is kept so the next start-up retries.
+38. **`SUPPORTED_PROTOCOL_VERSIONS = ("1.0", "1.1")` is announced everywhere** (relay hello, bridge
+    error detail): the MINOR rule makes both acceptable and the e2e test asserts the hello list. The
+    bridge test that expected `["1.1"]` alone contradicted that and was corrected.

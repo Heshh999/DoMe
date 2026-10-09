@@ -30,6 +30,13 @@ export interface ConfirmationModalProps {
   now?: () => Date;
 }
 
+/** Fixed copy for every Sleep / Restart / Shutdown confirmation (spec §10). */
+export const POWER_CONFIRMATION_COPY = "This can interrupt or end remote access to the PC. DoMe cannot wake or power it on again remotely in this version, so you will need to be at the PC to restore access.";
+
+export function isPowerAction(action: string): boolean {
+  return action === "power.sleep" || action === "power.restart" || action === "power.shutdown";
+}
+
 export function ConfirmationModal({ record, pcName, labels, connected = true, onRespond, onDismiss, now = () => new Date() }: ConfirmationModalProps) {
   const pending = record.confirmation;
   const [busy, setBusy] = useState<"approve" | "decline" | null>(null);
@@ -50,6 +57,7 @@ export function ConfirmationModal({ record, pcName, labels, connected = true, on
   const bound = pending.bindingProblem === null;
   const offline = !connected || pending.connectionLost;
   const canClose = onDismiss !== undefined && (expired || offline);
+  const power = isPowerAction(pending.parsed.challenge.action);
 
   const respond = async (decision: "approve" | "decline") => {
     setBusy(decision);
@@ -76,6 +84,11 @@ export function ConfirmationModal({ record, pcName, labels, connected = true, on
         <p className="mt-3 rounded-control bg-bg-sunken border border-border px-3 py-2 text-sm text-text-muted break-words" data-testid="confirm-detail">
           <span className="block text-[11px] uppercase tracking-wider text-text-faint mb-0.5">Reported by the PC</span>
           {desc.detail}
+        </p>
+      ) : null}
+      {power ? (
+        <p className="mt-3 text-sm text-text" data-testid="confirm-power-copy">
+          {POWER_CONFIRMATION_COPY}
         </p>
       ) : null}
       {!bound ? (

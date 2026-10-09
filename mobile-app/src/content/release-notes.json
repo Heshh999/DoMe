@@ -1,0 +1,65 @@
+{
+  "$comment": "Public release history and known issues (spec §11A). Every entry is honest about verification: nothing in this build is Windows-device-tested or iPhone-tested. Rendered by src/pages/public/ReleaseNotesPage.tsx.",
+  "status": {
+    "channel": "pre-release",
+    "headline": "DoMe is a pre-release build. There is no public Windows installer yet and no customer-facing release has been verified on real devices.",
+    "verification": "Automated tests run on every component (unit and integration, with simulated Windows and phone behaviour). Real iPhone and real Windows PC checks are listed as pending below; nothing on this page claims they passed."
+  },
+  "releases": [
+    {
+      "version": "0.1.0 (protocol 1.1)",
+      "date": "2026-10",
+      "state": "in development — not published",
+      "changes": [
+        "Free touchpad and keyboard: cursor movement, clicks, double click, right click, scrolling, explicit Drag mode, literal typing with a Compose and Send fallback, tested shortcuts (Ctrl+A/C/V/Z, Ctrl+L in browsers).",
+        "Explicit, independently revocable touchpad and keyboard permissions per phone, granted by the PC owner on the PC; existing pairings do not receive them automatically.",
+        "Connection health screen with one next action per state, a first-use walkthrough, and help links from every failure.",
+        "Support requests from the app with a reference number after receipt and a copyable redacted summary when sending fails.",
+        "Now Playing panel showing exactly which PC, app or browser tab a media control will affect.",
+        "Sleep, restart and shutdown confirmations state that remote access can end and that remote wake is not supported."
+      ],
+      "verified": ["Unit and component tests in the phone app (jsdom), the PC agent (simulated Windows adapter) and the relay (real PostgreSQL)."],
+      "not_verified": ["Real iPhone Safari / installed PWA gestures, keyboard varieties (IME, autocorrect, dictation, emoji), rotation and backgrounding.", "Real Windows input injection, multi-monitor and mixed-DPI behaviour, lock screen and UAC restrictions.", "Network loss during a drag, key hold or text send on real devices.", "Installer, update and uninstall on Windows 10/11."]
+    },
+    {
+      "version": "0.1.0 (protocol 1.0)",
+      "date": "2026-10",
+      "state": "internal build — not published",
+      "changes": ["YouTube control through the browser extension in a background tab, Windows media sessions and system volume, approved apps, Lock, confirmed Sleep/Restart/Shutdown.", "Pairing by QR code with local approval on the PC; per-phone signing keys; revocation."],
+      "verified": ["Component test suites and an end-to-end relay-path test between the real services on one machine."],
+      "not_verified": ["Any real-device scenario."]
+    }
+  ],
+  "known_issues": [
+    {
+      "title": "No official Windows download yet",
+      "detail": "The signed installer and update channel are not published. The Download page says so instead of offering a dead or unsigned link.",
+      "workaround": "None for customers; developers run the agent from source as described in the repository."
+    },
+    {
+      "title": "Double tap on the touchpad relies on Windows’ double-click timing",
+      "detail": "Two quick taps send two clicks; Windows combines them into a double click within its own double-click time (500 ms by default). On a slow connection the second click can arrive late and count as a separate click.",
+      "workaround": "Use the Double button under the touchpad, which sends a true double click."
+    },
+    {
+      "title": "Live typing pauses after some edits",
+      "detail": "Correcting text in the middle of what was already sent, or deleting an emoji or accented cluster, cannot be mirrored safely on the PC. Live typing then pauses with an explanation; nothing is sent.",
+      "workaround": "Fix the text on the PC, or use Compose and Send for the rest."
+    },
+    {
+      "title": "The phone cannot see which field has focus on the PC",
+      "detail": "DoMe shows the window in front, not the field inside it. Typing goes to whatever the PC has focused.",
+      "workaround": "Click the field on the PC (with the touchpad) before typing."
+    },
+    {
+      "title": "Lock screen, sign-in and administrator prompts cannot be controlled",
+      "detail": "Windows refuses remote input on protected screens by design, and DoMe does not try to bypass that.",
+      "workaround": "Unlock or answer the prompt at the PC."
+    },
+    {
+      "title": "Freshness is re-evaluated every 5 seconds",
+      "detail": "After the PC goes quiet, controls can stay enabled for up to 5 seconds past the 75-second freshness limit.",
+      "workaround": "None needed; the next state report re-enables them."
+    }
+  ]
+}

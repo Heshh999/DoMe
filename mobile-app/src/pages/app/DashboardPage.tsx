@@ -6,6 +6,8 @@
 import { Link } from "react-router";
 
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
+import { FailureLinks } from "../../components/FailureLinks.tsx";
+import { NowPlaying } from "../../components/NowPlaying.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, Notice, Pill } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
@@ -46,6 +48,7 @@ export function DashboardPage() {
       {remoteOff ? (
         <Notice tone="warning" title="Remote control is switched off on the PC">
           <Steps steps={recoverySteps("PC_REMOTE_DISABLED")} />
+          <FailureLinks code="PC_REMOTE_DISABLED" />
         </Notice>
       ) : null}
       {locked && !remoteOff ? <Notice tone="info">The PC is locked. {state?.media_while_locked ? "Media controls are allowed while locked." : "Only Lock and status are available until it is unlocked."}</Notice> : null}
@@ -65,48 +68,14 @@ export function DashboardPage() {
         </Notice>
       ) : null}
 
-      <Card>
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="font-semibold">Now playing</h2>
-          <Link to="/app/remote" className="tap inline-flex items-center text-sm text-accent font-semibold px-1">
-            Open remote
-          </Link>
-        </div>
-        {yt.ok ? (
-          <div className="flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-text-faint">YouTube{yt.tab.ad_showing ? " · ad playing" : yt.tab.is_live ? " · live" : ""}</p>
-              <p className="font-medium truncate" title={yt.tab.title ?? undefined}>
-                {yt.tab.title ?? "YouTube video"}
-              </p>
-            </div>
-            <Button size="lg" variant="primary" disabled={!canControl || yt.tab.paused === undefined} aria-label={yt.tab.paused ? "Play" : "Pause"} onClick={() => void send("youtube.set_paused", { paused: !yt.tab.paused }, yt.target, "button")}>
-              {yt.tab.paused ? "Play" : "Pause"}
-            </Button>
-          </div>
-        ) : media.ok ? (
-          <div className="flex items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-text-faint">{media.session.app_label ?? "Windows media"}</p>
-              <p className="font-medium truncate">{media.session.title ?? "Playing"}</p>
-            </div>
-            <Button size="lg" variant="primary" disabled={!canControl || !(media.session.controls.includes("pause") || media.session.controls.includes("play"))} onClick={() => void send("media.set_paused", { paused: media.session.status === "playing" }, media.target, "button")}>
-              {media.session.status === "playing" ? "Pause" : "Play"}
-            </Button>
-          </div>
-        ) : (
-          <p className="text-sm text-text-muted">
-            {!fresh ? "Media state is not available until the PC is online." : yt.reason === "ambiguous" || media.reason === "ambiguous" ? "More than one player is active — choose one in the remote." : yt.reason === "none_attached" ? "A YouTube tab is open but needs a reload before DoMe can control it." : state?.extension_connected === false ? "Nothing is playing. To control YouTube, install the DoMe browser extension on the PC." : "Nothing is playing on the PC right now."}
-          </p>
-        )}
-      </Card>
+      <NowPlaying pcName={pcName} state={state} fresh={fresh} canControl={canControl} selectedTab={selectedTab} selectedSession={selectedSession} onSend={(action, params, target) => void send(action, params, target, "button")} />
 
       <VolumeSlider label="Windows volume" scopeHint="The PC’s system volume — affects every app." value={fresh && typeof volume?.value === "number" ? volume.value : null} muted={fresh ? (volume?.muted ?? null) : null} disabled={!canControl} onChange={(v) => void send("windows.set_volume", { value: v }, null, "slider")} onToggleMute={() => void send("windows.set_muted", { muted: !(volume?.muted ?? false) }, null, "button")} />
 
       <Card>
         <h2 className="font-semibold mb-3">Quick actions</h2>
         <div className="grid grid-cols-2 gap-2">
-          <Button size="lg" disabled={!canControl || !yt.ok} onClick={() => yt.ok && void send("youtube.next", {}, yt.target, "button")}>
+          <Button size="lg" disabled={!canControl || !yt.ok || yt.tab.has_next === false} onClick={() => yt.ok && void send("youtube.next", {}, yt.target, "button")}>
             Next video
           </Button>
           <Button size="lg" disabled={!canControl || !yt.ok} onClick={() => yt.ok && void send("youtube.seek_relative", { seconds: -10 }, yt.target, "button")}>
@@ -119,6 +88,8 @@ export function DashboardPage() {
             Sleep…
           </Button>
         </div>
+        {yt.ok && yt.tab.has_next === false ? <p className="text-xs text-text-muted mt-2">This player reports no next video, so Next is unavailable.</p> : null}
+        {!yt.ok && media.ok ? <p className="text-xs text-text-muted mt-2">Next video and Back 10 s are YouTube controls; they stay off while the target is a Windows media player and are never turned into a generic media key.</p> : null}
         <p className="text-xs text-text-faint mt-2">Sleep, restart and shut down always ask you to confirm on this phone first.</p>
       </Card>
 
@@ -126,6 +97,7 @@ export function DashboardPage() {
         <Notice tone="danger" title="Not sent">
           <p>{errorMessage(sendError)}</p>
           <Steps steps={recoverySteps(sendError.code)} />
+          <FailureLinks code={sendError.code} />
           <Button size="md" variant="ghost" onClick={clearError}>
             Dismiss
           </Button>
