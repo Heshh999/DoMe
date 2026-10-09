@@ -101,6 +101,7 @@ class AgentConn(_Conn):
         "remote_enabled_reported",
         "supports_input",
         "input_sessions",
+        "error_route_ok",
         "events_suppressed",
     )
 
@@ -119,6 +120,8 @@ class AgentConn(_Conn):
         # Bounded: the latest session per controller, at most MAX_AGENT_INPUT_SESSIONS entries (one live session
         # per PC is the rule; the slack covers a takeover whose `ended` frame is still in flight).
         self.input_sessions: dict[str, uuid.UUID] = {}
+        # controllers verified to belong to this PC's account, for routing agent INPUT_* error frames (bounded)
+        self.error_route_ok: set[uuid.UUID] = set()
         self.events_suppressed = 0  # agent-attributed rejection rows not written because the per-PC cap was hit
 
     def remember_input_session(self, input_session_id: str, controller_id: uuid.UUID) -> None:

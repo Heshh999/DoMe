@@ -298,7 +298,7 @@ export interface HelloAck {
   pc_id?: Uuid;
 }
 /**
- * Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors). Command-scoped failures are always `result` frames.
+ * Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors, manual-input batch rejections). Command-scoped failures are always `result` frames.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "error_frame".
@@ -310,6 +310,14 @@ export interface ErrorFrame {
    * Required for subscription errors so the controller knows which PC was refused
    */
   ref_pc_id?: string;
+  /**
+   * Manual-input rejections (INPUT_*): the input session the refused batch named. The phone ignores errors for a session it no longer runs.
+   */
+  ref_input_session_id?: string;
+  /**
+   * Agent → relay only, on INPUT_* rejections: the controller whose batch was refused. The relay routes the frame to that controller's 1.1 sockets (after checking the controller belongs to the PC's account) and strips this field.
+   */
+  ref_controller_id?: string;
 }
 /**
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema

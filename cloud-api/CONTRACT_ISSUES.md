@@ -66,6 +66,8 @@ next protocol MINOR bump.
     rejections.** Implemented as at most one `input_rejected` event per minute per controller (bounded by the
     per-socket cap as well). Proposed: state the bound in the rule so phones and the security log agree on what
     a burst of rejections looks like.
+    **Resolved by the maintainer (protocol 1.1 amendment, 2026-10-09):** agent `error` frames carrying `ref_controller_id` are now routed (not logged only) after an account check; foreign or owner-contradicting routes are refused with a `relay_frame_rejected` event.
+
 15. **`support_ticket_request.diagnostics` (≤ 32768 chars) exceeds the service's generic 16 KiB REST body
     limit.** Not a contract defect, but worth noting: the support endpoint reads up to 48 KiB. Proposed: a
     `limits.max_rest_body_bytes` (or a per-def hint) so clients and servers size buffers from one place.

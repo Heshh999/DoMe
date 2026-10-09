@@ -49,6 +49,8 @@
     `dropped_events`, `pc_state.input_restricted` / `foreground_app` and `input_session` frames only.
     Needs a contract field (`error_frame.ref_input_session_id`) and relay routing; not fixable inside
     pc-agent.
+    **Resolved by the maintainer (protocol 1.1 amendment, 2026-10-09):** rejection reasons now reach the phone (see CONTRACT_ISSUES #11); the phone ignores rejections naming a session it has left.
+
 14. **Clock-offset estimate, residual cases** (DECISIONS.md #39): the first batch of a session is judged
     against the `input.session_start` sample; if that command and the first batch were both delayed by
     the same stall, the first batch can pass (the envelope window still bounds it to ~15 s, and the next

@@ -86,8 +86,17 @@ def state_frame(pc_id: str, state: dict[str, Any]) -> dict[str, Any]:
     return {"type": "state", "pc_id": pc_id, "at": now_text(), "state": state}
 
 
-def error_frame(spec: ErrorSpec) -> dict[str, Any]:
-    return {"type": "error", "error": error_object(spec)}
+def error_frame(
+    spec: ErrorSpec, *, ref_input_session_id: str | None = None, ref_controller_id: str | None = None
+) -> dict[str, Any]:
+    """``ref_input_session_id`` / ``ref_controller_id`` mark a manual-input rejection so the relay can route it to the
+    batch's controller (rules.input_sessions)."""
+    frame: dict[str, Any] = {"type": "error", "error": error_object(spec)}
+    if ref_input_session_id is not None:
+        frame["ref_input_session_id"] = ref_input_session_id
+    if ref_controller_id is not None:
+        frame["ref_controller_id"] = ref_controller_id
+    return frame
 
 
 def ping_frame() -> dict[str, Any]:

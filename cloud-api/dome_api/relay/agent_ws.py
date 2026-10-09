@@ -194,7 +194,7 @@ async def _loop(ws: WebSocket, svc: Services, mgr: ConnectionManager, conn: Agen
         elif kind == "grant_update":
             await _on_grant_update(mgr, conn, frame)
         elif kind == "error":
-            log.warning("agent.error_frame", pc_id=str(conn.pc_id), code=frame["error"].get("code"))
+            await _on_agent_error(mgr, conn, frame)
         await mgr.touch_pc_last_seen(conn.pc_id, conn.last_seen)
 
 
@@ -510,6 +510,42 @@ async def _on_input_session(mgr: ConnectionManager, conn: AgentConn, frame: dict
         conn.remember_input_session(session_id, controller_id)
     written = await mgr.send_input_frame_to_controller(controller_id, frame)
     await mgr.broadcast_to_subscribers(conn.pc_id, frame, validate=False, input_frame=True, skip=written)
+
+
+MAX_ERROR_ROUTES = 64
+
+
+async def _on_agent_error(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    """An agent ``error`` frame. Manual-input rejections (INPUT_* with ``ref_controller_id``) go to that controller's
+    1.1 sockets with ``ref_pc_id`` added and ``ref_controller_id`` stripped (rules.input_sessions); the controller must
+    belong to this PC's account and, when the session is known, be its owner. Everything else is logged only."""
+    error = frame["error"]
+    code = str(error.get("code", ""))
+    ref_controller = frame.get("ref_controller_id")
+    session_id = frame.get("ref_input_session_id")
+    if not code.startswith("INPUT_") or ref_controller is None:
+        log.warning("agent.error_frame", pc_id=str(conn.pc_id), code=code)
+        return
+    controller_id = uuid.UUID(ref_controller)
+    owner = conn.input_sessions.get(session_id) if session_id else None
+    if owner is not None and owner != controller_id:
+        log.warning("agent.error_frame.owner_mismatch", pc_id=str(conn.pc_id), code=code)
+        await mgr.agent_rejection_event(conn, {"frame": "error", "reason": "owner_mismatch"})
+        return
+    if owner is None and controller_id not in conn.error_route_ok:
+        async with mgr.db() as db:
+            ctrl = await db.get(Controller, controller_id)
+        if ctrl is None or ctrl.account_id != conn.account_id:
+            log.warning("agent.error_frame.foreign_controller", pc_id=str(conn.pc_id), code=code)
+            await mgr.agent_rejection_event(conn, {"frame": "error", "reason": "controller_not_in_account"})
+            return
+        if len(conn.error_route_ok) >= MAX_ERROR_ROUTES:
+            conn.error_route_ok.clear()
+        conn.error_route_ok.add(controller_id)
+    out: dict[str, Any] = {"type": "error", "error": error, "ref_pc_id": str(conn.pc_id)}
+    if session_id is not None:
+        out["ref_input_session_id"] = session_id
+    await mgr.send_input_frame_to_controller(controller_id, out)
 
 
 async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:

@@ -240,7 +240,10 @@ async def test_replayed_seq_and_stale_batches_are_dropped(harness: AgentHarness,
     await send_batch(harness, controller, sid, 1, [MOVE])
     await wait_for(lambda: harness.fake.input_count("move") == 1)
     await send_batch(harness, controller, sid, 1, [MOVE])  # replay
-    await expect_error(harness, "INPUT_SEQUENCE_INVALID")
+    err = await expect_error(harness, "INPUT_SEQUENCE_INVALID")
+    # routed to the batch's phone by the relay (rules.input_sessions): the frame names the session and controller
+    assert err["ref_input_session_id"] == sid and err["ref_controller_id"] == controller.controller_id
+    load_schemas().validate_frame("agent_to_relay", err)
     await send_batch(harness, controller, sid, 2, [MOVE], issued_at=now_utc() - timedelta(seconds=2))  # stale
     err = await expect_error(harness, "INPUT_STALE")
     assert err["error"]["retryable"] is True

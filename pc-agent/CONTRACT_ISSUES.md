@@ -57,6 +57,8 @@
     `pc_state.input_restricted` or `foreground_app` changes, `input_session{suspended|ended, reason}`.
     pc-agent cannot add the integration test "reason reaches the controller on the real relay path":
     the contract has no field for it and the relay is another component.
+    **Resolved by the maintainer (protocol 1.1 amendment, 2026-10-09):** `error_frame` gained `ref_input_session_id` and `ref_controller_id`; the agent sets both on every input rejection and cloud-api routes the frame to that controller's 1.1 sockets (`relay/agent_ws.py::_on_agent_error`), stripping `ref_controller_id` and adding `ref_pc_id`.
+
 12. **`grant_update.capabilities` has `minItems: 1`**, so a grant cannot be emptied through this frame;
     the agent refuses the local change ("revoke instead"). Fine, but worth a sentence in
     `rules.grant_update`.
@@ -81,6 +83,8 @@
     the controller's clock offset (bounded by max_clock_skew_seconds, e.g. a windowed minimum of
     now − issued_at over the session's batches) — to be <= input_age_budget_ms; the agent may
     additionally bound the relay → agent leg with relay.received_at the same way".
+    **Resolved by the maintainer (protocol 1.1 amendment, 2026-10-09):** `rules.input_sessions` now defines the age against the per-session clock-offset estimate (as implemented by `AgeEstimator`).
+
 17. **UIPI and `INPUT_RESTRICTED`.** Windows drops input aimed at a higher-integrity window without an
     error (`SendInput` returns the full count), so "Windows accepted" in `input_ack` is not observable
     there. The agent refuses keyboard events with `INPUT_RESTRICTED` while it knows an elevated window

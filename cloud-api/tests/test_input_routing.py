@@ -494,3 +494,79 @@ async def test_pairing_may_request_pointer_and_keyboard(env: Env, alice: Browser
     assert online_agent.snapshot["controllers"][0]["capabilities"] == ["keyboard", "media", "status"]
     grants = (await alice.get(f"/v1/pcs/{online_agent.pc_id}/grants", schema="grants_response"))["grants"]
     assert grants[0]["capabilities"] == ["keyboard", "media", "status"]
+
+
+async def test_agent_input_rejections_reach_only_the_batch_controller(
+    env: Env, alice: Browser, bob: Browser, online_agent: AgentSim
+) -> None:
+    """rules.input_sessions: an agent INPUT_* error frame naming ref_controller_id is delivered to that controller's
+    1.1 sockets with ref_pc_id added and ref_controller_id stripped; other phones never see it; a controller outside
+    the PC's account or contradicting the known session owner is refused and audited; plain agent errors stay logs."""
+    pc = online_agent.pc_id
+    owner = await _input_pair(env, alice, online_agent)
+    watcher = ControllerSim(env, alice, name="Other phone")
+    await watcher.pair(online_agent)
+    await watcher.connect()
+    await watcher.subscribe(pc)
+    assert (await watcher.recv())["type"] == "pc_status"
+    sid = new_input_session_id()
+    try:
+        # a retired session (unknown to the relay): routed by ref_controller_id after the account check
+        await online_agent.send(
+            {
+                "type": "error",
+                "error": {"code": "INPUT_SESSION_EXPIRED", "message": "x", "retryable": True},
+                "ref_input_session_id": sid,
+                "ref_controller_id": owner.controller_id,
+            }
+        )
+        err = await owner.recv_type("error")
+        assert err == {
+            "type": "error",
+            "error": {"code": "INPUT_SESSION_EXPIRED", "message": "x", "retryable": True},
+            "ref_pc_id": pc,
+            "ref_input_session_id": sid,
+        }
+        await expect_nothing(watcher.ws, 0.4)  # type: ignore[arg-type]
+
+        # a live session owned by `owner`: an error naming another controller for it is refused
+        await online_agent.input_session(sid, owner.controller_id or "", "started", "started")
+        await owner.recv_type("input_session")
+        await watcher.recv_type("input_session")
+        await online_agent.send(
+            {
+                "type": "error",
+                "error": {"code": "INPUT_STALE", "message": "x", "retryable": True},
+                "ref_input_session_id": sid,
+                "ref_controller_id": watcher.controller_id,
+            }
+        )
+        await expect_nothing(watcher.ws, 0.4)  # type: ignore[arg-type]
+        await expect_nothing(owner.ws, 0.2)  # type: ignore[arg-type]
+
+        # a controller of another account is never a route
+        stranger = ControllerSim(env, bob, name="Bob's phone")
+        await online_agent.send(
+            {
+                "type": "error",
+                "error": {"code": "INPUT_STALE", "message": "x", "retryable": True},
+                "ref_controller_id": str(uuid.uuid4()),
+            }
+        )
+        await expect_nothing(owner.ws, 0.4)  # type: ignore[arg-type]
+        assert stranger.ws is None
+        reasons = [
+            e["detail"].get("reason")
+            for e in (await alice.get("/v1/account/security-events"))["events"]
+            if e["kind"] == "relay_frame_rejected" and e["detail"].get("frame") == "error"
+        ]
+        assert "owner_mismatch" in reasons and "controller_not_in_account" in reasons
+
+        # a non-input agent error is only logged
+        await online_agent.send(
+            {"type": "error", "error": {"code": "MALFORMED_MESSAGE", "message": "x", "retryable": False}}
+        )
+        await expect_nothing(owner.ws, 0.4)  # type: ignore[arg-type]
+    finally:
+        await owner.close()
+        await watcher.close()

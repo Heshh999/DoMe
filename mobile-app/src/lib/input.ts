@@ -424,6 +424,12 @@ export class InputSessionClient {
     const code = frame.error.code;
     if (!frame.ref_pc_id || frame.ref_pc_id !== this.state.pcId) return false;
     const inputCode = code.startsWith("INPUT_") || code === "RATE_LIMITED";
+    // The PC names the session whose batch it refused (rules.input_sessions); a rejection for a session this phone
+    // has already left (an old session, a takeover by this phone) must not end or annotate the current one.
+    if (inputCode && frame.ref_input_session_id && frame.ref_input_session_id !== this.state.sessionId) {
+      log.info("input.batch_rejected_other_session", { code });
+      return true;
+    }
     const live = this.state.phase === "live" || this.state.phase === "starting";
     if (!inputCode && !(live && (code === "PC_OFFLINE" || code === "PC_RECONNECTING"))) return false;
     log.info("input.batch_rejected", { code });

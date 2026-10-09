@@ -392,7 +392,11 @@ describe("InputSessionClient", () => {
     socket.receive({ type: "error", error: { code: "INPUT_NOT_PERMITTED", message: "x", retryable: false }, ref_pc_id: PC });
     expect(rt.input.snapshot.problem?.code).toBe("INPUT_NOT_PERMITTED");
     expect(useLiveStore.getState().pcs[PC]!.refused).toBeNull();
-    socket.receive({ type: "error", error: { code: "INPUT_SESSION_EXPIRED", message: "x", retryable: true }, ref_pc_id: PC });
+    // a rejection naming another (old) session never ends the current one
+    socket.receive({ type: "error", error: { code: "INPUT_SESSION_EXPIRED", message: "x", retryable: true }, ref_pc_id: PC, ref_input_session_id: "Z".repeat(22) });
+    expect(rt.input.snapshot.phase).toBe("live");
+    const sid = rt.input.snapshot.sessionId!;
+    socket.receive({ type: "error", error: { code: "INPUT_SESSION_EXPIRED", message: "x", retryable: true }, ref_pc_id: PC, ref_input_session_id: sid });
     expect(rt.input.snapshot.phase).toBe("ended");
     // a subscription refusal still works as before
     socket.receive({ type: "error", error: { code: "GRANT_MISSING", message: "x", retryable: false }, ref_pc_id: PC });

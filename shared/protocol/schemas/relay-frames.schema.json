@@ -168,9 +168,17 @@
         "ref_pc_id": {
           "$ref": "#/$defs/uuid",
           "description": "Required for subscription errors so the controller knows which PC was refused"
+        },
+        "ref_input_session_id": {
+          "$ref": "#/$defs/input_session_id",
+          "description": "Manual-input rejections (INPUT_*): the input session the refused batch named. The phone ignores errors for a session it no longer runs."
+        },
+        "ref_controller_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Agent → relay only, on INPUT_* rejections: the controller whose batch was refused. The relay routes the frame to that controller's 1.1 sockets (after checking the controller belongs to the PC's account) and strips this field."
         }
       },
-      "description": "Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors). Command-scoped failures are always `result` frames."
+      "description": "Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors, manual-input batch rejections). Command-scoped failures are always `result` frames."
     },
     "ping": {
       "type": "object",

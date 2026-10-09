@@ -543,31 +543,31 @@ class InputSessionManager:
         count = len(vb.payload["events"])
         if session is None or session.state == "ended":
             code = "INPUT_SESSION_EXPIRED" if sid in self._retired else "INPUT_SESSION_REQUIRED"
-            await self._report(None, code)
+            await self._report(code, session_id=sid, controller_id=vb.key.controller_id)
             return False
         if sid != session.input_session_id or vb.key.controller_id != session.controller_id:
             code = "INPUT_SESSION_EXPIRED" if sid in self._retired else "INPUT_SESSION_REQUIRED"
-            await self._report(None, code)
+            await self._report(code, session_id=sid, controller_id=vb.key.controller_id)
             return False
         if session.state == "suspended":
             session.dropped_events += count
-            await self._report(session, "INPUT_SUSPENDED")
+            await self._report("INPUT_SUSPENDED", session=session)
             return False
         if vb.seq <= session.last_seq:
             session.dropped_events += count
-            await self._report(session, "INPUT_SEQUENCE_INVALID")
+            await self._report("INPUT_SEQUENCE_INVALID", session=session)
             self._schedule_ack(session)
             return False
         age = self._batch_age(session, vb, relay_received_at, relay_connection_id)
         if age * 1000.0 > self.age_budget_ms:
             session.dropped_events += count
-            await self._report(session, "INPUT_STALE")
+            await self._report("INPUT_STALE", session=session)
             self._schedule_ack(session)
             return False
         needed = vb.required_capabilities
         if ("pointer" in needed and not session.pointer) or ("keyboard" in needed and not session.keyboard):
             session.dropped_events += count
-            await self._report(session, "INPUT_NOT_PERMITTED")
+            await self._report("INPUT_NOT_PERMITTED", session=session)
             self._schedule_ack(session)
             return False
         session.last_seq = vb.seq
@@ -641,7 +641,7 @@ class InputSessionManager:
             if any(code == "INPUT_RESTRICTED" for code, _m in outcome.errors):
                 await self._probe_restricted()  # state frame: pc_state.input_restricted reaches the phone
             for code, message in outcome.errors:
-                await self._report(session, code, message)
+                await self._report(code, message, session=session)
             if session.live:
                 self._schedule_ack(session)
 
@@ -911,16 +911,31 @@ class InputSessionManager:
             )
         )
 
-    async def _report(self, session: InputSession | None, code: str, message: str | None = None) -> None:
-        """Error frame for a dropped batch/event, at most one per code per second (counts go in the ack)."""
+    async def _report(
+        self,
+        code: str,
+        message: str | None = None,
+        *,
+        session: InputSession | None = None,
+        session_id: str | None = None,
+        controller_id: str | None = None,
+    ) -> None:
+        """Error frame for a dropped batch/event, at most one per code per second (counts go in the ack). It names
+        the batch's session and controller so the relay can deliver it to that phone (rules.input_sessions)."""
         now = time.monotonic()
         if now - self._last_error_at.get(code, 0.0) < ERROR_FRAME_INTERVAL:
             return
         self._last_error_at[code] = now
         defaults = load_registry().errors.get(code, {})
         text = message or str(defaults.get("user_message", code))
-        log.info("input batch dropped", code=code, session=session is not None)
-        await self._send(error_frame((code, text, bool(defaults.get("retryable", False)))))
+        sid = session.input_session_id if session is not None else session_id
+        cid = session.controller_id if session is not None else controller_id
+        log.info("input batch dropped", code=code, session=sid is not None)
+        await self._send(
+            error_frame(
+                (code, text, bool(defaults.get("retryable", False))), ref_input_session_id=sid, ref_controller_id=cid
+            )
+        )
 
     # ----- recovery file ---------------------------------------------------------------------------------------
     def _persist_holds(self, session: InputSession) -> None:
