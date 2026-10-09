@@ -104,7 +104,9 @@ const helloAck = { type: "hello_ack", protocol_version: "1.0", server_time: TS, 
 
 async function connected(): Promise<FakeSocket> {
   rt!.start();
-  await flush();
+  // The first socket opens only after the hello proof is signed with a freshly generated key; under
+  // full-suite load that can take more than a few macrotasks.
+  for (let i = 0; i < 50 && sockets.length === 0; i++) await flush();
   const s = sockets[0]!;
   s.open();
   s.receive(helloAck);

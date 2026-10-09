@@ -140,7 +140,8 @@ export function makeRuntime(): RuntimeHarness {
     sockets,
     async connect() {
       rt.start();
-      await flush();
+      // Key generation + hello-proof signing precede the first socket; wait for it instead of assuming 10 ticks.
+      for (let i = 0; i < 50 && sockets.length === 0; i++) await flush();
       const s = sockets[0];
       if (!s) throw new Error("no socket was opened");
       s.open();
