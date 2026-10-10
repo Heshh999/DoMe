@@ -9,7 +9,14 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   `failed to get console: The handle is invalid`: Docker's animated progress display needs the console
   window, and the kit passes program output through PowerShell. Fix: `--progress plain` on every
   compose call and on the extension build, plus `BUILDKIT_PROGRESS=plain`. Re-checked here: the start
-  script builds with plain output and the stack comes up. Windows re-run pending.
+  script builds with plain output and the stack comes up.
+- Re-run: **step 1 passed on Windows end to end** (build, api healthy, public addresses reachable). Step 2
+  stopped at the agent's status: `dome-agent status --json` raised `AttributeError: module
+  'win32process' has no attribute 'ProcessIdToSessionId'` (it lives in `win32ts`). The pipe server
+  also took `FILE_FLAG_FIRST_PIPE_INSTANCE` from `win32con` (it is in `win32pipe`). Both fixed. New
+  guard: `types-pywin32` in the agent's dev tools and `mypy --config-file mypy-windows.ini` (CI) type-
+  checks every Windows code path against the pywin32 stubs; it reports the original bug when it is put
+  back. The kit now prints the agent's own error output when its status cannot be read.
 
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 

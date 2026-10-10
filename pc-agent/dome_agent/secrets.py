@@ -31,7 +31,7 @@ def protection_label() -> str:
 
 def protect(data: bytes) -> bytes:
     if sys.platform == "win32":
-        import win32crypt  # type: ignore[import-not-found]
+        import win32crypt
 
         try:
             blob: bytes = win32crypt.CryptProtectData(data, _DPAPI_DESCRIPTION, None, None, None, 0)
@@ -44,7 +44,7 @@ def protect(data: bytes) -> bytes:
 
 def unprotect(blob: bytes) -> bytes:
     if sys.platform == "win32":
-        import win32crypt  # type: ignore[import-not-found]
+        import win32crypt
 
         try:
             _desc, data = win32crypt.CryptUnprotectData(blob, None, None, None, 0)

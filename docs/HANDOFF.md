@@ -46,6 +46,7 @@ cd shared/python && uv run pytest -q           # 135
 cd shared/ts && pnpm test                       # 86
 cd cloud-api && uv run pytest -q                # 120 (needs the local PostgreSQL and tools/dev-idp venv)
 cd pc-agent && uv run pytest -q                 # 257 (+1 skipped as root)
+cd pc-agent && uv run mypy --config-file mypy-windows.ini  # Windows code paths vs. pywin32 stubs
 cd browser-extension && pnpm test               # 90
 cd mobile-app && pnpm test                      # 291
 cd tools/dev-idp && uv run --extra dev pytest -q  # 14
@@ -119,7 +120,10 @@ unless stated.
   agent, cleared test data and **created both quick-tunnel addresses**; the image build then failed
   with "failed to get console: The handle is invalid" (Docker's animated progress needs the console,
   and the kit pipes program output through PowerShell). Fixed by plain progress for every compose call
-  and the extension build; awaiting the re-run.
+  and the extension build. On the re-run **step 1 passed**; step 2 hit two pywin32 API mistakes in
+  `bridge/ipc.py` (wrong modules for `ProcessIdToSessionId` and `FILE_FLAG_FIRST_PIPE_INSTANCE`), now
+  fixed and guarded by `mypy --config-file mypy-windows.ini` in CI. pycaw, comtypes, winsdk and the
+  ctypes calls have no stubs, so the Windows adapters can still fail at runtime the first time they run.
 - **Windows**: none of `pc-agent/dome_agent/platform/windows/*` (volume via pycaw, media sessions via
   winsdk, app launching, lock, power, start-at-login, native-host registry entries) has run on a
   Windows machine. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the

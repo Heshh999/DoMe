@@ -28,6 +28,9 @@ dev = [
     "mypy>=1.14,<3",
     "ruff>=0.9,<1",
     "types-psutil>=6.1",
+    # Lets `mypy --config-file mypy-windows.ini` check every pywin32 call on the Windows code paths
+    # (a wrong module for ProcessIdToSessionId broke the first real Windows run).
+    "types-pywin32>=312.0.0.20261006",
 ]
 build = [
     "pyinstaller>=6.11,<7",

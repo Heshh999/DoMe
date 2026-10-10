@@ -87,12 +87,12 @@ def _own_identity() -> tuple[str, str]:
     """(SID, session id) on Windows; (uid, "") elsewhere. Always from our OWN token/process."""
     if sys.platform == "win32":
         import win32api
-        import win32process
         import win32security
+        import win32ts
 
         token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
         sid, _attrs = win32security.GetTokenInformation(token, win32security.TokenUser)
-        session_id = win32process.ProcessIdToSessionId(win32api.GetCurrentProcessId())
+        session_id = win32ts.ProcessIdToSessionId(win32api.GetCurrentProcessId())  # type: ignore[no-untyped-call]
         return str(win32security.ConvertSidToStringSid(sid)), str(session_id)
     return str(os.getuid()), ""
 
@@ -120,6 +120,8 @@ def connect(state_dir: Path, timeout: float = 5.0, kind: EndpointKind = "bridge"
 
 
 def _connect_unix(path: str, timeout: float) -> FrameConnection:
+    if sys.platform == "win32":
+        raise RuntimeError("Unix sockets are not used on Windows (named pipes are)")
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     sock.connect(path)
@@ -242,6 +244,8 @@ class IpcServer:
 
     # ----- unix ---------------------------------------------------------------------------------
     def _bind_unix(self) -> socket.socket:
+        if sys.platform == "win32":
+            raise RuntimeError("Unix sockets are not used on Windows (named pipes are)")
         path = self.address
         try:
             os.unlink(path)
@@ -277,6 +281,8 @@ class IpcServer:
 
     @staticmethod
     def _unix_peer(conn: socket.socket) -> PeerInfo:
+        if sys.platform == "win32":
+            raise RuntimeError("Unix sockets are not used on Windows (named pipes are)")
         try:
             creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
             pid, uid, _gid = struct.unpack("3i", creds)
@@ -317,7 +323,6 @@ class IpcServer:
 
     def _create_pipe_instance(self, *, first_instance: bool) -> Any:
         import ntsecuritycon
-        import win32con
         import win32pipe
         import win32security
 
@@ -332,7 +337,7 @@ class IpcServer:
         attributes.bInheritHandle = False
         open_mode = win32pipe.PIPE_ACCESS_DUPLEX
         if first_instance:
-            open_mode |= win32con.FILE_FLAG_FIRST_PIPE_INSTANCE
+            open_mode |= win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE
         pipe_mode = (
             win32pipe.PIPE_TYPE_BYTE
             | win32pipe.PIPE_READMODE_BYTE
@@ -355,8 +360,8 @@ class IpcServer:
         import win32api
         import win32con
         import win32pipe
-        import win32process
         import win32security
+        import win32ts
 
         try:
             pid = int(win32pipe.GetNamedPipeClientProcessId(handle))
@@ -364,7 +369,7 @@ class IpcServer:
             try:
                 token = win32security.OpenProcessToken(process, win32security.TOKEN_QUERY)
                 sid, _attrs = win32security.GetTokenInformation(token, win32security.TokenUser)
-                session = str(win32process.ProcessIdToSessionId(pid))
+                session = str(win32ts.ProcessIdToSessionId(pid))  # type: ignore[no-untyped-call, unused-ignore]
                 return PeerInfo(pid=pid, identity=str(win32security.ConvertSidToStringSid(sid)), session=session)
             finally:
                 win32api.CloseHandle(process)

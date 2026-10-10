@@ -130,6 +130,8 @@ class InstanceLock:
         return True
 
     def _acquire_flock(self) -> bool:
+        if sys.platform == "win32":
+            raise RuntimeError("flock is not used on Windows (a named mutex is)")
         import fcntl
 
         fh = self.lock_path.open("a+", encoding="utf-8")
@@ -157,7 +159,7 @@ class InstanceLock:
         if self._wrote_pid:
             with contextlib.suppress(OSError):
                 self.pid_path.unlink()
-        if self._fh is not None:
+        if sys.platform != "win32" and self._fh is not None:  # only the flock path sets _fh
             import fcntl
 
             with contextlib.suppress(OSError):

@@ -34,8 +34,10 @@ def _enable_shutdown_privilege() -> None:
     token = win32security.OpenProcessToken(
         win32api.GetCurrentProcess(), win32con.TOKEN_ADJUST_PRIVILEGES | win32con.TOKEN_QUERY
     )
-    luid = win32security.LookupPrivilegeValue(None, win32security.SE_SHUTDOWN_NAME)
-    win32security.AdjustTokenPrivileges(token, 0, [(luid, win32con.SE_PRIVILEGE_ENABLED)])
+    # pywin32 documents None as "the local system" and a list of (LUID, attributes) tuples as the new
+    # state; the types-pywin32 stubs are stricter than the runtime here.
+    luid = win32security.LookupPrivilegeValue(None, win32security.SE_SHUTDOWN_NAME)  # type: ignore[arg-type, unused-ignore]
+    win32security.AdjustTokenPrivileges(token, 0, [(luid, win32con.SE_PRIVILEGE_ENABLED)])  # type: ignore[arg-type, unused-ignore]
 
 
 def _map_error(err: int, what: str) -> ProtocolError:

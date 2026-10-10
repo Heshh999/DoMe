@@ -115,6 +115,9 @@ jobs:
       - name: pc-agent - mypy
         working-directory: pc-agent
         run: uv run mypy
+      - name: pc-agent - mypy (Windows code paths against the pywin32 stubs)
+        working-directory: pc-agent
+        run: uv run mypy --config-file mypy-windows.ini
       - name: pc-agent - pytest
         working-directory: pc-agent
         run: uv run pytest -q -p no:cacheprovider
