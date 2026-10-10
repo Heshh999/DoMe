@@ -17,6 +17,11 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   guard: `types-pywin32` in the agent's dev tools and `mypy --config-file mypy-windows.ini` (CI) type-
   checks every Windows code path against the pywin32 stubs; it reports the original bug when it is put
   back. The kit now prints the agent's own error output when its status cannot be read.
+- Next run: step 2 completed and the tray icon appeared. Pairing from the iPhone was refused with "This
+  request was not allowed" (403 FORBIDDEN: a wrong origin or a CSRF token that no longer matches the
+  session cookie, for example after signing in again in another tab). The phone app now refreshes its
+  CSRF token from GET /v1/session and retries a refused state-changing request once, only for the same
+  account; the api logs the reason of every 403 (`request.refused`).
 
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 

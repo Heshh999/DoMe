@@ -40,7 +40,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     if (get().status !== "signed_in") set({ status: "loading", error: null });
     try {
       const session = await api.session();
-      configureApi({ csrfToken: session.csrf_token });
+      configureApi({ csrfToken: session.csrf_token, accountId: session.account.id });
       set({ status: "signed_in", session, error: null });
       return session;
     } catch (e) {

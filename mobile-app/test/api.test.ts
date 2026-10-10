@@ -10,7 +10,7 @@ function respond(status: number, body: unknown) {
   return new Response(body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-afterEach(() => configureApi({ csrfToken: null, fetchImpl: (i, init) => fetch(i, init), onUnauthenticated: null }));
+afterEach(() => configureApi({ csrfToken: null, accountId: null, fetchImpl: (i, init) => fetch(i, init), onUnauthenticated: null }));
 
 describe("REST client", () => {
   it("validates responses against rest.schema.json and rejects anything else", async () => {
@@ -69,6 +69,56 @@ describe("REST client", () => {
     const e = await api.pcs().catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ApiError);
     expect((e as ApiError).code).toBe("NETWORK");
+  });
+
+  it("a FORBIDDEN from a stale CSRF token (signed in again elsewhere) refreshes the token and retries once, for the same account only", async () => {
+    const forbidden = () => respond(403, { error: { code: "FORBIDDEN", message: "Missing or invalid CSRF token", retryable: false } });
+    const pc = { id: UUID, name: "Office", enabled: true, connection: "online", last_seen: null, created_at: TS, platform: "windows" };
+    const fresh = "F".repeat(40);
+    let calls: Array<{ url: string; method: string; csrf: string | undefined }> = [];
+    const server = (current: { token: string; account: string }) => async (url: string, init: RequestInit) => {
+      const csrf = (init.headers as Record<string, string>)["X-DoMe-CSRF"];
+      calls.push({ url, method: init.method ?? "GET", csrf });
+      if (url.endsWith("/v1/session")) return respond(200, { ...session, csrf_token: current.token, account: { ...session.account, id: current.account } });
+      return csrf === current.token ? respond(200, pc) : forbidden();
+    };
+
+    // same account, new token: one session fetch, one retry with the fresh token
+    configureApi({ csrfToken: "stale-token", accountId: UUID, fetchImpl: server({ token: fresh, account: UUID }) });
+    await expect(api.patchPc(UUID, { name: "Office" })).resolves.toMatchObject({ id: UUID });
+    expect(calls.map((c) => `${c.method} ${c.url.replace(/^.*\/v1/, "/v1")} ${c.csrf ?? "-"}`)).toEqual([
+      `PATCH /v1/pcs/${UUID} stale-token`,
+      "GET /v1/session -",
+      `PATCH /v1/pcs/${UUID} ${fresh}`,
+    ]);
+    calls = [];
+    await api.patchPc(UUID, { name: "Office" }); // the fresh token is kept for later requests
+    expect(calls).toHaveLength(1);
+
+    // signed in as ANOTHER account elsewhere: never acts for it, the refusal stands
+    calls = [];
+    const other = "44444444-4444-4444-8444-444444444444";
+    configureApi({ csrfToken: "stale-token", accountId: UUID, fetchImpl: server({ token: fresh, account: other }) });
+    await expect(api.patchPc(UUID, { name: "Office" })).rejects.toMatchObject({ status: 403, code: "FORBIDDEN" });
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+
+    // refused again with the fresh token (e.g. a wrong origin): exactly one retry, then the error
+    calls = [];
+    configureApi({ csrfToken: "stale-token", accountId: UUID, fetchImpl: async (url, init) => {
+      calls.push({ url, method: init.method ?? "GET", csrf: undefined });
+      return url.endsWith("/v1/session") ? respond(200, { ...session, csrf_token: fresh }) : forbidden();
+    } });
+    await expect(api.patchPc(UUID, { name: "Office" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(2);
+
+    // GET requests are never retried this way
+    calls = [];
+    configureApi({ fetchImpl: async (url, init) => {
+      calls.push({ url, method: init.method ?? "GET", csrf: undefined });
+      return forbidden();
+    } });
+    await expect(api.pcs()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(calls).toHaveLength(1);
   });
 
   it("204 responses return undefined and path segments are encoded", async () => {

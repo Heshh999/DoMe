@@ -72,8 +72,14 @@ def _response(err: ApiError) -> JSONResponse:
     return JSONResponse(err.body(), status_code=err.status, headers={"Cache-Control": "no-store", **err.headers})
 
 
-async def api_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, ApiError)
+    if exc.status == 403:
+        # The request log line shows only "403"; the reason (origin, CSRF, ...) is what makes a refusal
+        # diagnosable. Messages are fixed strings chosen by the code, never request data.
+        from dome_api.logging import get_logger
+
+        get_logger("dome_api.errors").info("request.refused", path=request.url.path, code=exc.code, reason=exc.message)
     return _response(exc)
 
 

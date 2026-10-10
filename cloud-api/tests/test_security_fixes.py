@@ -308,3 +308,32 @@ def test_sliding_window_first_request_after_quiet_period_does_not_crash(
     assert limiter.exhausted("203.0.113.7") is False
     assert limiter.allow("203.0.113.7") is True
     assert limiter.allow("203.0.113.7") is False
+
+
+async def test_refusals_log_their_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 403 used to log only its status; the first iPhone test hit 'This request was not allowed' with
+    no way to tell a stale CSRF token from a wrong origin. The reason is now logged (fixed strings only)."""
+    from starlette.requests import Request
+
+    import dome_api.logging as dome_logging
+    from dome_api.errors import ApiError, api_error_handler
+
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    class _Log:
+        def info(self, event: str, **fields: Any) -> None:
+            seen.append((event, fields))
+
+    monkeypatch.setattr(dome_logging, "get_logger", lambda _name: _Log())
+    scope = {"type": "http", "method": "POST", "path": "/v1/pairing/claim", "headers": [], "query_string": b""}
+    response = await api_error_handler(Request(scope), ApiError(403, "FORBIDDEN", "Missing or invalid CSRF token"))
+    assert response.status_code == 403
+    assert seen == [
+        (
+            "request.refused",
+            {"path": "/v1/pairing/claim", "code": "FORBIDDEN", "reason": "Missing or invalid CSRF token"},
+        )
+    ]
+    seen.clear()
+    await api_error_handler(Request(scope), ApiError(404, "NOT_FOUND"))
+    assert seen == []  # only refusals, not every error

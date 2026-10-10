@@ -32,18 +32,23 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 interface ClientState {
   csrfToken: string | null;
+  /** The account the CSRF token belongs to (from the same GET /v1/session). */
+  accountId: string | null;
   fetchImpl: FetchLike;
   onUnauthenticated: (() => void) | null;
 }
 
 const state: ClientState = {
   csrfToken: null,
+  accountId: null,
   fetchImpl: (input, init) => fetch(input, init),
   onUnauthenticated: null,
 };
 
-export function configureApi(options: { csrfToken?: string | null; fetchImpl?: FetchLike; onUnauthenticated?: (() => void) | null }): void {
+export function configureApi(options: { csrfToken?: string | null; accountId?: string | null; fetchImpl?: FetchLike; onUnauthenticated?: (() => void) | null }): void {
   if ("csrfToken" in options) state.csrfToken = options.csrfToken ?? null;
+  if ("accountId" in options) state.accountId = options.accountId ?? null;
+  else if ("csrfToken" in options && !options.csrfToken) state.accountId = null;
   if (options.fetchImpl) state.fetchImpl = options.fetchImpl;
   if ("onUnauthenticated" in options) state.onUnauthenticated = options.onUnauthenticated ?? null;
 }
@@ -100,6 +105,30 @@ export interface RequestOptions {
 }
 
 export async function apiRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, options: RequestOptions): Promise<T> {
+  const sentToken = state.csrfToken;
+  try {
+    return await sendRequest<T>(method, path, options);
+  } catch (e) {
+    // A state-changing request refused as FORBIDDEN usually carries the CSRF token of an earlier sign-in:
+    // the session cookie was replaced (signing in again, e.g. in another tab) while this page kept its
+    // token. The server refuses before doing anything, so fetch the current session's token and retry
+    // once, but only for the same account: the page must never act for an account it does not show.
+    if (method === "GET" || !(e instanceof ApiError) || e.code !== "FORBIDDEN") throw e;
+    let session: rest.SessionResponse;
+    try {
+      session = await sendRequest<rest.SessionResponse>("GET", "/v1/session", { responseBody: "session_response" });
+    } catch {
+      throw e;
+    }
+    if (session.csrf_token === sentToken || (state.accountId !== null && session.account.id !== state.accountId)) throw e;
+    log.info("api.csrf_refreshed", { method, path });
+    state.csrfToken = session.csrf_token;
+    state.accountId = session.account.id;
+    return sendRequest<T>(method, path, options);
+  }
+}
+
+async function sendRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, options: RequestOptions): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const init: RequestInit = { method, headers, credentials: "include", cache: "no-store", redirect: "error", mode: "same-origin" };
   if (API_ORIGIN) init.mode = "cors";
