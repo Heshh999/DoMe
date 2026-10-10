@@ -22,6 +22,10 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   session cookie, for example after signing in again in another tab). The phone app now refreshes its
   CSRF token from GET /v1/session and retries a refused state-changing request once, only for the same
   account; the api logs the reason of every 403 (`request.refused`).
+- Restart from a fresh ZIP: step 1 stopped at "Making the QR code" with `OSError: [Errno 22] Invalid
+  argument` writing `open-on-iphone.png`: Windows Photos still showed (and locked) the picture from the
+  previous start. Each start now writes a new file name, removes old pictures when it can, and a failed
+  picture only warns (the address is printed anyway).
 
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 

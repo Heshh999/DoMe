@@ -70,17 +70,31 @@ $exitCode = Invoke-KitMain {
 
     # /app goes straight to sign-in (the bare address is the public website).
     $phoneUrl = $appUrl + '/app'
-    $qrPath = Join-Path $script:StateDir 'open-on-iphone.png'
+    # A picture viewer can still hold the QR code of an earlier start open (Windows Photos locks it; the
+    # error reads "Invalid argument"). Each start writes a new file, removes old ones when it can, and a
+    # failed picture never stops the start: the address is printed below anyway.
+    $qrShown = $false
     if (-not $NoQr) {
-        Invoke-Native 'Making the QR code' { & $script:AgentPython (Join-Path $PSScriptRoot 'kit_helper.py') qr $phoneUrl $qrPath }
-        Show-Image $qrPath
+        Get-ChildItem -Path $script:StateDir -Filter 'open-on-iphone*.png' -ErrorAction SilentlyContinue |
+            ForEach-Object { try { Remove-Item -Force -LiteralPath $_.FullName -ErrorAction Stop } catch { } }
+        $qrPath = Join-Path $script:StateDir ('open-on-iphone-' + (Get-Date).ToString('yyyyMMdd-HHmmss') + '.png')
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { & $script:AgentPython (Join-Path $PSScriptRoot 'kit_helper.py') qr $phoneUrl $qrPath; $qrOk = ($LASTEXITCODE -eq 0) }
+        finally { $ErrorActionPreference = $previous }
+        if ($qrOk -and (Test-Path $qrPath)) {
+            Show-Image $qrPath
+            $qrShown = $true
+        } else {
+            Write-Warn 'Could not make the QR code picture; type the address below into Safari instead.'
+        }
     }
 
     Write-Banner 'DoMe test server is running'
     Write-Host ''
     Write-Host '  Open this on your iPhone (Safari):' -ForegroundColor White
     Write-Host ('      ' + $phoneUrl) -ForegroundColor Green
-    if (-not $NoQr) { Write-Host '      (or point the iPhone camera at the QR code that just opened)' }
+    if ($qrShown) { Write-Host '      (or point the iPhone camera at the QR code that just opened)' }
     Write-Host ''
     Write-Host '  Sign-in passphrase (the sign-in page asks for it):' -ForegroundColor White
     Write-Host ('      ' + $env:DOME_TEST_PASSPHRASE) -ForegroundColor Green
