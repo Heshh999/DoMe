@@ -32,7 +32,9 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   standard), which Chromium does not, so every rehearsal (Chromium) passed. Fixed: the PWA and the api use
   `Referrer-Policy: same-origin` (still nothing sent to other sites), and the Origin check accepts a
   null/missing Origin only with the browser-set `Sec-Fetch-Site: same-origin` (an installed PWA can keep
-  the old policy until it updates). Tested with the request shapes; not yet confirmed on the iPhone.
+  the old policy until it updates).
+- After updating: **pairing succeeded on the owner's iPhone in Safari** over quick tunnels (sign-in,
+  link, claim, matching codes, approval on the PC). Next: the step 5 features on the real devices.
 
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 

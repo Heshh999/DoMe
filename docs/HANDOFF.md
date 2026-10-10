@@ -124,6 +124,10 @@ unless stated.
   `bridge/ipc.py` (wrong modules for `ProcessIdToSessionId` and `FILE_FLAG_FIRST_PIPE_INSTANCE`), now
   fixed and guarded by `mypy --config-file mypy-windows.ini` in CI. pycaw, comtypes, winsdk and the
   ctypes calls have no stubs, so the Windows adapters can still fail at runtime the first time they run.
+  Later runs fixed a QR-picture lock (Windows Photos) and a Safari-only pairing refusal (`Origin: null`
+  under `no-referrer`, now `same-origin`); then **the iPhone (Safari) paired with the PC over quick
+  tunnels**. The step 5 features (volume, media, YouTube, touchpad, keyboard, apps, lock, power) have
+  not been reported yet.
 - **Windows**: none of `pc-agent/dome_agent/platform/windows/*` (volume via pycaw, media sessions via
   winsdk, app launching, lock, power, start-at-login, native-host registry entries) has run on a
   Windows machine. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the
