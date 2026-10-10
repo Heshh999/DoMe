@@ -6,14 +6,6 @@ param(
 )
 . "$PSScriptRoot\common.ps1"
 
-function Get-AgentStatus {
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try { $text = (& $script:AgentExe status --json 2>$null | Out-String) } finally { $ErrorActionPreference = $previous }
-    if ($LASTEXITCODE -ne 0 -or -not $text.Trim()) { Stop-Kit 'Could not read the DoMe PC program status.' }
-    return ($text | ConvertFrom-Json)
-}
-
 function Open-ExtensionsPage {
     foreach ($browser in @(@('chrome', 'chrome://extensions'), @('msedge', 'edge://extensions'))) {
         try {

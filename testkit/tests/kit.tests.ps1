@@ -72,6 +72,33 @@ try {
     Check 'SIGNIN_URL host lower-cased, other port and path kept' $stable.SigninUrl 'https://dome-signin.example.com:8443/realms/dome'
     $script:KitDir = $saved
 
+    # Get-AgentStatus: JSON from stdout, the program's error output shown (not hidden) when it fails.
+    $savedExe = $script:AgentExe
+    $fake = Join-Path $script:StateDir 'fake-agent.ps1'
+    $pwshExe = (Get-Process -Id $PID).Path
+    function Use-FakeAgent([string]$Body) {
+        Set-Content -Path $fake -Encoding Ascii -Value $Body
+        $wrapper = Join-Path $script:StateDir ('fake-agent' + $(if ($script:OnWindows) { '.cmd' } else { '' }))
+        if ($script:OnWindows) {
+            Set-Content -Path $wrapper -Encoding Ascii -Value ('@"' + $pwshExe + '" -NoProfile -File "' + $fake + '" %*')
+        } else {
+            Set-Content -Path $wrapper -Encoding Ascii -Value @('#!/bin/sh', ('exec "' + $pwshExe + '" -NoProfile -File "' + $fake + '" "$@"'))
+            & chmod +x $wrapper
+        }
+        $script:AgentExe = $wrapper
+    }
+    Use-FakeAgent '[Console]::Out.WriteLine(''{"agent_running": false, "identity": {"linked": true}}''); exit 0'
+    $st = Get-AgentStatus
+    Check 'status JSON parsed' ([bool]$st.identity.linked) $true
+    Use-FakeAgent '[Console]::Error.WriteLine(''a warning on stderr''); [Console]::Out.WriteLine(''{"agent_running": true}''); exit 0'
+    Check 'stderr noise does not break the JSON' ([bool](Get-AgentStatus).agent_running) $true
+    Use-FakeAgent '[Console]::Error.WriteLine(''ModuleNotFoundError: No module named win32file''); exit 1'
+    $caught = @{ e = $null }  # a hashtable: the script block below runs in its own scope
+    $shown = & { try { [void](Get-AgentStatus) } catch { $caught.e = $_.Exception } } 6>&1 | Out-String
+    Check 'a failing program stops the kit' ([bool]($caught.e -and $caught.e.Data.Contains('DoMeKit'))) $true
+    Check 'its error message is shown' ($shown -match 'No module named win32file') $true
+    $script:AgentExe = $savedExe
+
     # The quick-tunnel address in cloudflared's banner, and its failure lines (old and 2026.x wording).
     $banner = '2026-10-09T20:00:00Z INF |  https://lucky-orange-river-cat.trycloudflare.com                    |'
     Check 'tunnel URL found' ([regex]::Matches($banner, $script:TunnelUrlPattern)[0].Value) 'https://lucky-orange-river-cat.trycloudflare.com'

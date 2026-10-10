@@ -272,6 +272,30 @@ function ConvertTo-NormalHttpsUrl([string]$Url) {
     return ($normal + $m.Groups[3].Value).TrimEnd('/')
 }
 
+function Get-AgentStatus {
+    # Asks the DoMe PC program for its status as JSON. Its error output is kept apart from the JSON and,
+    # when it fails, shown to the user: hiding it made a failure on Windows impossible to diagnose.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $all = @(& $script:AgentExe status --json 2>&1) } finally { $ErrorActionPreference = $previous }
+    $code = $LASTEXITCODE
+    $stdout = ($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { [string]$_ }) -join "`n"
+    $stderr = @($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { $_.ToString() })
+    $status = $null
+    if ($code -eq 0 -and $stdout.Trim()) {
+        try { $status = $stdout | ConvertFrom-Json } catch { $status = $null }
+    }
+    if ($null -eq $status) {
+        Write-Host ''
+        Write-Host ('   The DoMe PC program answered (exit code ' + $code + '):') -ForegroundColor Yellow
+        foreach ($line in (@($stderr) + @($stdout -split "`n") | Where-Object { $_ -and $_.Trim() } | Select-Object -Last 30)) {
+            Write-Host ('     ' + $line)
+        }
+        Stop-Kit 'Could not read the DoMe PC program status (its own message is above). Please send a screenshot of this window.'
+    }
+    return $status
+}
+
 function Get-CurrentPath { return (Join-Path $script:StateDir 'current.json') }
 
 # DoMe identifies an account by sign-in address + email, so a new quick-tunnel address (or deleted test
