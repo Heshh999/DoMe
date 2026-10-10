@@ -43,7 +43,9 @@ class SecurityHeadersMiddleware:
                 present = {k.lower() for k, _ in headers}
                 extra = {
                     b"content-security-policy": self.csp.encode(),
-                    b"referrer-policy": b"no-referrer",
+                    # same-origin, not no-referrer: still nothing to other sites, but no-referrer makes
+                    # Safari send "Origin: null" on the app's own POSTs, which the Origin check refuses.
+                    b"referrer-policy": b"same-origin",
                     b"x-content-type-options": b"nosniff",
                     b"x-frame-options": b"DENY",
                     b"permissions-policy": b"camera=(self), microphone=(self), geolocation=()",

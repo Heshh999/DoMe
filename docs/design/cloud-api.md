@@ -178,7 +178,7 @@ and included in every `grants_snapshot` for Pro; a fresh snapshot is pushed on p
 ## Security headers and static serving
 
 `Content-Security-Policy: default-src 'self'; connect-src 'self' wss: https:; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' <issuer>`,
-`Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Permissions-Policy: camera=(self)`
+`Referrer-Policy: same-origin`, `X-Content-Type-Options: nosniff`, `Permissions-Policy: camera=(self)`
 (QR scanning), HSTS in production. `/v1` and `/ws` responses carry `Cache-Control: no-store`.
 
 ## Logging

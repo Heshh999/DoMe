@@ -267,6 +267,6 @@ frame against `relay-frames.schema.json`.
 - Migrations: `0001_initial`, `0002_support_tickets`. `dome-api` applies them at start-up.
 - Request log lines carry the matched route template and a masked path: a device-link `user_code`
   never appears (`/v1/agent-link/{user_code}/approve`); query strings are never logged.
-- Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: no-referrer`,
+- Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: same-origin`,
   `X-Content-Type-Options: nosniff`, `Permissions-Policy: camera=(self)`, HSTS in production,
   `Cache-Control: no-store` on `/v1`, `/ws` and `/healthz`.

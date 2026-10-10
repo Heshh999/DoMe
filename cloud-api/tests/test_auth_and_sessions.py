@@ -55,6 +55,30 @@ async def test_csrf_and_origin_required_for_state_changes(alice: Browser) -> Non
     assert r.status_code == 404
 
 
+async def test_null_origin_passes_only_when_the_browser_marks_the_request_same_origin(alice: Browser) -> None:
+    """iPhone Safari sent "Origin: null" on the app's own pairing claim (referrer policy no-referrer), and the
+    first real pairing was refused. A null or missing Origin now passes only with the browser-set
+    Sec-Fetch-Site: same-origin, which no page can forge; the CSRF token is still required."""
+    body = {"pc_name": "x", "remote_enabled": True}
+    path = "/v1/agent-link/ABCD-EFGH/approve"
+    same_origin_null = {"Origin": "null", "Sec-Fetch-Site": "same-origin"}
+    r = await alice.request("POST", path, body, origin=False, headers=same_origin_null)
+    assert r.status_code == 404  # past the Origin and CSRF layers
+    r = await alice.request("POST", path, body, origin=False, headers={"Sec-Fetch-Site": "same-origin"})
+    assert r.status_code == 404  # Origin omitted entirely, same verdict
+    for headers in (
+        {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+        {"Origin": "null", "Sec-Fetch-Site": "same-site"},
+        {"Origin": "null"},
+        {"Sec-Fetch-Site": "none"},
+        {"Origin": "https://evil.example", "Sec-Fetch-Site": "same-origin"},  # a real wrong origin never passes
+    ):
+        r = await alice.request("POST", path, body, origin=False, headers=headers)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "FORBIDDEN", headers
+    r = await alice.request("POST", path, body, origin=False, csrf=False, headers=same_origin_null)
+    assert r.status_code == 403  # the CSRF token is still required
+
+
 async def test_return_to_must_be_relative(env: Env) -> None:
     r = await env.http.get("/v1/auth/login", params={"return_to": "https://evil.example/"})
     assert r.status_code == 400 and r.json()["error"]["code"] == "MALFORMED_MESSAGE"

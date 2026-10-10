@@ -26,6 +26,13 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   argument` writing `open-on-iphone.png`: Windows Photos still showed (and locked) the picture from the
   previous start. Each start now writes a new file name, removes old pictures when it can, and a failed
   picture only warns (the address is printed anyway).
+- Pairing from the iPhone was still refused. The api's new refusal log said `reason='Origin not allowed'`
+  for `POST /v1/pairing/claim`, while the same iPhone's `/ws/controller` passed the same check: under
+  `Referrer-Policy: no-referrer` Safari sends `Origin: null` on a page's own same-origin requests (Fetch
+  standard), which Chromium does not, so every rehearsal (Chromium) passed. Fixed: the PWA and the api use
+  `Referrer-Policy: same-origin` (still nothing sent to other sites), and the Origin check accepts a
+  null/missing Origin only with the browser-set `Sec-Fetch-Site: same-origin` (an installed PWA can keep
+  the old policy until it updates). Tested with the request shapes; not yet confirmed on the iPhone.
 
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 

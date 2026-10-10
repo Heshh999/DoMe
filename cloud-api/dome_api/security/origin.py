@@ -11,12 +11,18 @@ def origin_allowed(origin: str | None, allowed: frozenset[str]) -> bool:
     return origin is not None and origin.lower() in allowed
 
 
-def require_allowed_origin(headers: Mapping[str, str], allowed: frozenset[str]) -> str:
+def require_allowed_origin(headers: Mapping[str, str], allowed: frozenset[str]) -> None:
     origin = headers.get("origin")
-    if not origin_allowed(origin, allowed):
-        raise ApiError(403, "FORBIDDEN", "Origin not allowed")
-    assert origin is not None
-    return origin.lower()
+    if origin_allowed(origin, allowed):
+        return
+    # Under a "no-referrer" policy, Safari and Firefox send "Origin: null" on a page's own same-origin
+    # requests (Fetch standard, "serialize a request origin"); the PWA used that policy, and an installed
+    # copy can keep it until it updates. Sec-Fetch-Site is set by the browser and cannot be written by a
+    # page, so a null or missing Origin passes only when the browser itself marks the request same-origin.
+    # A cross-site page (or a sandboxed frame) always gets a real origin or "cross-site" here.
+    if origin in (None, "null") and headers.get("sec-fetch-site") == "same-origin":
+        return
+    raise ApiError(403, "FORBIDDEN", "Origin not allowed")
 
 
 def require_origin_absent(headers: Mapping[str, str]) -> None:

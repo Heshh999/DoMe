@@ -110,7 +110,8 @@ async def test_security_headers_and_no_store(env: Env) -> None:
     r = await env.http.get("/v1/plans")
     csp = r.headers["content-security-policy"]
     assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp and env.settings.issuer_origin in csp
-    assert r.headers["referrer-policy"] == "no-referrer" and r.headers["x-content-type-options"] == "nosniff"
+    # same-origin: nothing to other sites; no-referrer made Safari send "Origin: null" on the app's own POSTs
+    assert r.headers["referrer-policy"] == "same-origin" and r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["cache-control"] == "no-store"
     assert "strict-transport-security" not in r.headers  # not production
     r = await env.http.get("/")
