@@ -47,7 +47,7 @@ export default defineConfig({
       registerType: "autoUpdate",
       injectRegister: false, // registered from src/pwa.ts (no inline script: CSP script-src 'self')
       manifest: {
-        name: "DoMe",
+        name: "DoMe Remote",
         short_name: "DoMe",
         description: "Your phone is a simple, secure remote for your PC.",
         theme_color: "#0b0f17",

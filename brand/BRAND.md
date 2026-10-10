@@ -1,5 +1,16 @@
 # DoMe brand specification
 
+> **New logo (2026-10-10).** The owner chose the final logo: `reference/dome-remote-logo.webp` (the
+> "DoMe" wordmark whose "o" is a ringed planet with a blue and a red tip, "REMOTE" spaced underneath,
+> on navy; the app icon is the ringed "o" in white on a blue rounded tile; a black lockup for light
+> backgrounds). It replaces the dome-arc mark described below. Until the vector sources and exports
+> in this directory are redrawn from it, the files here are the previous interim mark.
+>
+> **Name.** The product's full name is **DoMe Remote** (app install name, store listings, legal
+> text). Everyone will call it **DoMe**: that is the short name (Home Screen label, tray, everyday
+> copy). Write it *DoMe*, never "Dome" or "DOME" (the logo's spaced capitals "REMOTE" are lettering,
+> not how to write the name in text).
+
 Short, practical rules for the DoMe identity. One identity across the website, the PWA, the Windows
 agent (tray, setup window, installer) and documents. Everything here is original work drawn as
 geometry in the SVG sources of this directory; no font file, stock art or third-party mark is used.
