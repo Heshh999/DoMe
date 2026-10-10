@@ -21,6 +21,11 @@ def _endpoint() -> Any:
     device = AudioUtilities.GetSpeakers()
     if device is None:
         raise ProtocolError("OS_ERROR", "No default audio output device")
+    # Current pycaw (the locked 20260927 included) returns an AudioDevice wrapper that exposes the
+    # endpoint as a property and has no Activate; older releases returned the raw IMMDevice.
+    endpoint = getattr(device, "EndpointVolume", None)
+    if endpoint is not None:
+        return endpoint
     interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 
@@ -37,6 +42,7 @@ class WindowsVolume:
 
         comtypes.CoInitialize()
         try:
+            endpoint: Any = None
             try:
                 endpoint = _endpoint()
                 return fn(endpoint)
@@ -44,6 +50,10 @@ class WindowsVolume:
                 raise
             except Exception as exc:  # COM errors
                 raise ProtocolError("OS_ERROR", f"Audio endpoint error: {exc.__class__.__name__}") from exc
+            finally:
+                # Release the COM pointer while COM is still initialised on this thread: comtypes
+                # releasing it after CoUninitialize can crash the process.
+                del endpoint
         finally:
             comtypes.CoUninitialize()
 
