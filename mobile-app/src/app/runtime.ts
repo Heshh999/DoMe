@@ -237,9 +237,15 @@ export class Runtime {
   private onFrame(frame: relayFrames.RelayToController): void {
     const live = useLiveStore.getState();
     switch (frame.type) {
-      case "pc_status":
+      case "pc_status": {
         live.onPcStatus(frame);
+        // The relay also sends pc_status after the PC owner changed this phone's touchpad/keyboard
+        // permission on the PC (grant_update): re-read grants already on screen so the Touchpad page
+        // follows without reloading the app.
+        const devices = useDevicesStore.getState();
+        if (devices.grantsByPc[frame.pc_id] !== undefined) void devices.loadGrants(frame.pc_id);
         return;
+      }
       case "state":
         live.onState(frame);
         if (frame.pc_id === this.input.snapshot.pcId) this.input.setForegroundApp(frame.state.foreground_app ?? null);

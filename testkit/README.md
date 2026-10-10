@@ -82,7 +82,8 @@ would not know the test server's current address.
    are using; the iPhone camera app would open the code in Safari instead.
 3. Name the phone, choose what it may do, tap **Request pairing**.
 4. Both screens show a **6-digit number**. If they match, approve on the PC and choose the
-   permissions this phone gets.
+   permissions this phone gets. **Allow touchpad** and **Allow keyboard** start unticked: tick them
+   to use the Touchpad (you can also switch them on later, see step 5).
 5. The iPhone says **Paired**.
 
 ## Step 5: things to try
@@ -92,7 +93,10 @@ Everything below **really happens on this PC**.
 - **Remote**: Windows volume and mute; play/pause/next for whatever is playing (Spotify, a video).
 - **YouTube** (Remote, YouTube tab): open a video in Chrome or Edge with the extension loaded.
 - **Touchpad**: move the mouse, click, scroll and drag. Its **Keyboard** button types text into the
-  active window on the PC.
+  active window on the PC. If it says the phone has no touchpad or keyboard permission: on the PC,
+  right-click the DoMe tray icon, **Paired phones**, your phone, tick **Allow touchpad** (and again
+  for **Allow keyboard**). The Touchpad page then unlocks by itself (an older app version needs the page
+  reloaded in Safari).
 - **Type**: write a command in words, for example "Set my PC volume to 35 percent" or "Pause
   YouTube"; DoMe shows exactly what it will do before sending it.
 - **Apps**: opens apps you approved on the PC. To approve one, open a Command Prompt in the

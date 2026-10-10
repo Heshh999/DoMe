@@ -359,18 +359,18 @@ class TrayUI:
             if self.agent is not None:
                 self._call(self.agent.input.end("stopped"))
 
-        def phones_menu() -> Any:
-            """One submenu per paired phone with checkable 'Allow touchpad' / 'Allow keyboard' items."""
-            items: list[Any] = []
+        def phones_items() -> list[Any]:
+            """One submenu per paired phone with checkable 'Allow touchpad' / 'Allow keyboard' items.
+
+            Read again whenever the tray rebuilds its menu (every status update): the icon is created before
+            the agent thread binds, and phones are paired while DoMe runs, so a list built once stays empty."""
             if self.agent is None:
-                return pystray.Menu(pystray.MenuItem("(no agent)", None, enabled=False))
-            for g in self.agent.store.list_grants():
-                items.append(
-                    pystray.MenuItem(f"{g.display_name} ({g.controller_id[:8]}…)", _phone_menu(g.controller_id))
-                )
-            if not items:
-                items.append(pystray.MenuItem("(no paired phones)", None, enabled=False))
-            return pystray.Menu(*items)
+                return [pystray.MenuItem("(starting…)", None, enabled=False)]
+            items = [
+                pystray.MenuItem(f"{g.display_name} ({g.controller_id[:8]}…)", _phone_menu(g.controller_id))
+                for g in self.agent.store.list_grants()
+            ]
+            return items or [pystray.MenuItem("(no paired phones)", None, enabled=False)]
 
         def _phone_menu(controller_id: str) -> Any:
             def checked(cap: str) -> Callable[[Any], bool]:
@@ -418,7 +418,7 @@ class TrayUI:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(toggle_label, toggle_remote),
             pystray.MenuItem("Stop manual input", stop_input),
-            pystray.MenuItem("Paired phones", phones_menu()),
+            pystray.MenuItem("Paired phones", pystray.Menu(phones_items)),
             pystray.MenuItem("Pair a phone…", pair),
             pystray.MenuItem("Approved apps…", apps),
             pystray.MenuItem("Start at login", toggle_startup, checked=startup_checked),

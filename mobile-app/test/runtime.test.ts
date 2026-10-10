@@ -222,6 +222,30 @@ describe("Runtime", () => {
     expect(useSessionStore.getState().session).toBeNull();
   });
 
+  it("a pc_status re-reads the grants already loaded for that PC (permission changed on the PC)", async () => {
+    const grant = { id: "55555555-5555-4555-8555-555555555555", controller_id: CONTROLLER, pc_id: PC, capabilities: ["status", "media", "pointer"], created_at: TS };
+    const fetched: string[] = [];
+    configureApi({
+      csrfToken: session.csrf_token,
+      fetchImpl: async (input) => {
+        fetched.push(String(input));
+        return respond(200, { grants: [grant] });
+      },
+    });
+    useDevicesStore.setState({ grantsByPc: { [PC]: [{ ...grant, capabilities: ["status", "media"] }] } });
+    const s = await connected();
+    s.receive({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS });
+    await flush();
+    expect(fetched.filter((u) => u.endsWith(`/v1/pcs/${PC}/grants`))).toHaveLength(1);
+    expect(useDevicesStore.getState().grantsByPc[PC]![0]!.capabilities).toContain("pointer");
+
+    // a PC whose grants were never shown is not fetched
+    const other = "66666666-6666-4666-8666-666666666666";
+    s.receive({ type: "pc_status", pc_id: other, connection: "online", last_seen: TS });
+    await flush();
+    expect(fetched.some((u) => u.includes(other))).toBe(false);
+  });
+
   it("advances the live store clock while started and stops it on stop()", async () => {
     const before = useLiveStore.getState().now;
     useLiveStore.setState({ now: before - 60_000 });

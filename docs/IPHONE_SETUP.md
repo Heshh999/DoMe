@@ -2,7 +2,7 @@
 
 Status: **pre-release engineering build. The DoMe web app has not been opened on an iPhone yet.**
 The app (`mobile-app/`) is built iPhone-first and its libraries and screens are unit-tested in a
-browser-like test environment (291 tests in 32 files at the last run recorded in
+browser-like test environment (293 tests in 32 files at the last run recorded in
 `mobile-app/README.md`, with a fake socket and a fake IndexedDB), and the pairing, command and
 manual-input paths it uses are integration-tested on Linux with a Python stand-in for the phone.
 Camera scanning, key persistence in Safari, Add to Home Screen, resume after the phone was locked,

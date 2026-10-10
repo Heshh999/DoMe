@@ -34,7 +34,15 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   null/missing Origin only with the browser-set `Sec-Fetch-Site: same-origin` (an installed PWA can keep
   the old policy until it updates).
 - After updating: **pairing succeeded on the owner's iPhone in Safari** over quick tunnels (sign-in,
-  link, claim, matching codes, approval on the PC). Next: the step 5 features on the real devices.
+  link, claim, matching codes, approval on the PC). Windows media control worked.
+- Touchpad locked ("no touchpad or keyboard permission"; the PC approval window leaves both unticked on
+  purpose). The way to grant them later, tray -> Paired phones -> phone -> Allow touchpad, was broken: the
+  submenu was built once when the icon was created, before the agent thread bound (it read "(no agent)")
+  and before any phone was paired, so it never listed a phone. It is now re-read on every menu rebuild
+  (each status update); `tests/test_tray_menu.py` fails on the old code. The phone also never re-read its
+  grant after the PC changed it (the relay's `pc_status` after `grant_update` updated only the online
+  state); the runtime now re-reads grants already shown for that PC. Runs: pc-agent 258 (+1 skipped),
+  ruff, mypy and mypy-windows clean; mobile-app 293 in 32 files, typecheck, lint, build clean.
 
 ## 2026-10-09 — Test kit for a real Windows PC and iPhone; fixes found by rehearsing it
 
