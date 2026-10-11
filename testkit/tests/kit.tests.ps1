@@ -315,6 +315,327 @@ try {
     Check 'old failure wording' ('failed to request quick Tunnel: 429 Too Many Requests' -match $script:TunnelFailurePattern) $true
     Check '2026.x failure wording' ('quick tunnel provisioning failed with status 429: rate limited' -match $script:TunnelFailurePattern) $true
     Check 'a normal log line is not a failure' ('INF Requesting new quick Tunnel on trycloudflare.com...' -match $script:TunnelFailurePattern) $false
+
+    # Every double-click file keeps CRLF line endings (cmd.exe needs them) and runs a script that exists.
+    foreach ($cmd in Get-ChildItem -Path $script:KitDir -Filter '*.cmd') {
+        $text = [IO.File]::ReadAllText($cmd.FullName)
+        Check ('CRLF only: ' + $cmd.Name) ([regex]::Matches($text, '(?<!\r)\n').Count) 0
+        $m = [regex]::Match($text, 'scripts\\([A-Za-z0-9-]+\.ps1)')
+        Check ('runs an existing script: ' + $cmd.Name) ($m.Success -and (Test-Path (Join-Path $scriptsDir $m.Groups[1].Value))) $true
+    }
+    Check 'step 4 runs apply-ai-settings.ps1' ([IO.File]::ReadAllText((Join-Path $script:KitDir '4 Apply AI settings.cmd')) -match 'scripts\\apply-ai-settings\.ps1') $true
+
+    # The optional AI assistant: the owner's key in testkit\ai-key.txt, DoMe's monthly limit in
+    # testkit\ai-monthly-limit-usd.txt (Read-AiSettings). The key must never be shown or written by the kit.
+    $realKitDir = $script:KitDir
+    $script:KitDir = $script:StateDir
+    $keyFile = Join-Path $script:KitDir 'ai-key.txt'
+    $limitFile = Join-Path $script:KitDir 'ai-monthly-limit-usd.txt'
+    $sentinel = 'sk-ant-api03-KITTEST' + [guid]::NewGuid().ToString('N')
+    $script:allShown = New-Object System.Text.StringBuilder
+    function Write-KitFile([string]$Path, [string]$Text, [bool]$Bom = $false) {
+        [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding $Bom))
+    }
+    function Invoke-ReadAi {
+        # Runs Read-AiSettings like the scripts do; returns its value, what the window showed and how it stopped.
+        $r = @{ Ai = $null; Stopped = $null; Shown = '' }
+        $r.Shown = & { try { $r.Ai = Read-AiSettings } catch { $r.Stopped = $_.Exception } } *>&1 | Out-String
+        [void]$script:allShown.Append($r.Shown)
+        if ($r.Stopped) { [void]$script:allShown.Append($r.Stopped.Message) }
+        return $r
+    }
+    function Test-KitStop($Result) { return [bool]($Result.Stopped -and $Result.Stopped.Data.Contains('DoMeKit')) }
+    try {
+        $r = Invoke-ReadAi
+        Check 'AI: no key file, off' $r.Ai.Enabled $false
+        Check 'AI: no key file, no key' $r.Ai.Key ''
+        Check 'AI: no key file, default limit 500 cents' $r.Ai.CeilingCents 500
+        Check 'AI: no key file, status line' (Get-AiStatusLine $r.Ai) "AI assistant: off (no testkit\ai-key.txt; see README, 'Talk to DoMe')"
+
+        Write-KitFile $keyFile ("  " + $sentinel + "  `r`n") $true
+        $r = Invoke-ReadAi
+        Check 'AI: key with BOM, spaces and a trailing newline is on' $r.Ai.Enabled $true
+        Check 'AI: that key is trimmed' ($r.Ai.Key -ceq $sentinel) $true
+        Check 'AI: an sk-ant- key gives no warning' ($r.Shown -match 'does not look like') $false
+        Check 'AI: on, status line' (Get-AiStatusLine $r.Ai) 'AI assistant: on (key file found, monthly limit US$5)'
+        Write-KitFile $keyFile ($sentinel + "`n")
+        Check 'AI: key with an LF line end' ((Invoke-ReadAi).Ai.Key -ceq $sentinel) $true
+
+        foreach ($bad in @(@('a space inside', ($sentinel.Substring(0, 12) + ' ' + $sentinel.Substring(12))),
+                @('two lines', ($sentinel + "`r`nsecond line")), @('a tab inside', ($sentinel + "`tx")),
+                @('a typographic quote', ($sentinel + [char]0x2019)), @('a non-breaking space inside', ('sk-ant-' + [char]0x00A0 + 'x')))) {
+            Write-KitFile $keyFile $bad[1]
+            $r = Invoke-ReadAi
+            Check ('AI: key with ' + $bad[0] + ' is refused') (Test-KitStop $r) $true
+            Check ('AI: that refusal says why') ([bool]($r.Stopped -and $r.Stopped.Message -match 'must contain only the key')) $true
+        }
+
+        Write-KitFile $keyFile 'not-an-anthropic-key-123'
+        $r = Invoke-ReadAi
+        Check 'AI: a non-sk-ant- value is still used' $r.Ai.Enabled $true
+        Check 'AI: with a warning' ($r.Shown -match 'does not look like an Anthropic API key') $true
+        Check 'AI: and without showing it' ($r.Shown -match 'not-an-anthropic-key-123') $false
+
+        Write-KitFile $keyFile "  `r`n" $true
+        $r = Invoke-ReadAi
+        Check 'AI: an empty key file is off' $r.Ai.Enabled $false
+        Check 'AI: an empty key file is no stop' $r.Stopped $null
+        Check 'AI: empty file, status line' (Get-AiStatusLine $r.Ai) "AI assistant: off (testkit\ai-key.txt is empty; see README, 'Talk to DoMe')"
+
+        Write-KitFile $keyFile $sentinel
+        foreach ($case in @(@('invalid', 'five'), @('0', '0'), @('101', '101'), @('negative', '-3'), @('a fraction', '5.5'),
+                @('a currency sign', '$12'), @('empty', ''))) {
+            Write-KitFile $limitFile $case[1]
+            $r = Invoke-ReadAi
+            Check ('AI limit ' + $case[0] + ': default 500 cents') $r.Ai.CeilingCents 500
+            Check ('AI limit ' + $case[0] + ': with a warning') ($r.Shown -match 'whole number of US dollars from 1 to 100') $true
+        }
+        foreach ($case in @(@('12', "12`r`n", 1200), @('1', '1', 100), @('100', '100', 10000), @('with a BOM', ' 7 ', 700))) {
+            Write-KitFile $limitFile $case[1] ($case[0] -eq 'with a BOM')
+            $r = Invoke-ReadAi
+            Check ('AI limit ' + $case[0] + ': cents') $r.Ai.CeilingCents $case[2]
+            Check ('AI limit ' + $case[0] + ': no warning') ($r.Shown -match 'whole number') $false
+        }
+        Check 'AI: the status line names the limit' (Get-AiStatusLine $r.Ai) 'AI assistant: on (key file found, monthly limit US$7)'
+        Remove-Item -Force $limitFile
+
+        # The compose variables: the key only ever travels in this process's environment.
+        Set-AiComposeVariables (Invoke-ReadAi).Ai
+        Check 'AI compose: enabled' $env:DOME_TEST_AI_ENABLED 'true'
+        Check 'AI compose: key' ($env:DOME_TEST_AI_KEY -ceq $sentinel) $true
+        Check 'AI compose: ceiling' $env:DOME_TEST_AI_CEILING_CENTS '500'
+        Remove-Item -Force $keyFile
+        Set-AiComposeVariables (Invoke-ReadAi).Ai
+        Check 'AI compose: off' $env:DOME_TEST_AI_ENABLED 'false'
+        Check 'AI compose: an earlier key is removed' ([string]$env:DOME_TEST_AI_KEY) ''
+
+        # docker-compose.yml passes exactly these seven settings to the api service (docs/design/assistant.md 5.1).
+        $composeLines = @(Get-Content -Path $script:ComposeFile | ForEach-Object { $_.Trim() })
+        $apiAt = [array]::IndexOf($composeLines, 'api:')
+        $nextServiceAt = [array]::IndexOf($composeLines, 'tunnel-app:')
+        $expectedAi = @('DOME_AI_ENABLED: ${DOME_TEST_AI_ENABLED:-false}', 'DOME_AI_PROVIDER: anthropic',
+            'DOME_AI_ANTHROPIC_API_KEY: ${DOME_TEST_AI_KEY:-}', 'DOME_AI_MONTHLY_CEILING_CENTS: ${DOME_TEST_AI_CEILING_CENTS:-500}',
+            'DOME_AI_CACHE_TTL: 1h', 'DOME_AI_DEV_GRANT_INTERPRETATIONS: "300"',
+            'DOME_AI_DEV_GRANT_COST_CAP_CENTS: ${DOME_TEST_AI_CEILING_CENTS:-500}')
+        foreach ($line in $expectedAi) {
+            $at = [array]::IndexOf($composeLines, $line)
+            Check ('compose api service has: ' + $line) ($at -gt $apiAt -and $at -lt $nextServiceAt) $true
+        }
+        Check 'compose has no other DOME_AI_ setting' (@($composeLines | Where-Object { $_ -like 'DOME_AI_*' }).Count) $expectedAi.Count
+        Check 'compose default ceiling is the kit default limit' ('${DOME_TEST_AI_CEILING_CENTS:-' + ($script:AiDefaultLimitUsd * 100) + '}' -in
+            @($composeLines | ForEach-Object { if ($_ -match '^DOME_AI_MONTHLY_CEILING_CENTS: (.*)$') { $Matches[1] } })) $true
+        # Step 1 reads the key file before its first compose call (a refused file stops before test data is
+        # cleared or tunnels open) and sets the compose variables before starting DoMe; step 4 runs the function.
+        $startServer = [IO.File]::ReadAllText((Join-Path $scriptsDir 'start-server.ps1'))
+        $readAt = $startServer.IndexOf('$ai = Read-AiSettings')
+        Check 'step 1 reads the AI settings' ($readAt -gt 0) $true
+        Check 'step 1 reads them before any compose call' ($readAt -lt $startServer.IndexOf('Invoke-Compose')) $true
+        Check 'step 1 sets the AI compose variables before starting DoMe' (
+            $startServer.IndexOf('Set-AiComposeVariables $ai') -in ($readAt + 1)..($startServer.IndexOf("Invoke-Compose 'Starting DoMe'"))) $true
+        Check 'step 1 repeats the AI line in its summary' ($startServer.IndexOf('Get-AiStatusLine $ai') -gt $startServer.IndexOf("Write-Banner 'DoMe test server is running'")) $true
+        Check 'step 4 runs Update-ServerAiSettings' ([IO.File]::ReadAllText((Join-Path $scriptsDir 'apply-ai-settings.ps1')) -match
+            '(?s)Invoke-KitMain \{.*Update-ServerAiSettings.*\}') $true
+        $ignored = @(Get-Content -Path (Join-Path $realKitDir '.gitignore') | ForEach-Object { $_.Trim() })
+        Check 'git ignores ai-key.txt' ('ai-key.txt' -in $ignored) $true
+        Check 'git ignores ai-monthly-limit-usd.txt' ('ai-monthly-limit-usd.txt' -in $ignored) $true
+
+        # Step 4 (Update-ServerAiSettings) with Docker and the network replaced by the functions below, defined in
+        # the child scope that runs it. $step4 steers them and records what happened. The server's sources are
+        # the small repository of the fingerprint checks above.
+        $realRepoDir = $script:RepoDir
+        $script:RepoDir = $repo
+        $serverPrint = Get-SourceFingerprint $repo $script:ServerSources
+        $step4 = @{ Invoke = (New-Object System.Collections.Generic.List[string]); Output = (New-Object System.Collections.Generic.List[string])
+            Running = "postgres`ndev-idp`napi`n"; Healthy = $true; Public = $true; FailCompose = $false; Env = $null; Stopped = $null }
+        function Invoke-Step4 {
+            $step4.Invoke.Clear()
+            $step4.Output.Clear()
+            $step4.Env = $null
+            $step4.Stopped = $null
+            $shown = & {
+                function Assert-Docker { }
+                function Get-ComposeOutput([string[]]$Arguments) { $step4.Output.Add($Arguments -join ' '); return $step4.Running }
+                function Invoke-Compose([string]$What, [string[]]$Arguments) {
+                    $step4.Invoke.Add($Arguments -join ' ')
+                    # As Invoke-Native reports a failing docker compose (a build that could not download, say).
+                    if ($step4.FailCompose) { Stop-Kit ("$What failed (exit code 1). The lines above say why.") }
+                    $step4.Env = @{ App = $env:DOME_TEST_APP_URL; Signin = $env:DOME_TEST_SIGNIN_URL; Client = $env:DOME_TEST_CLIENT_SECRET
+                        Session = $env:DOME_TEST_SESSION_SECRET; Passphrase = $env:DOME_TEST_PASSPHRASE; AiEnabled = $env:DOME_TEST_AI_ENABLED
+                        AiKey = [string]$env:DOME_TEST_AI_KEY; Ceiling = $env:DOME_TEST_AI_CEILING_CENTS }
+                }
+                function Wait-Url([string]$Url, [int]$TimeoutSeconds) {
+                    if ($Url.StartsWith('http://127.0.0.1:18080/')) { return $step4.Healthy }
+                    return $step4.Public
+                }
+                try { Update-ServerAiSettings } catch { $step4.Stopped = $_.Exception }
+            } *>&1 | Out-String
+            [void]$script:allShown.Append($shown)
+            if ($step4.Stopped) { [void]$script:allShown.Append($step4.Stopped.Message) }
+            return $shown
+        }
+        function Test-Step4Stop { return [bool]($step4.Stopped -and $step4.Stopped.Data.Contains('DoMeKit')) }
+        function Get-RecordedSources {
+            # current.json's server_sources, or '' when it has none (strict mode refuses a missing property).
+            $c = Read-Current
+            if ($c -and $c.PSObject.Properties['server_sources']) { return [string]$c.server_sources }
+            return ''
+        }
+        $currentJson = @{ app_url = 'https://app-one.trycloudflare.com'; signin_url = 'https://signin-one.trycloudflare.com'
+            passphrase = 'abcd-efgh-jkmn'; mode = 'quick-tunnel'; started_at = '2026-10-11T10:00:00'; server_sources = $serverPrint }
+        Remove-Item -Force (Get-CurrentPath) -ErrorAction SilentlyContinue
+
+        [void](Invoke-Step4)
+        Check 'step 4 without current.json: stops' (Test-Step4Stop) $true
+        Check 'step 4 without current.json: says to run step 1' ($step4.Stopped.Message -match '1 Start test server\.cmd') $true
+        Check 'step 4 without current.json: no compose change' $step4.Invoke.Count 0
+
+        Write-Current $currentJson
+        $step4.Running = "postgres`ndev-idp`n"
+        [void](Invoke-Step4)
+        Check 'step 4 with the api stopped: stops' (Test-Step4Stop) $true
+        Check 'step 4 with the api stopped: says to run step 1' ($step4.Stopped.Message -match '1 Start test server\.cmd') $true
+        Check 'step 4 with the api stopped: no compose change' $step4.Invoke.Count 0
+        $step4.Running = "postgres`r`ndev-idp`r`napi`r`n"
+
+        Write-KitFile $keyFile ($sentinel + "`r`n")
+        Write-KitFile $limitFile '12'
+        $currentBefore = [IO.File]::ReadAllText((Get-CurrentPath))
+        $shown = Invoke-Step4
+        Check 'step 4: no stop' $step4.Stopped $null
+        Check 'step 4: exactly one compose change' ($step4.Invoke -join ' | ') 'up -d --no-deps --force-recreate dev-idp api'
+        $allCompose = (@($step4.Invoke) + @($step4.Output)) -join ' | '
+        Check 'step 4: never compose down' ($allCompose -match '\bdown\b') $false
+        Check 'step 4: never removes volumes' ($allCompose -match '(^|\s)-v(\s|$)|--volumes') $false
+        Check 'step 4: never touches a tunnel' ($allCompose -match 'tunnel') $false
+        Check 'step 4: the app address from current.json' $step4.Env.App $currentJson.app_url
+        Check 'step 4: the sign-in address from current.json' $step4.Env.Signin $currentJson.signin_url
+        Check 'step 4: the passphrase stays' $step4.Env.Passphrase $currentJson.passphrase
+        Check 'step 4: the persistent session secret' $step4.Env.Session (Get-PersistentSecret 'session-secret.txt' 32)
+        Check 'step 4: a new sign-in client secret' ($step4.Env.Client -cmatch '^[0-9a-f]{48}$') $true
+        Check 'step 4: AI on' $step4.Env.AiEnabled 'true'
+        Check 'step 4: the key reaches compose' ($step4.Env.AiKey -ceq $sentinel) $true
+        Check 'step 4: the monthly limit reaches compose' $step4.Env.Ceiling '1200'
+        Check 'step 4: says AI is on' ($shown -match [regex]::Escape('AI assistant: on (key file found, monthly limit US$12)')) $true
+        Check 'step 4: shows the passphrase' ($shown -match $currentJson.passphrase) $true
+        Check 'step 4: the key is not in a compose argument' ($allCompose.Contains($sentinel)) $false
+        Check 'step 4, same sources: no rebuild' ($shown -match 'rebuilding|updated too') $false
+        Check 'step 4, same sources: current.json unchanged' ([IO.File]::ReadAllText((Get-CurrentPath)) -ceq $currentBefore) $true
+        $firstClient = $step4.Env.Client
+        [void](Invoke-Step4)
+        Check 'step 4: the client secret is new on every run' ($step4.Env.Client -ne $firstClient) $true
+
+        # An older current.json without a passphrase gets a new one, recorded with every other field kept.
+        $old = [ordered]@{ app_url = $currentJson.app_url; signin_url = $currentJson.signin_url; mode = 'stable'; server_sources = $serverPrint }
+        Write-Current $old
+        $shown = Invoke-Step4
+        $saved = Read-Current
+        Check 'step 4, no passphrase yet: a new one' ([string]$saved.passphrase -cmatch '^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$') $true
+        Check 'step 4, no passphrase yet: compose gets it' $step4.Env.Passphrase ([string]$saved.passphrase)
+        Check 'step 4, no passphrase yet: it is shown' ($shown -match [string]$saved.passphrase) $true
+        Check 'step 4, no passphrase yet: other fields kept' ('{0}|{1}|{2}|{3}' -f $saved.app_url, $saved.signin_url, $saved.mode, $saved.server_sources) (
+            '{0}|{1}|stable|{2}' -f $currentJson.app_url, $currentJson.signin_url, $serverPrint)
+        Check 'step 4, no passphrase yet: only recreates' ($step4.Invoke -join ' | ') 'up -d --no-deps --force-recreate dev-idp api'
+        Check 'step 4: the key is not in current.json' ([IO.File]::ReadAllText((Get-CurrentPath)).Contains($sentinel)) $false
+
+        # A test server built from other sources than this folder's (started before a newer download was
+        # extracted here) is rebuilt, never just recreated from its old image: that would say "AI assistant: on"
+        # while the server and the iPhone app have no assistant. The account, pairing and addresses stay.
+        $rebuildCall = 'up -d --build --no-deps --force-recreate dev-idp api'
+        $older = [ordered]@{ app_url = $currentJson.app_url; signin_url = $currentJson.signin_url; passphrase = $currentJson.passphrase
+            mode = 'quick-tunnel'; started_at = $currentJson.started_at; server_sources = 'f00d' }
+        Write-Current $older
+        $shown = Invoke-Step4
+        $saved = Read-Current
+        Check 'step 4, newer sources: no stop' $step4.Stopped $null
+        Check 'step 4, newer sources: rebuilds dev-idp and api' ($step4.Invoke -join ' | ') $rebuildCall
+        Check 'step 4, newer sources: says so' ($shown -match 'This folder has a newer DoMe server; rebuilding it') $true
+        Check 'step 4, newer sources: says the account stays' ($shown -match 'your test account and pairing stay') $true
+        Check 'step 4, newer sources: says to reopen the iPhone app' ($shown -match 'The iPhone app was updated too') $true
+        Check 'step 4, newer sources: recorded' (Get-RecordedSources) $serverPrint
+        Check 'step 4, newer sources: other fields kept' ('{0}|{1}|{2}|{3}' -f $saved.app_url, $saved.signin_url, $saved.passphrase, $saved.mode) (
+            '{0}|{1}|{2}|quick-tunnel' -f $currentJson.app_url, $currentJson.signin_url, $currentJson.passphrase)
+        # Read from the file: PowerShell 7's ConvertFrom-Json turns the date into a DateTime (5.1 keeps the text).
+        Check 'step 4, newer sources: started_at kept' ([IO.File]::ReadAllText((Get-CurrentPath)) -match '"started_at":\s*"2026-10-11T10:00:00"') $true
+        Check 'step 4, newer sources: the passphrase stays' $step4.Env.Passphrase $currentJson.passphrase
+        Check 'step 4, newer sources: the addresses stay' ('{0}|{1}' -f $step4.Env.App, $step4.Env.Signin) ('{0}|{1}' -f $currentJson.app_url, $currentJson.signin_url)
+        Check 'step 4, newer sources: AI on' $step4.Env.AiEnabled 'true'
+        Check 'step 4, newer sources: the key reaches compose' ($step4.Env.AiKey -ceq $sentinel) $true
+        $allCompose = (@($step4.Invoke) + @($step4.Output)) -join ' | '
+        Check 'step 4, newer sources: never compose down, volumes or a tunnel' ($allCompose -match '\bdown\b|(^|\s)-v(\s|$)|--volumes|tunnel') $false
+        $shown = Invoke-Step4
+        Check 'step 4 after a rebuild: only recreates' ($step4.Invoke -join ' | ') 'up -d --no-deps --force-recreate dev-idp api'
+        Check 'step 4 after a rebuild: says nothing of a rebuild' ($shown -match 'rebuilding|updated too') $false
+
+        # A current.json from a kit that did not record server_sources yet: rebuilt as well.
+        $older.Remove('server_sources')
+        Write-Current $older
+        $shown = Invoke-Step4
+        Check 'step 4, sources unknown: rebuilds' ($step4.Invoke -join ' | ') $rebuildCall
+        Check 'step 4, sources unknown: says so' ($shown -match 'started by an older test kit; rebuilding it') $true
+        Check 'step 4, sources unknown: recorded' (Get-RecordedSources) $serverPrint
+
+        # The real fingerprint: an edited server source rebuilds; a failed build stops with the running server
+        # unchanged and records nothing, so the next run builds again.
+        Write-RepoFile 'cloud-api/dome_api/app.py' 'changed again'
+        $editedPrint = Get-SourceFingerprint $repo $script:ServerSources
+        [void](Invoke-Step4)
+        Check 'step 4, edited server source: rebuilds' ($step4.Invoke -join ' | ') $rebuildCall
+        Check 'step 4, edited server source: recorded' (Get-RecordedSources) $editedPrint
+        Write-RepoFile 'mobile-app/src/lib/assistant.ts' 'export {};'
+        $step4.FailCompose = $true
+        [void](Invoke-Step4)
+        $step4.FailCompose = $false
+        Check 'step 4, failed rebuild: stops' (Test-Step4Stop) $true
+        Check 'step 4, failed rebuild: says what failed' ($step4.Stopped.Message -match '^Rebuilding DoMe failed') $true
+        Check 'step 4, failed rebuild: nothing recorded' (Get-RecordedSources) $editedPrint
+        [void](Invoke-Step4)
+        Check 'step 4 after a failed rebuild: rebuilds again' ($step4.Invoke -join ' | ') $rebuildCall
+        Check 'step 4 after a failed rebuild: then recorded' (Get-RecordedSources) (Get-SourceFingerprint $repo $script:ServerSources)
+
+        # Both at once: no passphrase yet and newer sources.
+        Write-Current ([ordered]@{ app_url = $currentJson.app_url; signin_url = $currentJson.signin_url; mode = 'stable'; server_sources = 'f00d' })
+        [void](Invoke-Step4)
+        $saved = Read-Current
+        Check 'step 4, no passphrase and newer sources: rebuilds' ($step4.Invoke -join ' | ') $rebuildCall
+        Check 'step 4, no passphrase and newer sources: both recorded' ('{0}|{1}|{2}' -f ([string]$saved.passphrase -cmatch '^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$'),
+            $saved.server_sources, $saved.mode) ('True|{0}|stable' -f (Get-SourceFingerprint $repo $script:ServerSources))
+
+        Remove-Item -Force $keyFile
+        $shown = Invoke-Step4
+        Check 'step 4 without a key file: AI off' $step4.Env.AiEnabled 'false'
+        Check 'step 4 without a key file: no key reaches compose' $step4.Env.AiKey ''
+        Check 'step 4 without a key file: says AI is off' ($shown -match [regex]::Escape("AI assistant: off (no testkit\ai-key.txt")) $true
+
+        Write-KitFile $keyFile ('two words ' + $sentinel)
+        [void](Invoke-Step4)
+        Check 'step 4 with a refused key file: stops' (Test-Step4Stop) $true
+        Check 'step 4 with a refused key file: no compose change' $step4.Invoke.Count 0
+        Write-KitFile $keyFile $sentinel
+
+        $step4.Public = $false
+        $shown = Invoke-Step4
+        Check 'step 4, public address down: no stop' $step4.Stopped $null
+        Check 'step 4, public address down: says so' ($shown -match 'Not reachable at') $true
+        $step4.Public = $true
+        $step4.Healthy = $false
+        [void](Invoke-Step4)
+        Check 'step 4, DoMe does not start: stops' (Test-Step4Stop) $true
+        Check 'step 4, DoMe does not start: points to the log' ($step4.Stopped.Message -match 'docker logs dome-test-api-1') $true
+        $step4.Healthy = $true
+
+        # Nothing the kit showed or wrote holds the key.
+        Check 'AI: the key was never shown' ($script:allShown.ToString().Contains($sentinel)) $false
+        $written = @(Get-ChildItem -Path $script:StateDir -Recurse -File | Where-Object { $_.FullName -ne $keyFile } |
+                Where-Object { [IO.File]::ReadAllText($_.FullName).Contains($sentinel) } | ForEach-Object { $_.Name })
+        Check 'AI: the key was never written to a file' ($written -join ', ') ''
+    } finally {
+        $script:KitDir = $realKitDir
+        if (Get-Variable -Name realRepoDir -ErrorAction SilentlyContinue) { $script:RepoDir = $realRepoDir }
+        foreach ($name in @('DOME_TEST_APP_URL', 'DOME_TEST_SIGNIN_URL', 'DOME_TEST_CLIENT_SECRET', 'DOME_TEST_SESSION_SECRET',
+                'DOME_TEST_PASSPHRASE', 'DOME_TEST_AI_ENABLED', 'DOME_TEST_AI_KEY', 'DOME_TEST_AI_CEILING_CENTS')) {
+            [Environment]::SetEnvironmentVariable($name, $null)
+        }
+    }
 } finally {
     Remove-Item -Recurse -Force $script:StateDir -ErrorAction SilentlyContinue
 }

@@ -2,7 +2,8 @@
 #
 # Do not run this file by hand; "1 Start test server.cmd" (scripts/start-server.ps1) does it,
 # because it must first learn the two temporary public addresses and then hand them to the
-# services. Every ${...:?} value below is set by that script.
+# services. Every ${...:?} value below is set by that script ("4 Apply AI settings.cmd" sets them
+# again from testkit\.state\current.json when it recreates dev-idp and api).
 #
 #   postgres       database (kept in the "dome-test_pgdata" volume between runs)
 #   dev-idp        the development sign-in page (tools/dev-idp), locked with a passphrase
@@ -90,6 +91,17 @@ services:
       # published on 127.0.0.1 only.
       DOME_TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       DOME_LOG_LEVEL: INFO
+      # The optional AI assistant (README, "Talk to DoMe"). The scripts set the DOME_TEST_AI_* values from
+      # testkit\ai-key.txt and testkit\ai-monthly-limit-usd.txt; without a key file it is off. The 1-hour
+      # prompt cache suits one owner who talks now and then (docs/design/assistant.md section 2.8).
+      DOME_AI_ENABLED: ${DOME_TEST_AI_ENABLED:-false}
+      DOME_AI_PROVIDER: anthropic
+      DOME_AI_ANTHROPIC_API_KEY: ${DOME_TEST_AI_KEY:-}
+      DOME_AI_MONTHLY_CEILING_CENTS: ${DOME_TEST_AI_CEILING_CENTS:-500}
+      DOME_AI_CACHE_TTL: 1h
+      # Development allowance for the test account (refused by cloud-api outside development/test).
+      DOME_AI_DEV_GRANT_INTERPRETATIONS: "300"
+      DOME_AI_DEV_GRANT_COST_CAP_CENTS: ${DOME_TEST_AI_CEILING_CENTS:-500}
     ports:
       - "127.0.0.1:18080:8080"
     volumes:

@@ -59,3 +59,27 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     `test_queue_depth_and_rate_limit` followed a crashed flood test that left the server draining a backlog; that
     test bug is fixed). If it recurs, swap the limiters for smaller ones in the test, as
     `test_controller_frame_flood_is_throttled_without_growing_security_events` does.
+
+## AI assistant, step 1
+
+15. **Not live-tested.** There is no Anthropic key in the build environment. The adapter is tested against an
+    `httpx2.MockTransport` stub with the real `anthropic` 1.13 SDK (request body, headers, event parsing, error and
+    retry mapping), the service with a scripted fake provider. Whether the API accepts the output schema (35 `anyOf`
+    variants, parameterless variants with `"params": {"type": "object", "additionalProperties": false,
+    "properties": {}}`), what `usage.iterations` entries really carry, what a streamed mid-output fallback really looks
+    like (the adapter joins the declined partial and its continuation, docs/design/assistant.md §2.10), and what a
+    streamed message's request id is come from the bundled API reference and must be confirmed by the owner's first
+    live call
+    (`tests/test_assistant_live.py`, docs/design/assistant.md §8.6). If the first call fails with
+    `reason=bad_request`, look at the parameterless `params` note of §2.4 first.
+16. **A Cancel through the Cloudflare tunnel may never reach uvicorn.** The disconnect watcher cancels the provider
+    call and frees the account only when uvicorn sees the client go; through a tunnel the turn may simply complete
+    (and be charged), and the phone's bounded `AI_BUSY` resend covers the gap (§4.3).
+17. **The price table is hand-kept.** DoMe's spend is its own estimate; reconcile it monthly with the Anthropic
+    Console's usage and cost report and re-check `assistant/pricing.py` against Anthropic's pricing page before any
+    paid launch (docs/OPERATIONS.md). Cache writes are priced at the configured TTL's rate, not from the
+    `cache_creation` breakdown.
+18. **Single process.** `in_flight`, the per-account turn buckets and the sweeper are in memory per process
+    (ADR-0001 D1). The reservations themselves are in PostgreSQL and stay exact under any number of processes.
+19. **The usage period is the calendar month in UTC** for every plan and billing interval; when billing anchors periods
+    to the subscription, only `metering.period_for()` changes.

@@ -209,3 +209,94 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     (`manager.PC_STATE_1_1_FIELDS`) for sockets that did not announce 1.1, live and for the cached frame sent on
     subscribe. State frames are unsigned routing data, so removing keys does not touch anything the phone verifies;
     1.1 sockets still get the agent's frame unchanged.
+
+## AI assistant, step 1 (docs/design/assistant.md)
+
+43. **No protocol or registry bump for the assistant.** The four endpoints, their bodies, eight error codes and two
+    plan fields travel only between the PWA and cloud-api (deployed together) or are read by cloud-api alone; no
+    frame, signed payload, action or limit changed. The exception is written into `docs/PROTOCOL.md` §1 and listed in
+    §19 with its date; `rules.search_queries` gained the assistant clause (text only). This build changed the contract
+    under `shared/protocol/` itself (design Step A), unlike the earlier builds that treated it as frozen.
+44. **cloud-api serves only AI turns; deterministic-first lives on the phone.** Requests the phone's Type grammar
+    understands never reach this service, so nothing here parses commands. A turn returns at most three steps the phone
+    resolves (app names against its own approved-app list), checks, shows and signs; the service never builds, signs
+    or sends a command, and the relay cannot tell an assistant command from a typed one.
+45. **Streaming with `get_final_message()`, SDK retries off, one explicit retry of unbilled failures.** The SDK's own
+    retries would also retry timeouts, which may be billed while only the last attempt's usage is reported. The adapter
+    retries once (`DOME_AI_MAX_RETRIES`, 0–1), after 1 s, only for an HTTP 429/529 before the stream opened, its
+    streaming form (an `overloaded_error` / `rate_limit_error` event before `message_start`: no model ran, so the
+    attempt is not counted and its cost is 0, and the error's status is the 529 / 429 it stands for, not the stream's
+    200), or a connection that never opened (`APIConnectionError` caused by `httpx2.ConnectError` /
+    `ConnectTimeout`), and only with at least 10 s of the 20 s deadline left after the wait. It counts its attempts
+    itself.
+46. **A request that was sent but never answered is cost-unknown, even before the stream opened.** The design lists
+    "raised after the stream opened" for `cost_unknown`; a read timeout or a dropped connection while waiting for the
+    response headers is neither an HTTP error nor a connection that never opened, so Anthropic may have billed it. The
+    adapter marks it `cost_unknown` (settled by the unknown-cost rule) and does not retry it. A stream that ends without
+    `message_stop` and without an error is treated the same (`provider_error`, cost unknown), never parsed.
+47. **`fallbacks="default"` is passed as the SDK keyword, not `extra_body`.** `anthropic` 1.13's
+    `beta.messages.stream` declares `fallbacks: BetaFallbacksParam` (`Iterable[...] | Literal["default"]`) and mypy
+    strict accepts it; the call passes every argument as an explicit keyword so the SDK signature is type-checked.
+    The HTTP-stub test pins the wire body (`"fallbacks": "default"`, `"stream": true`) and the
+    `anthropic-beta: server-side-fallback-2026-07-01` header.
+48. **Reservations are conditional `UPDATE`s in one short transaction, rows locked in one order.** Ledger row (insert
+    `ON CONFLICT DO NOTHING` = duplicate check), usage period, spend month; settle and the sweeper use the same order,
+    so they cannot deadlock. The sweeper settles each stale row in its own transaction (candidate ids read without a
+    lock, then that row re-locked `FOR UPDATE SKIP LOCKED`): one transaction for several rows held the month row while
+    waiting for another account's period row, and deadlocked with that account's live settle (found in review; a
+    metering test pauses the sweeper between two accounts' rows while a live turn settles). A refused reservation rolls back whole and re-reads the period row to name the reason
+    (`requests`, `cost_cap`, `failures`, checked in that order). The ledger row's `created_at` comes from the service
+    clock, so the sweeper and an injected test clock agree.
+49. **Unknown-cost turns cost the account, not just the operator.** Deadline, cancel and `cost_unknown` turns settle
+    at `input side of message_start + max_tokens × output price` when exactly one attempt opened without a fallback,
+    else at the full reservation; the cost goes to the ledger, the account's period (its cost cap) and the operator
+    month alike. With the failed-turn limit (`DOME_AI_FAILED_TURNS_PER_PERIOD`, counting timeout, abandoned, refused,
+    invalid_output) one account cannot push its induced failures onto the shared ceiling.
+50. **Pricing source.** `assistant/pricing.py` copies the Claude API reference's cached price table of 2026-10-11
+    (Opus 5.5 $4/$20, cache write 5 m $5 / 1 h $8, read $0.20; Opus 5 and 4.8 $5/$25 for fallbacks). Unknown models are
+    priced at $10/$50 and logged `assistant.unknown_model_price`. Each attempt of `usage.iterations` is priced at its
+    own model: the entry's `model` when present, else the model that ran that hop by the `fallback` blocks (the first
+    block's `from`, then each block's `to`), else the message's model (no block: nothing declined before it, a sticky
+    turn included). So when the whole chain refuses, the fallback hop is priced at its own dearer rates. Start-up
+    refuses a `DOME_AI_TURN_RESERVE_MICRO_USD` below the worst case of one turn (`worst_case_turn_micro_usd`: 10 000
+    input tokens at the 1-hour write rate plus `DOME_AI_MAX_OUTPUT_TOKENS` of output, on the requested model and on
+    the dearest fallback model), so a larger output limit cannot outgrow the reservation unnoticed.
+51. **`in_flight` is a dict of per-turn tokens, not a set.** A cancelled turn releases the account at once (so a
+    rephrased request is not answered `AI_BUSY`); with a plain set its `finally` could later remove a newer turn's
+    entry and let a third turn run concurrently. A turn releases only its own token.
+52. **The disconnect watcher is stopped by an event, not only by cancellation.** Starlette's
+    `Request.is_disconnected()` awaits `receive()` inside a pre-cancelled anyio cancel scope; a task cancellation
+    arriving while the watcher is inside it is absorbed by that scope, and the watcher kept polling until the client
+    gave up (every turn then took as long as the client's own timeout). Found by the route tests.
+53. **Supplementary-plane format characters are removed server-side.** The schema patterns refuse controls and the
+    BMP's `Cf` characters; Unicode tag characters (U+E0000–E007F, used to hide instructions in text) are outside the
+    BMP, so `text` and every `recent` line are cleaned with `\p{Cf}` removal before the user message is built. A text
+    that is empty afterwards is a 400. The model's `reply` and `choices` get the same cleaning (§3.9).
+54. **The plan duplicate rule resolves "it" the way the phone does.** App names are compared case-folded with spaces
+    collapsed, and `it`, `that` or `the app` stands for the previous app step's app in the same plan, so
+    `[launch Spotify, launch it]` is refused here as the phone's `stepKey` would refuse it after charging.
+55. **Settings hide their input in validation errors** (`hide_input_in_errors=True`). A `mode="before"` validator
+    (the renamed `DOME_AI_API_KEY` check) made pydantic print `input_value=` with every raw setting, the Anthropic key
+    and the session secret included. Every start-up error now names variables only.
+56. **A cancelled turn answers 499 to nobody.** The client is gone; the status is only for the request log line.
+57. **The turn log line also carries `invalid_reason` and `attempts`.** `invalid_reason` is a fixed code from
+    `validate.py` (`steps.not_eligible`, `plan.duplicate`, `reply.length` …) or the provider outcome (`truncated`,
+    `invalid`); never a value from the output. It is what an operator needs to tell a schema problem from a model
+    habit when the live checks show invalid outputs.
+58. **Test seams.** `AssistantConfig` (frozen dataclass, replaced per test with `dataclasses.replace`) carries the
+    enabled flag, dev grants, ceiling, reserve, failed-turn limit, enforced deadline (separate from the reported
+    `turn_deadline_seconds`, which the schema bounds to 10–60), an optional turn rate limit override, the disconnect
+    poll interval and the clock. The adapter takes an `http_client`, a monotonic clock and a sleep function.
+59. **A streamed mid-output fallback keeps the rescued reply.** On a stream, a decline after some output keeps the
+    declined model's partial text, marks the boundary with a `fallback` block and lets the fallback model continue from
+    the partial (the skill's model-migration guide). The adapter therefore joins the text blocks in order across a
+    `fallback` block (as the SDK's `get_final_text()` does), or takes the text after the last block when only that
+    parses; anything else is still invalid. Before, the second text block made every such rescue `invalid`: the owner
+    heard the fixed question and both attempts were paid. Without a fallback block, exactly one text block is required.
+60. **`app.launch` from the model carries no parameters at all.** Its only parameter (`app_id`) is the phone's to fill
+    from its own approved list, so `params` must be `{}`; any key (a path, arguments) makes the output invalid and the
+    turn uncharged, instead of reaching the phone, which refused it after the turn was charged. The shared plan fixture
+    has the case, so the phone keeps agreeing.
+61. **The development console log is coloured only on a terminal** (`ConsoleRenderer(colors=sys.stderr.isatty())`).
+    The test kit runs `DOME_ENV=development` in a container without one, and its README has the owner search
+    `docker logs` with `findstr`; an older Command Prompt printed the escape codes as text.

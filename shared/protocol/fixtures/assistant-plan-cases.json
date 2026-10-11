@@ -1,0 +1,144 @@
+{
+  "$comment": "AI-shaped plans (assistant_step lists, as POST /v1/assistant/turn returns them in mode act) with the expected verdict, run by cloud-api (tests/test_assistant_validate.py) and by the phone (planFromAssistant, with `apps` as the approved-app list and no last search). valid: cloud-api returns the steps and the phone builds a plan from them. invalid: cloud-api answers the fixed uncharged reply (invalid_output) and the phone refuses the steps (anything but a plan). `rule` names the rule that decides it. Only cases both sides can judge belong here: every app named resolves against `apps`, and nothing depends on the phone's live state (docs/design/assistant.md §3.9, §4.4).",
+  "apps": [
+    {"app_id": "spotify", "display_name": "Spotify", "running": false},
+    {"app_id": "calculator", "display_name": "Calculator", "running": false},
+    {"app_id": "notepad", "display_name": "Notepad", "running": true, "windows": [{"foreground": false}]},
+    {"app_id": "paint", "display_name": "Paint", "running": true, "windows": [{"foreground": false}]}
+  ],
+  "cases": [
+    {
+      "name": "a confirmation step on its own",
+      "steps": [{"action": "power.sleep", "params": {}}],
+      "verdict": "valid",
+      "rule": "confirmation_alone"
+    },
+    {
+      "name": "closing an app on its own",
+      "steps": [{"action": "app.close", "params": {}, "app": "Notepad"}],
+      "verdict": "valid",
+      "rule": "confirmation_alone"
+    },
+    {
+      "name": "a confirmation step with another step",
+      "steps": [{"action": "windows.set_volume", "params": {"value": 10}}, {"action": "power.shutdown", "params": {}}],
+      "verdict": "invalid",
+      "rule": "confirmation_alone"
+    },
+    {
+      "name": "closing an app with another step",
+      "steps": [{"action": "app.close", "params": {}, "app": "Notepad"}, {"action": "app.minimize", "params": {}, "app": "Paint"}],
+      "verdict": "invalid",
+      "rule": "confirmation_alone"
+    },
+    {
+      "name": "the same action twice without an app",
+      "steps": [{"action": "youtube.set_paused", "params": {"paused": true}}, {"action": "youtube.set_paused", "params": {"paused": false}}],
+      "verdict": "invalid",
+      "rule": "duplicate"
+    },
+    {
+      "name": "the same action twice on the same app, named differently",
+      "steps": [{"action": "app.minimize", "params": {}, "app": "Notepad"}, {"action": "app.minimize", "params": {}, "app": "notepad"}],
+      "verdict": "invalid",
+      "rule": "duplicate"
+    },
+    {
+      "name": "the same action twice on the same app through it",
+      "steps": [{"action": "app.launch", "params": {}, "app": "Spotify"}, {"action": "app.launch", "params": {}, "app": "it"}],
+      "verdict": "invalid",
+      "rule": "duplicate"
+    },
+    {
+      "name": "two apps launched",
+      "steps": [{"action": "app.launch", "params": {}, "app": "Spotify"}, {"action": "app.launch", "params": {}, "app": "Calculator"}],
+      "verdict": "valid",
+      "rule": "duplicate"
+    },
+    {
+      "name": "the same window action on two apps",
+      "steps": [{"action": "app.minimize", "params": {}, "app": "Notepad"}, {"action": "app.minimize", "params": {}, "app": "Paint"}],
+      "verdict": "valid",
+      "rule": "duplicate"
+    },
+    {
+      "name": "a player step straight after a search",
+      "steps": [{"action": "youtube.search", "params": {"query": "lofi"}}, {"action": "youtube.set_paused", "params": {"paused": false}}],
+      "verdict": "invalid",
+      "rule": "player_after_search"
+    },
+    {
+      "name": "next video straight after a search",
+      "steps": [{"action": "youtube.search", "params": {"query": "jazz"}}, {"action": "youtube.next", "params": {}}],
+      "verdict": "invalid",
+      "rule": "player_after_search"
+    },
+    {
+      "name": "open a result straight after a search",
+      "steps": [{"action": "youtube.search", "params": {"query": "lofi"}}, {"action": "youtube.open_result", "params": {"index": 1}}],
+      "verdict": "valid",
+      "rule": "player_after_search"
+    },
+    {
+      "name": "search, open a result, then set its volume",
+      "steps": [
+        {"action": "youtube.search", "params": {"query": "rain sounds"}},
+        {"action": "youtube.open_result", "params": {"index": 2}},
+        {"action": "youtube.set_volume", "params": {"value": 30}}
+      ],
+      "verdict": "valid",
+      "rule": "player_after_search"
+    },
+    {
+      "name": "three different steps",
+      "steps": [
+        {"action": "windows.set_volume", "params": {"value": 30}},
+        {"action": "youtube.set_paused", "params": {"paused": true}},
+        {"action": "media.next", "params": {}}
+      ],
+      "verdict": "valid",
+      "rule": "step_count"
+    },
+    {
+      "name": "four steps",
+      "steps": [
+        {"action": "windows.set_volume", "params": {"value": 30}},
+        {"action": "youtube.set_paused", "params": {"paused": true}},
+        {"action": "media.next", "params": {}},
+        {"action": "windows.set_muted", "params": {"muted": false}}
+      ],
+      "verdict": "invalid",
+      "rule": "step_count"
+    },
+    {
+      "name": "a human-only action",
+      "steps": [{"action": "input.session_start", "params": {}}],
+      "verdict": "invalid",
+      "rule": "ai_eligible"
+    },
+    {
+      "name": "an action the registry does not have",
+      "steps": [{"action": "system.run_shell", "params": {}}],
+      "verdict": "invalid",
+      "rule": "ai_eligible"
+    },
+    {
+      "name": "a parameter out of range",
+      "steps": [{"action": "windows.set_volume", "params": {"value": 150}}],
+      "verdict": "invalid",
+      "rule": "params"
+    },
+    {
+      "name": "an app launch with parameters of its own",
+      "steps": [{"action": "app.launch", "params": {"path": "C:/Windows/System32/cmd.exe", "args": "/c calc"}, "app": "Notepad"}],
+      "verdict": "invalid",
+      "rule": "params"
+    },
+    {
+      "name": "a path instead of an app name",
+      "steps": [{"action": "app.launch", "params": {}, "app": "C:\\Windows\\System32\\cmd.exe"}],
+      "verdict": "invalid",
+      "rule": "app_name"
+    }
+  ]
+}

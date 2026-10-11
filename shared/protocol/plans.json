@@ -1,5 +1,5 @@
 {
-  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices. manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); it is identical for every plan because Free has the same input responsiveness as Pro. The pointer and keyboard capabilities are Free features.",
+  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices. manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); it is identical for every plan because Free has the same input responsiveness as Pro. The pointer and keyboard capabilities are Free features. AI assistant (docs/design/assistant.md; read by cloud-api only): ai_interpretations_per_period is the customer unit (one charged assistant turn per usage period, the calendar month in UTC); ai_cost_cap_cents_per_period is an internal per-account backstop in US cents on the metered provider cost per usage period (unknown-cost turns count against it); ai_turn_rate_limit is the per-account token bucket for POST /v1/assistant/turn. Both AI allowances stay 0 until the Phase E release gate.",
   "plans": {
     "free": {
       "display_name": "DoMe Free",
@@ -11,6 +11,11 @@
       "routine_max_seconds": 0,
       "ai_interpretations_per_period": 0,
       "ai_transcription_minutes_per_period": 0,
+      "ai_cost_cap_cents_per_period": 0,
+      "ai_turn_rate_limit": {
+        "per_minute": 10,
+        "burst": 5
+      },
       "manual_command_rate_limit": {
         "per_minute": 120,
         "burst": 30
@@ -34,11 +39,16 @@
       "routine_max_seconds": 60,
       "ai_interpretations_per_period": 0,
       "ai_transcription_minutes_per_period": 0,
+      "ai_cost_cap_cents_per_period": 0,
+      "ai_turn_rate_limit": {
+        "per_minute": 10,
+        "burst": 5
+      },
       "manual_command_rate_limit": {
         "per_minute": 120,
         "burst": 30
       },
-      "$comment": "AI allowances stay 0 until the Phase E release gate; the cost model evaluates 250 interpretations / 30 minutes.",
+      "$comment": "AI allowances stay 0 until the Phase E release gate; the cost model evaluates 250 interpretations / 30 minutes and a 300-cent cost cap.",
       "coalescable_command_rate_limit": {
         "per_minute": 360,
         "burst": 60

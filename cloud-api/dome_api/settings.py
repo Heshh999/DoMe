@@ -4,15 +4,21 @@ validated once at start-up so a misconfigured deployment fails fast instead of a
 from __future__ import annotations
 
 import ipaddress
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Env = Literal["development", "staging", "production", "test"]
+AiProvider = Literal["", "anthropic", "fake"]
+# The Anthropic SDK reads these from the environment (base URL, logging, extra headers, credentials): a stray one
+# could redirect the key and the owner's words, log request bodies or add headers (docs/design/assistant.md §3.11).
+_ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"
+MICRO_USD_PER_CENT = 10_000
 
 
 def _origin(value: str) -> str:
@@ -29,7 +35,8 @@ def _origin(value: str) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="DOME_", extra="ignore", frozen=True)
+    # hide_input_in_errors: a failed start-up check must never print the raw values (keys, secrets, database URL)
+    model_config = SettingsConfigDict(env_prefix="DOME_", extra="ignore", frozen=True, hide_input_in_errors=True)
 
     env: Env = "development"
     public_origin: str = Field(description="Exact origin the PWA is served from (Origin checks, cookies, QR links)")
@@ -91,9 +98,42 @@ class Settings(BaseSettings):
     stripe_webhook_secret: SecretStr = SecretStr("")
     stripe_price_monthly: str = ""
     stripe_price_annual: str = ""
+
+    # AI assistant, step 1 (docs/design/assistant.md §3.11). Off unless DOME_AI_ENABLED; the key lives only here.
     ai_enabled: bool = False
-    ai_provider: str = ""
-    ai_api_key: SecretStr = SecretStr("")
+    ai_provider: AiProvider = ""
+    ai_anthropic_api_key: SecretStr = SecretStr("")
+    ai_model: str = Field(default="claude-opus-5-5", pattern=r"^claude-[a-z0-9-]{1,48}$")
+    ai_effort: Literal["low", "medium", "high"] = "low"
+    ai_max_output_tokens: int = Field(default=1024, ge=512, le=4096)
+    # with streaming: the longest allowed gap between chunks of one attempt (the connect timeout is fixed at 5 s)
+    ai_timeout_seconds: int = Field(default=15, ge=5, le=30)
+    # DoMe's own retry of failures Anthropic does not bill (the SDK's retries are always off)
+    ai_max_retries: int = Field(default=1, ge=0, le=1)
+    ai_turn_deadline_seconds: int = Field(default=20, ge=10, le=60)
+    ai_cache_ttl: Literal["5m", "1h"] = "5m"
+    # operator spending ceiling across all accounts per calendar month (UTC); 0 refuses start-up with AI on
+    ai_monthly_ceiling_cents: int = Field(default=0, ge=0)
+    ai_turn_reserve_micro_usd: int = Field(default=250_000, ge=10_000)
+    ai_failed_turns_per_period: int = Field(default=20, ge=1, le=1000)
+    # development/test allowance; refused anywhere else
+    ai_dev_grant_interpretations: int = Field(default=0, ge=0)
+    ai_dev_grant_cost_cap_cents: int = Field(default=0, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _v_renamed_ai_key(cls, data: Any) -> Any:
+        # Settings ignore unknown variables, so the renamed key is looked up directly. Every developer .env copied
+        # from an older .env.example has an empty DOME_AI_API_KEY=; only a value refuses start-up.
+        if os.environ.get("DOME_AI_API_KEY", "").strip():
+            raise ValueError(
+                "DOME_AI_API_KEY was renamed to DOME_AI_ANTHROPIC_API_KEY; move the key and remove the old variable"
+            )
+        if "DOME_AI_API_KEY" in os.environ:
+            from dome_api.logging import get_logger
+
+            get_logger("dome_api.settings").warning("settings.renamed_variable", variable="DOME_AI_API_KEY")
+        return data
 
     @field_validator("public_origin")
     @classmethod
@@ -157,7 +197,55 @@ class Settings(BaseSettings):
             )
         if self.static_dir is not None and not self.static_dir.is_dir():
             raise ValueError(f"DOME_STATIC_DIR {self.static_dir} is not a directory")
+        self._v_ai()
         return self
+
+    def _v_ai(self) -> None:
+        """The assistant's start-up checks (docs/design/assistant.md §3.11). Messages name variables, never values."""
+        if self.ai_provider == "fake" and self.env in ("staging", "production"):
+            raise ValueError(f"DOME_AI_PROVIDER=fake is for development and tests only, not {self.env}")
+        if self.env not in ("development", "test") and (
+            self.ai_dev_grant_interpretations or self.ai_dev_grant_cost_cap_cents
+        ):
+            raise ValueError(
+                f"DOME_AI_DEV_GRANT_INTERPRETATIONS and DOME_AI_DEV_GRANT_COST_CAP_CENTS must be 0 in {self.env}"
+            )
+        if not self.ai_enabled:
+            return
+        if not self.ai_provider:
+            raise ValueError("DOME_AI_ENABLED=true requires DOME_AI_PROVIDER (anthropic or fake)")
+        if self.ai_provider == "anthropic":
+            if not self.ai_anthropic_api_key.get_secret_value().strip():
+                raise ValueError("DOME_AI_PROVIDER=anthropic requires DOME_AI_ANTHROPIC_API_KEY")
+            stray = sorted(k for k in os.environ if k.upper().startswith(_ANTHROPIC_ENV_PREFIX))
+            if stray:
+                raise ValueError(
+                    f"{stray[0]} is set in the environment; remove every ANTHROPIC_* variable while the Anthropic "
+                    "provider is enabled (the SDK would read it)"
+                )
+        if self.ai_monthly_ceiling_cents <= 0:
+            raise ValueError("DOME_AI_ENABLED=true requires DOME_AI_MONTHLY_CEILING_CENTS above 0")
+        if self.ai_turn_deadline_seconds < self.ai_timeout_seconds + 5:
+            raise ValueError("DOME_AI_TURN_DEADLINE_SECONDS must be at least DOME_AI_TIMEOUT_SECONDS + 5")
+        from dome_api.assistant.pricing import worst_case_turn_micro_usd
+
+        if self.ai_turn_reserve_micro_usd < worst_case_turn_micro_usd(self.ai_model, self.ai_max_output_tokens):
+            raise ValueError(
+                "DOME_AI_TURN_RESERVE_MICRO_USD is below what one turn can cost at most with DOME_AI_MODEL and "
+                "DOME_AI_MAX_OUTPUT_TOKENS (one attempt plus one fallback attempt, docs/design/assistant.md §3.7); "
+                "raise DOME_AI_TURN_RESERVE_MICRO_USD or lower DOME_AI_MAX_OUTPUT_TOKENS"
+            )
+        from dome_api.plans import catalog
+
+        for plan in catalog().plans.values():
+            limit = max(plan.ai_interpretations_per_period, self.ai_dev_grant_interpretations)
+            cap = max(plan.ai_cost_cap_cents_per_period, self.ai_dev_grant_cost_cap_cents) * MICRO_USD_PER_CENT
+            if limit > 0 and cap < self.ai_turn_reserve_micro_usd:
+                raise ValueError(
+                    f"plan {plan.id!r}: an AI allowance needs a cost cap of at least one turn reservation "
+                    "(ai_cost_cap_cents_per_period / DOME_AI_DEV_GRANT_COST_CAP_CENTS x 10000 >= "
+                    "DOME_AI_TURN_RESERVE_MICRO_USD); every turn would fail otherwise"
+                )
 
     # ----- derived -----------------------------------------------------------------------------
     @property

@@ -101,6 +101,8 @@ def test_settings_refuse_wildcard_and_require_proxies_outside_development(settin
     base = settings.model_dump()
     base["session_secret"] = settings.session_secret.get_secret_value()
     base["oidc_client_secret"] = settings.oidc_client_secret.get_secret_value()
+    # the suite's fake AI provider and development grants are refused outside development/test (test_settings.py)
+    base.update(ai_enabled=False, ai_provider="", ai_dev_grant_interpretations=0, ai_dev_grant_cost_cap_cents=0)
     with pytest.raises(ValidationError, match="spoof"):
         Settings(**{**base, "trusted_proxies": "*"})
     with pytest.raises(ValidationError, match="not an IP address"):

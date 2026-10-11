@@ -41,14 +41,19 @@ src/
                  (lifecycle + onceSettled), input (manual-input session client), gestures (touchpad state
                  machine), typing (live typing / IME mapper), health (layered connection health), nowPlaying,
                  inputStatus, support, confirmations, controllerKey, intents, labels, pairing, qr, targets,
-                 throttle, log (redacting), diagnostics, format, outcome, connection, power, pricing
-  store/         zustand: session, devices (REST inventory + selection), live (relay state, commands), input
-  app/           runtime wiring, AppShell (tabs, banners, confirmation modal), PublicLayout, router, hooks
+                 throttle, log (redacting), diagnostics, format, outcome, connection, power, pricing,
+                 planRun (shared plan runner), assistant (turn pipeline), assistantContext, butlerSpeech,
+                 speech (recognition + synthesis)
+  store/         zustand: session, devices (REST inventory + selection), live (relay state, commands), input,
+                 assistant (phone prefs persisted; conversation, recent, last app in memory)
+  app/           runtime wiring, AppShell (tabs, banners, confirmation modal, speech unlock), PublicLayout,
+                 router, hooks, voice (the one recognizer/speaker/Assistant controller)
   components/    ui primitives, Sheet, ConfirmationModal, CommandOutcome, VolumeSlider, PcSwitcher, PcStatus,
                  OfflineScreen, TouchpadSurface, KeyboardPanel, GestureGuide, NowPlaying, FailureLinks,
-                 ProExplanation
-  pages/app/     Dashboard, Remote, Touchpad, Command, Apps, Health, Routines (Pro preview), Layouts (Pro
-                 preview), Devices, Pair, Settings, Billing, Link, More
+                 ProExplanation, TalkButton, Conversation, AssistantSettingsCard, AssistantConsentSheet,
+                 VoiceNoticeSheet
+  pages/app/     Dashboard, Remote, Touchpad, Command, Assistant (Ask), Apps, Health, Routines (Pro preview),
+                 Layouts (Pro preview), Devices, Pair, Settings, Billing, Link, More
   pages/public/  Landing, Pricing, FAQ, Download, Support (+ ticket form), ReleaseNotes, Privacy (DRAFT),
                  Terms (DRAFT), NotFound
   content/       release-notes.json (public release history + known issues)
@@ -172,6 +177,63 @@ scripts/         gen-validators.ts, make-icons.mjs
   only while none is approved). A step that ends in FULLSCREEN_UNSUPPORTED shows the PC's message and
   a "Maximise instead" chip that fills "maximise <app>" (sent only with Send).
 
+### The voice assistant, step 1 — `/app/assistant` (docs/design/assistant.md §4)
+
+- **Deterministic first** (`lib/assistant.ts`, controller-tested): the words (speech, typed, or dictated
+  with the keyboard's microphone) go through the Type page's own parser and context first. Plans,
+  handoffs and clarifications are handled on the phone — instant, free, with AI off or down; chips DoMe
+  built are `local` turns that never reach the AI. Only words the parser does not know go to
+  `POST /v1/assistant/turn`, and only when the account consented (current consent version), this
+  phone's **Use AI on this phone** is on and no limit stopped it. A clarification about something else
+  (`topic: other`) offers "Ask the assistant", which sends the owner's own words on a tap.
+- **The AI's steps are the grammar's steps** (`planFromAssistant` in `intents.ts`): same `PlanStep`s,
+  app names resolved against the PC's approved apps on the phone ("it" = the app of the step before,
+  else the conversation's last app), every step re-checked (registry, `ai_eligible`, params, fields the
+  AI may not set: `video_id`, `countdown_seconds`, `app_id`), then the same plan rules (`assemblePlan`:
+  ≤ 3 steps, a confirmation step alone, no duplicates). Anything else is a clarification; nothing
+  partial runs. In mode `act` the model's reply is ignored.
+- **Running** (`runPlanOnPc`, shared with the Type page, `source: "assistant"`): the plan card is always
+  shown first; a plan runs at once only when every step's registry risk is `low` (or it is a single
+  step the PC confirms), **Ask before every action** is off, the page stayed visible and the plan was
+  ready ≤ 15 s after the words, it did not come from a multi-step chip and the words did not end on
+  "and"/"then"/a comma. Otherwise Run/Cancel; a spoken "yes" never runs anything. Lock, open, focus
+  and full screen are `moderate` and always wait for Run. A new request supersedes a card still
+  waiting for Run ("Not run."), so yes/no only ever answer the newest card; a yes or no after a
+  clarification with choices is answered on the phone ("Please tap your choice on the screen.", "Very
+  well."), never sent to the AI. "Cancel"/"never mind" while a countdown runs always cancel the
+  countdown. Shut-down, restart, sleep and close go to the PC's own signed challenge in the global
+  confirmation modal; after a countdown started, the card offers a large "Cancel shut-down", which sends
+  `power.cancel` through the same runner and shows ("Cancelling…", then the outcome) and says the
+  result. A turn records its PC: switching PC cancels the AI request in flight and drops anything the
+  turn would still do ("You switched PCs, so I've left that request."), and a card only runs on the PC
+  it was shown for. Waiting for the PC's apps shows "Checking the PC's apps…" and is busy like
+  thinking.
+- **What is said** (`butlerSpeech.ts`): deterministic sentences from the real results ("Very good.
+  YouTube is paused."), the configured form of address (none by default), never a search query, title,
+  URL or key name aloud (one exception: "what is playing" asked on its own). The Type page's messages
+  have spoken statements of their own (a "Did you mean …?" or "Play “…” on YouTube?" question is said
+  as a statement, a message quoting the owner's words is said without them, help is "things you can
+  ask me"), and each AI error code has one line naming the real cause. `recent` for a later AI
+  turn holds closed template lines only ("(DoMe handled this itself: open the app)", "The app is
+  open."), never a PC display name, player label, title, query or agent message.
+- **Speech** (`speech.ts`): Web Speech recognition started only from the talk tap (tap to talk, tap to
+  stop, 15 s from `audiostart`, aborted when hidden), with every iOS error mapped (`service-not-allowed`
+  → Dictate, remembered per display mode; two transient failures → Dictate for the session; "Try voice
+  again"); speechSynthesis with an en-GB ranking (Daniel/Arthur first, novelty voices never by
+  themselves), unlocked by non-talk taps (tried again on each until speech has really started once),
+  "Tap to hear" when speech did not start in 1.5 s (that tap and Test voice speak at once, without
+  waiting for the voice list), mute, rate 0.8–1.2, nothing spoken while listening or hidden.
+- **Screen readers and layout**: bubbles carry "You said:" / "{name}:" for screen readers; the polite
+  live region reads each new butler line once and is never refilled with an older one after listening;
+  passing notices are a `role="status"`; footer links are 44 px targets. The space under the
+  conversation follows the dock's measured height (ResizeObserver), so the newest card's buttons can
+  scroll above the dock in every state.
+- **Consent and Settings** (`AssistantSettingsCard`): status and the reason when unavailable, the
+  allowance ("5 of 300 used this month · renews …"), consent (DRAFT text, version pinned by the
+  contract) and withdrawal for the account, and the phone preferences (`dome.assistant.prefs`: Ask tab,
+  Use AI, name, form of address, Ask before every action, Read replies aloud, voice, rate). The
+  conversation itself is never stored.
+
 ### Now Playing, health, support, upgrade
 
 - **Now Playing** (`NowPlaying`, `lib/nowPlaying.ts`, unit- and component-tested): PC name, app or
@@ -207,7 +269,23 @@ scripts/         gen-validators.ts, make-icons.mjs
 
 ## Tests
 
-`pnpm test` — **40 files / 715 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
+Voice assistant (step 1): `assistantPlan` (equivalence with typed words, app resolution, refusals, plan
+rules, `commandText` round trip for every AI-eligible action, the shared fixture
+`shared/protocol/fixtures/assistant-plan-cases.json`), `assistant` (the controller with fake API/PC/
+speaker/visibility/clock: deterministic first, AI usability, act/ask/answer/decline, every error's
+fallback and its copy per code, Cancel and the AI_BUSY resend, the risk rule, yes/no/cancel with
+countdowns, superseded cards and clarifications, switching PC mid-turn, the busy app-list wait,
+readiness, failures, `recent` bounds, the T2 multi-turn sentinel test, timings), `butlerSpeech`,
+`speech` (fake recognizer and synthesiser; the unlock latch), `assistantContext`, `assistantStore`,
+`api` (the four endpoints), `checkBundle` (the build's key-material check) and components
+`AssistantPage` (over the real runtime: talk states, live line and live region, auto-run vs Run, the
+AI's shutdown through the confirmation modal, Cancel shut-down's three outcomes, a PC switch while
+thinking, tags, allowance chip, banners, XSS, dictation, the dock spacer) and `AssistantSettings`
+(consent POST/DELETE, prefs, clearing the form of address, voice picker, tab swap, speech unlock, More
+entries).
+`parseCommand`'s clarifications gained a `topic`; three expectations in `intents.grammar` name it.
+
+`pnpm test` — **51 files / 1116 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
 network). New in 1.2: `commands`/`confirmations` (each action stamped with its `since`, verified by the
 real verifier; confirmations carry the command's stamp), `protocol-parity` (`since` per action, 1.2
 params/targets/results, a below-`since` stamp refused), `targets` (search target: chosen tab, new tab,
@@ -264,6 +342,24 @@ Nothing below has been run on a device. Each row is **not yet verified**.
 | Real relay path | With cloud-api + pc-agent running: Next changes the video in a background tab; result shows the transition. |
 | Confirmation on device | Sleep… → modal shows the registry line, the fixed loss-of-access / no-remote-wake copy and the PC's countdown detail; Approve → "Windows accepted the request". |
 | Lighthouse/PWA audit | Installability, contrast ≥ 4.5:1, touch target sizes on a real iPhone; 6-tab bar legible at 375 px. |
+
+### Manual iPhone checklist — voice assistant (docs/design/assistant.md §8.6)
+
+Not run on a device yet. Safari tab **and** Home Screen app, iOS version recorded:
+
+| Area | Step |
+| --- | --- |
+| Recognition | Tap to talk: "Getting ready…" then "Listening…"; or `service-not-allowed` and the switch to Dictate (expected in the Home Screen app); "Try voice again"; the dock stays above the keyboard while dictating. |
+| Dock | In each dock state (idle, text field open, Thinking with Cancel, Working with Stop, Dictate with its hint, keyboard open), a plan card that waits for Run: its Run and Cancel buttons scroll fully above the dock. |
+| Permissions | Deny the microphone: Dictate and "How to allow it" — check the Settings path shown against iOS 17 and 18, Safari and the Home Screen app, and correct the copy. Siri & Dictation off: the Dictate copy. |
+| Interruptions | An incoming call or Siri while listening and while speaking: recognition aborts, speech stops, the talk button returns to idle and works again. |
+| Network | Airplane mode while Thinking → the phone's own answer, nothing sent to the PC; while Working → the honest connection message. |
+| Background | Lock or background the phone while listening, while Thinking (→ the plan comes back with Run, not run) and while speaking. |
+| Misheard / pauses | Say "look my computer": the model asks or the Run card shows, nothing runs by itself. "Open Spotify … and then play some jazz" with a pause: a Run card, not a half-run. |
+| Speech out | Replies with the Silent switch on and off, right after the microphone was used, after returning from the background and after a relaunch; whether `navigator.audioSession` routing helps (`ROUTE_AUDIO_SESSION` in `speech.ts`); "Tap to hear" when speech stays locked. |
+| Voices | Which en-GB voices the phone lists; the ranking and deny list in `speech.ts` confirmed; mute / Read replies aloud, form of address, Ask before every action. |
+| VoiceOver | With Read replies aloud off: no double reading; nothing captured into the transcript. |
+| Latency | Settings → Diagnostics `assistant.timing` entries for the AI checks: words ended → response, → first result, → speech; the first request after a restart noted separately. |
 
 ### Manual iPhone checklist — touchpad and keyboard (spec §10A F, scenarios 18–20)
 

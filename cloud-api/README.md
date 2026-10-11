@@ -24,6 +24,56 @@ tickets" below. Evidence tags follow spec §17: everything here is **integration
 PostgreSQL and simulated agents/phones; nothing in this component is Windows-device-tested or
 iPhone-tested, and the relay cannot verify that a batch it forwarded was injected on the PC.
 
+AI assistant, step 1 (spec §13, Phase E; `docs/design/assistant.md`): `GET /v1/assistant`, consent, and
+`POST /v1/assistant/turn`, which turns the owner's words into at most three AI-eligible steps or a short spoken
+butler reply with Claude Opus 5.5 (migration 0003). Off unless configured; see "AI assistant" below.
+**Integration-tested** with a scripted fake provider and an HTTP-level stub of the Anthropic API; **not live-tested**
+(no key in the build environment) and not released (`plans.json` allowances stay 0 until the Phase E gate).
+
+## AI assistant (step 1)
+
+Design: `docs/design/assistant.md`; contract: `docs/PROTOCOL.md` §19 (PWA-only bodies, no version bump). Code:
+`dome_api/assistant/` and `dome_api/routes/assistant.py`.
+
+| Route | Auth | Body | Answer |
+| --- | --- | --- | --- |
+| `GET /v1/assistant` | session | | `assistant_status_response` (available or the first reason it is not, consent, allowance, turn deadline) |
+| `POST /v1/assistant/consent` | session + CSRF | `assistant_consent_request{version: "2026-10-11", accept: true}` | `assistant_status_response`; 403 `AI_NOT_AVAILABLE` when AI is off or not in the plan |
+| `DELETE /v1/assistant/consent` | session + CSRF | | 204 (all phones, next turn; idempotent) |
+| `POST /v1/assistant/turn` | session + CSRF | `assistant_turn_request` | `assistant_turn_response`, or the codes of `docs/design/assistant.md` §1.2 |
+
+A turn, in order: configured → one turn in flight per account (`AI_BUSY`, checked first: it does no work, so the
+phone's resend after a Cancel does not use up the bucket) → per-account token bucket (`plans.json
+ai_turn_rate_limit`, 429 + `Retry-After`) → strict body (16 KiB) → consent (`AI_CONSENT_REQUIRED`) → effective
+limits → the request's transaction is committed → reservation (allowance, cost cap, failed-turn limit, operator
+ceiling; `AI_TURN_DUPLICATE`, `AI_ALLOWANCE_EXHAUSTED` with `detail{resets_at, reason}`, `AI_SPEND_LIMIT_REACHED`) →
+the provider call inside the turn deadline, raced against the client disconnecting → validation of the model's
+output against `actions.json` (`ai_eligible` only; a violation becomes a fixed, uncharged question) → settlement →
+response → one `assistant.turn` log line. Refusals answer `AI_DECLINED` (422), provider failures `AI_UNAVAILABLE`
+(502, or 504 for a timeout) with `detail.reason`. Only valid replies are charged; every turn's real token cost is
+metered, and turns whose cost is unknown are charged to the account's own cost cap.
+
+What reaches Anthropic: the frozen system prompt and action catalogue (one cached block) and one user message with
+exactly `context`, `recent` and `request`, copied field by field from the validated request. What is stored: counts,
+micro-dollars, outcome codes, the served model id and the provider request id (`assistant_turns`, `usage_periods`,
+`ai_spend_months`). Never stored or logged: the words, `recent`, the context, the reply, the choices, the steps.
+
+The Anthropic call (`assistant/anthropic_provider.py`, SDK `anthropic` 1.x): `beta.messages.stream` with
+`model=claude-opus-5-5`, `max_tokens=1024`, `output_config={effort: "low", format: json_schema}`,
+`fallbacks="default"` + beta `server-side-fallback-2026-07-01`, no `thinking` (always adaptive on this model), no
+tools, no sampling parameters, an explicit `base_url`, SDK retries off. The key lives only in
+`DOME_AI_ANTHROPIC_API_KEY`; start-up refuses every `ANTHROPIC_*` environment variable while this provider is on, and
+the `anthropic`, `httpx2` and `httpcore` loggers are pinned to WARNING.
+
+Monthly reconciliation (spec §13): compare `ai_spend_months` and the ledger's sums for the closed month with the
+Anthropic Console's usage and cost report; investigate a difference above 10 %; re-check `assistant/pricing.py`.
+
+First live check (owner, with a key; costs a few cents, never in CI):
+
+```sh
+DOME_AI_LIVE_TESTS=1 DOME_AI_ANTHROPIC_API_KEY=sk-ant-... uv run pytest -q -s tests/test_assistant_live.py
+```
+
 ## Manual input (protocol 1.1)
 
 Rules: `shared/protocol/version.json → rules.input_sessions`, `rules.grant_update`. The relay is the
@@ -194,7 +244,21 @@ misconfiguration stops the process with a plain error.
 | `DOME_SUPPORT_RESPONSE_EXPECTATION` | `` | Customer-facing response expectation (≤ 200 chars) returned with tickets **only** when set by the founder (spec §11A). Unset = the field is absent. |
 | `DOME_STATIC_DIR` | unset | Built PWA directory to serve at `/` (SPA fallback to `index.html`). |
 | `DOME_LOG_LEVEL` | `INFO` | structlog level. JSON output except in `development`. |
-| `DOME_STRIPE_*`, `DOME_AI_*` | blank / false | Declared for Phase C/E; billing endpoints are not implemented yet (`GET /v1/plans` reports `billing_enabled: false`). |
+| `DOME_STRIPE_*` | blank | Declared for Phase C; billing endpoints are not implemented yet (`GET /v1/plans` reports `billing_enabled: false`). |
+| `DOME_AI_ENABLED` | `false` | Master switch of the AI assistant. When true, start-up requires a provider, a key for `anthropic` and no `ANTHROPIC_*` variable in the environment, a ceiling above 0, a deadline ≥ timeout + 5, and for every plan with an effective allowance a cost cap of at least one reservation. |
+| `DOME_AI_PROVIDER` | `` | `anthropic` or `fake` (scripted test provider; refused in staging and production). |
+| `DOME_AI_ANTHROPIC_API_KEY` | `` | Server only; never logged, returned or written to disk by DoMe. (Renamed from `DOME_AI_API_KEY`: a non-empty old variable refuses start-up, an empty one only warns.) |
+| `DOME_AI_MODEL` | `claude-opus-5-5` | `^claude-[a-z0-9-]{1,48}$`; change only after review (prices, schema support). |
+| `DOME_AI_EFFORT` | `low` | `low`, `medium` or `high` (always sent; changing it invalidates the prompt cache). |
+| `DOME_AI_MAX_OUTPUT_TOKENS` | `1024` | 512–4096; thinking counts toward it. Above about 1555 the default reservation no longer covers the worst case and start-up refuses until `DOME_AI_TURN_RESERVE_MICRO_USD` is raised. |
+| `DOME_AI_TIMEOUT_SECONDS` | `15` | 5–30; with streaming, the longest gap between chunks (connect timeout fixed at 5 s). |
+| `DOME_AI_MAX_RETRIES` | `1` | 0–1; DoMe's own retry of unbilled failures only (the SDK's retries are always 0). |
+| `DOME_AI_TURN_DEADLINE_SECONDS` | `20` | 10–60, the whole turn including a retry; the phone aborts 5 s after it. |
+| `DOME_AI_CACHE_TTL` | `5m` | `5m` or `1h` (the test kit uses `1h`). |
+| `DOME_AI_MONTHLY_CEILING_CENTS` | `0` | Operator spending ceiling across all accounts per calendar month (UTC). |
+| `DOME_AI_TURN_RESERVE_MICRO_USD` | `250000` | ≥ 10 000; reserved per turn before the call. With the assistant on, start-up refuses a value below the worst case of one turn for `DOME_AI_MODEL` and `DOME_AI_MAX_OUTPUT_TOKENS` (one attempt plus one fallback attempt, `pricing.worst_case_turn_micro_usd`). |
+| `DOME_AI_FAILED_TURNS_PER_PERIOD` | `20` | 1–1000; timeouts, refusals and invalid outputs per account and period before `AI_ALLOWANCE_EXHAUSTED` (`failures`). |
+| `DOME_AI_DEV_GRANT_INTERPRETATIONS` / `DOME_AI_DEV_GRANT_COST_CAP_CENTS` | `0` / `0` | Development/test allowance (effective limit = max(plan, grant)); refused outside `development` and `test`. |
 
 ### Client addresses behind a proxy
 
@@ -237,7 +301,12 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy dome_api tests
 ```
 
-Current counts (2026-10-09, protocol 1.1 build after the review fixes): **117 passed** (89 from the 1.0 build,
+Current counts (2026-10-11, AI assistant step 1): **301 passed, 1 skipped** (126 before the assistant, all unchanged
+in expectation apart from `test_security_fixes.py`'s proxy test, whose staging settings now drop the suite's fake
+AI provider; 175 new in `tests/test_assistant_*.py`: catalogue and golden prefix, the Anthropic adapter against an
+`httpx2.MockTransport` stub, pricing, output validation with the shared plan fixture, metering races from 10
+database sessions, routes end to end, settings; the skipped one is the opt-in live check). Earlier:
+(2026-10-09, protocol 1.1 build after the review fixes): **117 passed** (89 from the 1.0 build,
 all unchanged in expectation; 13 in `tests/test_input_routing.py`; 6 in `tests/test_support_tickets.py`, whose
 bundle and redaction-helper tests gained typed-text / URL / pairing-code assertions, plus concurrent-budget and
 reference-collision tests; 9 in `tests/test_input_hardening.py` for the flood close, per-socket RATE_LIMITED
@@ -261,10 +330,11 @@ frame against `relay-frames.schema.json`.
 - One process per deployment (ADR-0001 D1). The connection manager is in-memory; a restart marks
   in-flight commands `outcome_unknown` / `expired` (start-up sweep) and agents reconnect with backoff.
 - Logs are JSON on stderr. Keys such as `token`, `pc_credential`, `code_hash`, `challenge_text`,
-  `payload`, `sig`, `title`, `email`, `text` (typed keyboard content) and anything ending in `_token/_secret/_code/_credential/_key`
-  are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
+  `payload`, `sig`, `title`, `email`, `text` (typed keyboard content), the assistant's `reply`, `choices`, `query`,
+  `recent`, `persona`, `context`, `steps`, `params`, `user_json`, `system_text`, and anything ending in
+  `_token/_secret/_code/_credential/_key` are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
   beyond the error code), so typed text exists only in transit through this process.
-- Migrations: `0001_initial`, `0002_support_tickets`. `dome-api` applies them at start-up.
+- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`. `dome-api` applies them at start-up.
 - Request log lines carry the matched route template and a masked path: a device-link `user_code`
   never appears (`/v1/agent-link/{user_code}/approve`); query strings are never logged.
 - Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: same-origin`,

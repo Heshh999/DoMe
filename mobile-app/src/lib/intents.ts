@@ -6,6 +6,11 @@
  * the text box; nothing is ever guessed or sent to a fallback the preview did not show. Media titles and other
  * remote text never reach this parser; it only sees what the customer typed, and even that can never become a path,
  * argument or shell text — the output is registry action names plus parameters validated against the contract.
+ *
+ * The optional AI assistant (docs/design/assistant.md §4.4) proposes steps in the same shape the grammar produces —
+ * an action, its params and an app name as spoken — and `planFromAssistant` turns them into the same `PlanStep`s with
+ * the same code (app names resolved against the PC's approved apps here, never by the model), then the same
+ * plan-level checks (`assemblePlan`). Every step keeps a `text` that parses back to it (`commandText`).
  */
 import { registry, type ActionName, type JsonValue } from "@dome/protocol";
 
@@ -52,6 +57,11 @@ export interface IntentContext {
    * (`lastResults`). Its title is untrusted text, shown as text. null/undefined = nothing else is playing.
    */
   playingElsewhere?: { afterSearch: PlayingTab | null; lastResults: PlayingTab | null } | null;
+  /**
+   * The approved app the conversation's most recent app step acted on (the Assistant keeps it on the phone only):
+   * "maximise it" with no app earlier in the same command means this app. Ignored unless it is still approved.
+   */
+  lastAppId?: string | null;
 }
 
 export interface PlayingTab {
@@ -99,6 +109,13 @@ export interface Choice {
   text: string;
 }
 
+/**
+ * What a clarification asks about. The Assistant keeps every clarification on the phone (only the phone knows the
+ * PC's apps and players), remembers only this closed topic of it, and offers "Ask the assistant" for `other` alone.
+ * Absent = `other`, so a new message never puts its text anywhere by default.
+ */
+export type ClarifyTopic = "app" | "player" | "volume_scope" | "volume_unknown" | "safety" | "other";
+
 export type CommandParse =
   | { kind: "plan"; steps: PlanStep[]; choices: Choice[] }
   | {
@@ -111,6 +128,8 @@ export type CommandParse =
       missingApp?: string;
       /** The approved-app list has not arrived yet. */
       appsUnknown?: boolean;
+      /** What it asks about (absent = "other"). */
+      topic?: ClarifyTopic;
     }
   /** DoMe cannot do this with a command (it cannot see the screen or type); the Touchpad can. */
   | { kind: "handoff"; message: string; choices: Choice[] }
@@ -161,14 +180,19 @@ function step(
 }
 
 const steps = (list: PlanStep[], choices: Choice[] = []): PieceResult => ({ kind: "steps", steps: list, choices });
-const clarify = (message: string, choices: Choice[] = [], extra: { link?: "touchpad"; missingApp?: string; appsUnknown?: boolean } = {}): PieceResult => ({
+const clarify = (message: string, choices: Choice[] = [], extra: { link?: "touchpad"; missingApp?: string; appsUnknown?: boolean; topic?: ClarifyTopic } = {}): PieceResult => ({
   kind: "clarify",
   message,
   choices,
   link: extra.link ?? null,
   ...(extra.missingApp !== undefined ? { missingApp: extra.missingApp } : {}),
   ...(extra.appsUnknown ? { appsUnknown: true } : {}),
+  ...(extra.topic && extra.topic !== "other" ? { topic: extra.topic } : {}),
 });
+const APP: { topic: ClarifyTopic } = { topic: "app" };
+const VOLUME_SCOPE: { topic: ClarifyTopic } = { topic: "volume_scope" };
+const VOLUME_UNKNOWN: { topic: ClarifyTopic } = { topic: "volume_unknown" };
+const SAFETY: { topic: ClarifyTopic } = { topic: "safety" };
 const handoff = (message: string, choices: Choice[] = []): PieceResult => ({ kind: "handoff", message, choices });
 const choice = (label: string, text: string): Choice => ({ label, text });
 
@@ -225,7 +249,7 @@ const isYoutubeStep = (s: PlanStep | null): boolean => !!s && s.action.startsWit
 const MEDIA_VOLUME = "DoMe sets the whole PC's volume or the YouTube player's, not one app's. Which one?";
 
 function volumeStep(p: Piece, scope: Scope, value: number, detail?: string): PieceResult {
-  if (scope === "media") return clarify(MEDIA_VOLUME, [choice(`Set the PC volume to ${value}%`, `set the pc volume to ${value}`), choice(`Set YouTube volume to ${value}%`, `set youtube volume to ${value}`)]);
+  if (scope === "media") return clarify(MEDIA_VOLUME, [choice(`Set the PC volume to ${value}%`, `set the pc volume to ${value}`), choice(`Set YouTube volume to ${value}%`, `set youtube volume to ${value}`)], VOLUME_SCOPE);
   const opts = detail ? { detail } : {};
   if (scope === "youtube") return steps([step(p, "youtube.set_volume", { value }, { needsTarget: "youtube", ...opts })]);
   return steps([step(p, "windows.set_volume", { value }, opts)]);
@@ -233,7 +257,7 @@ function volumeStep(p: Piece, scope: Scope, value: number, detail?: string): Pie
 
 function relativeVolume(p: Piece, g: Record<string, string | undefined>, up: boolean): PieceResult {
   const scope = scopeIn(p.text);
-  if (scope === "media") return clarify(MEDIA_VOLUME, [choice(up ? "Turn the PC up" : "Turn the PC down", up ? "turn the pc volume up" : "turn the pc volume down"), choice(up ? "Turn YouTube up" : "Turn YouTube down", up ? "turn the youtube volume up" : "turn the youtube volume down")]);
+  if (scope === "media") return clarify(MEDIA_VOLUME, [choice(up ? "Turn the PC up" : "Turn the PC down", up ? "turn the pc volume up" : "turn the pc volume down"), choice(up ? "Turn YouTube up" : "Turn YouTube down", up ? "turn the youtube volume up" : "turn the youtube volume down")], VOLUME_SCOPE);
   if (g.all) return volumeStep(p, scope, up ? 100 : 0);
   let delta = 10;
   // "by a lot" and "by a bit" are amounts in words, like "a lot" on its own
@@ -242,12 +266,12 @@ function relativeVolume(p: Piece, g: Record<string, string | undefined>, up: boo
     delta = /^(?:a lot|lots|much|way)$/.test(mod) ? 20 : 5;
   } else if (g.by !== undefined) {
     const n = parseNumberWords(g.by.replace(/ percent$/, ""));
-    if (n === null || n < 1 || n > 100) return clarify("How much? Say a number of percent, for example “turn it up by 20”.");
+    if (n === null || n < 1 || n > 100) return clarify("How much? Say a number of percent, for example “turn it up by 20”.", [], VOLUME_UNKNOWN);
     delta = n;
   }
   const base = scope === "youtube" ? p.ctx.youtubeVolume : p.ctx.pcVolume;
   if (base === null || base === undefined) {
-    return scope === "youtube" ? clarify("I don't know the current YouTube volume yet. Try “set YouTube volume to 40”.") : clarify("I don't know the current PC volume yet. Try “set the volume to 40”.");
+    return scope === "youtube" ? clarify("I don't know the current YouTube volume yet. Try “set YouTube volume to 40”.", [], VOLUME_UNKNOWN) : clarify("I don't know the current PC volume yet. Try “set the volume to 40”.", [], VOLUME_UNKNOWN);
   }
   const value = Math.min(100, Math.max(0, base + (up ? delta : -delta)));
   return volumeStep(p, scope, value, `${up ? "Up" : "Down"} ${delta} from ${base}%`);
@@ -256,8 +280,8 @@ function relativeVolume(p: Piece, g: Record<string, string | undefined>, up: boo
 function levelResult(p: Piece, scope: Scope, level: string, explicit: boolean): PieceResult | null {
   const parsed = parseLevel(level);
   if ("value" in parsed) return volumeStep(p, scope, parsed.value);
-  if (parsed.invalid === "range") return clarify("Volume must be between 0 and 100 percent.");
-  return explicit ? clarify("I didn't catch the volume level. Say a number from 0 to 100, for example “set the volume to 40”.") : null;
+  if (parsed.invalid === "range") return clarify("Volume must be between 0 and 100 percent.", [], VOLUME_UNKNOWN);
+  return explicit ? clarify("I didn't catch the volume level. Say a number from 0 to 100, for example “set the volume to 40”.", [], VOLUME_UNKNOWN) : null;
 }
 
 const volumeRules: Rule = (p) => {
@@ -290,7 +314,7 @@ const volumeRules: Rule = (p) => {
     if (r) return r;
   }
   if (new RegExp(`^(?:max out|max|maximi[sz]e|crank up|crank) ${VOLP}$`).test(t)) return volumeStep(p, scopeIn(t), 100);
-  if (new RegExp(`^(?:set|change|adjust) ${VOLP}$`).test(t)) return clarify("To what level? Say a number from 0 to 100, for example “set the volume to 40”.");
+  if (new RegExp(`^(?:set|change|adjust) ${VOLP}$`).test(t)) return clarify("To what level? Say a number from 0 to 100, for example “set the volume to 40”.", [], VOLUME_UNKNOWN);
   return null;
 };
 
@@ -302,8 +326,8 @@ function muteChoices(muted: boolean): Choice[] {
 }
 
 function muteResult(p: Piece, muted: boolean, scope: Scope | null): PieceResult {
-  if (scope === null) return clarify(`${muted ? "Mute" : "Unmute"} YouTube or the whole PC?`, muteChoices(muted));
-  if (scope === "media") return clarify("DoMe can mute the whole PC or the YouTube player, not a single app. Which one?", muteChoices(muted));
+  if (scope === null) return clarify(`${muted ? "Mute" : "Unmute"} YouTube or the whole PC?`, muteChoices(muted), VOLUME_SCOPE);
+  if (scope === "media") return clarify("DoMe can mute the whole PC or the YouTube player, not a single app. Which one?", muteChoices(muted), VOLUME_SCOPE);
   if (scope === "youtube") return steps([step(p, "youtube.set_muted", { muted }, { needsTarget: "youtube" })]);
   return steps([step(p, "windows.set_muted", { muted })]);
 }
@@ -353,7 +377,7 @@ function playbackResult(p: Piece, want: Want, who: "youtube" | "media" | "ask"):
       next: [choice("Next video", "next video"), choice(`Next track (${label})`, "next track")],
       previous: [choice("Previous video", "previous video"), choice(`Previous track (${label})`, "previous track")],
     };
-    return clarify(`YouTube and ${label} ${both}. Which one?`, options[want]);
+    return clarify(`YouTube and ${label} ${both}. Which one?`, options[want], { topic: "player" });
   }
   if (who === "youtube") {
     if (want === "pause" || want === "play") return steps([step(p, "youtube.set_paused", { paused: want === "pause" }, { needsTarget: "youtube" })]);
@@ -541,7 +565,7 @@ const searchRules: Rule = (p) => {
     const results = p.ctx.lastSearch?.results;
     if (results && results.length > 0) return clarify("Which one? Tap a result, or say “play the first video”.", resultChoices(results));
     const hint = p.ctx.playback?.youtube.available ? " On YouTube you can also say “search YouTube for …” and then “play the first video”." : "";
-    return handoff(`DoMe can't see your screen, so it can't tell which one “that” is. Use the Touchpad to point and tap.${hint}`);
+    return handoff(`${THAT_ONE_HANDOFF} Use the Touchpad to point and tap.${hint}`);
   }
   // search
   m = /^(?:search for|search|look up|lookup|look for|find)(?: on| in)? youtube(?: for)? (?<q>.+)$|^youtube search(?: for)? (?<q2>.+)$/d.exec(t);
@@ -583,6 +607,9 @@ const YOUTUBE_WORD: Readonly<Record<string, string>> = {
   down: "turn youtube down",
 };
 
+/** The end of the answer to "play {words}": a question on the Type page; the Assistant speaks a statement instead (butlerSpeech.ts). */
+export const ONLY_SEARCH_PLAYS = "DoMe only plays videos by searching YouTube.";
+
 /** Last-resort YouTube phrases, after every other rule: "youtube lofi", "search lofi", "play lofi". */
 const searchFallbackRules: Rule = (p) => {
   const word = /^youtube (\S+)$/.exec(p.text)?.[1];
@@ -594,7 +621,7 @@ const searchFallbackRules: Rule = (p) => {
     // "play the second", "play that one": a position or a pronoun is never searched for
     if (NOT_A_QUERY.test(m.groups!.q!)) return whichResult(p);
     const q = unquote(typedGroup(p, m, "q"));
-    return clarify(`Play “${q}” on YouTube? DoMe only plays videos by searching YouTube.`, [choice(`Play “${q}” on YouTube`, `play ${q} on youtube`)]);
+    return clarify(`Play “${q}” on YouTube? ${ONLY_SEARCH_PLAYS}`, [choice(`Play “${q}” on YouTube`, `play ${q} on youtube`)]);
   }
   return null;
 };
@@ -617,7 +644,7 @@ const pcRules: Rule = (p) => {
   if (timed) {
     const verb = timed.groups!.verb!;
     const [what, phrase] = /restart|reboot/.test(verb) ? ["a restart", "restart my pc"] : /sleep/.test(verb) ? ["sleep", "put my computer to sleep"] : ["a shutdown", "shut down my pc"];
-    return clarify(`DoMe can't schedule ${what}. Send “${phrase}” when you're ready.`, [choice(phrase.charAt(0).toUpperCase() + phrase.slice(1), phrase)]);
+    return clarify(`DoMe can't schedule ${what}. Send “${phrase}” when you're ready.`, [choice(phrase.charAt(0).toUpperCase() + phrase.slice(1), phrase)], SAFETY);
   }
   if (new RegExp(`^(?:shut ?down|shut ${DEVICE} down|shut ?down ${DEVICE}|turn ${DEVICE} off|turn off ${DEVICE}|power (?:off|down)(?: ${DEVICE})?|switch off ${DEVICE}|switch ${DEVICE} off)$`).test(t)) return steps([step(p, "power.shutdown", {})]);
   if (new RegExp(`^(?:restart|reboot)(?: ${DEVICE})?$`).test(t)) return steps([step(p, "power.restart", {})]);
@@ -629,12 +656,18 @@ const pcRules: Rule = (p) => {
 
 // --- pointer / keyboard: honest handoff --------------------------------------------------------------------------------
 
+/** The honest answers to "click …" and "type …"; the Assistant speaks its own words for them (butlerSpeech.ts). */
+export const POINTER_HANDOFF = "DoMe can't see your screen, so typed commands don't click or scroll. Use the Touchpad to point and tap.";
+export const KEYBOARD_HANDOFF = "Typed commands never type text or press keys on the PC. Use the keyboard on the Touchpad page.";
+/** Start of the answer to "click on that movie" when there are no search results to pick from. */
+export const THAT_ONE_HANDOFF = "DoMe can't see your screen, so it can't tell which one “that” is.";
+
 const handoffRules: Rule = (p) => {
   const t = p.text;
   if (/^(?:(?:double|right|left) )?click(?: .*)?$|^(?:double )?tap(?: on)? .+$|^(?:scroll|swipe)(?: .*)?$|^move (?:the )?(?:mouse|cursor|pointer)(?: .*)?$|^drag(?: .*)?$/.test(t)) {
-    return handoff("DoMe can't see your screen, so typed commands don't click or scroll. Use the Touchpad to point and tap.");
+    return handoff(POINTER_HANDOFF);
   }
-  if (/^(?:type|write|press|hit) .+$/.test(t)) return handoff("Typed commands never type text or press keys on the PC. Use the keyboard on the Touchpad page.");
+  if (/^(?:type|write|press|hit) .+$/.test(t)) return handoff(KEYBOARD_HANDOFF);
   return null;
 };
 
@@ -710,6 +743,8 @@ const ACTIVE_VERBS: ReadonlySet<AppVerb> = new Set(["focus", "minimize", "maximi
  * exactly that name (or id, or a known alias) still wins: "open Spotify" opens it when Spotify is approved.
  */
 const RESERVED_APP_WORDS = /^(?:pc|computer|laptop|volume|sound|audio|music|spotify|media|youtube player|screen|everything|all|full ?screen|theater mode|theatre mode)$/;
+/** Reserved words that are also an app's name: with an app verb and no such app approved, "not an approved app". */
+const RESERVED_APP_BRANDS = /^spotify$/;
 /** An app slot that is no name at all: a preposition or a number first ("in 5 minutes"), "all …", a flag or a path. */
 const NOT_A_NAME = /^(?:in|on|at|to|for|with|from|by|after|before|into|onto|of|off|out|over|up|down|all|every|everything|each|both)\b|^\d+(?: |$)|(?:^| )[-/\\]/;
 const MANY_APPS = /^(?:all|every|everything|each|both)\b/;
@@ -770,11 +805,16 @@ function youtubeAsApp(p: Piece, verb: AppVerb): PieceResult {
   if (verb === "fullscreen_off") return youtubeExitFullscreen(p);
   if (verb === "close") return clarify("DoMe can't close a single tab. Closing the browser closes all of its tabs.", browsers.slice(0, 2).map((a) => choice(`Close ${a.display_name}`, `close ${appPhrase(a, apps)}`)));
   if (browsers.length === 1) return appSteps(p, verb, browsers[0]!);
-  if (browsers.length > 1) return clarify("Which browser is YouTube in?", browsers.slice(0, 4).map((a) => choice(VERB_PHRASE[verb].replace("{}", a.display_name), VERB_PHRASE[verb].replace("{}", appPhrase(a, apps)))));
-  return clarify("To control the browser's window from here, approve it on the PC first: DoMe tray → Add an app…");
+  if (browsers.length > 1) return clarify("Which browser is YouTube in?", browsers.slice(0, 4).map((a) => choice(VERB_PHRASE[verb].replace("{}", a.display_name), VERB_PHRASE[verb].replace("{}", appPhrase(a, apps)))), APP);
+  return clarify("To control the browser's window from here, approve it on the PC first: DoMe tray → Add an app…", [], APP);
 }
 
 type AppResolution = { kind: "app"; app: IntentApp } | { kind: "result"; result: PieceResult; strength: number };
+
+/** Start of the "Did you mean …?" suggestion (the Assistant speaks it as a statement, butlerSpeech.ts). */
+export const DID_YOU_MEAN = "Did you mean ";
+
+const notApproved = (name: string): PieceResult => clarify(`“${name}” is not an approved app on this PC. Add it on the PC: DoMe tray → Add an app…`, [], { missingApp: name, topic: "app" });
 
 function resolveAppSlot(p: Piece, verb: AppVerb, raw: string): AppResolution | null {
   // "the window", "the app" and "the video" are tested before the article goes: they are not names
@@ -782,29 +822,32 @@ function resolveAppSlot(p: Piece, verb: AppVerb, raw: string): AppResolution | n
   const name = unquote(raw).replace(/^(?:the|my|a|an) /i, "").trim();
   const lower = appNameKey(name);
   if (IT.test(full) || IT.test(lower)) {
-    const id = p.prev?.appId;
+    const last = p.ctx.lastAppId;
+    const id = p.prev?.appId ?? (last && p.ctx.apps?.some((a) => a.app_id === last) ? last : null);
     if (id) return { kind: "app", app: p.ctx.apps?.find((a) => a.app_id === id) ?? { app_id: id, display_name: id } };
     // the example names one of the customer's own apps: the first chip (the app in front first), else any approved one
     const chips = pickAppChoices(p.ctx, verb);
     const fallback = VERB_PHRASE[verb].replace("{}", exampleAppPhrase(p.ctx.apps));
     const example = chips[0]?.label ?? fallback.charAt(0).toUpperCase() + fallback.slice(1);
-    return { kind: "result", result: clarify(`Which app? Say “${example}”, for example.`, chips), strength: 2 };
+    return { kind: "result", result: clarify(`Which app? Say “${example}”, for example.`, chips, APP), strength: 2 };
   }
   if (YT_OBJECT.test(full) || YT_OBJECT.test(lower)) return { kind: "result", result: youtubeAsApp(p, verb), strength: 3 };
-  if (MANY_APPS.test(lower)) return { kind: "result", result: clarify("DoMe acts on one app at a time. Which one?", pickAppChoices(p.ctx, verb)), strength: 1 };
+  if (MANY_APPS.test(lower)) return { kind: "result", result: clarify("DoMe acts on one app at a time. Which one?", pickAppChoices(p.ctx, verb), APP), strength: 1 };
   if (!APP_NAME.test(lower) || NOT_A_NAME.test(lower)) return null;
   if (RESERVED_APP_WORDS.test(lower)) {
     const own = p.ctx.apps ? strongMatch(lower, p.ctx.apps) : null;
-    return own ? { kind: "app", app: own } : null;
+    if (own) return { kind: "app", app: own };
+    // "open Spotify" names an app even when it is not approved: say so, as for any other name, never "unknown"
+    return RESERVED_APP_BRANDS.test(lower) ? { kind: "result", result: notApproved(name), strength: 0 } : null;
   }
-  if (!p.ctx.apps) return { kind: "result", result: clarify("I can't see the PC's approved apps yet. They load as soon as the PC is online.", [], { appsUnknown: true, missingApp: name }), strength: 0 };
+  if (!p.ctx.apps) return { kind: "result", result: clarify("I can't see the PC's approved apps yet. They load as soon as the PC is online.", [], { appsUnknown: true, missingApp: name, topic: "app" }), strength: 0 };
   const apps = p.ctx.apps;
   const found = matchApp(lower, apps);
   const chipsFor = (list: readonly IntentApp[]) => list.map((a) => choice(VERB_PHRASE[verb].replace("{}", a.display_name), VERB_PHRASE[verb].replace("{}", appPhrase(a, apps))));
   if (found.kind === "match") return { kind: "app", app: found.app };
-  if (found.kind === "ambiguous") return { kind: "result", result: clarify(`Which one: ${found.apps.map((a) => a.display_name).join(" or ")}?`, chipsFor(found.apps)), strength: 2 };
-  if (found.kind === "suggest") return { kind: "result", result: clarify(`Did you mean ${found.apps.map((a) => a.display_name).join(" or ")}?`, chipsFor(found.apps)), strength: 1 };
-  return { kind: "result", result: clarify(`“${name}” is not an approved app on this PC. Add it on the PC: DoMe tray → Add an app…`, [], { missingApp: name }), strength: 0 };
+  if (found.kind === "ambiguous") return { kind: "result", result: clarify(`Which one: ${found.apps.map((a) => a.display_name).join(" or ")}?`, chipsFor(found.apps), APP), strength: 2 };
+  if (found.kind === "suggest") return { kind: "result", result: clarify(`${DID_YOU_MEAN}${found.apps.map((a) => a.display_name).join(" or ")}?`, chipsFor(found.apps), APP), strength: 1 };
+  return { kind: "result", result: notApproved(name), strength: 0 };
 }
 
 const appRules: Rule = (p) => {
@@ -831,9 +874,12 @@ const appRules: Rule = (p) => {
 
 // --- help ------------------------------------------------------------------------------------------------------------------
 
+/** The Type page's answer to "help" (the Assistant shows and speaks its own words for it, butlerSpeech.ts). */
+export const HELP_MESSAGE = "Here are some things you can type. You can also join up to three with “and” or “then”.";
+
 const helpRules: Rule = (p) => {
   if (!/^(?:help|what can (?:you|i) (?:do|say|type)|commands|examples|what can dome do)$/.test(p.text)) return null;
-  return clarify("Here are some things you can type. You can also join up to three with “and” or “then”.", [
+  return clarify(HELP_MESSAGE, [
     choice("Make the volume 100%", "make the volume 100%"),
     choice("Search YouTube for lofi beats", "search youtube for lofi beats"),
     choice("Play the second video", "play the second video"),
@@ -883,6 +929,8 @@ function runRules(p: Piece, rules: readonly Rule[]): PieceResult | null {
   return null;
 }
 
+const PICK_RESULT_FIRST = "Pick a result first: a search shows a list of videos, not a player. For example “play the first video and make it full screen”.";
+
 function parsePiece(p: Piece): PieceResult | null {
   if (p.text.length > MAX_STEP_CHARS) return null;
   // "turn the volume up on my pc", "open notepad on the computer": the device is implied (but "search YouTube for
@@ -901,7 +949,7 @@ function parsePiece(p: Piece): PieceResult | null {
   }
   // A search shows a list of videos, not a player: a player step right after it would reach the results page.
   if (r?.kind === "steps" && p.prev?.action === "youtube.search" && r.steps[0]?.needsTarget === "youtube") {
-    return clarify("Pick a result first: a search shows a list of videos, not a player. For example “play the first video and make it full screen”.", [choice(`Play the first video, then ${p.display}`, `play the first video and ${p.display}`)]);
+    return clarify(PICK_RESULT_FIRST, [choice(`Play the first video, then ${p.display}`, `play the first video and ${p.display}`)], SAFETY);
   }
   return r;
 }
@@ -1069,20 +1117,38 @@ export function parseCommand(raw: unknown, ctx: IntentContext = {}): CommandPars
   }
 
   const planSteps = segments.flatMap((s) => (s.result?.kind === "steps" ? s.result.steps : []));
-  if (planSteps.length > MAX_PLAN_STEPS) return { kind: "clarify", message: `DoMe runs up to ${MAX_PLAN_STEPS} steps at a time. Send the rest as a separate command.`, choices: [], link: null };
+  const choices = segments.flatMap((seg) => (seg.result?.kind === "steps" ? seg.result.choices.map((c) => (multi ? { label: c.label, text: withPart(display, seg, c.text) } : c)) : []));
+  return assemblePlan(planSteps, choices, ctx);
+}
+
+/**
+ * Fixed parts of the plan-level and suggestion messages, exported so the Assistant can speak its own fixed lines for
+ * them (butlerSpeech.ts): the on-screen messages quote the owner's words, the spoken ones never do.
+ */
+export const TOO_MANY_STEPS = `DoMe runs up to ${MAX_PLAN_STEPS} steps at a time. Send the rest as a separate command.`;
+export const CONFIRM_ALONE = " needs your confirmation on the phone, so send it on its own.";
+export const SAME_THING = " control the same thing. Send one of them.";
+export const UNDERSTOOD_PART = "I understood ";
+
+/**
+ * The plan-level rules every plan obeys, however its steps were found (typed words or the assistant's steps): at
+ * most three steps, a step the PC asks to confirm only on its own, no two steps controlling the same thing, a YouTube
+ * step after one that reported a tab acting on that tab, and the video playing elsewhere paused before a result opens.
+ */
+export function assemblePlan(planSteps: PlanStep[], choices: Choice[], ctx: IntentContext): CommandParse {
+  if (planSteps.length > MAX_PLAN_STEPS) return { kind: "clarify", message: TOO_MANY_STEPS, choices: [], link: null, topic: "safety" };
   if (planSteps.length > 1) {
     const confirmed = planSteps.find((s) => s.confirmation);
-    if (confirmed) return { kind: "clarify", message: `“${confirmed.text}” needs your confirmation on the phone, so send it on its own.`, choices: [choice(confirmed.text, confirmed.text)], link: null };
+    if (confirmed) return { kind: "clarify", message: `“${confirmed.text}”${CONFIRM_ALONE}`, choices: expressible(confirmed.action) ? [choice(confirmed.text, confirmed.text)] : [], link: null, topic: "safety" };
     const seen = new Map<string, PlanStep>();
     for (const s of planSteps) {
       const twin = seen.get(stepKey(s));
-      if (twin) return { kind: "clarify", message: `“${twin.text}” and “${s.text}” control the same thing. Send one of them.`, choices: [], link: null };
+      if (twin) return { kind: "clarify", message: `“${twin.text}” and “${s.text}”${SAME_THING}`, choices: [], link: null, topic: "safety" };
       seen.set(stepKey(s), s);
     }
   }
   // A YouTube step right after another one acts on the tab that step reported (an opened result's tab).
   const linked = planSteps.map((s, i) => (i > 0 && s.needsTarget === "youtube" && !s.fromPrevious && RESULT_TAB_ACTIONS.has(planSteps[i - 1]!.action) ? { ...s, fromPrevious: true } : s));
-  const choices = segments.flatMap((seg) => (seg.result?.kind === "steps" ? seg.result.choices.map((c) => (multi ? { label: c.label, text: withPart(display, seg, c.text) } : c)) : []));
   return { kind: "plan", steps: pauseOtherVideo(linked, ctx), choices };
 }
 
@@ -1106,5 +1172,202 @@ function unknownWithParts(memo: PieceMemo, src: Source, ctx: IntentContext, cuts
   const missing = parts.find((x) => !x.ok);
   const understood = parts.filter((x) => x.ok).map((x) => `“${x.shown}”`);
   if (!missing || understood.length === 0) return UNKNOWN;
-  return { kind: "unknown", message: `I understood ${understood.join(" and ")} but not “${missing.shown}”.` };
+  return { kind: "unknown", message: `${UNDERSTOOD_PART}${understood.join(" and ")} but not “${missing.shown}”.` };
+}
+
+// --- the assistant's steps -------------------------------------------------------------------------------------------
+
+/** Actions the grammar has no words for: their `commandText` is readable, but never offered as a chip to tap. */
+const NO_COMMAND_WORDS: ReadonlySet<string> = new Set(["media.get_sessions", "youtube.get_state", "youtube.list_tabs"]);
+
+/** True when `commandText` of this action parses back to it (so a chip may carry it). */
+export function expressible(action: string): boolean {
+  return !NO_COMMAND_WORDS.has(action);
+}
+
+/** Seconds as a clock time the grammar reads back: 90 → "1:30", 3725 → "1:02:05". */
+function clock(seconds: number): string {
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+/** A search query as words that parse back to exactly that query (quoted, so "and", "then" or "please" stay in it). */
+function queryWords(query: string): string {
+  return query.includes('"') || [...query].length > MAX_QUERY - 1 ? query : `"${query}"`;
+}
+
+/**
+ * A canonical command for a step, in words `parseCommand` reads back as the same action and params (for the same
+ * approved apps and, for a result, the same search). It is the `text` of steps the assistant proposed, so chips and
+ * messages built from `step.text` work as for typed commands. Never spoken: butlerSpeech.ts has its own phrases.
+ */
+export function commandText(s: PlanStep, apps: readonly IntentApp[] | null | undefined): string {
+  const p = s.params;
+  const list = apps ?? [];
+  const id = s.appId ?? (typeof s.target?.app_id === "string" ? s.target.app_id : typeof p.app_id === "string" ? p.app_id : null);
+  const app = id ? list.find((a) => a.app_id === id) : undefined;
+  const name = app ? appPhrase(app, list) : (id ?? "it");
+  const n = (v: JsonValue | undefined) => (typeof v === "number" ? v : 0);
+  switch (s.action) {
+    case "app.launch":
+      return `open ${name}`;
+    case "app.focus":
+      return `bring ${name} to the front`;
+    case "app.minimize":
+      return `minimise ${name}`;
+    case "app.maximize":
+      return `maximise ${name}`;
+    case "app.restore":
+      return `restore ${name}`;
+    case "app.set_fullscreen":
+      return p.enabled ? `full screen ${name}` : `exit full screen in ${name}`;
+    case "app.close":
+      return `close ${name}`;
+    case "app.list":
+      return "list my apps";
+    case "media.get_sessions":
+      return "list the media players";
+    case "media.next":
+      return "next track";
+    case "media.previous":
+      return "previous track";
+    case "media.set_paused":
+      return p.paused ? "pause the media player" : "play the media player";
+    case "power.cancel":
+      return "cancel the countdown";
+    case "power.restart":
+      return "restart my pc";
+    case "power.shutdown":
+      return "shut down my pc";
+    case "power.sleep":
+      return "put my computer to sleep";
+    case "system.get_status":
+      return "refresh the status";
+    case "system.ping":
+      return "ping my pc";
+    case "windows.get_volume":
+      return "what is the pc volume";
+    case "windows.lock":
+      return "lock my computer";
+    case "windows.set_muted":
+      return p.muted ? "mute the pc" : "unmute the pc";
+    case "windows.set_volume":
+      return `set the pc volume to ${n(p.value)}`;
+    case "youtube.get_state":
+      return "read the youtube player";
+    case "youtube.list_tabs":
+      return "list the youtube tabs";
+    case "youtube.next":
+      return "next video";
+    case "youtube.previous":
+      return "previous video";
+    case "youtube.open_result":
+      return `play the ${ordinalWord(n(p.index))} video`;
+    case "youtube.request_fullscreen":
+      return "make the video full screen";
+    case "youtube.search":
+      return `search youtube for ${queryWords(typeof p.query === "string" ? p.query : "")}`;
+    case "youtube.seek_relative":
+      return n(p.seconds) < 0 ? `go back ${-n(p.seconds)} seconds` : `skip ahead ${n(p.seconds)} seconds`;
+    case "youtube.seek_to":
+      return n(p.position_seconds) === 0 ? "start over" : `jump to ${clock(n(p.position_seconds))}`;
+    case "youtube.set_muted":
+      return p.muted ? "mute youtube" : "unmute youtube";
+    case "youtube.set_paused":
+      return p.paused ? "pause youtube" : "play youtube";
+    case "youtube.set_theater":
+      return p.enabled ? "theater mode on" : "theater mode off";
+    case "youtube.set_volume":
+      return `set youtube volume to ${n(p.value)}`;
+    case "input.session_start":
+    case "input.session_stop":
+      return "use the touchpad";
+  }
+}
+
+/** A step as POST /v1/assistant/turn returns it (rest.schema.json `assistant_step`): untrusted until checked here. */
+export interface AssistantStepInput {
+  action: string;
+  params: Record<string, JsonValue>;
+  app?: string;
+}
+
+/** The answer to any step DoMe will not take from the assistant (unknown, human-only, wrong params or fields). */
+export const NOT_FROM_HERE = "That isn't something DoMe can do from here.";
+
+const APP_VERBS: Partial<Record<ActionName, AppVerb>> = { "app.launch": "launch", "app.focus": "focus", "app.minimize": "minimize", "app.maximize": "maximize", "app.restore": "restore", "app.close": "close" };
+/** Parameters the assistant never sets: the phone fills `video_id` from its own results; power keeps its 10 s countdown. */
+const WITHHELD: Partial<Record<ActionName, string>> = { "youtube.open_result": "video_id", "power.sleep": "countdown_seconds", "power.restart": "countdown_seconds", "power.shutdown": "countdown_seconds" };
+
+const isAppAction = (name: ActionName) => name === "app.launch" || registry.get(name).targetName === "window_target";
+
+/** One assistant step as plan steps (or why not), built by the grammar's own functions with `prev` before it. */
+function assistantPiece(raw: AssistantStepInput, ctx: IntentContext, prev: PlanStep | null): PieceResult {
+  const refuse = clarify(NOT_FROM_HERE, [], SAFETY);
+  if (typeof raw !== "object" || raw === null || typeof raw.action !== "string" || !registry.has(raw.action)) return refuse;
+  const name: ActionName = raw.action;
+  if (!registry.get(name).aiEligible) return refuse;
+  const params = raw.params;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return refuse;
+  const withheld = WITHHELD[name];
+  if (withheld && withheld in params) return refuse;
+  const appAction = isAppAction(name);
+  if (appAction !== (raw.app !== undefined) || (appAction && typeof raw.app !== "string")) return refuse;
+  if (name === "app.launch" && Object.keys(params).length > 0) return refuse; // the phone adds app_id from its own match
+  let validated: Record<string, unknown> = {};
+  try {
+    if (name !== "app.launch") validated = registry.validateParams(name, params);
+  } catch {
+    return refuse;
+  }
+  const p: Piece = { text: "", display: "", typed: () => "", ctx, prev };
+  if (appAction) {
+    const spoken = raw.app!;
+    const verb: AppVerb = name === "app.set_fullscreen" ? (validated.enabled ? "fullscreen_on" : "fullscreen_off") : APP_VERBS[name]!;
+    const resolved = resolveAppSlot(p, verb, spoken);
+    if (!resolved) return notApproved(spoken.trim());
+    return resolved.kind === "result" ? resolved.result : appSteps(p, verb, resolved.app);
+  }
+  if (name === "youtube.open_result") return openResult(p, Number(validated.index));
+  if (name === "youtube.request_fullscreen") return youtubeFullscreen(p);
+  const target = registry.get(name).targetName;
+  const needsTarget: TargetSource | undefined = name === "youtube.search" ? "youtube_browser" : target === "youtube_target" ? "youtube" : target === "media_session_target" ? "media" : undefined;
+  return steps([step(p, name, params, needsTarget ? { needsTarget } : {})]);
+}
+
+/**
+ * Steps the assistant proposed (docs/design/assistant.md §4.4) as the same plan the grammar would build: every
+ * action checked against the registry here again (AI-eligible, params, no fields it may not set), app names resolved
+ * against the PC's approved apps on this phone ("it" = the app of the step before, else `ctx.lastAppId`), targets
+ * chosen like typed steps, then the same plan rules (`assemblePlan`). Anything DoMe will not run becomes a
+ * clarification: never a partial plan, never a guess.
+ */
+export function planFromAssistant(input: readonly AssistantStepInput[], ctx: IntentContext): CommandParse {
+  if (input.length === 0) return clarify(NOT_FROM_HERE, [], SAFETY) as CommandParse;
+  if (input.length > MAX_PLAN_STEPS) return { kind: "clarify", message: TOO_MANY_STEPS, choices: [], link: null, topic: "safety" };
+  const built: PlanStep[] = [];
+  const choices: Choice[] = [];
+  for (const raw of input) {
+    const prev = built.at(-1) ?? null;
+    let r: PieceResult;
+    try {
+      r = assistantPiece(raw, ctx, prev);
+    } catch {
+      // A value the contract refuses (validateParams/validateTarget) is not a step; never a crash.
+      r = clarify(NOT_FROM_HERE, [], SAFETY);
+    }
+    if (r.kind !== "steps") return r as CommandParse;
+    const made = r.steps.map((s) => ({ ...s, text: commandText(s, ctx.apps) }));
+    // A search shows a list of videos, not a player: a player step right after it would reach the results page.
+    if (prev?.action === "youtube.search" && made[0]?.needsTarget === "youtube") {
+      const chip = expressible(made[0].action) ? [choice(`Play the first video, then ${made[0].text}`, `${prev.text} and play the first video and ${made[0].text}`)] : [];
+      return clarify(PICK_RESULT_FIRST, chip, SAFETY) as CommandParse;
+    }
+    built.push(...made);
+    choices.push(...r.choices);
+  }
+  return assemblePlan(built, choices, ctx);
 }

@@ -7,13 +7,14 @@ the DoMe PC program from the source code and builds the browser extension for Yo
 It is a **test setup, not the product as customers will get it**. Read "What this is not" before
 leaving it running.
 
-Three double-click files do everything:
+Three double-click files do everything, and a fourth switches on the optional AI assistant:
 
 | File | What it does |
 | --- | --- |
 | `1 Start test server.cmd` | Starts DoMe in Docker, opens two temporary HTTPS addresses, prints the sign-in passphrase and shows a QR code for your iPhone. |
 | `2 Start DoMe on this PC.cmd` | Prepares and starts the DoMe PC program, builds the browser extension, links this PC to your test account. Keep its window open while testing. |
 | `3 Stop test server.cmd` | Stops the test server; asks whether to keep or delete the test data. |
+| `4 Apply AI settings.cmd` | Optional. Switches the AI assistant on or off after you add, change or delete `ai-key.txt`, keeping the addresses, your test account and the pairing (see "Talk to DoMe"). A running test server older than this folder is rebuilt first. |
 
 ## What you need
 
@@ -133,6 +134,106 @@ Add `--replace` to point an app that is already approved at a different program 
 Please write down what worked, what did not, and anything confusing. For a problem with the app,
 **More -> Settings & help** has a diagnostics report you can download and attach.
 
+## Talk to DoMe (optional AI assistant)
+
+You can talk to DoMe on the iPhone and it answers aloud, like a butler. Plainly worded requests
+("pause YouTube", "volume 40", "open Edge") DoMe understands by itself, for free, with or without
+this. For everything else ("it's a little quiet in here", "would you be so kind as to find some jazz
+for me on YouTube", "how do I take a screenshot?") it asks Claude, an AI model made by Anthropic,
+using **your own** Anthropic account. It is off until you do the steps below.
+
+What it does: it picks the same safe actions the buttons use and shows them on the phone before
+and while they run. Simple ones (pause, volume, a YouTube search) run straight away; opening or
+switching apps, full screen and locking the PC wait for your tap on **Run**; shutting down,
+restarting, sleeping and closing apps always ask you to confirm. It never uses the Touchpad or
+the keyboard, and it **cannot see your screen** yet, so "click on that movie in ZStream" still gets
+the honest answer: use the Touchpad, or for YouTube results say "play the first video". (Seeing the
+screen and clicking, always shown to you first, is a later step.)
+
+What it sends: only for requests DoMe cannot work out by itself, your words go through the DoMe
+test server on this PC to Anthropic, with the assistant's recent replies and a few facts (is the PC
+online, is something playing, the volume). Never your screen, your app list, video or window
+titles, audio or anything typed with the Touchpad keyboard. The iPhone shows the exact text before
+you turn it on.
+
+1. **Get an API key.** On any computer, open https://console.anthropic.com (it may take you to
+   platform.claude.com, the Claude Console) and sign up or sign in.
+   - Under **Billing**, add credit. It is prepaid; US$5 is plenty to try this.
+   - Under **Limits**, **set a monthly spend limit**, for example US$5. Do not skip this: it is the
+     limit that really protects your money (see step 3).
+   - Under **API keys**, click **Create key**, name it "DoMe test kit" and copy it. It is shown only
+     once; if you lose it, delete it and create a new one.
+2. **Put the key in a file.** In this `testkit` folder create `ai-key.txt` with only the key in it:
+   open Notepad, paste the key, **File -> Save As**, choose the `testkit` folder, set "Save as type"
+   to **All files** and name it `ai-key.txt`. Nothing else in the file: no quotes, no spaces, no
+   second line. Never share this file; git ignores it. Best done before step 1 of the kit, so the
+   first start already has it.
+3. **Optional: DoMe's own limit.** DoMe stops using the assistant when its own estimate of the
+   month's spend reaches US$5. The phone then says "This month's AI requests needed more processing
+   than your plan includes" (aloud: "this month's AI requests are used up"). To change the limit,
+   create `ai-monthly-limit-usd.txt` next to `ai-key.txt` with a whole number of dollars from 1 to
+   100, then run step 4. With temporary addresses this estimate starts again at every run of
+   `1 Start test server.cmd` (each run is a new, empty test account), so the spend limit you set in
+   the Console is the one that counts.
+4. **Switch it on.** If the test server is not running yet, run `1 Start test server.cmd` as usual:
+   it reads the file by itself. If it is already running, double-click **`4 Apply AI settings.cmd`**
+   instead: it switches the assistant on without new addresses, so your test account, the linked
+   PC, the pairing and the iPhone's permissions stay (running step 1 again would also work, but it
+   starts a new, empty test account: link the PC again, pair again, replace the Home Screen icon and
+   allow the microphone again). Right after you download this version, step 4 first rebuilds the
+   running test server, which is older than this folder (a few minutes; the window says
+   "rebuilding it"; your test account and the pairing stay). Then close DoMe on the iPhone and
+   open it again, so it loads the new app. Either window must say
+   **AI assistant: on (key file found, monthly limit US$5)**.
+5. **On the iPhone:** in the DoMe app open **More -> Settings & help -> Assistant -> Turn on the AI
+   assistant...**, read it and tap **Turn on**. The **Type** tab becomes **Ask**. Tap the
+   microphone and talk: "Good evening", "It's a little quiet in here", "How do I take a
+   screenshot?". Answers from Claude say **Asked Claude** under them. Plain commands such as "pause
+   YouTube" or "volume 40" work here too, but DoMe answers them by itself, so they have no
+   **Asked Claude** tag (that does not mean the assistant is off). The first time, DoMe explains
+   how listening works, then the iPhone asks to allow the microphone and speech recognition. If
+   the talk button says **Dictate**, speech recognition is not available in this app on your iPhone
+   (common in a Home Screen app): tap the text box and use the microphone key on the iPhone keyboard
+   instead. If you hear nothing, check that the side switch is not on Silent and the volume is up.
+   **Settings -> Assistant** also has the butler's name, how it addresses you (nothing, sir, madam
+   or your own words), its voice, **Read replies aloud** and **Ask before every action**.
+
+**What it costs** (estimates; your Anthropic credit pays, DoMe adds nothing):
+
+- Requests DoMe understands by itself: free, and they never reach Anthropic.
+- Other requests: about 1 US cent each. The first one after starting the test server, or after an
+  hour without using the assistant, is slower and costs about 4 US cents, because DoMe's standing
+  instructions are stored ("cached") at Anthropic for an hour after it. US$5 of credit is a few
+  hundred requests.
+- Each answer on the phone says "Asked Claude" when it went to Anthropic. The test account allows
+  300 assistant requests a month.
+- To check the bill: Anthropic's Console has a **Usage** page. DoMe's own numbers are in its log: in
+  a Command Prompt run `docker logs dome-test-api-1 2>&1 | findstr /C:assistant.turn`. Each line is
+  one request; `cost_micro_usd` is DoMe's estimate in millionths of a dollar (10000 = 1 cent). The
+  log starts again whenever step 1 or step 4 restarts the server. If the two differ by more than
+  about 10 %, please tell us.
+
+**Turn it off:**
+
+- On the iPhone: **More -> Settings & help -> Assistant -> Turn off the AI assistant**. It stops at
+  once for every phone of the account. Buttons, Type and plainly worded voice commands keep working.
+- On the PC: delete `ai-key.txt` and double-click `4 Apply AI settings.cmd`. The window says
+  **AI assistant: off** and the key is no longer in DoMe.
+- When you have finished testing, also delete the key in the Console (**API keys**), so it can
+  never be used again.
+
+**Good to know:**
+
+- The key stays on this PC: in `ai-key.txt` and in the settings of the DoMe container in Docker,
+  where anyone who can use Docker on this PC can read it (`docker inspect`). The scripts never print
+  it or copy it anywhere else, DoMe never logs it, and it never goes to the iPhone or the PC
+  program.
+- DoMe keeps counts only (requests, tokens, cost), never what you said or what the assistant
+  answered. Anthropic's API terms apply to the text it receives.
+- The model is Claude Opus 5.5. It is the first time the assistant meets the real model (until now
+  it was only tested against a stand-in), so please note anything odd: a wrong action, a strange
+  answer, a long wait.
+
 ## Stopping
 
 - Double-click **`3 Stop test server.cmd`**. It asks whether to delete all test data; answer **N** to
@@ -154,7 +255,9 @@ When you get a newer copy of this repository as a ZIP:
    the running test server is older than this folder when step 1 is needed (press Enter there to
    go on without it). With temporary addresses, step 1 means new addresses: step 2 links this PC
    again, and the iPhone opens the new address and pairs again. Otherwise skip step 1: the running
-   server, your test account and the pairing stay as they are.
+   server, your test account and the pairing stay as they are. `4 Apply AI settings.cmd` also brings
+   an older running server up to date (it rebuilds it from this folder) while keeping the addresses,
+   your test account and the pairing; use it instead of step 1 when you want to keep those.
 4. **Step 2:** run `2 Start DoMe on this PC.cmd`. It always runs the new PC program, and it builds
    the browser extension again by itself when the extension changed. If that build fails (for
    example without internet), the window says so and DoMe starts with the previous extension; the
@@ -182,6 +285,9 @@ start:
   (a browser opens: passphrase, same email as on the iPhone, **Link this PC**).
 - Open the **new** address on the iPhone (scan the new QR code), sign in and **pair again**. A Home
   Screen icon added earlier still points to the old address: remove it and add the new one.
+- With the AI assistant: turn it on again on the iPhone (**Settings -> Assistant**) and allow the
+  microphone again (the iPhone asks per address). To switch the assistant on or off without a new
+  address, use `4 Apply AI settings.cmd` instead of step 1.
 
 To avoid all this, use a stable address (next section).
 
@@ -238,6 +344,12 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 | YouTube controls stay greyed out | Check that the extension is loaded and switched on; YouTube tabs that were already open pick it up by themselves, so reload a tab only if it still does not respond. Step 2 rebuilds the extension by itself when it changed; to rebuild it anyway: quit DoMe from the tray, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
 | Pairing says the device limit is reached | The free plan allows 2 phones per account (this happens with a stable address, where the account is kept). Tap **Manage devices**, revoke phones you no longer use, pair again. |
 | The iPhone and the PC do not see each other | Both must be signed in with the same email in the same test account. After a new start, run step 2 again and use the new address on the iPhone. |
+| "ai-key.txt must contain only the key" | The file holds something besides the key (a space, a second line, quotes). Open it in Notepad, leave only the key on one line, save, and run the step again. Nothing was changed. |
+| The iPhone says the AI assistant isn't switched on for this DoMe service | No key file, or step 4 was not run after creating it: the step 1 or step 4 window must say **AI assistant: on**. Check the file is called exactly `ai-key.txt` in the `testkit` folder: Notepad can save it as `ai-key.txt.txt` (in File Explorer, **View -> Show -> File name extensions** shows the real name). |
+| "The AI assistant didn't answer" | In a Command Prompt run `docker logs dome-test-api-1 2>&1 \| findstr /C:assistant.provider_error`. `provider_auth`: the key is wrong or was deleted; create a new one, put it in `ai-key.txt`, run step 4. `provider_billing`: add credit in the Console (**Billing**) or raise its spend limit. `overloaded`, `timeout` or `provider_error`: Anthropic was busy or slow; try again. `bad_request`: please report it with that log line. Nothing was done on the PC in any of these cases. |
+| "This month's AI requests needed more processing than your plan includes" (aloud: "this month's AI requests are used up"), or "paused until next month because DoMe reached its AI spending limit" | In the test kit both mean DoMe's own US$ limit from `ai-monthly-limit-usd.txt` (default US$5; see "Talk to DoMe", step 3). Put a higher whole number (at most 100) in that file, run step 4, then on the iPhone switch to another tab and back to **Ask** (or close the app and open it again): the assistant works again. The date the phone gives ("Renews 1 November") is when the month's count starts again by itself; with temporary addresses the next run of step 1 also starts it again (a new, empty test account). Buttons, Type and plainly worded voice commands keep working meanwhile. |
+| "You've used this month's 300 AI requests" or "Too many AI requests failed this month" | The test account's 300 requests a month, or 20 requests that timed out, were refused or got an unusable answer (the `outcome` in the log's `assistant.turn` lines says which, see "What it costs"). These start again on the date the phone gives, or at the next run of step 1 with temporary addresses. Buttons, Type and plainly worded voice commands keep working meanwhile. |
+| DoMe did not start after adding the key | `docker logs dome-test-api-1` names the setting it refused (never the key itself); send those lines with your notes. To go on without the assistant meanwhile, delete `ai-key.txt` and run step 4. |
 | Anything else | Server logs: in a Command Prompt run `docker logs dome-test-api-1` (sign-in page: `docker logs dome-test-dev-idp-1`). PC program log: `%LOCALAPPDATA%\DoMe\logs\agent.log`. Send these with your notes. |
 
 ## What this is not
@@ -259,7 +371,8 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 | Where | What |
 | --- | --- |
 | `testkit\.state\` | Session secret, current addresses and passphrase (`current.json`, also which sources the running server was built from), the QR picture, the extension build (`extension.new` and `extension.old` are temporary folders used while a new build replaces it), its key (`extension-key.pem`, keeps the extension ID fixed) and which sources it was built from (`extension-sources.txt`). Not committed to git. |
-| Docker | Containers and volumes named `dome-test...`. |
+| `testkit\ai-key.txt`, `testkit\ai-monthly-limit-usd.txt` | Only if you create them (see "Talk to DoMe"): your Anthropic API key and DoMe's monthly AI limit. The scripts only read them and never copy the key anywhere but the DoMe container's settings. Not committed to git. Delete them to stop using the assistant. |
+| Docker | Containers and volumes named `dome-test...`. While the AI assistant is on, the `api` container's settings hold your API key. |
 | `%LOCALAPPDATA%\DoMe\` | The PC program's link, pairings, settings and logs. |
 | Windows registry (your user only) | `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and the Edge equivalent, so the extension can talk to the PC program. Removed by `dome-agent uninstall-native-host`. |
 | `pc-agent\.venv\` | The PC program's Python environment (created by uv). |

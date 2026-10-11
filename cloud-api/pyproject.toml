@@ -17,6 +17,7 @@ dependencies = [
     "structlog>=26.1.0,<27",
     "httpx>=0.28.1,<1",
     "httpx2>=2.13.1,<3",
+    "anthropic>=1.13.0,<2",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +61,8 @@ ignore = ["S101", "B008", "S104", "S311", "S608"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "ASYNC", "E501"]
 "dome_api/db/alembic/*" = ["E501"]
+# the frozen butler prompt is prose, one paragraph per line (docs/design/assistant.md §2.2)
+"dome_api/assistant/catalogue.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

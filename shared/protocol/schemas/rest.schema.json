@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dome.app/schemas/rest.schema.json",
   "title": "DoMe REST bodies that cross component boundaries",
-  "description": "Request and response bodies exchanged between the PWA or the agent and cloud-api. Both clients validate responses at the boundary; cloud-api tests validate its responses against these definitions. Error responses always use `error_body`. Every object is closed (additionalProperties:false); additive changes bump the protocol MINOR version.",
+  "description": "Request and response bodies exchanged between the PWA or the agent and cloud-api. Both clients validate responses at the boundary; cloud-api tests validate its responses against these definitions. Error responses always use `error_body`. Every object is closed (additionalProperties:false); additive changes bump the protocol MINOR version. New PWA-only endpoints (PROTOCOL.md §19) are additive without a version bump.",
   "$defs": {
     "uuid": {
       "$ref": "command.schema.json#/$defs/uuid"
@@ -1077,6 +1077,413 @@
           "items": {
             "$ref": "#/$defs/support_ticket"
           }
+        }
+      }
+    },
+    "assistant_text": {
+      "description": "Words the owner said or typed, or a line DoMe spoke. Printable text: no control characters, no format characters (bidi overrides, zero-width), no line or paragraph separators.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF\\uFFF9-\\uFFFB]+$"
+    },
+    "assistant_capability": {
+      "description": "Grant capabilities that matter to the assistant (never pointer or keyboard: rules.ai_eligibility).",
+      "type": "string",
+      "enum": [
+        "status",
+        "media",
+        "volume",
+        "apps",
+        "lock",
+        "power"
+      ]
+    },
+    "assistant_persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z .'-]{0,19}$"
+        },
+        "address": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z .'-]{0,23}$"
+        }
+      }
+    },
+    "assistant_context": {
+      "description": "Coarse state the phone chooses to share. Closed: enums and numbers only, apart from the persona's two pattern-limited words. No titles, app names, tab or window text, search queries or results text.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "persona",
+        "pc_connection",
+        "playback"
+      ],
+      "properties": {
+        "persona": {
+          "$ref": "#/$defs/assistant_persona"
+        },
+        "pc_connection": {
+          "type": "string",
+          "enum": [
+            "online",
+            "offline"
+          ]
+        },
+        "playback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "youtube",
+            "media"
+          ],
+          "properties": {
+            "youtube": {
+              "type": "string",
+              "enum": [
+                "none",
+                "playing",
+                "paused",
+                "list"
+              ]
+            },
+            "media": {
+              "type": "string",
+              "enum": [
+                "none",
+                "playing",
+                "paused"
+              ]
+            }
+          }
+        },
+        "pc_volume": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "youtube_volume": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "search_results": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/assistant_capability"
+          }
+        },
+        "part_of_day": {
+          "type": "string",
+          "enum": [
+            "morning",
+            "afternoon",
+            "evening",
+            "night"
+          ]
+        }
+      }
+    },
+    "assistant_recent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "who",
+        "text"
+      ],
+      "properties": {
+        "who": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "butler"
+          ]
+        },
+        "text": {
+          "$ref": "#/$defs/assistant_text"
+        }
+      }
+    },
+    "assistant_turn_request": {
+      "description": "POST /v1/assistant/turn (session + CSRF). turn_id is generated by the phone per turn and never reused; the phone never retries a turn automatically.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_id",
+        "source",
+        "text",
+        "recent",
+        "context"
+      ],
+      "properties": {
+        "turn_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "speech",
+            "typed",
+            "choice"
+          ]
+        },
+        "text": {
+          "$ref": "#/$defs/assistant_text"
+        },
+        "recent": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/assistant_recent"
+          }
+        },
+        "context": {
+          "$ref": "#/$defs/assistant_context"
+        }
+      }
+    },
+    "assistant_step": {
+      "description": "A step the assistant proposes. action is checked against actions.json (ai_eligible) and params against the action's params schema by cloud-api, again by the phone and again by the PC. app is a spoken app name the phone resolves against its local approved-app list; never an id, path or argument.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "params"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-z]+\\.[a-z_]+$"
+        },
+        "params": {
+          "type": "object"
+        },
+        "app": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF\\uFFF9-\\uFFFB<>{}`\\\\/:*?\"|]+$"
+        }
+      }
+    },
+    "assistant_allowance": {
+      "description": "exhausted says which limit stops new turns this period (null while turns are possible); requests: the interpretations are used, cost_cap: the internal per-account cost cap is reached, failures: too many failed turns.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "used",
+        "period_start",
+        "period_end",
+        "exhausted"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "period_start": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "period_end": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "exhausted": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "requests",
+                "cost_cap",
+                "failures"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assistant_turn_response": {
+      "description": "200 POST /v1/assistant/turn. In mode act the phone ignores reply and announces the validated steps and their real results itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_id",
+        "mode",
+        "reply",
+        "choices",
+        "handoff",
+        "steps",
+        "charged",
+        "allowance"
+      ],
+      "properties": {
+        "turn_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "act",
+            "ask",
+            "answer",
+            "decline"
+          ]
+        },
+        "reply": {
+          "type": "string",
+          "maxLength": 400,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF\\uFFF9-\\uFFFB]*$"
+        },
+        "choices": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u0600-\\u0605\\u061C\\u06DD\\u070F\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF\\uFFF9-\\uFFFB]+$"
+          }
+        },
+        "handoff": {
+          "type": "string",
+          "enum": [
+            "none",
+            "touchpad"
+          ]
+        },
+        "steps": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/assistant_step"
+          }
+        },
+        "charged": {
+          "type": "boolean"
+        },
+        "allowance": {
+          "$ref": "#/$defs/assistant_allowance"
+        }
+      }
+    },
+    "assistant_consent_version": {
+      "description": "The consent text version the PWA shows and cloud-api requires. Changing the consent copy changes this value in both, through this schema.",
+      "const": "2026-10-11"
+    },
+    "assistant_consent_request": {
+      "description": "POST /v1/assistant/consent (session + CSRF)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "accept"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/assistant_consent_version"
+        },
+        "accept": {
+          "const": true
+        }
+      }
+    },
+    "assistant_status_response": {
+      "description": "GET /v1/assistant and 200 POST /v1/assistant/consent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "unavailable_reason",
+        "provider",
+        "consent_version",
+        "consent",
+        "allowance",
+        "turn_deadline_seconds"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "unavailable_reason": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "not_configured",
+                "not_in_plan",
+                "allowance_exhausted",
+                "spend_limit"
+              ]
+            }
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "fake",
+            "none"
+          ]
+        },
+        "turn_deadline_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 60
+        },
+        "consent_version": {
+          "$ref": "#/$defs/assistant_consent_version"
+        },
+        "consent": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "given_at"
+              ],
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                },
+                "given_at": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
+            }
+          ]
+        },
+        "allowance": {
+          "$ref": "#/$defs/assistant_allowance"
         }
       }
     }

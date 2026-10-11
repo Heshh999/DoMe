@@ -1,3 +1,6 @@
 # Per-PC state written by the scripts: secrets, current addresses, the built extension and its key.
 .state/
 stable-addresses.txt
+# The owner's Anthropic API key and DoMe's monthly AI spend limit for the test server (README, "Talk to DoMe").
+ai-key.txt
+ai-monthly-limit-usd.txt

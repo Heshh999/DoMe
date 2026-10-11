@@ -2,6 +2,39 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-11 — Optional AI voice butler, step 1 (Phase E, behind consent and allowances)
+
+The owner asked for a Jarvis-like butler they talk to; they chose a formal British butler, Claude
+Opus 5.5, two steps (screen clicking later, always shown first), and later: no screenshots at all.
+
+- **Design** `docs/design/assistant.md` (reviewed by security/cost, iPhone voice and integration lenses).
+  Deterministic first: the phone's own parser handles what it understands (free, instant, no AI);
+  only what it cannot understand goes to `POST /v1/assistant/turn` (consent checked every turn).
+  The model returns the same plan representation as the Type grammar (up to 3 AI-eligible steps,
+  app names as spoken) or a question/answer/decline; the phone resolves app names locally, shows the
+  plan, signs every command and speaks a butler sentence built from the real results (no second
+  model call). Sent to Anthropic: the words, at most six recent lines from the last 10 minutes and a
+  closed set of enums/numbers; never audio, screenshots, app lists, titles, clipboard or typed text.
+- **cloud-api**: provider interface (fake + Anthropic SDK 1.x adapter: `claude-opus-5-5`, effort low,
+  structured outputs, server-side fallbacks, refusal -> `AI_DECLINED`, prompt caching of the frozen
+  prompt + catalogue), output validation against the registry (AI-eligible only), metering ledger
+  with reservations, per-account cap, operator ceiling, rate limit, one turn in flight, sweeper; no
+  words in logs or tables (sentinel tests). Migration 0003.
+- **Phone**: the Ask screen (push-to-talk with Safari speech recognition, keyboard-dictation and
+  typed fallbacks, en-GB speech unlocked on the first tap, mute), consent and Settings (name, form of
+  address, voice, "Ask before every action"), plan cards reusing the Type plan runner, honest
+  fallbacks when AI is off, down or used up; `pnpm build` refuses a bundle containing key material.
+- **Test kit**: the owner's key in `testkit\ai-key.txt` (git-ignored, never printed), an optional
+  monthly limit file and step 4 "Apply AI settings" (rebuilds the server when its sources changed).
+- Reviews: 25 findings (4 major) all fixed with tests that fail on the old code.
+- Runs (Linux): 2,688 tests, 2,684 passed, 4 skipped, 0 failed (shared/python 264, dev-idp 14,
+  cloud-api 316 + 1 live test skipped without a key, pc-agent 604 + 3, shared/ts 124, mobile-app 1116,
+  browser-extension 154, integration 30); ruff/mypy/tsc/eslint clean; alembic check; testkit 270;
+  actionlint.
+- **Not yet verified**: the real Anthropic API (no key here; the owner's first call), the iPhone voice
+  behaviour. Plans in `plans.json` keep AI allowances at 0 until the owner's new Free / Pro / Pro Plus
+  plans (5-hour and weekly limits) are built next, after the brand and UI redesign.
+
 ## 2026-10-11 — Protocol 1.2: window controls, YouTube search, much richer Type, tray "Add an app..."
 
 Built from the owner's critique of Type ("full screen <app>", "make the volume 100%", "bring <app> to

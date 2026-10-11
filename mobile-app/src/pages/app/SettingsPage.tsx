@@ -8,6 +8,7 @@ import { Link } from "react-router";
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { navigation } from "../../app/navigation.ts";
 import { getRuntime } from "../../app/runtime.ts";
+import { AssistantSettingsCard } from "../../components/AssistantSettingsCard.tsx";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { Button, Card, Notice } from "../../components/ui.tsx";
 import { APP_VERSION, buildDiagnostics, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
@@ -91,6 +92,8 @@ export function SettingsPage() {
         ) : null}
       </Card>
 
+      <AssistantSettingsCard />
+
       <Card>
         <h2 className="font-semibold">Install on your iPhone</h2>
         {standalone ? (
@@ -119,6 +122,7 @@ export function SettingsPage() {
           <li>Commands are signed by a key that never leaves this phone; your PC only accepts phones you approved on the PC.</li>
           <li>The DoMe service routes commands and current PC state between your devices and keeps a lifecycle record per command (action, state, timing, error code) — not parameters, results, typed text or media titles.</li>
           <li>This app stores no analytics, advertising or session-replay scripts, and never caches your PC’s data.</li>
+          <li>The Assistant keeps the conversation in memory only. With the AI assistant on, only requests DoMe can’t work out by itself go to Anthropic, through DoMe’s server; see the Assistant card above.</li>
           <li>
             Full details: <Link to="/privacy" className="text-accent font-semibold">Privacy notice</Link>.
           </li>

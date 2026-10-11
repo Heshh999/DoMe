@@ -56,6 +56,20 @@ REDACT_EXACT = frozenset(
         "x-dome-csrf",
         # typed keyboard content (rules.input_sessions (5): no component logs typed text)
         "text",
+        # the AI assistant's words, context and answers (docs/design/assistant.md §3.10): defence in depth, the
+        # assistant never passes them to a logger in the first place
+        "transcript",
+        "reply",
+        "choices",
+        "query",
+        "recent",
+        "persona",
+        "say",
+        "user_json",
+        "system_text",
+        "steps",
+        "params",
+        "context",
     }
 )
 REDACT_SUFFIXES = ("_token", "_secret", "_code", "_credential", "_key", "_pem", "_title")
@@ -276,7 +290,13 @@ def configure_logging(level: str = "INFO", *, json_output: bool = True) -> None:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
-    renderer: Any = structlog.processors.JSONRenderer() if json_output else structlog.dev.ConsoleRenderer()
+    # Colours only on a terminal: `docker logs` of a container without one is read in plain `key=value` (the test
+    # kit's README has the owner search it with findstr, and an older Command Prompt prints escape codes as is).
+    renderer: Any = (
+        structlog.processors.JSONRenderer()
+        if json_output
+        else structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())
+    )
     structlog.configure(
         processors=[*shared, structlog.processors.EventRenamer("message"), renderer],
         wrapper_class=structlog.make_filtering_bound_logger(lvl),
@@ -302,6 +322,17 @@ def configure_logging(level: str = "INFO", *, json_output: bool = True) -> None:
     for name in ("uvicorn", "uvicorn.error", "sqlalchemy.engine", "alembic", "httpx", "httpcore"):
         logging.getLogger(name).handlers[:] = []
         logging.getLogger(name).propagate = True
+    pin_sdk_loggers()
+
+
+# The Anthropic SDK logs request options at DEBUG/INFO (ANTHROPIC_LOG=debug); its HTTP stack logs URLs and headers.
+SDK_LOGGERS = ("anthropic", "httpx2", "httpcore", "httpcore2")
+
+
+def pin_sdk_loggers() -> None:
+    """Keep the AI SDK's own logging at WARNING whatever DOME_LOG_LEVEL says (docs/design/assistant.md §3.10)."""
+    for name in SDK_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> Any:

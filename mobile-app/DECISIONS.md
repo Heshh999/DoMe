@@ -340,3 +340,96 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     plays any more) does not count toward the three steps. `runPlan` retries a window step after its
     app's launch on TARGET_GONE (the PC refuses that before any side effect) and races every wait
     against Stop and the relay status.
+
+47. **The Assistant is a smarter parser plus a spoken reply, on the Type page's own code.** (docs/design/
+    assistant.md §4.) Every turn goes through `parseCommand` first; plans, handoffs and every
+    clarification stay on the phone — clarifications about apps need the PC's app list, which the AI
+    never sees, and the safety ones are product rules — and only `unknown` words reach the AI, when it
+    is usable. Its steps return in the grammar's representation and `planFromAssistant` builds the same
+    `PlanStep`s with the grammar's own `step()`, `resolveAppSlot()`, `appSteps()` and `openResult()`,
+    then the same `assemblePlan` (extracted from `parseCommand`, no behaviour change). `commandText`
+    gives each AI step words that parse back to it (three actions the grammar cannot express —
+    `media.get_sessions`, `youtube.get_state`, `youtube.list_tabs` — are never offered as chips). The
+    run glue was extracted from `CommandPage.tsx` into `planRun.ts` (`runPlanOnPc`, `STATUS_LABEL`,
+    the app-list refresh helpers) and both pages use it. Clarifications gained a `topic`
+    (`app|player|volume_scope|volume_unknown|safety|other`, absent = other) so `recent` and the "Ask the
+    assistant" chip never depend on a message's text; three existing toEqual expectations name it.
+
+48. **Only low-risk plans run without a tap.** The rule reads `registry.get(action).risk`, never a
+    hand-kept list: `windows.lock`, `app.launch`, `app.focus` and `app.set_fullscreen` are `moderate`
+    and wait for Run (a misheard or injected lock would shut the owner out of remote control until
+    someone unlocks the PC at the desk). A lone step with `confirmation: challenge` is sent at once so
+    the PC answers with its signed challenge and the global modal shows it; only a tap there approves.
+    A plan also waits when the page was hidden during the turn, when it was ready more than 15 s after
+    the words, when it came from a multi-step deterministic chip, when the transcript ended on a joiner
+    and when **Ask before every action** is on. A spoken "yes" with a card waiting answers "Please tap
+    Run on the screen." and runs nothing (the microphone can hear the PC's own speakers); while a plan
+    is running new words are ignored. "Cancel"/"never mind" reach `power.cancel` only while a countdown
+    is pending — and then always, whatever card waits: the countdown is checked before any card. A new
+    request supersedes every card still waiting for Run (shown "Not run."), so a yes, a no or a Run tap
+    only ever concerns the card of the turn just before; a stale card can never be run later by
+    accident.
+
+49. **`recent` is built from closed templates, never from what was shown or spoken.** Owner lines of
+    turns DoMe handled itself are notes of what it did ("(DoMe handled this itself: open the app)");
+    butler lines are result templates with every PC-sourced part replaced ("The app is open.", "I
+    listed 3 apps on the screen.", the failed code's `errors.json` message, never the agent's text),
+    clarification topics, or the model's own cleaned reply. "It" for apps is resolved on the phone
+    (`lastAppId`), so `recent` can do without app names. The multi-turn sentinel test proves no display
+    name, label, title, query or agent message reaches a turn request. `recent`, the conversation and
+    `lastAppId` live in memory only and are cleared on sign-out, PC switch, 10 minutes without a turn
+    and reload.
+
+50. **Tap to talk, not hold to talk; Dictate always works.** Recognition starts in the talk button's
+    `click` (iOS counts a touch as activation at `touchend`), stops on the second tap, 15 s after
+    `audiostart` or when the page hides. Where web speech recognition is missing or refused
+    (`service-not-allowed`, typical in a Home Screen app; remembered per display mode), the button
+    becomes Dictate and focuses a text field inside the same tap so the keyboard and its microphone key
+    open; dictated text is sent as `speech` so the model expects misrecognition. Speech is unlocked by
+    a silent utterance on taps that are not the talk button (nor the voice notice's Continue, which
+    starts the microphone), tried again on each such `pointerup`/`touchend`/`click` until an utterance
+    has really started (`onstart`), since WebKit may ignore a try; a line that does not start within
+    1.5 s offers "Tap to hear", and that tap (like Test voice) speaks at once instead of waiting for the
+    voice list. Nothing is spoken while listening, muted or hidden.
+
+51. **The phone validates both directions of every assistant call.** Requests are checked against
+    `assistant_turn_request` before they leave (so `context` can only hold the closed fields) and
+    responses against `assistant_turn_response`; a reply carrying a format character the contract
+    forbids is refused as a whole and the phone answers by itself. Model text is cleaned again
+    (`\p{Cf}` removed, separators as spaces) and rendered as React text only. The phone never retries a
+    turn, except after its own Cancel when the server answers AI_BUSY: the same words are sent again
+    with a new `turn_id` every 2 s until the cancelled turn's deadline (AI_BUSY is answered before any
+    reservation). The client aborts `turn_deadline_seconds + 5` s after sending.
+
+52. **A turn belongs to the PC and the conversation it started in.** (Review round on the Assistant.)
+    The turn records the selected PC and a conversation counter (raised by every clear: PC switch,
+    sign-out, idle). After each wait — the AI's answer, the app list, the PC's state — a turn whose PC
+    or conversation changed is dropped: no plan is built or run, nothing goes into `recent`, and with a
+    PC selected one line says why ("You switched PCs, so I've left that request."). Switching PC also
+    cancels the AI request in flight (`voice.ts` subscribes to the selection; the runtime keeps clearing
+    the conversation), and `runItem` refuses a card whose PC is not the selected one. The turn is busy
+    from its first word to its last line: the app-list wait shows "Checking the PC's apps…" (phase
+    `checking`) and neither a second request nor a Run starts meanwhile. The touch at the turn's start
+    keeps the idle clear from ever emptying the conversation of a turn still running.
+
+53. **Clarifications are answered by a tap, never by a spoken yes.** A clarification with choices from
+    the turn before is a pending question: "yes" answers "Please tap your choice on the screen." and
+    "no" answers "Very well.", both on the phone, so a "yes" never becomes a charged AI request about
+    nothing (the model never sees the app names behind "Did you mean Notepad?"). Their spoken versions
+    are statements ("I think you meant Notepad. Tap it on the screen to go ahead."). The Type page's
+    messages keep their wording on screen; `butlerSpeech.ts` speaks fixed lines for those that ask a
+    question or quote the owner's words (`ONLY_SEARCH_PLAYS`, `DID_YOU_MEAN`, `SAME_THING`,
+    `CONFIRM_ALONE`, `TOO_MANY_STEPS`, `UNDERSTOOD_PART`, `HELP_MESSAGE` exported from `intents.ts`), and
+    the Assistant shows its own help line ("things you can say"). An AI error is the whole answer:
+    one line per code naming the real cause (the network, a rate limit, a limit with its renewal date,
+    the request still finishing), followed only by a part the parser did understand; a named limit is
+    not followed by the contract's message naming it again. "Open Spotify" with no Spotify approved is
+    "not an approved app" on the phone (a reserved word that is also an app's name), never an AI turn.
+
+54. **The card's Cancel shut-down goes through the Assistant.** It sends `power.cancel` with
+    `runPlanOnPc` and its own stopper (so Stop on another plan never stops it and it never waits for
+    one): signed, tracked on the card (`cancel.commandId`), shown ("Cancelling…", then the compact
+    outcome, or the send error) and said ("Cancelled.", "Nothing was counting down.", "I'm afraid I
+    couldn't cancel it: …"). The button goes once the cancel succeeded, once a PC state that named this
+    countdown no longer does, or once the countdown's time passed; after a failure it stays to try
+    again.

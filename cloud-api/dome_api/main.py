@@ -13,6 +13,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from dome_api import __version__
+from dome_api.assistant.service import AssistantConfig, AssistantService, build_provider
 from dome_api.auth.oidc import OIDCClient
 from dome_api.db.engine import make_engine, make_session_factory
 from dome_api.db.migrate import head_revision
@@ -25,7 +26,7 @@ from dome_api.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
-from dome_api.logging import configure_logging, get_logger
+from dome_api.logging import configure_logging, get_logger, pin_sdk_loggers
 from dome_api.relay.agent_ws import agent_endpoint
 from dome_api.relay.controller_ws import controller_endpoint
 from dome_api.relay.lifecycle import Sweeper
@@ -35,6 +36,7 @@ from dome_api.routes import (
     account,
     agent,
     agent_link,
+    assistant,
     auth,
     commands,
     controllers,
@@ -75,13 +77,14 @@ def _build_services(settings: Settings) -> Services:
     db = make_session_factory(engine)
     signer = EntitlementSigner.from_path(settings.entitlement_signing_key_pem_path, settings.effective_api_url)
     relay = ConnectionManager(settings=settings, db=db, signer=signer)
+    registry = load_registry()
     return Services(
         settings=settings,
         engine=engine,
         db=db,
         oidc=OIDCClient(settings),
         signer=signer,
-        registry=load_registry(),
+        registry=registry,
         schemas=load_schemas(),
         relay=relay,
         limiters=RateLimiters(settings, load_registry()),
@@ -93,6 +96,13 @@ def _build_services(settings: Settings) -> Services:
         link_code_account_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_account, 900),
         link_code_ip_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_ip, 900),
         support_ticket_limiter=SlidingWindowLimiter(settings.rate_support_tickets_per_hour, 3600),
+        assistant=AssistantService(
+            config=AssistantConfig.from_settings(settings),
+            provider=build_provider(settings),
+            db=db,
+            registry=registry,
+            validate_responses=settings.validate_rest_responses,
+        ),
     )
 
 
@@ -107,11 +117,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await _check_migrations(services)
         sweeper = Sweeper(services.relay, settings.relay_sweep_interval_seconds)
         app.state.services = services
+        pin_sdk_loggers()  # the AI SDK never logs request options, whatever the log level (also under tests)
         await sweeper.start()
+        await services.assistant.start()
         log.info("startup", version=__version__, env=settings.env, origin=settings.public_origin)
         try:
             yield
         finally:
+            await services.assistant.stop()
+            await services.assistant.aclose()
             await sweeper.stop()
             await services.oidc.aclose()
             await services.engine.dispose()
@@ -140,6 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         commands.router,
         plans.router,
         support.router,
+        assistant.router,
     ):
         app.include_router(router, prefix="/v1")
     app.include_router(health.router)

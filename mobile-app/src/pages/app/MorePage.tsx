@@ -4,6 +4,8 @@ import { Card } from "../../components/ui.tsx";
 import { useSessionStore } from "../../store/session.ts";
 
 const ITEMS = [
+  { to: "/app/assistant", title: "Assistant", text: "Talk to DoMe; it answers aloud and works your PC" },
+  { to: "/app/command", title: "Type a command", text: "Typed commands, without any AI service" },
   { to: "/app/devices", title: "Devices", text: "PCs, paired phones, permissions, pairing" },
   { to: "/app/health", title: "Connection health", text: "What works, what does not, and the next step" },
   { to: "/app/routines", title: "Routines", text: "One-tap sequences (DoMe Pro preview)" },

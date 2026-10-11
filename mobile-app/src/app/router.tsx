@@ -1,6 +1,7 @@
 import { createBrowserRouter } from "react-router";
 
 import { AppsPage } from "../pages/app/AppsPage.tsx";
+import { AssistantPage } from "../pages/app/AssistantPage.tsx";
 import { BillingPage } from "../pages/app/BillingPage.tsx";
 import { CommandPage } from "../pages/app/CommandPage.tsx";
 import { DashboardPage } from "../pages/app/DashboardPage.tsx";
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
       { path: "health", element: <HealthPage /> },
       { path: "layouts", element: <LayoutsPage /> },
       { path: "command", element: <CommandPage /> },
+      { path: "assistant", element: <AssistantPage /> },
       { path: "apps", element: <AppsPage /> },
       { path: "routines", element: <RoutinesPage /> },
       { path: "devices", element: <DevicesPage /> },

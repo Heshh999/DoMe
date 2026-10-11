@@ -141,7 +141,7 @@ Set with `fly secrets set --app <app> NAME=value` (secrets override `[env]` valu
 | `DATABASE_URL` or `DOME_DATABASE_URL` | PostgreSQL connection (`fly postgres attach` injects `DATABASE_URL`; the entrypoint converts it to the `postgresql+psycopg://` form) | rotate the database role password, then the secret, then restart |
 | `DOME_TRUSTED_PROXIES` | not secret, but environment-specific and mandatory in staging/production; may live in `[env]` once verified | none |
 | `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET` | Phase C only; unused today | — |
-| `DOME_AI_API_KEY` | Phase E only; unused today | — |
+| `DOME_AI_ANTHROPIC_API_KEY` | Phase E AI assistant (Anthropic API key; renamed from `DOME_AI_API_KEY`, which now refuses start-up when non-empty). Unused while `DOME_AI_ENABLED=false`. With the assistant on, start-up also refuses any `ANTHROPIC_*` variable in the environment | the next assistant turn uses the new key; revoke the old key in the Anthropic Console |
 
 Non-secret configuration lives in `fly.toml` `[env]` (`DOME_ENV`, `DOME_PUBLIC_ORIGIN`,
 `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`, relay limits, log level) and is documented variable by

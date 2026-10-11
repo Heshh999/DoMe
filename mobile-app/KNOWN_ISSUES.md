@@ -126,3 +126,30 @@ Items from the review that were recorded rather than fully closed, plus residual
     the browser may refuse (shown as "That control is not available right now" until the extension
     maps it to ACTIVATION_REQUIRED); the outcome copy therefore points at Play on the PC or a Touchpad
     click.
+
+25. **The voice assistant is not tested on a device or with the real model.** Speech recognition,
+    synthesis, the microphone permission sheets, the Home Screen app's `service-not-allowed`, the
+    keyboard dock above the iOS keyboard (`visualViewport`), VoiceOver interplay and the latency
+    targets are unit- and component-tested with fakes only; the iPhone checklist in the README
+    (docs/design/assistant.md §8.6) is open. The "How to allow it" Settings path is a best guess until
+    checked on iOS 17 and 18. `navigator.audioSession` routing (`ROUTE_AUDIO_SESSION`) is on until the
+    device check says whether it helps; the voice ranking and deny list are unconfirmed on the owner's
+    iPhone. Whether WebKit lets the silent unlock through on `pointerup`, `touchend` or `click` is
+    unverified: the shell therefore tries again on each such tap until an utterance has really started.
+    The dock spacer follows the dock's measured height; that the newest card's Run row clears the dock
+    in every dock state is on the README's device checklist.
+
+26. **The bundle key check runs inside `pnpm build`, not as its own CI step.** Design §8.3 step 4 asks for
+    a step after `mobile-app - build` in `.github/workflows/ci.yml` that fails when `mobile-app/dist`
+    contains `sk-ant`. The workflow file is outside this component's scope, so `pnpm build` runs
+    `scripts/check-bundle.ts` right after `vite build` instead (`test/checkBundle.test.ts`): CI's existing
+    "mobile-app - build" step and the deploy image's `pnpm build` both fail on key material. A separate,
+    named CI step and the docs/SECURITY.md T23 status ("planned") are for the workflow and docs owners.
+    The PWA itself never holds or asks for an API key (the key lives only in cloud-api settings).
+
+27. **"Connecting to {PC}…" waits up to 5 s; voice turns while a plan runs are ignored.** A request
+    spoken while the previous plan is still running, or while DoMe connects to the PC or checks its
+    apps (up to 5 s), is not queued (the talk button shows Stop, "Connecting…" or "Checking…"); say it
+    again once it finished. Search-result chips and deterministic chips are local turns: they never
+    reach the AI even when it is on. A plan already running when the owner switches PC finishes on the
+    PC it was shown for, but its closing line is not said (the conversation it belonged to was cleared).

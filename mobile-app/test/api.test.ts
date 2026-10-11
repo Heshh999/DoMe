@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { rest } from "@dome/protocol";
+
 import { api, ApiError, apiRequest, configureApi, loginUrl } from "../src/lib/api.ts";
 
 const UUID = "33333333-3333-4333-8333-333333333333";
@@ -147,5 +149,91 @@ describe("REST client", () => {
     expect(loginUrl("/app/remote")).toBe("/v1/auth/login?return_to=%2Fapp%2Fremote");
     expect(loginUrl("//evil.example")).toBe("/v1/auth/login?return_to=%2Fapp");
     expect(loginUrl("https://evil.example")).toBe("/v1/auth/login?return_to=%2Fapp");
+  });
+});
+
+describe("assistant endpoints (docs/design/assistant.md §1.2)", () => {
+  const ALLOWANCE = { limit: 300, used: 5, period_start: "2026-10-01T00:00:00Z", period_end: "2026-11-01T00:00:00Z", exhausted: null };
+  const STATUS = { available: true, unavailable_reason: null, provider: "fake", turn_deadline_seconds: 20, consent_version: "2026-10-11", consent: null, allowance: ALLOWANCE };
+  const TURN: rest.AssistantTurnRequest = { turn_id: UUID, source: "speech", text: "it's a little quiet in here", recent: [], context: { persona: { name: "DoMe" }, pc_connection: "online", playback: { youtube: "none", media: "none" } } };
+  const REPLY = { turn_id: UUID, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.set_volume", params: { value: 50 } }], charged: true, allowance: { ...ALLOWANCE, used: 6 } };
+
+  function server(status: number, body: unknown) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    configureApi({
+      csrfToken: "tok",
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return status === 204 ? new Response(null, { status }) : respond(status, body);
+      },
+    });
+    return calls;
+  }
+
+  it("GET /v1/assistant validates the status", async () => {
+    const calls = server(200, STATUS);
+    await expect(api.assistantStatus()).resolves.toMatchObject({ available: true, consent_version: "2026-10-11" });
+    expect(calls[0]!.url).toBe("/v1/assistant");
+    server(200, { ...STATUS, provider: "openai" });
+    await expect(api.assistantStatus()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+  });
+
+  it("POST /v1/assistant/consent sends the pinned version with CSRF; anything else is refused before sending", async () => {
+    const calls = server(200, { ...STATUS, consent: { version: "2026-10-11", given_at: TS } });
+    await api.assistantConsent({ version: "2026-10-11", accept: true });
+    expect(calls[0]!.init.method).toBe("POST");
+    expect((calls[0]!.init.headers as Record<string, string>)["X-DoMe-CSRF"]).toBe("tok");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ version: "2026-10-11", accept: true });
+    await expect(api.assistantConsent({ version: "2026-01-01", accept: true } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    await expect(api.assistantConsent({ version: "2026-10-11", accept: false } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("DELETE /v1/assistant/consent withdraws with CSRF", async () => {
+    const calls = server(204, null);
+    await expect(api.assistantWithdraw()).resolves.toBeUndefined();
+    expect(calls[0]!.init.method).toBe("DELETE");
+    expect((calls[0]!.init.headers as Record<string, string>)["X-DoMe-CSRF"]).toBe("tok");
+  });
+
+  it("POST /v1/assistant/turn validates the request and the response, and passes the abort signal", async () => {
+    const calls = server(200, REPLY);
+    const abort = new AbortController();
+    await expect(api.assistantTurn(TURN, abort.signal)).resolves.toMatchObject({ mode: "act", charged: true });
+    expect(calls[0]!.init.signal).toBe(abort.signal);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual(TURN);
+    // an extra field (a title, say) never leaves the phone
+    await expect(api.assistantTurn({ ...TURN, context: { ...TURN.context, title: "x" } } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    await expect(api.assistantTurn({ ...TURN, text: "a\u202eb" })).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    expect(calls).toHaveLength(1);
+    server(200, { ...REPLY, steps: [REPLY.steps[0], REPLY.steps[0], REPLY.steps[0], REPLY.steps[0]] });
+    await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    server(200, { ...REPLY, reply: "bad\u202e" });
+    await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+  });
+
+  it.each([
+    [429, "AI_ALLOWANCE_EXHAUSTED", { resets_at: "2026-11-01T00:00:00Z", reason: "requests" }],
+    [502, "AI_UNAVAILABLE", { reason: "timeout" }],
+    [503, "AI_SPEND_LIMIT_REACHED", undefined],
+    [409, "AI_BUSY", undefined],
+    [422, "AI_DECLINED", undefined],
+    [403, "AI_CONSENT_REQUIRED", undefined],
+  ])("an error body %i %s keeps its code and detail", async (status, code, detail) => {
+    server(status, { error: { code, message: "m", retryable: false, ...(detail ? { detail } : {}) } });
+    const e = await api.assistantTurn(TURN).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ApiError);
+    expect(e).toMatchObject({ status, code, detail });
+  });
+
+  it("an aborted turn rejects with the AbortError (Cancel), not a network error", async () => {
+    configureApi({
+      csrfToken: "tok",
+      fetchImpl: (_url, init) => new Promise((_r, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))),
+    });
+    const abort = new AbortController();
+    const p = api.assistantTurn(TURN, abort.signal);
+    abort.abort();
+    await expect(p).rejects.toMatchObject({ name: "AbortError" });
   });
 });

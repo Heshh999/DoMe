@@ -18,12 +18,14 @@ between the phone PWA, the cloud backend/relay, the Windows agent and the browse
 | `schemas/entitlement.schema.json` | Claims of the EdDSA entitlement assertion and its refresh rule |
 | `schemas/rest.schema.json` | REST request/response bodies that cross component boundaries |
 | `version.json` → `rules` | Normative behavioural rules (terminal result, duplicates, snapshot semantics, pairing, identity binding, caching, in-flight deadlines, coalescing) |
-| `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations |
+| `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations; `assistant-plan-cases.json` (AI-shaped plans and their structure verdict, run by cloud-api and the phone) |
 
 Rules:
 
 1. Changing any schema requires bumping `version.json` according to the rule inside it and
-   updating `docs/PROTOCOL.md`.
+   updating `docs/PROTOCOL.md`. Exception: a new REST endpoint whose bodies travel only between the
+   PWA and cloud-api (deployed together), and error codes only such endpoints return, need no bump;
+   they are listed with their date in `docs/PROTOCOL.md` §19.
 2. Verifiers reject unknown `alg`, unknown top-level fields, duplicate keys, oversized or
    deeply nested payloads, and anything failing schema validation. Nothing is silently
    reinterpreted.
@@ -82,3 +84,16 @@ Library helpers: Python `ActionSpec.since`, `Registry.min_version`, `negotiate_v
 builder (`buildCommandPayload`) stamps `since`; `buildConfirmationPayload` requires
 `commandProtocolVersion`. Validation error messages name the path and the failed keyword, never
 the offending value.
+
+## AI assistant, step 1 — REST additions without a version bump (2026-10-11)
+
+PWA-only endpoints (`docs/PROTOCOL.md` §19, design brief `docs/design/assistant.md`); `protocol_version`
+and `registry_version` stay 1.2.
+
+| Addition | Where |
+| --- | --- |
+| `GET /v1/assistant`, `POST`/`DELETE /v1/assistant/consent`, `POST /v1/assistant/turn` bodies: `assistant_text`, `assistant_capability`, `assistant_persona`, `assistant_context`, `assistant_recent`, `assistant_turn_request`, `assistant_step`, `assistant_allowance`, `assistant_turn_response`, `assistant_consent_version` (`2026-10-11`), `assistant_consent_request`, `assistant_status_response` | `schemas/rest.schema.json` |
+| Errors `AI_NOT_AVAILABLE`, `AI_CONSENT_REQUIRED`, `AI_ALLOWANCE_EXHAUSTED`, `AI_SPEND_LIMIT_REACHED`, `AI_UNAVAILABLE`, `AI_DECLINED`, `AI_BUSY`, `AI_TURN_DUPLICATE` (REST error bodies of those routes only) | `errors.json` |
+| Plan fields `ai_cost_cap_cents_per_period`, `ai_turn_rate_limit` (read by cloud-api only) | `plans.json` |
+| `rules.search_queries`: the assistant clause (text only) | `version.json` |
+| Plan-structure cases shared by cloud-api's validator and the phone | `fixtures/assistant-plan-cases.json` |

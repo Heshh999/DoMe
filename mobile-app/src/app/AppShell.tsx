@@ -14,19 +14,56 @@ import { useOnline } from "./useOnline.ts";
 import { Button, Notice, Spinner } from "../components/ui.tsx";
 import { useDevicesStore } from "../store/devices.ts";
 import { pendingConfirmation, useLiveStore } from "../store/live.ts";
+import { useAssistantStore } from "../store/assistant.ts";
 import { useSessionStore } from "../store/session.ts";
 import { useLabels } from "./hooks.ts";
 import { navigation, signInRedirect } from "./navigation.ts";
 import { getRuntime } from "./runtime.ts";
+import { getSpeaker } from "./voice.ts";
 
-const TABS: Array<{ to: string; label: string; icon: string; end?: boolean }> = [
-  { to: "/app", label: "Home", icon: "⌂", end: true },
-  { to: "/app/remote", label: "Remote", icon: "▶" },
-  { to: "/app/touchpad", label: "Touchpad", icon: "▭" },
-  { to: "/app/command", label: "Type", icon: "⌨" },
-  { to: "/app/apps", label: "Apps", icon: "▦" },
-  { to: "/app/more", label: "More", icon: "⋯" },
-];
+type Tab = { to: string; label: string; icon: string; end?: boolean };
+const TYPE_TAB: Tab = { to: "/app/command", label: "Type", icon: "⌨" };
+const ASK_TAB: Tab = { to: "/app/assistant", label: "Ask", icon: "◉" };
+
+/** Six tabs; the fourth is Type, or Ask when this phone shows the Assistant tab (both stay under More). */
+function tabs(showAssistant: boolean): Tab[] {
+  return [
+    { to: "/app", label: "Home", icon: "⌂", end: true },
+    { to: "/app/remote", label: "Remote", icon: "▶" },
+    { to: "/app/touchpad", label: "Touchpad", icon: "▭" },
+    showAssistant ? ASK_TAB : TYPE_TAB,
+    { to: "/app/apps", label: "Apps", icon: "▦" },
+    { to: "/app/more", label: "More", icon: "⋯" },
+  ];
+}
+
+/**
+ * iOS speaks only after a gesture: taps anywhere that are not the talk button (the tab that opens Ask, Send, a chip)
+ * unlock speech, each one trying again until speech has really started once (WebKit may not count every event type
+ * as a gesture, and may ignore a try). The talk tap itself never speaks, so the unlock never competes with listening.
+ */
+const UNLOCK_EVENTS = ["pointerup", "touchend", "click"] as const;
+
+function SpeechUnlock() {
+  useEffect(() => {
+    const stop = () => {
+      for (const type of UNLOCK_EVENTS) document.removeEventListener(type, unlock, true);
+    };
+    function unlock(e: Event) {
+      const speaker = getSpeaker();
+      if (speaker.unlocked) {
+        stop();
+        return;
+      }
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest("[data-talk-button]")) return;
+      speaker.unlock();
+    }
+    for (const type of UNLOCK_EVENTS) document.addEventListener(type, unlock, true);
+    return stop;
+  }, []);
+  return null;
+}
 
 export function RequireSession({ children }: { children: React.ReactNode }) {
   const status = useSessionStore((s) => s.status);
@@ -160,10 +197,12 @@ function AppRuntime() {
 
 export function AppShell() {
   const online = useOnline();
+  const showAssistant = useAssistantStore((s) => s.prefs.showAssistant);
   if (!online) return <OfflineScreen />;
   return (
     <RequireSession>
       <AppRuntime />
+      <SpeechUnlock />
       <div className="min-h-dvh bg-bg text-text flex flex-col">
         <div className="flex-1 w-full max-w-lg mx-auto px-4 pt-[calc(var(--safe-top)+0.75rem)] pb-[calc(84px+var(--safe-bottom))]">
           <div className="mb-3 empty:hidden">
@@ -173,7 +212,7 @@ export function AppShell() {
         </div>
         <nav aria-label="Main" className="fixed bottom-0 inset-x-0 border-t border-border bg-bg-elevated/95 backdrop-blur supports-[backdrop-filter]:bg-bg-elevated/80 pb-[var(--safe-bottom)]">
           <ul className="max-w-lg mx-auto grid grid-cols-6">
-            {TABS.map((t) => (
+            {tabs(showAssistant).map((t) => (
               <li key={t.to}>
                 <NavLink to={t.to} end={t.end ?? false} className={({ isActive }) => `tap flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] text-[11px] font-semibold ${isActive ? "text-accent" : "text-text-muted"}`}>
                   <span aria-hidden="true" className="text-xl leading-none">

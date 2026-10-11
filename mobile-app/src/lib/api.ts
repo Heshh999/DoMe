@@ -196,4 +196,11 @@ export const api = {
   supportTickets: () => apiRequest<rest.SupportTicketsResponse>("GET", "/v1/support/tickets", { responseBody: "support_tickets_response" }),
   supportTicket: (id: string) => apiRequest<rest.SupportTicket>("GET", `/v1/support/tickets/${encodeURIComponent(id)}`, { responseBody: "support_ticket_response" }),
   securityEvents: () => apiRequest<rest.SecurityEventsResponse>("GET", "/v1/account/security-events", { responseBody: "security_events_response" }),
+
+  // The optional AI assistant (docs/design/assistant.md §1.2): PWA-only endpoints. A turn carries the owner's words
+  // and the closed context of assistantContext.ts, never PC text; the phone never retries a turn by itself.
+  assistantStatus: () => apiRequest<rest.AssistantStatusResponse>("GET", "/v1/assistant", { responseBody: "assistant_status_response" }),
+  assistantConsent: (body: rest.AssistantConsentRequest) => apiRequest<rest.AssistantStatusResponse>("POST", "/v1/assistant/consent", { responseBody: "assistant_status_response", requestBody: "assistant_consent_request", body }),
+  assistantWithdraw: () => apiRequest<void>("DELETE", "/v1/assistant/consent", { responseBody: null }),
+  assistantTurn: (body: rest.AssistantTurnRequest, signal?: AbortSignal) => apiRequest<rest.AssistantTurnResponse>("POST", "/v1/assistant/turn", { responseBody: "assistant_turn_response", requestBody: "assistant_turn_request", body, ...(signal ? { signal } : {}) }),
 };

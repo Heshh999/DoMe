@@ -48,6 +48,17 @@ SEVERITIES = ("info", "notice", "warning", "critical")
 ACTORS = ("account", "pc", "controller", "system")
 PLATFORMS = ("windows", "development")
 SUPPORT_TICKET_STATUSES = ("received", "in_review", "answered", "closed")
+# assistant ledger outcomes (docs/design/assistant.md §3.12); only `answered` is ever charged
+ASSISTANT_TURN_STATUSES = (
+    "pending",
+    "answered",
+    "invalid_output",
+    "refused",
+    "provider_error",
+    "timeout",
+    "cancelled",
+    "abandoned",
+)
 SUPPORT_CATEGORIES = (
     "connection",
     "pairing",
@@ -91,6 +102,9 @@ class Account(Base):
     plan: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'free'"))
     created_at: Mapped[datetime] = created_at_col()
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # AI assistant consent (account-level, versioned; checked on every turn; the history is in security events)
+    assistant_consent_version: Mapped[str | None] = mapped_column(String(16))
+    assistant_consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Session(Base):
@@ -376,6 +390,62 @@ class UsagePeriod(Base):
     ai_transcription_seconds_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     ai_interpretations_reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     ai_transcription_seconds_reserved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # AI assistant metering (docs/design/assistant.md §3.7): counts and micro-dollars only, never text
+    ai_cost_used_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    ai_cost_reserved_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    ai_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    ai_output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    ai_cache_read_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    ai_cache_write_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    ai_failed_turns: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+
+class AiSpendMonth(Base):
+    """The operator's AI spend per calendar month (UTC) across all accounts, against DOME_AI_MONTHLY_CEILING_CENTS.
+    No account data."""
+
+    __tablename__ = "ai_spend_months"
+
+    month_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    spent_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reserved_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class AssistantTurn(Base):
+    """The assistant ledger: one row per AI turn, reserved before the provider call and settled after it.
+    Deliberately no text column of any kind: never the words, the recent lines, the context, the reply or the
+    steps (docs/design/assistant.md §3.10, §3.12). ``model_served`` and ``provider_request_id`` come from the
+    provider's response metadata."""
+
+    __tablename__ = "assistant_turns"
+    __table_args__ = (
+        UniqueConstraint("account_id", "client_turn_id", name="uq_assistant_turns_account_turn"),
+        _enum_check("status", ASSISTANT_TURN_STATUSES, "ck_assistant_turns_status"),
+        Index("ix_assistant_turns_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_turn_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    charged: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    month_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reserved_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    cache_write_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    model_served: Mapped[str | None] = mapped_column(String(64))
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    provider_request_id: Mapped[str | None] = mapped_column(String(128))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = created_at_col()
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Layout(Base):

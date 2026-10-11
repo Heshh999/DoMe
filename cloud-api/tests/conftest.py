@@ -7,6 +7,7 @@ ES256 keys from ``dome_protocol``; nothing in the API is mocked.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import secrets
@@ -46,9 +47,12 @@ from sqlalchemy.engine import make_url
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
+from dome_api.assistant.fake_provider import FakeProvider
+from dome_api.assistant.service import AssistantService
 from dome_api.db.migrate import upgrade_to_head
 from dome_api.keygen import write_key
 from dome_api.main import create_app
+from dome_api.plans import RateLimit
 from dome_api.settings import Settings
 from dome_api.state import Services
 
@@ -169,6 +173,12 @@ def settings(
         rate_login_per_minute=100_000,
         rate_agent_token_per_minute=100_000,
         rate_link_code_failures_per_ip=100_000,  # per-account budget (tested) keeps its default
+        # the AI assistant with the scripted fake provider; tests swap services.assistant.config/provider per test
+        ai_enabled=True,
+        ai_provider="fake",
+        ai_monthly_ceiling_cents=10_000,
+        ai_dev_grant_interpretations=50,
+        ai_dev_grant_cost_cap_cents=1_000,
     )
 
 
@@ -936,6 +946,18 @@ async def paired(env: Env, alice: Browser, online_agent: AgentSim) -> AsyncItera
     await ctrl.connect()
     yield ctrl
     await ctrl.close()
+
+
+@pytest.fixture
+def assistant(env: Env) -> Iterator[AssistantService]:
+    """The assistant with a fresh scripted fake provider and a generous turn rate limit. The app is built once from
+    frozen settings, so tests swap ``config`` (dataclasses.replace) and ``provider``; both are restored here."""
+    svc = env.services.assistant
+    saved_config, saved_provider = svc.config, svc.provider
+    svc.config = dataclasses.replace(saved_config, turn_rate_limit=RateLimit(per_minute=60_000, burst=1_000))
+    svc.provider = FakeProvider()
+    yield svc
+    svc.config, svc.provider = saved_config, saved_provider
 
 
 def dump(obj: Any) -> str:

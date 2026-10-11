@@ -36,6 +36,17 @@ export function PrivacyPage() {
         </ul>
       </section>
       <section className="space-y-2 text-sm text-text-muted">
+        <h2 className="text-lg font-semibold text-text">The voice assistant (optional)</h2>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>Talking to DoMe uses your iPhone’s own speech recognition, provided by Apple, which may process your words on Apple’s servers. DoMe listens only while you tap the microphone button and never records, uploads or keeps audio.</li>
+          <li>Requests DoMe understands by itself are handled on your phone and go nowhere else.</li>
+          <li>Only if you turn on the AI assistant (an explicit consent, which you can withdraw in Settings at any time), requests DoMe can’t work out by itself are sent through DoMe’s server to Anthropic, which provides the Claude AI model: those words (including any YouTube search words in them), your earlier requests to the assistant and its replies from the past 10 minutes, a short note of what DoMe did by itself in that time (without naming apps, players, videos or searches), the assistant name and form of address you chose, and a few facts about your PC (whether it is online, whether something is playing, volume levels, how many search results are showing, which kinds of actions your phone may perform).</li>
+          <li>Never sent to Anthropic: audio, your screen, the list of apps on your PC or their names, player names, video or window titles, the words of commands DoMe handled by itself, anything typed with the Touchpad keyboard, your clipboard or files.</li>
+          <li>DoMe does not store what you say or what the assistant answers. It keeps counts (requests and tokens, and their cost) per month to apply your allowance. Anthropic’s API data terms apply to the text it receives. [FOUNDER: confirm Anthropic’s data terms and list Anthropic as a sub-processor.]</li>
+          <li>The conversation on your phone is kept in memory only and is cleared when you sign out, switch PC, after 10 minutes without a request, or when the app reloads. Your assistant preferences (name, form of address, voice) are stored on the phone.</li>
+        </ul>
+      </section>
+      <section className="space-y-2 text-sm text-text-muted">
         <h2 className="text-lg font-semibold text-text">On your PC</h2>
         <p>The DoMe app keeps its key material protected by Windows, the list of phones you approved, the apps you approved, and a short bounded journal of executed commands. Logs are redacted. The browser extension only runs on YouTube pages and does not collect browsing history.</p>
       </section>

@@ -21,7 +21,9 @@ From `docs/spec/MASTER_PROMPT.md` §2, in the order the code enforces them:
 2. Charge for convenience, customisation, more computers and costly optional services, never for
    responsiveness, and never with advertisements, artificial delays or daily paywalls.
 3. A button works without an LLM. Typed commands are parsed deterministically on the phone; no AI
-   service is in the execution path.
+   service is in the execution path. The optional assistant (Phase E) only proposes steps for
+   requests the phone's parser does not understand; the phone checks, shows and signs every command
+   itself, and buttons, the Type page and plainly worded voice commands never call it.
 4. Display actual results from the PC. "Sent" is not "received", "received" is not "done"; when the
    PC vanishes mid-command the phone says *outcome unknown*, not failed and not succeeded.
 5. The PC never listens on the internet. It opens one outbound connection; the phone never sends a
@@ -58,7 +60,8 @@ the PWA pricing table (`mobile-app/src/lib/pricing.ts`) and the entitlement asse
 | Custom layouts, shortcuts, named profiles | — | at paid launch | not implemented (tables exist) |
 | Saved routines (up to 10 steps, 60 s) using approved, non-disruptive actions | — | at paid launch | gate implemented and integration-tested (`ENTITLEMENT_REQUIRED`); routine CRUD/UI not implemented |
 | Permissions, revocation, session management, security activity | included | included | integration-tested |
-| Optional cloud AI interpretation and push-to-talk transcription | not offered | not offered until the Phase E gate (allowance 0 in `plans.json`) | not implemented |
+| Optional AI voice assistant, step 1 (push-to-talk, AI interpretation into registry actions, spoken butler replies; `docs/design/assistant.md`) | not offered (`ai_interpretations_per_period` 0) | not offered until the Phase E gate (allowance 0 in `plans.json`; 250 requests and a US$3 cost cap are the evaluated Pro values) | cloud-api implemented: unit- and integration-tested with a fake provider and an HTTP stub of the Anthropic API (`cloud-api/tests/test_assistant_*.py`); the phone side was being built on 2026-10-11; **not live-tested against the real model, not iPhone-tested, not advertised**. Only development and test servers grant an allowance (the test kit: 300 requests, "Talk to DoMe" in `testkit/README.md`) |
+| Cloud transcription | not offered | not offered | not built: the iPhone's own speech recognition is used (`ai_transcription_minutes_per_period` stays 0) |
 | Price | free | US$5.99/month or US$49.99/year (pricing experiment inputs) | no checkout exists |
 
 Touchpad and keyboard are **Free** features (`plans.json`: both capabilities are Free, and
@@ -162,7 +165,8 @@ publicly available.
 | Production identity provider (Auth0 or Keycloak), production hosting, backups/restore rehearsal, monitoring, incident runbooks | Phase D | ADR-0001 decisions, `cloud-api/README.md` settings; `deploy/` is a placeholder |
 | Real-device evidence: Windows 10/11 and iPhone Safari checklists | Phase B/D acceptance | Checklists in `pc-agent/README.md`, `mobile-app/README.md`, `browser-extension/README.md` |
 | Activation-funnel instrumentation (install, connected, paired, extension connected, first verified command, repeat use, upgrade, cancellation) | Phase D | `activation_events` table; no events emitted |
-| Optional cloud AI interpretation and push-to-talk transcription with explicit consent, metering, quotas, spending ceiling, prompt-injection tests | Phase E (separate release gate) | `usage_periods` table, allowances fixed at 0, env settings declared |
+| Optional AI voice assistant with explicit consent, metering, quotas, spending ceiling, prompt-injection tests: step 1 (talk, AI interpretation into AI-eligible registry actions, spoken butler replies) | Phase E (separate release gate, `docs/design/assistant.md` §8.7) | cloud-api: consent, allowance, per-account cost cap, operator ceiling, Anthropic adapter (`claude-opus-5-5`), validation and ledger, tested with a fake provider and an HTTP stub; test kit: owner's own key (`testkit/README.md`, "Talk to DoMe"); phone side in progress on 2026-10-11; allowances in `plans.json` fixed at 0 |
+| Step 2 of the assistant: screen viewing and clicking, always shown first and confirmed on the phone | Phase E, after step 1's gate | Design hooks only (`docs/design/assistant.md` §7); nothing built |
 | Optional clipboard sync, consented screen previews, schedules, guest access with separate identities, supported Wake-on-LAN | Later expansion | Nothing; the action registry and grant model leave room |
 | Horizontal relay scaling (Redis pub/sub) | When a second relay replica is demonstrably needed | Single-process design; seam documented in ADR-0001 D1 |
 | End-to-end payload encryption between phone and PC | Later, separately reviewed, with a maintained standard protocol | Not started; privacy copy states the relay can read routed payloads |
@@ -175,7 +179,7 @@ publicly available.
 | B — Free beta | Pairing/revocation, native extension integration, all core controls, human-directed touchpad/keyboard with explicit grants and bounded input sessions, deterministic text, onboarding, connection health, single-instance agent, media-target clarity and power-state copy, truthful states, permission/replay/input-recovery tests, development installer, real-device evidence (including the actual phone keyboard and the Windows input adapter) | Code complete except packaging; real-device evidence outstanding |
 | C — paid launch | Multi-PC limits (done), layouts, routines, billing lifecycle, deletion, cost model (done: `docs/COST_MODEL.md`) | Design only for billing/layouts/routines |
 | D — public release preparation | Signed distribution and updates, privacy/help/pricing pages (drafts exist), monitoring, store submissions, backup/restore, support flows, load checks | Not started beyond drafts and this documentation |
-| E — optional AI/voice | Provider adapter, consent, metering, quotas, real iPhone microphone behaviour | Not started |
+| E — optional AI/voice | Provider adapter, consent, metering, quotas, real iPhone microphone behaviour | Step 1 in progress (2026-10-11): cloud-api implemented and tested with a fake provider and an HTTP stub; phone side being built; test kit ready for the owner's first live call. Not live-tested, not iPhone-tested, not offered. Step 2 (screen viewing, show-first clicking): designed hooks only |
 
 ## 5. What is deliberately not promised
 
@@ -196,8 +200,10 @@ publicly available.
   means the events were accepted, not that a field changed. Lock screens, UAC prompts and elevated
   windows refuse remote input, and DoMe does not bypass them. Typed text passes the relay in readable
   form inside TLS. It is not stored, logged or sent to an AI provider.
-- **No AI in the product today**, and when it comes it will be optional, consented, metered, with no
-  automatic overage; typed commands and buttons never depend on it.
+- **No AI offered to customers today.** The step-1 assistant exists for development and the test
+  kit only. When it is offered it is optional, consented, metered, with no automatic overage; typed
+  commands and buttons never depend on it. It never sees the screen, never runs anything itself and
+  only proposes actions the registry marks AI-eligible (never touchpad, keyboard or text input).
 - **No arbitrary executables, arguments, shell, PowerShell, registry edits, downloaded code or
   remote-updated extension logic.** Apps are approved locally by path and hash; the extension has one
   host permission (`https://www.youtube.com/*`) and no network access.

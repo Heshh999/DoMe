@@ -20,6 +20,12 @@ $exitCode = Invoke-KitMain {
     $env:DOME_TEST_PASSPHRASE = New-Passphrase
     Write-Ok 'done'
 
+    # Before anything is cleared or started: a key file the kit refuses stops here, with the test data intact.
+    Write-Step 'Reading the optional AI assistant settings (testkit\ai-key.txt)'
+    $ai = Read-AiSettings
+    Set-AiComposeVariables $ai
+    Write-AiStatus $ai
+
     $stable = Read-StableAddresses
     if ($stable) {
         Write-Step 'Using your own addresses from testkit\stable-addresses.txt'
@@ -101,6 +107,8 @@ $exitCode = Invoke-KitMain {
     Write-Host ''
     Write-Host '  Sign-in passphrase (the sign-in page asks for it):' -ForegroundColor White
     Write-Host ('      ' + $env:DOME_TEST_PASSPHRASE) -ForegroundColor Green
+    Write-Host ''
+    Write-Host ('  ' + (Get-AiStatusLine $ai))
     Write-Host ''
     Write-Host '  Next: double-click "2 Start DoMe on this PC.cmd".'
     if ($mode -eq 'quick-tunnel') {

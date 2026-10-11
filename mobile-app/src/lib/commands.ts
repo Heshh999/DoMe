@@ -58,8 +58,8 @@ export interface CommandRecord {
   terminal: TerminalOutcome | null;
   /** No frame arrived by expires_at + grace; the UI says "no answer yet", never "failed". */
   noAnswer: boolean;
-  /** Where the command came from (for the per-page "last result"). */
-  source: "button" | "text" | "slider" | "system";
+  /** Where the command came from (for the per-page "last result"); `assistant` = a plan the Assistant page ran. */
+  source: "button" | "text" | "slider" | "system" | "assistant";
 }
 
 export interface Identity {

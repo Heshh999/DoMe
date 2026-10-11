@@ -78,3 +78,11 @@ next protocol MINOR bump.
     `input_restricted` from state frames sent to sockets that did not announce 1.1 (state frames are unsigned).
     Proposed: state in `rules.controller_socket_identity` (or the compatibility section) that the relay downgrades
     unsigned routing frames to the peer's announced version, and list the fields per MINOR version.
+
+17. **This build changed the contract (docs/design/assistant.md §1, Step A).** The assistant's REST bodies, eight
+    error codes, two `plans.json` fields, the `rules.search_queries` clause and `fixtures/assistant-plan-cases.json`
+    were added without a version bump under the new `docs/PROTOCOL.md` §1 exception (§19). Observations:
+    - `assistant_step.params` is an open object by design; per-action validation is in code on all three sides.
+    - A cancelled turn (client gone) has no response body; the server logs status 499, which no client ever sees.
+    - `assistant_status_response.turn_deadline_seconds` is bounded 10–60 like `DOME_AI_TURN_DEADLINE_SECONDS`; the
+      service reports the setting even when a test enforces a shorter deadline.

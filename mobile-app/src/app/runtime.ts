@@ -12,6 +12,7 @@ import { clearAccountState, deleteInstallationKey, getControllerIdentity, getOrC
 import { APP_VERSION } from "../lib/diagnostics.ts";
 import { errorSummary, log } from "../lib/log.ts";
 import { RelayClient, relayUrl, type RelayClientOptions, type RelayStatus } from "../lib/relay.ts";
+import { useAssistantStore } from "../store/assistant.ts";
 import { useDevicesStore } from "../store/devices.ts";
 import { useInputStore } from "../store/input.ts";
 import { useLiveStore } from "../store/live.ts";
@@ -143,11 +144,12 @@ export class Runtime {
       }
     };
     // Switching the selected PC ends the session on the old one before anything can target the new one, and
-    // forgets YouTube search results (memory only; they belong to the PC they were found on).
+    // forgets YouTube search results and the Assistant's conversation (memory only; they belong to that PC).
     const unsubscribePc = useDevicesStore.subscribe((s, prev) => {
       if (s.selectedPcId === prev.selectedPcId) return;
       if (this.input.snapshot.pcId && this.input.snapshot.pcId !== s.selectedPcId) void this.input.stop("pc_switch");
       useLiveStore.getState().clearLastSearch();
+      useAssistantStore.getState().clearConversation();
     });
     const onOnline = () => {
       useLiveStore.getState().markAllStale();
@@ -221,6 +223,7 @@ export class Runtime {
     this.lastAccountId = null;
     useLiveStore.getState().reset();
     useDevicesStore.getState().reset();
+    useAssistantStore.getState().resetAccount();
     configureApi({ csrfToken: null });
     try {
       await clearAccountState();

@@ -8,24 +8,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { refreshApprovedApps, useApprovedApps, useLabels, useMyGrant, useSelectedPc } from "../../app/hooks.ts";
-import { describeSendError, getRuntime } from "../../app/runtime.ts";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, inputClass, Notice, Steps } from "../../components/ui.tsx";
-import { intentContext, previewStep, runPlan, type LiveView, type PlanRun, type StepRun } from "../../lib/commandPlan.ts";
+import { intentContext, previewStep, type LiveView, type PlanRun } from "../../lib/commandPlan.ts";
 import { appCommandText, exampleAppPhrase, MAX_COMMAND_CHARS, parseCommand, type Choice, type PlanStep } from "../../lib/intents.ts";
 import { ordinalWord } from "../../lib/intentWords.ts";
 import { describeAction, errorMessage, recoverySteps, type LabelContext } from "../../lib/labels.ts";
+import { APP_CHECK_DELAY_MS, APPS_FRESH_MS, createStopper, runPlanOnPc, STATUS_LABEL } from "../../lib/planRun.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useLiveStore } from "../../store/live.ts";
-
-/** How long the text must stay unchanged before an unknown app name makes the page re-read the PC's app list. */
-const APP_CHECK_DELAY_MS = 400;
-/** An app list younger than this is current enough to say "not approved" without asking the PC again. */
-const APPS_FRESH_MS = 3_000;
-
-const STATUS_LABEL: Record<StepRun["status"], string> = { waiting: "Waiting", sending: "Sending", running: "Running", succeeded: "Done", skipped: "Not needed", failed: "Failed", not_sent: "Not sent", unknown: "Result unknown" };
 
 function ChoiceChips({ choices, onPick, label }: { choices: Choice[]; onPick: (text: string) => void; label: string }) {
   if (choices.length === 0) return null;
@@ -71,9 +64,8 @@ export function CommandPage() {
   const [run, setRun] = useState<{ steps: PlanStep[]; run: PlanRun } | null>(null);
   const [checkedApps, setCheckedApps] = useState<ReadonlySet<string>>(() => new Set());
   const [checkingApp, setCheckingApp] = useState<string | null>(null);
-  const stopRef = useRef(false);
-  /** Wakes a step that is waiting for its answer when Stop is pressed (runPlan's onInterrupt). */
-  const wakeRef = useRef(new Set<() => void>());
+  /** Stop for the running plan; it also wakes a step that is waiting for its answer. */
+  const stopper = useRef(createStopper()).current;
   /** Set from the tap until the run ends, so a double tap never starts the plan twice (state updates come later). */
   const runningRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -121,42 +113,16 @@ export function CommandPage() {
   const submit = async () => {
     if (!ready || parsed.kind !== "plan" || !pcId || runningRef.current) return;
     const planSteps = parsed.steps;
-    stopRef.current = false;
+    stopper.reset();
     runningRef.current = true;
-    let cleared = false;
-    const result = await runPlan(planSteps, {
-      view: () => {
-        const s = useLiveStore.getState();
-        return { state: s.pcs[pcId]?.state ?? null, stateSeq: s.pcs[pcId]?.stateSeq, selectedTab: s.selectedTab[pcId], selectedSession: s.selectedSession[pcId], lastSearch: s.lastSearchByPc[pcId] ?? null };
-      },
-      send: async (action, params, target) => {
-        const rec = await getRuntime().send({ pcId, action, params, target, source: "text" });
-        if (!cleared) {
-          cleared = true;
-          setText(""); // sent: the text (a search, perhaps) is not kept on screen
-        }
-        return rec;
-      },
-      settled: (commandId) => getRuntime().commands.onceSettled(commandId),
-      describeError: describeSendError,
-      stopRequested: () => stopRef.current,
-      connected: () => useLiveStore.getState().relayStatus === "open",
-      onInterrupt: (wake) => {
-        wakeRef.current.add(wake);
-        const unsubscribe = useLiveStore.subscribe((now, before) => {
-          if (now.relayStatus !== before.relayStatus) wake();
-        });
-        return () => {
-          wakeRef.current.delete(wake);
-          unsubscribe();
-        };
-      },
-      update: (r) => setRun({ steps: planSteps, run: r }),
+    await runPlanOnPc(pcId, planSteps, {
+      source: "text",
+      stopper,
+      onFirstSend: () => setText(""), // sent: the text (a search, perhaps) is not kept on screen
+      onUpdate: (r) => setRun({ steps: planSteps, run: r }),
     }).finally(() => {
       runningRef.current = false;
     });
-    // Opening or closing an app changes which ones are running; re-read so "maximise it" next sees it running.
-    if (result.steps.some((s, i) => s.status === "succeeded" && (planSteps[i]!.action === "app.launch" || planSteps[i]!.action === "app.close"))) void refreshApprovedApps(pcId);
   };
 
   const runRecords = run ? run.run.steps.map((s) => (s.commandId ? (commands.find((c) => c.commandId === s.commandId) ?? null) : null)) : [];
@@ -257,10 +223,7 @@ export function CommandPage() {
               <Button
                 type="button"
                 size="lg"
-                onClick={() => {
-                  stopRef.current = true;
-                  for (const wake of wakeRef.current) wake();
-                }}
+                onClick={() => stopper.stop()}
               >
                 Stop
               </Button>

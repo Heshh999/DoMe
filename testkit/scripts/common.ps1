@@ -332,6 +332,155 @@ function Write-Current($Object) {
     $Object | ConvertTo-Json | Set-Content -Path (Get-CurrentPath) -Encoding Ascii
 }
 
+# The optional AI assistant (docs/design/assistant.md section 5). The owner's Anthropic API key is read from
+# testkit\ai-key.txt and handed to the api container through the compose environment only: the kit never
+# prints, logs or writes it (not to current.json, not to .state). Both files are ignored by git.
+$script:AiKeyFileName = 'ai-key.txt'
+$script:AiLimitFileName = 'ai-monthly-limit-usd.txt'
+$script:AiDefaultLimitUsd = 5
+
+function Read-KitTextFile([string]$Path) {
+    # The whole file without a UTF-8 byte order mark (Notepad can write one) and surrounding whitespace.
+    $text = Get-Content -Raw -LiteralPath $Path
+    if ($null -eq $text) { return '' }  # a 0-byte file (a [string] cast keeps this $null in PowerShell 7)
+    return ([string]$text).TrimStart([char]0xFEFF).Trim()
+}
+
+function Read-AiMonthlyLimitUsd {
+    # Optional testkit\ai-monthly-limit-usd.txt: a whole number of US dollars from 1 to 100 (default 5).
+    $path = Join-Path $script:KitDir $script:AiLimitFileName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $script:AiDefaultLimitUsd }
+    $text = Read-KitTextFile $path
+    if ($text -match '^[0-9]{1,3}\z' -and [int]$text -ge 1 -and [int]$text -le 100) { return [int]$text }
+    Write-Warn ('testkit\' + $script:AiLimitFileName + ' must hold a whole number of US dollars from 1 to 100; using ' + $script:AiDefaultLimitUsd + '.')
+    return $script:AiDefaultLimitUsd
+}
+
+function Read-AiSettings {
+    # Returns Enabled, Key, LimitUsd, CeilingCents and State (on, missing or empty). A file that holds more than
+    # the key stops the kit: guessing which part is the key could send the wrong text to Anthropic as a key.
+    $limitUsd = Read-AiMonthlyLimitUsd
+    $settings = [pscustomobject]@{ Enabled = $false; Key = ''; LimitUsd = $limitUsd; CeilingCents = $limitUsd * 100; State = 'missing' }
+    $path = Join-Path $script:KitDir $script:AiKeyFileName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $settings }
+    $key = Read-KitTextFile $path
+    if (-not $key) {
+        $settings.State = 'empty'
+        return $settings
+    }
+    # Printable ASCII only: no spaces, line breaks or typographic characters inside (an API key has none).
+    if ($key -cnotmatch '^[\x21-\x7E]+\z') {
+        Stop-Kit ('testkit\' + $script:AiKeyFileName + ' must contain only the key: one line, nothing else (see README, "Talk to DoMe").')
+    }
+    if (-not $key.StartsWith('sk-ant-', [StringComparison]::Ordinal)) {
+        Write-Warn ('testkit\' + $script:AiKeyFileName + ' does not look like an Anthropic API key (those start with sk-ant-); using it anyway.')
+    }
+    $settings.Enabled = $true
+    $settings.Key = $key
+    $settings.State = 'on'
+    return $settings
+}
+
+function Set-AiComposeVariables($Ai) {
+    # Read by docker-compose.yml (service api). Process variables of this window only; an empty value removes
+    # the variable, so a key from an earlier run never lingers.
+    $env:DOME_TEST_AI_ENABLED = $(if ($Ai.Enabled) { 'true' } else { 'false' })
+    $env:DOME_TEST_AI_KEY = $Ai.Key
+    $env:DOME_TEST_AI_CEILING_CENTS = [string]$Ai.CeilingCents
+}
+
+function Get-AiStatusLine($Ai) {
+    if ($Ai.Enabled) { return ('AI assistant: on (key file found, monthly limit US$' + $Ai.LimitUsd + ')') }
+    if ($Ai.State -eq 'empty') { return "AI assistant: off (testkit\$($script:AiKeyFileName) is empty; see README, 'Talk to DoMe')" }
+    return "AI assistant: off (no testkit\$($script:AiKeyFileName); see README, 'Talk to DoMe')"
+}
+
+function Write-AiStatus($Ai) {
+    if ($Ai.Enabled) { Write-Ok (Get-AiStatusLine $Ai) } else { Write-Note (Get-AiStatusLine $Ai) }
+}
+
+function Test-ComposeServiceRunning([string]$Service) {
+    $running = Get-ComposeOutput @('ps', '--status', 'running', '--services')
+    return (@(([string]$running) -split "`r?`n" | Where-Object { $_.Trim() -eq $Service }).Count -gt 0)
+}
+
+function Update-ServerAiSettings {
+    # Step 4: gives the running test server the AI settings of testkit\ai-key.txt. Step 1 would do it too, but
+    # with temporary addresses it starts a new, empty test account (link, pairing and the iPhone's permissions
+    # all over again). This recreates only dev-idp and api: the database, the tunnels and so the addresses,
+    # the account, the linked PC and the pairing stay. Both get a new sign-in client secret (step 1 never
+    # stores it). A server built from other sources than this folder's (a newer download, or a current.json
+    # from an older kit without server_sources) is rebuilt first: recreating the old image would report the
+    # assistant on while the server and the iPhone app have none. The api applies new migrations when it
+    # starts. Checked by testkit/tests/kit.tests.ps1 (with Docker replaced).
+    $current = Read-Current
+    $notRunning = 'The test server is not running. Double-click "1 Start test server.cmd" first (it reads testkit\ai-key.txt too).'
+    if (-not $current) { Stop-Kit $notRunning }
+    Assert-Docker
+    # Set before any compose call, so the placeholders of Set-ComposePlaceholders are never used for them.
+    $appUrl = [string]$current.app_url
+    $env:DOME_TEST_APP_URL = $appUrl
+    $env:DOME_TEST_SIGNIN_URL = [string]$current.signin_url
+    if (-not (Test-ComposeServiceRunning 'api')) { Stop-Kit $notRunning }
+
+    Write-Step 'Reading the AI assistant settings'
+    $ai = Read-AiSettings
+    Set-AiComposeVariables $ai
+    Write-AiStatus $ai
+
+    # The passphrase stays (the owner may have it written down); an older current.json without one gets a new one.
+    $passphrase = ''
+    if ($current.PSObject.Properties['passphrase']) { $passphrase = [string]$current.passphrase }
+    $newPassphrase = ($passphrase -notmatch '^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$')
+    if ($newPassphrase) { $passphrase = New-Passphrase }
+    $env:DOME_TEST_SESSION_SECRET = Get-PersistentSecret 'session-secret.txt' 32
+    $env:DOME_TEST_CLIENT_SECRET = New-HexSecret 24
+    $env:DOME_TEST_PASSPHRASE = $passphrase
+
+    # Computed before the build, as step 1 does: what was built, not what the folder holds afterwards.
+    $sources = Get-SourceFingerprint $script:RepoDir $script:ServerSources
+    $builtFrom = ''
+    if ($current.PSObject.Properties['server_sources']) { $builtFrom = [string]$current.server_sources }
+    $rebuild = ($builtFrom -ne $sources)
+    if ($rebuild) {
+        if ($builtFrom) { Write-Step 'This folder has a newer DoMe server; rebuilding it (your test account and pairing stay)' }
+        else { Write-Step 'The test server was started by an older test kit; rebuilding it from this folder (your test account and pairing stay)' }
+        Write-Note 'This takes a few minutes while Docker builds DoMe and the iPhone app.'
+        # A failed build stops here with the running server unchanged and server_sources not recorded, so
+        # the next run tries again.
+        Invoke-Compose 'Rebuilding DoMe' @('up', '-d', '--build', '--no-deps', '--force-recreate', 'dev-idp', 'api')
+    } else {
+        Write-Step 'Restarting the DoMe service with these settings (the addresses and your test data stay)'
+        Invoke-Compose 'Restarting DoMe' @('up', '-d', '--no-deps', '--force-recreate', 'dev-idp', 'api')
+    }
+    if ($newPassphrase -or $rebuild) {
+        $updated = [ordered]@{}
+        foreach ($property in $current.PSObject.Properties) { $updated[$property.Name] = $property.Value }
+        if ($newPassphrase) { $updated['passphrase'] = $passphrase }
+        if ($rebuild) { $updated['server_sources'] = $sources }
+        Write-Current $updated
+    }
+    Write-Step 'Waiting for DoMe to answer on this PC'
+    if (-not (Wait-Url 'http://127.0.0.1:18080/healthz' 240)) {
+        Stop-Kit 'DoMe did not start. To see why, run in a Command Prompt: docker logs dome-test-api-1'
+    }
+    Write-Ok 'DoMe is running'
+    if (Wait-Url ($appUrl + '/healthz') 60) { Write-Ok ('reachable at ' + $appUrl) }
+    else { Write-Warn ('Not reachable at ' + $appUrl + '. If the iPhone cannot open it either (after a restart of Docker or the PC the temporary addresses change), run "1 Start test server.cmd" for new addresses.') }
+
+    Write-Banner 'DoMe test server is running'
+    Write-Host ''
+    Write-Host ('  ' + (Get-AiStatusLine $ai)) -ForegroundColor White
+    Write-Host ''
+    Write-Host '  Sign-in passphrase (only needed if a sign-in page asks for it):' -ForegroundColor White
+    Write-Host ('      ' + $passphrase) -ForegroundColor Green
+    Write-Host ''
+    Write-Host '  Same addresses, same test account: the PC and the iPhone reconnect by themselves within a few'
+    Write-Host '  seconds and stay paired. If the DoMe app on the iPhone looks stuck, close it and open it again.'
+    if ($rebuild) { Write-Host '  The iPhone app was updated too: close DoMe on the iPhone and open it again to load the new version.' }
+    if ($ai.Enabled) { Write-Host '  On the iPhone: More -> Settings & help -> Assistant -> Turn on the AI assistant.' }
+}
+
 # A newer download extracted over this folder keeps testkit\.state, so the kit remembers which sources
 # each build was made from: step 2 rebuilds the browser extension when its sources changed, and says
 # when the running test server is older than this folder. Paths are relative to the repository root.

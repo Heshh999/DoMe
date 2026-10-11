@@ -8,12 +8,20 @@ lock the PC, put it to sleep after confirming on the phone, or use the phone as 
 keyboard for the PC — through a managed relay, with no port forwarding, VPN, or scripting. Free is
 useful forever; Pro (routines, layouts, more devices) comes at paid launch.
 
+Optionally, the owner can **talk to DoMe**: an AI voice assistant (Claude Opus 5.5, Phase E step 1,
+`docs/design/assistant.md`) that answers aloud like a formal butler and turns requests the phone's
+own parser does not understand into the same registry actions, which the phone shows and signs
+itself. It is off unless the owner consents, metered, never sees the screen and never touches the
+touchpad or keyboard; buttons and typed commands never need it.
+
 > Status: **pre-release engineering build, not yet device-tested.** Nothing here is publicly
 > available and no billing exists. The whole path phone → relay → PC agent → browser extension is
 > implemented and proven end to end on Linux with the operating-system adapters and the browser
 > replaced by explicit test doubles. **Nothing has run on a Windows PC, in a real Chrome against
 > youtube.com, or on an iPhone yet.** `docs/ACCEPTANCE.md` lists what was actually tested and how;
-> `docs/HANDOFF.md` says what to do next.
+> `docs/HANDOFF.md` says what to do next. The AI assistant is tested only with a fake model and an
+> HTTP stub of the Anthropic API; the first real call is the owner's, with their own key, through the
+> test kit (`testkit/README.md`, "Talk to DoMe").
 
 ## What is here
 
@@ -27,7 +35,7 @@ useful forever; Pro (routines, layouts, more devices) comes at paid launch.
 | `mobile-app/` | React + TypeScript + Vite + Tailwind PWA (iPhone-first): remote, touchpad and keyboard, Health screen, support, Now Playing. Non-extractable WebCrypto controller keys, strict validation of every frame, honest status everywhere. | 715 (unit, jsdom) |
 | `tests/` | Cross-component suite: real agent process + real relay + real PostgreSQL + real OIDC login + fake extension and fake input adapter. | 23 (integration, incl. manual input and a load smoke) |
 | `tools/dev-idp/` | Development-only OpenID Connect issuer, so local runs and tests never need an authentication bypass; optional passphrase gate for the test kit. | 14 (unit) |
-| `testkit/` | **Try DoMe on your own Windows PC and iPhone**: three double-click scripts run the whole service in Docker behind temporary HTTPS addresses, start the PC program from source and build the extension. Start with `testkit/README.md`. | 28 script checks (pwsh); full rehearsal on Linux with an HTTPS stand-in |
+| `testkit/` | **Try DoMe on your own Windows PC and iPhone**: three double-click scripts run the whole service in Docker behind temporary HTTPS addresses, start the PC program from source and build the extension; a fourth switches the optional AI assistant on with your own Anthropic API key. Start with `testkit/README.md`. | 240 script checks (pwsh); full rehearsal on Linux with an HTTPS stand-in (before the assistant) |
 | `brand/` | Original DoMe icon and wordmark (editable SVG), export script, `BRAND.md`. | 29 (unit) + export drift check |
 | `deploy/` | Container image, Fly.io configuration, Docker Compose for development, deployment notes. | image built and run by the test kit rehearsal (Linux); not deployed |
 | `.github/workflows/` | CI for every suite above. | not run on GitHub yet |

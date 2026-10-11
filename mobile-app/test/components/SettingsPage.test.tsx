@@ -99,7 +99,8 @@ describe("Sign out", () => {
   });
 
   it("a 401 from the logout call does not turn the manual sign-out into a sign-in redirect", async () => {
-    configureApi({ fetchImpl: async () => jsonResponse(401, { error: { code: "UNAUTHENTICATED", message: "gone", retryable: false } }) });
+    // only the logout call answers 401 (the page's own reads on opening, such as the assistant status, do not)
+    configureApi({ fetchImpl: async (url) => (url.endsWith("/v1/auth/logout") ? jsonResponse(401, { error: { code: "UNAUTHENTICATED", message: "gone", retryable: false } }) : jsonResponse(500, { error: { code: "INTERNAL", message: "unexpected", retryable: false } })) });
     const { nav, calls } = fakeNavigation();
     setNavigationForTests(nav);
     renderSettings();

@@ -3,6 +3,9 @@ controller rename, plan-disabled controllers."""
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import time
 from typing import Any
 
@@ -159,6 +162,33 @@ def test_log_redaction_covers_secrets_pairing_material_and_titles() -> None:
         assert out[k] == "[redacted]"
     assert out["nested"]["access_token"] == "[redacted]" and out["nested"]["list"][0]["sig"] == "[redacted]"
     assert event["token"] == "a"  # input untouched
+
+
+_CONSOLE_LOG = (
+    "from dome_api.logging import configure_logging, get_logger; "
+    "configure_logging('INFO', json_output=False); "
+    "get_logger('dome_api.assistant').info('assistant.turn', cost_micro_usd=6123)"
+)
+
+
+def test_development_console_log_is_plain_without_a_terminal() -> None:
+    """The test kit runs DOME_ENV=development in a container without a terminal, and its README has the owner search
+    `docker logs` with findstr: plain key=value, never colour escape codes. A terminal keeps its colours."""
+    piped = subprocess.run([sys.executable, "-c", _CONSOLE_LOG], capture_output=True, check=True, timeout=60)
+    assert b"cost_micro_usd=6123" in piped.stderr and b"\x1b" not in piped.stderr
+    if sys.platform == "win32":
+        return
+    import pty
+
+    primary, secondary = pty.openpty()
+    try:
+        subprocess.run(
+            [sys.executable, "-c", _CONSOLE_LOG], stdout=subprocess.DEVNULL, stderr=secondary, check=True, timeout=60
+        )
+        assert b"\x1b[" in os.read(primary, 65536)
+    finally:
+        os.close(secondary)
+        os.close(primary)
 
 
 async def test_pcs_response_reflects_connection_and_agent_version(

@@ -34,6 +34,10 @@ class Plan:
     routine_max_seconds: int
     ai_interpretations_per_period: int
     ai_transcription_minutes_per_period: int
+    # the assistant's internal per-account backstop on the metered provider cost (US cents per usage period) and
+    # its per-account turn bucket; read by the assistant only, never part of session_response or the assertion
+    ai_cost_cap_cents_per_period: int
+    ai_turn_rate_limit: RateLimit
     manual_command_rate_limit: RateLimit
     coalescable_command_rate_limit: RateLimit
     # signed input_batch frames per controller (rules.input_sessions); identical for every plan
@@ -141,6 +145,8 @@ def catalog() -> PlanCatalog:
             routine_max_seconds=int(body["routine_max_seconds"]),
             ai_interpretations_per_period=int(body["ai_interpretations_per_period"]),
             ai_transcription_minutes_per_period=int(body["ai_transcription_minutes_per_period"]),
+            ai_cost_cap_cents_per_period=int(body["ai_cost_cap_cents_per_period"]),
+            ai_turn_rate_limit=_rate(body["ai_turn_rate_limit"]),
             manual_command_rate_limit=_rate(body["manual_command_rate_limit"]),
             coalescable_command_rate_limit=_rate(body["coalescable_command_rate_limit"]),
             input_rate_limit=_rate_per_second(body["input_rate_limit"]),

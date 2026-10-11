@@ -300,6 +300,38 @@
     "EXTENSION_UPDATE_REQUIRED": {
       "retryable": false,
       "user_message": "Update the DoMe browser extension on the PC to use this control."
+    },
+    "AI_NOT_AVAILABLE": {
+      "retryable": false,
+      "user_message": "The AI assistant isn't available on this account. Buttons, typed commands and simple voice commands still work."
+    },
+    "AI_CONSENT_REQUIRED": {
+      "retryable": false,
+      "user_message": "Turn on the AI assistant in Settings first. It sends the words you say to an AI service."
+    },
+    "AI_ALLOWANCE_EXHAUSTED": {
+      "retryable": false,
+      "user_message": "You've reached this month's AI assistant limit. Buttons, typed commands and simple voice commands still work, and the limit renews next month."
+    },
+    "AI_SPEND_LIMIT_REACHED": {
+      "retryable": false,
+      "user_message": "The AI assistant is paused until next month because DoMe reached its AI spending limit. Buttons, typed commands and simple voice commands still work."
+    },
+    "AI_UNAVAILABLE": {
+      "retryable": true,
+      "user_message": "The AI assistant didn't answer. Nothing was done on your PC. Try again, or use a button or a typed command."
+    },
+    "AI_DECLINED": {
+      "retryable": false,
+      "user_message": "The AI assistant can't help with that request. Nothing was done on your PC."
+    },
+    "AI_BUSY": {
+      "retryable": true,
+      "user_message": "The AI assistant is still answering your last request. Try again in a moment."
+    },
+    "AI_TURN_DUPLICATE": {
+      "retryable": false,
+      "user_message": "That request was already sent. Ask again if you need to."
     }
   }
 }

@@ -169,7 +169,7 @@ describe("playback: YouTube or a media player, never a hidden fallback", () => {
   const both = (youtubePlaying: boolean, mediaPlaying: boolean): IntentContext => ({ ...CTX, playback: { youtube: { available: true, playing: youtubePlaying }, media: { available: true, playing: mediaPlaying, label: "Spotify" } } });
   it("bare 'pause' with YouTube and Spotify both playing asks, with a chip for each", () => {
     const r = parseCommand("pause", both(true, true));
-    expect(r).toEqual({ kind: "clarify", message: "YouTube and Spotify are both playing. Which one?", choices: [{ label: "Pause YouTube", text: "pause youtube" }, { label: "Pause Spotify", text: "pause the media player" }], link: null });
+    expect(r).toEqual({ kind: "clarify", message: "YouTube and Spotify are both playing. Which one?", choices: [{ label: "Pause YouTube", text: "pause youtube" }, { label: "Pause Spotify", text: "pause the media player" }], link: null, topic: "player" });
     for (const c of r.kind === "clarify" ? r.choices : []) expect(parseCommand(c.text, both(true, true)).kind).toBe("plan");
   });
   it("whatever is playing pauses, whatever is paused resumes", () => {
@@ -301,6 +301,18 @@ describe("YouTube search and results", () => {
 });
 
 describe("apps (fuzzy matching against the approved apps)", () => {
+  const NO_SPOTIFY: IntentContext = { ...CTX, apps: APPS.filter((a) => a.app_id !== "spotify") };
+
+  it.each(["open spotify", "launch spotify", "close spotify", "switch to spotify", "maximise spotify", "minimise spotify", "restore spotify", "full screen spotify"])("'%s' without Spotify approved: not an approved app (never unknown, so no AI turn)", (text) => {
+    expect(parseCommand(text, NO_SPOTIFY)).toMatchObject({ kind: "clarify", message: "“spotify” is not an approved app on this PC. Add it on the PC: DoMe tray → Add an app…", missingApp: "spotify", topic: "app" });
+  });
+
+  it("without Spotify approved, 'play spotify' and 'pause the music' stay the media player; 'open music' is still not a name", () => {
+    expect(brief(planOf("play spotify", NO_SPOTIFY))).toEqual([["media.set_paused", { paused: false }, "media"]]);
+    expect(brief(planOf("pause the music", NO_SPOTIFY))).toEqual([["media.set_paused", { paused: true }, "media"]]);
+    expect(parseCommand("open music", NO_SPOTIFY).kind).toBe("unknown");
+  });
+
   it.each<[string, Expected[]]>([
     ["open edge", [["app.launch", { app_id: "msedge" }, null]]],
     ["open Microsoft Edge", [["app.launch", { app_id: "msedge" }, null]]],
@@ -349,7 +361,7 @@ describe("apps (fuzzy matching against the approved apps)", () => {
     expect(r.kind === "clarify" && r.message).toMatch(/^Did you mean Notepad/);
   });
   it("an unknown app points at the tray's Add an app…", () => {
-    expect(parseCommand("open powershell", CTX)).toEqual({ kind: "clarify", message: "“powershell” is not an approved app on this PC. Add it on the PC: DoMe tray → Add an app…", choices: [], link: null, missingApp: "powershell" });
+    expect(parseCommand("open powershell", CTX)).toEqual({ kind: "clarify", message: "“powershell” is not an approved app on this PC. Add it on the PC: DoMe tray → Add an app…", choices: [], link: null, missingApp: "powershell", topic: "app" });
   });
   it("'it' without an app before it asks, offering the running apps (the one in front first)", () => {
     const r = parseCommand("maximise it", CTX);
@@ -568,7 +580,7 @@ describe("review findings (owner phrases that went wrong)", () => {
     }
   });
   it("words after 'shut down' or 'close' that name no app are never reported as an unapproved app", () => {
-    expect(parseCommand("shut down in 5 minutes", CTX)).toEqual({ kind: "clarify", message: "DoMe can't schedule a shutdown. Send “shut down my pc” when you're ready.", choices: [{ label: "Shut down my pc", text: "shut down my pc" }], link: null });
+    expect(parseCommand("shut down in 5 minutes", CTX)).toEqual({ kind: "clarify", message: "DoMe can't schedule a shutdown. Send “shut down my pc” when you're ready.", choices: [{ label: "Shut down my pc", text: "shut down my pc" }], link: null, topic: "safety" });
     expect(parseCommand("shut down the pc in an hour", CTX)).toMatchObject({ kind: "clarify", message: "DoMe can't schedule a shutdown. Send “shut down my pc” when you're ready." });
     expect(parseCommand("restart in 10 minutes", CTX)).toMatchObject({ kind: "clarify", message: "DoMe can't schedule a restart. Send “restart my pc” when you're ready." });
     const all = parseCommand("close all windows", CTX);
