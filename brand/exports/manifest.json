@@ -22,8 +22,8 @@
       "mode": "bleed",
       "width": 192,
       "height": 192,
-      "background": "#0b0f17",
-      "glyph_scale": 0.85
+      "background": "#0142fb",
+      "glyph_scale": 0.82
     },
     {
       "file": "pwa/icon-512-maskable.png",
@@ -31,8 +31,8 @@
       "mode": "bleed",
       "width": 512,
       "height": 512,
-      "background": "#0b0f17",
-      "glyph_scale": 0.85
+      "background": "#0142fb",
+      "glyph_scale": 0.82
     },
     {
       "file": "pwa/apple-touch-icon-180.png",
@@ -40,7 +40,7 @@
       "mode": "bleed",
       "width": 180,
       "height": 180,
-      "background": "#0b0f17",
+      "background": "#0142fb",
       "glyph_scale": 1
     },
     {
@@ -140,7 +140,7 @@
       "mode": "mono",
       "width": 16,
       "height": 16,
-      "color": "#101522"
+      "color": "#000000"
     },
     {
       "file": "windows/tray-mono-on-light-32.png",
@@ -148,7 +148,7 @@
       "mode": "mono",
       "width": 32,
       "height": 32,
-      "color": "#101522"
+      "color": "#000000"
     },
     {
       "file": "windows/tray-mono-on-light-48.png",
@@ -156,7 +156,7 @@
       "mode": "mono",
       "width": 48,
       "height": 48,
-      "color": "#101522"
+      "color": "#000000"
     },
     {
       "file": "windows/tray-mono-on-light-256.png",
@@ -164,7 +164,7 @@
       "mode": "mono",
       "width": 256,
       "height": 256,
-      "color": "#101522"
+      "color": "#000000"
     },
     {
       "file": "windows/dome.ico",
@@ -178,32 +178,61 @@
       ]
     },
     {
-      "file": "wordmark/wordmark-504.png",
+      "file": "extension/icon-16.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "file": "extension/icon-32.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 32,
+      "height": 32
+    },
+    {
+      "file": "extension/icon-48.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 48,
+      "height": 48
+    },
+    {
+      "file": "extension/icon-128.png",
+      "source": "icon.svg",
+      "mode": "tile",
+      "width": 128,
+      "height": 128,
+      "inset": 16
+    },
+    {
+      "file": "wordmark/wordmark-512.png",
       "source": "wordmark.svg",
       "mode": "wordmark",
-      "width": 504,
-      "height": 128
+      "width": 512,
+      "height": 155
     },
     {
-      "file": "wordmark/wordmark-1008.png",
+      "file": "wordmark/wordmark-1024.png",
       "source": "wordmark.svg",
       "mode": "wordmark",
-      "width": 1008,
-      "height": 256
+      "width": 1024,
+      "height": 311
     },
     {
-      "file": "wordmark/wordmark-dark-504.png",
+      "file": "wordmark/wordmark-dark-512.png",
       "source": "wordmark-dark.svg",
       "mode": "wordmark",
-      "width": 504,
-      "height": 128
+      "width": 512,
+      "height": 155
     },
     {
-      "file": "wordmark/wordmark-dark-1008.png",
+      "file": "wordmark/wordmark-dark-1024.png",
       "source": "wordmark-dark.svg",
       "mode": "wordmark",
-      "width": 1008,
-      "height": 256
+      "width": 1024,
+      "height": 311
     }
   ]
 }

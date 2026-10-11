@@ -2,15 +2,17 @@
   "name": "@dome/brand",
   "version": "0.1.0",
   "private": true,
-  "description": "DoMe brand identity: editable SVG wordmark/icon sources, BRAND.md, and the dependency-free export script that renders exports/",
+  "description": "DoMe brand identity: vector logo sources traced from the owner's logo, BRAND.md, and the dependency-free export script that renders exports/",
   "type": "module",
   "scripts": {
     "export": "node scripts/export.mjs",
     "export:check": "node scripts/export.mjs --check",
+    "sync": "node scripts/sync-consumers.mjs",
+    "sync:check": "node scripts/sync-consumers.mjs --check",
     "test": "node --test \"tests/**/*.test.mjs\"",
-    "lint": "xmllint --noout icon.svg icon-dark.svg icon-mono.svg wordmark.svg wordmark-dark.svg && ../mobile-app/node_modules/.bin/eslint .",
+    "lint": "xmllint --noout icon.svg icon-mono.svg mark.svg wordmark.svg wordmark-dark.svg wordmark-compact.svg wordmark-compact-dark.svg && ../mobile-app/node_modules/.bin/eslint .",
     "typecheck": "../mobile-app/node_modules/.bin/tsc -p tsconfig.json",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm export:check"
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm export:check && pnpm sync:check"
   },
   "engines": {
     "node": ">=22.12.0"
