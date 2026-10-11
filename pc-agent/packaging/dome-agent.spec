@@ -23,7 +23,8 @@ a = Analysis(
     [str(ROOT / "packaging" / "agent_entry.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[(str(CONTRACT), "dome_protocol/_contract")],
+    # dome_agent/assets holds the brand tray icon (tray.py falls back to drawing it if it is missing)
+    datas=[(str(CONTRACT), "dome_protocol/_contract"), (str(ROOT / "dome_agent" / "assets"), "dome_agent/assets")],
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],

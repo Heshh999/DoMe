@@ -324,3 +324,35 @@ def test_diagnostics_item_saves_the_bundle_and_shows_the_status(
         fn()
     assert "Could not save the diagnostics file (OSError)" in notes[-1]
     assert "could not be saved" in shown[-1][1]
+
+
+# ----- tray icon ---------------------------------------------------------------------------------------------------
+def test_tray_icon_is_the_brand_tile_with_a_connection_badge(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("PIL")
+    from dome_agent import tray
+
+    monkeypatch.setattr(tray, "_base_icon_cache", [])
+    assert tray.TRAY_ICON_PNG.is_file(), "brand/scripts/sync-consumers.mjs copies the brand tile here"
+    connected = tray._icon_image(tray._COLOURS["connected"])  # noqa: SLF001
+    offline = tray._icon_image(tray._COLOURS["offline"])  # noqa: SLF001
+    assert connected.size == (256, 256) and connected.mode == "RGBA"
+    assert connected.getpixel((0, 0))[3] == 0, "rounded tile corner stays transparent"
+    assert connected.getpixel((83, 20)) == (1, 66, 251, 255), "DoMe Blue tile from the brand PNG"
+    assert connected.getpixel((206, 75)) == (249, 96, 84, 255), "coral cursor from the brand PNG"
+    # the badge: status colour in the bottom-right corner inside a white ring; the rest of the icon is unchanged
+    assert connected.getpixel((201, 201))[:3] == tray._COLOURS["connected"]  # noqa: SLF001
+    assert offline.getpixel((201, 201))[:3] == tray._COLOURS["offline"]  # noqa: SLF001
+    assert connected.getpixel((201, 150)) == (255, 255, 255, 255)
+    assert connected.crop((0, 0, 140, 256)).tobytes() == offline.crop((0, 0, 140, 256)).tobytes()
+
+
+def test_tray_icon_is_drawn_when_the_png_is_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    pytest.importorskip("PIL")
+    from dome_agent import tray
+
+    monkeypatch.setattr(tray, "_base_icon_cache", [])
+    monkeypatch.setattr(tray, "TRAY_ICON_PNG", tmp_path / "missing.png")
+    image = tray._icon_image(tray._COLOURS["disabled"])  # noqa: SLF001
+    assert image.size == (256, 256)
+    assert image.getpixel((128, 6)) == (1, 66, 251, 255), "drawn DoMe Blue tile"
+    assert image.getpixel((201, 201))[:3] == tray._COLOURS["disabled"]  # noqa: SLF001

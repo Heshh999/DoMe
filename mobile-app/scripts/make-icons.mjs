@@ -1,8 +1,10 @@
 // Installs the DoMe brand icon into public/icons for the PWA manifest, the iPhone home screen and the
-// favicon. Source of truth: brand/icon.svg (editable SVG; see brand/BRAND.md). The PNG/ICO renders
-// come from brand/exports/, which brand/scripts/export.mjs produces from that same SVG and which the
-// brand test suite drift-checks against it (brand/exports/manifest.json records source and mode per
-// file). Nothing outside mobile-app/ is written. Run: pnpm gen:icons
+// favicon. Source of truth: brand/icon.svg (the app icon traced from the owner's logo: DoMe Blue rounded
+// tile, white ringed o, light-blue ring tip, coral cursor; see brand/BRAND.md). The PNG/ICO renders come
+// from brand/exports/, which brand/scripts/export.mjs produces from that same SVG and which the brand test
+// suite drift-checks against it (brand/exports/manifest.json records source and mode per file; the brand
+// tests also fail when public/icons no longer matches the exports). Nothing outside mobile-app/ is
+// written. Run: pnpm gen:icons
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

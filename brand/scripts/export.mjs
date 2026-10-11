@@ -3,10 +3,17 @@
 // files under ../exports/. Zero dependencies: Node 22 built-ins only.
 //
 // Why a rasterizer lives here: this repository's toolchain has no SVG renderer (no sharp/resvg in
-// mobile-app/node_modules, ImageMagick's SVG delegate `rsvg-convert` is absent, no cairo). Instead of
-// shipping hand-drawn pixel art that could drift from the SVG sources, this script parses a small,
-// strictly enforced SVG subset (see parseSvg) and renders it with signed-distance anti-aliasing. Any
-// SVG feature outside the subset makes the script fail loudly instead of silently rendering wrong.
+// mobile-app/node_modules, ImageMagick's SVG delegate `rsvg-convert` is absent, no cairo), and a
+// headless browser would make the committed exports depend on a browser build (anti-aliasing differs
+// between Chromium versions, so the pixel drift check would fail on every browser update). Instead this
+// script parses a strictly enforced SVG subset (see parseSvg) and renders it itself:
+//   - filled paths (M L H V C S Q T A Z, absolute and relative; nonzero or evenodd fill rule): curves are
+//     flattened to within FLATTEN_TOLERANCE user units, then scan-converted with exact horizontal
+//     coverage and SUBSAMPLES sub-scanlines per pixel row;
+//   - rect (optional rx), circle, and stroked lines/paths: signed-distance anti-aliasing.
+// Any SVG feature outside the subset makes the script fail loudly instead of silently rendering wrong.
+// tests/brand.test.mjs cross-checks the renders against the geometry; the renders were also compared
+// with Chromium's (DECISIONS D19).
 //
 // Run:            node brand/scripts/export.mjs          (writes brand/exports/**)
 // Check drift:    node brand/scripts/export.mjs --check  (exit 1 if any export differs from a fresh render)
@@ -30,17 +37,18 @@ export const isTileId = (id) => id !== undefined && TILE_ID_RE.test(id);
 /** @param {string|undefined} id */
 export const isGlyphGroup = (id) => id !== undefined && GLYPH_GROUP_RE.test(id);
 
-/** Brand colour tokens used by the export plan (kept in sync with BRAND.md by tests/brand.test.mjs). */
+/**
+ * Brand colour tokens (kept in sync with BRAND.md by tests/brand.test.mjs; every colour in the SVG
+ * sources must be one of these). Measured from the owner's logo (brand/reference/dome-remote-logo-v2.webp).
+ */
 export const TOKENS = Object.freeze({
-  night: "#0b0f17",
-  paper: "#f6f7fb",
-  slate: "#182033",
-  borderStrong: "#37445f",
-  signal: "#5ee1c0",
-  signalDeep: "#0c8f70",
-  ink: "#101522",
-  cloud: "#eef2f8",
+  navy: "#001441",
+  blue: "#0142fb",
+  sky: "#4281fa",
+  skyLight: "#63a1fe",
+  coral: "#f96054",
   white: "#ffffff",
+  ink: "#000000",
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -79,7 +87,7 @@ function parsePaint(text, currentColor) {
 // ---------------------------------------------------------------------------------------------
 
 const ALLOWED_ELEMENTS = new Set(["svg", "title", "desc", "g", "rect", "circle", "path", "line"]);
-const COMMON_ATTRS = new Set(["id", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"]);
+const COMMON_ATTRS = new Set(["id", "fill", "fill-rule", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"]);
 /** @type {Record<string, Set<string>>} */
 const ELEMENT_ATTRS = {
   svg: new Set(["xmlns", "viewBox", "width", "height", "role", "aria-labelledby"]),
@@ -94,7 +102,7 @@ const ELEMENT_ATTRS = {
 
 /**
  * @typedef {object} Shape
- * @property {"rrect"|"circle"|"polyline"} kind
+ * @property {"rrect"|"circle"|"polyline"|"fill"} kind  "fill" = a filled path (subpaths, fillRule)
  * @property {string|undefined} id
  * @property {string|undefined} group   id of the innermost enclosing <g>
  * @property {RGB|null} fill
@@ -104,6 +112,8 @@ const ELEMENT_ATTRS = {
  * @property {number} [cx] @property {number} [cy] @property {number} [r]
  * @property {number[][]} [points]
  * @property {boolean} [closed]
+ * @property {number[][][]} [subpaths] filled path: flattened subpaths, each implicitly closed
+ * @property {"nonzero"|"evenodd"} [fillRule]
  */
 
 /**
@@ -153,10 +163,11 @@ function tokenizeTags(text) {
 
 /**
  * Parses one brand SVG into flat shapes. Supported: <svg viewBox>, <title>, <desc>, <g> (inherits
- * fill/stroke/stroke-width, no transform), <rect> (optional rx), <circle>, <line>, <path d> with
- * M/m L/l H/h V/v A/a Z/z only and fill="none". Colours: #rrggbb, none, currentColor. Caps/joins: round.
+ * fill/fill-rule/stroke/stroke-width, no transform), <rect> (optional rx), <circle>, <line>, <path d>
+ * with M L H V C S Q T A Z (absolute and relative; arcs without x-axis rotation), filled (fill-rule
+ * nonzero or evenodd) and/or stroked. Colours: #rrggbb, none, currentColor. Caps/joins: round.
  * @param {string} text
- * @param {{currentColor?: string}} [options]
+ * @param {{currentColor?: string, tolerance?: number}} [options] tolerance: curve flattening, user units
  * @returns {SvgDoc}
  */
 export function parseSvg(text, options = {}) {
@@ -166,7 +177,7 @@ export function parseSvg(text, options = {}) {
   const shapes = [];
   let width = 0;
   let height = 0;
-  /** @type {{name: string, fill: RGB|null|undefined, stroke: RGB|null|undefined, strokeWidth: number|undefined, group: string|undefined}[]} */
+  /** @type {{name: string, fill: RGB|null|undefined, stroke: RGB|null|undefined, strokeWidth: number|undefined, fillRule: "nonzero"|"evenodd"|undefined, group: string|undefined}[]} */
   const stack = []; // inherited paint state per open element
   let sawSvg = false;
   /** @type {Set<string>} */
@@ -188,17 +199,20 @@ export function parseSvg(text, options = {}) {
       if (ids.has(tag.attrs.id)) throw new Error(`duplicate id="${tag.attrs.id}" (ids must be unique within a file)`);
       ids.add(tag.attrs.id);
     }
-    const parent = stack.length ? stack[stack.length - 1] : { name: "", fill: undefined, stroke: undefined, strokeWidth: undefined, group: undefined };
+    const parent = stack.length ? stack[stack.length - 1] : { name: "", fill: undefined, stroke: undefined, strokeWidth: undefined, fillRule: undefined, group: undefined };
     const cap = tag.attrs["stroke-linecap"];
     const join = tag.attrs["stroke-linejoin"];
     if (cap !== undefined && cap !== "round") throw new Error(`stroke-linecap="${cap}" is not supported (round only)`);
     if (join !== undefined && join !== "round") throw new Error(`stroke-linejoin="${join}" is not supported (round only)`);
+    const rule = tag.attrs["fill-rule"];
+    if (rule !== undefined && rule !== "nonzero" && rule !== "evenodd") throw new Error(`fill-rule="${rule}" is not supported (nonzero or evenodd)`);
 
     const inherited = {
       name: tag.name,
       fill: tag.attrs.fill !== undefined ? parsePaint(tag.attrs.fill, currentColor) : parent.fill,
       stroke: tag.attrs.stroke !== undefined ? parsePaint(tag.attrs.stroke, currentColor) : parent.stroke,
       strokeWidth: tag.attrs["stroke-width"] !== undefined ? num(tag.attrs["stroke-width"], "stroke-width") : parent.strokeWidth,
+      fillRule: /** @type {"nonzero"|"evenodd"|undefined} */ (rule ?? parent.fillRule),
       group: tag.name === "g" ? tag.attrs.id ?? parent.group : parent.group,
     };
 
@@ -255,10 +269,15 @@ export function parseSvg(text, options = {}) {
         break;
       }
       case "path": {
-        if (base.fill !== null) throw new Error('<path> must have fill="none" in the brand subset (filled shapes use rect/circle)');
-        if (base.stroke === null) throw new Error("<path> needs a stroke");
-        for (const sub of flattenPathData(tag.attrs.d ?? "")) {
-          shapes.push({ kind: "polyline", ...base, fill: null, points: sub.points, closed: sub.closed });
+        if (base.fill === null && base.stroke === null) throw new Error("<path> paints nothing (fill and stroke are both none)");
+        const subpaths = flattenPathData(tag.attrs.d ?? "", { tolerance: options.tolerance });
+        // SVG paints the fill first, then the stroke
+        if (base.fill !== null) {
+          const rings = subpaths.filter((sp) => sp.points.length >= 3).map((sp) => sp.points);
+          if (rings.length) shapes.push({ kind: "fill", ...base, stroke: null, subpaths: rings, fillRule: inherited.fillRule ?? "nonzero" });
+        }
+        if (base.stroke !== null) {
+          for (const sub of subpaths) shapes.push({ kind: "polyline", ...base, fill: null, points: sub.points, closed: sub.closed });
         }
         break;
       }
@@ -272,16 +291,36 @@ export function parseSvg(text, options = {}) {
   return { width, height, shapes };
 }
 
+/** Default curve-flattening tolerance in user units (≤ 0.02 px at every export size in the plan). */
+export const FLATTEN_TOLERANCE = 0.02;
+
 /**
- * Flattens path data (M/m L/l H/h V/v A/a Z/z) into polylines. Arcs are approximated by segments every
- * ARC_STEP_RAD (0.0175 rad = 1°); at 512 px that is well under 0.05 px of chord error for every arc here.
+ * Number of chords for a Bézier so the polyline stays within `tol` of the curve. Uses the classic bound
+ * on the second derivative: error ≤ max|B''| / (8 n²), with max|B''| ≤ 6·max(|P0−2P1+P2|, |P1−2P2+P3|)
+ * for a cubic and 2·|P0−2P1+P2| for a quadratic.
+ * @param {number} secondDiff max norm of the control polygon's second differences
+ * @param {number} factor 6 for cubic, 2 for quadratic
+ * @param {number} tol
+ */
+function chordCount(secondDiff, factor, tol) {
+  return Math.max(1, Math.min(1024, Math.ceil(Math.sqrt((factor * secondDiff) / (8 * tol)))));
+}
+
+/**
+ * Flattens path data into polylines. Commands: M L H V C S Q T A Z (absolute and relative; arcs must
+ * have x-axis-rotation 0). Bézier curves are split into chords within `tolerance` user units of the
+ * curve (FLATTEN_TOLERANCE by default); arcs use 1° steps (ARC_STEP_RAD).
  * @param {string} d
+ * @param {{tolerance?: number}} [options]
  * @returns {{points: number[][], closed: boolean}[]}
  */
-export function flattenPathData(d) {
-  const tokens = d.match(/[MmLlHhVvAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
-  const unexpected = d.replace(/[MmLlHhVvAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|[\s,]/g, "");
-  if (unexpected.length) throw new Error(`path data contains unsupported commands or characters: "${unexpected}" (subset: M L H V A Z)`);
+export function flattenPathData(d, options = {}) {
+  const tol = options.tolerance ?? FLATTEN_TOLERANCE;
+  if (!(tol > 0)) throw new Error("flattenPathData: tolerance must be > 0");
+  const tokenRe = /[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
+  const tokens = d.match(tokenRe) ?? [];
+  const unexpected = d.replace(tokenRe, "").replace(/[\s,]/g, "");
+  if (unexpected.length) throw new Error(`path data contains unsupported commands or characters: "${unexpected}" (subset: M L H V C S Q T A Z)`);
   /** @type {{points: number[][], closed: boolean}[]} */
   const subpaths = [];
   /** @type {{points: number[][], closed: boolean}|null} */
@@ -290,12 +329,45 @@ export function flattenPathData(d) {
   let y = 0;
   let startX = 0;
   let startY = 0;
+  // reflected control point for S/T (null when the previous command was not a matching curve)
+  /** @type {number[]|null} */
+  let lastCubicCtrl = null;
+  /** @type {number[]|null} */
+  let lastQuadCtrl = null;
   let i = 0;
   /** @type {string|null} */
   let cmd = null;
   const next = () => {
     if (i >= tokens.length || /[A-Za-z]/.test(tokens[i])) throw new Error(`path data: missing number after ${cmd}`);
     return Number(tokens[i++]);
+  };
+  /** @param {string} c */
+  const need = (c) => {
+    if (!current) throw new Error(`path data: ${c} before M`);
+    return current;
+  };
+  /** @param {number[]} p0 @param {number[]} p1 @param {number[]} p2 @param {number[]} p3 @param {number[][]} out */
+  const cubic = (p0, p1, p2, p3, out) => {
+    const dd = Math.max(Math.hypot(p0[0] - 2 * p1[0] + p2[0], p0[1] - 2 * p1[1] + p2[1]), Math.hypot(p1[0] - 2 * p2[0] + p3[0], p1[1] - 2 * p2[1] + p3[1]));
+    const n = chordCount(dd, 6, tol);
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      const mt = 1 - t;
+      const a = mt * mt * mt;
+      const b = 3 * mt * mt * t;
+      const c = 3 * mt * t * t;
+      const e = t * t * t;
+      out.push(k === n ? [p3[0], p3[1]] : [a * p0[0] + b * p1[0] + c * p2[0] + e * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + e * p3[1]]);
+    }
+  };
+  /** @param {number[]} p0 @param {number[]} p1 @param {number[]} p2 @param {number[][]} out */
+  const quad = (p0, p1, p2, out) => {
+    const n = chordCount(Math.hypot(p0[0] - 2 * p1[0] + p2[0], p0[1] - 2 * p1[1] + p2[1]), 2, tol);
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      const mt = 1 - t;
+      out.push(k === n ? [p2[0], p2[1]] : [mt * mt * p0[0] + 2 * mt * t * p1[0] + t * t * p2[0], mt * mt * p0[1] + 2 * mt * t * p1[1] + t * t * p2[1]]);
+    }
   };
   while (i < tokens.length) {
     const t = tokens[i];
@@ -307,69 +379,92 @@ export function flattenPathData(d) {
     } else if (cmd === "M") cmd = "L";
     else if (cmd === "m") cmd = "l";
     else if (cmd === "Z" || cmd === "z") throw new Error("path data: numbers after Z");
-
-    switch (cmd) {
-      case "M":
-      case "m": {
+    if (cmd === null) throw new Error("path data must start with M");
+    const rel = cmd === cmd.toLowerCase();
+    const ox = rel ? x : 0;
+    const oy = rel ? y : 0;
+    const upper = cmd.toUpperCase();
+    let cubicCtrl = null;
+    let quadCtrl = null;
+    switch (upper) {
+      case "M": {
         const nx = next();
         const ny = next();
-        x = cmd === "m" && current ? x + nx : nx;
-        y = cmd === "m" && current ? y + ny : ny;
+        x = ox + nx; // a leading "m" is relative to (0, 0), i.e. absolute; after Z it is relative to the subpath start
+        y = oy + ny;
         current = { points: [[x, y]], closed: false };
         subpaths.push(current);
         startX = x;
         startY = y;
         break;
       }
-      case "L":
-      case "l": {
-        if (!current) throw new Error("path data: L before M");
-        const nx = next();
-        const ny = next();
-        x = cmd === "l" ? x + nx : nx;
-        y = cmd === "l" ? y + ny : ny;
-        current.points.push([x, y]);
+      case "L": {
+        const sp = need(upper);
+        x = ox + next();
+        y = oy + next();
+        sp.points.push([x, y]);
         break;
       }
-      case "H":
-      case "h": {
-        if (!current) throw new Error("path data: H before M");
-        const nx = next();
-        x = cmd === "h" ? x + nx : nx;
-        current.points.push([x, y]);
+      case "H": {
+        const sp = need(upper);
+        x = ox + next();
+        sp.points.push([x, y]);
         break;
       }
-      case "V":
-      case "v": {
-        if (!current) throw new Error("path data: V before M");
-        const ny = next();
-        y = cmd === "v" ? y + ny : ny;
-        current.points.push([x, y]);
+      case "V": {
+        const sp = need(upper);
+        y = oy + next();
+        sp.points.push([x, y]);
         break;
       }
-      case "A":
-      case "a": {
-        if (!current) throw new Error("path data: A before M");
+      case "C":
+      case "S": {
+        const sp = need(upper);
+        /** @type {number[]} */
+        let c1;
+        if (upper === "C") c1 = [ox + next(), oy + next()];
+        else c1 = lastCubicCtrl ? [2 * x - lastCubicCtrl[0], 2 * y - lastCubicCtrl[1]] : [x, y];
+        const c2 = [ox + next(), oy + next()];
+        const p3 = [ox + next(), oy + next()];
+        cubic([x, y], c1, c2, p3, sp.points);
+        cubicCtrl = c2;
+        x = p3[0];
+        y = p3[1];
+        break;
+      }
+      case "Q":
+      case "T": {
+        const sp = need(upper);
+        /** @type {number[]} */
+        let c1;
+        if (upper === "Q") c1 = [ox + next(), oy + next()];
+        else c1 = lastQuadCtrl ? [2 * x - lastQuadCtrl[0], 2 * y - lastQuadCtrl[1]] : [x, y];
+        const p2 = [ox + next(), oy + next()];
+        quad([x, y], c1, p2, sp.points);
+        quadCtrl = c1;
+        x = p2[0];
+        y = p2[1];
+        break;
+      }
+      case "A": {
+        const sp = need(upper);
         const rx = next();
         const ry = next();
         const rot = next();
         const large = next();
         const sweep = next();
-        const ex0 = next();
-        const ey0 = next();
-        const ex = cmd === "a" ? x + ex0 : ex0;
-        const ey = cmd === "a" ? y + ey0 : ey0;
+        const ex = ox + next();
+        const ey = oy + next();
         if (rot !== 0) throw new Error("path data: rotated arcs are not supported (x-axis-rotation must be 0)");
         if ((large !== 0 && large !== 1) || (sweep !== 0 && sweep !== 1)) throw new Error("path data: arc flags must be 0 or 1");
-        for (const p of arcToPoints(x, y, rx, ry, large === 1, sweep === 1, ex, ey)) current.points.push(p);
+        for (const p of arcToPoints(x, y, rx, ry, large === 1, sweep === 1, ex, ey)) sp.points.push(p);
         x = ex;
         y = ey;
         break;
       }
-      case "Z":
-      case "z": {
-        if (!current) throw new Error("path data: Z before M");
-        current.closed = true;
+      case "Z": {
+        const sp = need(upper);
+        sp.closed = true;
         x = startX;
         y = startY;
         current = null;
@@ -378,6 +473,8 @@ export function flattenPathData(d) {
       default:
         throw new Error(`path data: unsupported command ${cmd}`);
     }
+    lastCubicCtrl = cubicCtrl;
+    lastQuadCtrl = quadCtrl;
   }
   for (const sp of subpaths) if (sp.points.length < 2 && !sp.closed) throw new Error("path data: a subpath with a single point has no geometry");
   return subpaths;
@@ -444,13 +541,15 @@ export function arcToPoints(x1, y1, rxIn, ryIn, largeArc, sweep, x2, y2) {
  * @property {number} [glyphScale] uniform scale about the canvas centre applied to shapes whose enclosing
  *   <g> id has the glyph role (GLYPH_GROUP_RE: "glyph" or "*-glyph")
  * @property {Record<string, RGB>} [recolor] replace every paint equal to key colour (as #rrggbb) with value
+ * @property {number} [inset] transparent margin in px on every side; the viewBox is fitted inside it
  */
 
 /**
  * Renders a parsed SVG into straight-alpha RGBA bytes (row-major, 4 bytes per pixel).
- * Anti-aliasing: per shape, a signed distance in pixels is evaluated at every pixel centre inside the
- * shape's bounding box and converted to coverage with clamp(0.5 − d, 0, 1); shapes are composited
- * source-over in document order. This is exact for straight edges and very close for the curves here.
+ * Anti-aliasing: filled paths get area coverage from scan conversion (exact horizontally, SUBSAMPLES
+ * sub-scanlines vertically; see paintFill); rects, circles and strokes get a signed distance in pixels
+ * at every pixel centre, converted to coverage with clamp(0.5 − d, 0, 1). Shapes are composited
+ * source-over in document order.
  * @param {SvgDoc} doc
  * @param {RenderOptions} options
  * @returns {{width: number, height: number, data: Uint8Array}}
@@ -459,8 +558,10 @@ export function render(doc, options) {
   const W = options.width;
   const H = options.height ?? Math.round((W * doc.height) / doc.width);
   if (!(W > 0 && H > 0 && Number.isInteger(W) && Number.isInteger(H))) throw new Error("render: width/height must be positive integers");
-  const sx = W / doc.width;
-  const sy = H / doc.height;
+  const inset = options.inset ?? 0;
+  if (!(inset >= 0 && 2 * inset < Math.min(W, H))) throw new Error("render: inset out of range");
+  const sx = (W - 2 * inset) / doc.width;
+  const sy = (H - 2 * inset) / doc.height;
   const scale = Math.min(sx, sy); // uniform; the viewBox is centred (preserveAspectRatio xMidYMid meet)
   const ox = (W - doc.width * scale) / 2;
   const oy = (H - doc.height * scale) / 2;
@@ -512,6 +613,9 @@ export function render(doc, options) {
       const sdf = (px, py) => Math.hypot(px - cx, py - cy) - r;
       if (fill) paintSdf(canvas, W, H, fill, sdf, [cx - r, cy - r, cx + r, cy + r]);
       if (stroke) paintSdf(canvas, W, H, stroke, (/** @type {number} */ px, /** @type {number} */ py) => Math.abs(sdf(px, py)) - half, [cx - r - half, cy - r - half, cx + r + half, cy + r + half]);
+    } else if (shape.kind === "fill") {
+      if (!fill) continue;
+      paintFill(canvas, W, H, fill, (shape.subpaths ?? []).map((sp) => sp.map(([ux, uy]) => toPx(ux, uy))), shape.fillRule ?? "nonzero");
     } else if (shape.kind === "polyline") {
       if (!stroke) continue;
       const pts = (shape.points ?? []).map(([ux, uy]) => toPx(ux, uy));
@@ -580,16 +684,111 @@ function paintSdf(canvas, W, H, color, sdf, bbox) {
     for (let x = x0; x <= x1; x++) {
       const d = sdf(x + 0.5, y + 0.5);
       const a = Math.min(1, Math.max(0, 0.5 - d));
-      if (a <= 0) continue;
-      const o = (y * W + x) * 4;
-      const da = canvas[o + 3];
-      const outA = a + da * (1 - a);
-      if (outA <= 0) continue;
-      // straight-alpha source-over
-      canvas[o] = (r * a + canvas[o] * da * (1 - a)) / outA;
-      canvas[o + 1] = (g * a + canvas[o + 1] * da * (1 - a)) / outA;
-      canvas[o + 2] = (b * a + canvas[o + 2] * da * (1 - a)) / outA;
-      canvas[o + 3] = outA;
+      if (a > 0) blend(canvas, (y * W + x) * 4, r, g, b, a);
+    }
+  }
+}
+
+/**
+ * Straight-alpha source-over of colour (r, g, b in 0..1) with coverage a onto the canvas pixel at offset o.
+ * @param {Float32Array} canvas @param {number} o @param {number} r @param {number} g @param {number} b @param {number} a
+ */
+function blend(canvas, o, r, g, b, a) {
+  const da = canvas[o + 3];
+  const outA = a + da * (1 - a);
+  if (outA <= 0) return;
+  canvas[o] = (r * a + canvas[o] * da * (1 - a)) / outA;
+  canvas[o + 1] = (g * a + canvas[o + 1] * da * (1 - a)) / outA;
+  canvas[o + 2] = (b * a + canvas[o + 2] * da * (1 - a)) / outA;
+  canvas[o + 3] = outA;
+}
+
+/** Sub-scanlines per pixel row for filled paths (vertical anti-aliasing resolution). */
+export const SUBSAMPLES = 16;
+
+/**
+ * Fills polygons (pixel coordinates, each implicitly closed) with the given fill rule. For each of
+ * SUBSAMPLES sub-scanlines per pixel row the edge crossings are sorted and every inside span adds its
+ * exact horizontal overlap with each pixel, so a pixel's coverage is its covered area up to the vertical
+ * sampling. Edges are half-open in y ([y0, y1)) so a shared vertex is never counted twice.
+ * @param {Float32Array} canvas @param {number} W @param {number} H @param {RGB} color
+ * @param {number[][][]} polygons @param {"nonzero"|"evenodd"} rule
+ */
+function paintFill(canvas, W, H, color, polygons, rule) {
+  /** @type {{x0: number, y0: number, y1: number, dxdy: number, dir: number}[]} */
+  const edges = [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const poly of polygons) {
+    const n = poly.length;
+    for (let k = 0; k < n; k++) {
+      const [ax, ay] = poly[k];
+      const [bx, by] = poly[(k + 1) % n];
+      minX = Math.min(minX, ax);
+      maxX = Math.max(maxX, ax);
+      minY = Math.min(minY, ay);
+      maxY = Math.max(maxY, ay);
+      if (ay === by) continue;
+      if (ay < by) edges.push({ x0: ax, y0: ay, y1: by, dxdy: (bx - ax) / (by - ay), dir: 1 });
+      else edges.push({ x0: bx, y0: by, y1: ay, dxdy: (ax - bx) / (ay - by), dir: -1 });
+    }
+  }
+  if (!edges.length) return;
+  edges.sort((a, b) => a.y0 - b.y0);
+  const px0 = Math.max(0, Math.floor(minX));
+  const px1 = Math.min(W - 1, Math.ceil(maxX));
+  const py0 = Math.max(0, Math.floor(minY));
+  const py1 = Math.min(H - 1, Math.ceil(maxY));
+  if (px1 < px0 || py1 < py0) return;
+  const span = px1 - px0 + 1;
+  const partial = new Float64Array(span + 2);
+  const full = new Float64Array(span + 2); // difference array for fully covered runs
+  const w = 1 / SUBSAMPLES;
+  const [r, g, b] = [color[0] / 255, color[1] / 255, color[2] / 255];
+  /** @param {number} xa @param {number} xb */
+  const addSpan = (xa, xb) => {
+    const a = Math.min(span, Math.max(0, xa - px0));
+    const z = Math.min(span, Math.max(0, xb - px0));
+    if (z <= a) return;
+    const ia = Math.floor(a);
+    const ib = Math.floor(z);
+    if (ia === ib) {
+      partial[ia] += (z - a) * w;
+      return;
+    }
+    partial[ia] += (ia + 1 - a) * w;
+    full[ia + 1] += w;
+    full[ib] -= w;
+    partial[ib] += (z - ib) * w;
+  };
+  let nextEdge = 0;
+  /** @type {typeof edges} */
+  let active = [];
+  /** @type {number[][]} */
+  const crossings = [];
+  for (let py = py0; py <= py1; py++) {
+    partial.fill(0);
+    full.fill(0);
+    for (let s = 0; s < SUBSAMPLES; s++) {
+      const sy = py + (s + 0.5) * w;
+      while (nextEdge < edges.length && edges[nextEdge].y0 <= sy) active.push(edges[nextEdge++]);
+      active = active.filter((e) => e.y1 > sy);
+      crossings.length = 0;
+      for (const e of active) crossings.push([e.x0 + (sy - e.y0) * e.dxdy, e.dir]);
+      crossings.sort((p, q) => p[0] - q[0]);
+      let winding = 0;
+      for (let k = 0; k < crossings.length - 1; k++) {
+        winding += crossings[k][1];
+        if (rule === "evenodd" ? (winding & 1) !== 0 : winding !== 0) addSpan(crossings[k][0], crossings[k + 1][0]);
+      }
+    }
+    let run = 0;
+    for (let k = 0; k < span; k++) {
+      run += full[k];
+      const a = Math.min(1, partial[k] + run);
+      if (a > 1e-9) blend(canvas, (py * W + px0 + k) * 4, r, g, b, a);
     }
   }
 }
@@ -863,25 +1062,33 @@ export function readIcoDirectory(buf) {
 
 /**
  * Every file under exports/. `mode`:
- *  - "tile":  the SVG as drawn (transparent outside the rounded tile)
+ *  - "tile":  the SVG as drawn (transparent outside the rounded tile); `inset` adds a transparent margin
+ *             (the Chrome Web Store asks for 96 px of artwork inside a 128 px extension icon)
  *  - "bleed": the tile is dropped and the canvas is filled with `background`; the glyph is scaled by
  *             `glyphScale` about the centre (maskable icons keep the glyph inside the 80 % safe zone)
  *  - "mono":  icon-mono.svg with currentColor = `color`, transparent background
  *  - "wordmark": the lockup at `width` px, transparent background
  * @typedef {object} ExportEntry
  * @property {string} out @property {string} source @property {"tile"|"bleed"|"mono"|"wordmark"} mode
- * @property {number} [size] @property {number} [width] @property {number[]} [ico]
+ * @property {number} [size] @property {number} [width] @property {number[]} [ico] @property {number} [inset]
  * @property {string} [background] @property {number} [glyphScale] @property {string} [color]
  */
+
+/**
+ * Maskable glyph scale: the mark's farthest outline point is 234.0 units from the centre of the 512
+ * tile (the tip of the cursor's right wing); 0.82 brings it to 191.9 units, inside the 204.8-unit (80 %)
+ * safe circle that platform masks keep, with margin (asserted by tests/brand.test.mjs).
+ */
+export const MASKABLE_GLYPH_SCALE = 0.82;
 
 /** @type {readonly ExportEntry[]} */
 export const EXPORT_PLAN = Object.freeze([
   // PWA (mobile-app/public/icons)
   { out: "pwa/icon-192.png", source: "icon.svg", mode: "tile", size: 192 },
   { out: "pwa/icon-512.png", source: "icon.svg", mode: "tile", size: 512 },
-  { out: "pwa/icon-192-maskable.png", source: "icon.svg", mode: "bleed", size: 192, background: TOKENS.night, glyphScale: 0.85 },
-  { out: "pwa/icon-512-maskable.png", source: "icon.svg", mode: "bleed", size: 512, background: TOKENS.night, glyphScale: 0.85 },
-  { out: "pwa/apple-touch-icon-180.png", source: "icon.svg", mode: "bleed", size: 180, background: TOKENS.night, glyphScale: 1 },
+  { out: "pwa/icon-192-maskable.png", source: "icon.svg", mode: "bleed", size: 192, background: TOKENS.blue, glyphScale: MASKABLE_GLYPH_SCALE },
+  { out: "pwa/icon-512-maskable.png", source: "icon.svg", mode: "bleed", size: 512, background: TOKENS.blue, glyphScale: MASKABLE_GLYPH_SCALE },
+  { out: "pwa/apple-touch-icon-180.png", source: "icon.svg", mode: "bleed", size: 180, background: TOKENS.blue, glyphScale: 1 },
   // Favicons (website + PWA)
   { out: "favicon/favicon-16.png", source: "icon.svg", mode: "tile", size: 16 },
   { out: "favicon/favicon-32.png", source: "icon.svg", mode: "tile", size: 32 },
@@ -904,11 +1111,16 @@ export const EXPORT_PLAN = Object.freeze([
   { out: "windows/tray-mono-on-light-48.png", source: "icon-mono.svg", mode: "mono", size: 48, color: TOKENS.ink },
   { out: "windows/tray-mono-on-light-256.png", source: "icon-mono.svg", mode: "mono", size: 256, color: TOKENS.ink },
   { out: "windows/dome.ico", source: "icon.svg", mode: "tile", ico: [16, 32, 48, 256] },
-  // Wordmark lockups (website header, installer pages, documents)
-  { out: "wordmark/wordmark-504.png", source: "wordmark.svg", mode: "wordmark", width: 504 },
-  { out: "wordmark/wordmark-1008.png", source: "wordmark.svg", mode: "wordmark", width: 1008 },
-  { out: "wordmark/wordmark-dark-504.png", source: "wordmark-dark.svg", mode: "wordmark", width: 504 },
-  { out: "wordmark/wordmark-dark-1008.png", source: "wordmark-dark.svg", mode: "wordmark", width: 1008 },
+  // Browser extension (browser-extension/public/icons; manifest "icons" and "action.default_icon")
+  { out: "extension/icon-16.png", source: "icon.svg", mode: "tile", size: 16 },
+  { out: "extension/icon-32.png", source: "icon.svg", mode: "tile", size: 32 },
+  { out: "extension/icon-48.png", source: "icon.svg", mode: "tile", size: 48 },
+  { out: "extension/icon-128.png", source: "icon.svg", mode: "tile", size: 128, inset: 16 },
+  // Wordmark lockups with REMOTE (website, installer pages, documents), 1x and 2x
+  { out: "wordmark/wordmark-512.png", source: "wordmark.svg", mode: "wordmark", width: 512 },
+  { out: "wordmark/wordmark-1024.png", source: "wordmark.svg", mode: "wordmark", width: 1024 },
+  { out: "wordmark/wordmark-dark-512.png", source: "wordmark-dark.svg", mode: "wordmark", width: 512 },
+  { out: "wordmark/wordmark-dark-1024.png", source: "wordmark-dark.svg", mode: "wordmark", width: 1024 },
 ]);
 
 /** @type {Map<string, SvgDoc>} */
@@ -939,7 +1151,7 @@ function renderEntryImage(entry, size) {
     case "tile":
     case "mono":
       if (size === undefined) throw new Error(`${entry.out}: size missing`);
-      return render(doc, { width: size, height: size });
+      return render(doc, { width: size, height: size, inset: entry.inset });
     case "bleed":
       if (size === undefined || entry.background === undefined) throw new Error(`${entry.out}: size/background missing`);
       return render(doc, { width: size, height: size, background: parseHexColor(entry.background), dropIds: tileIds(doc), glyphScale: entry.glyphScale });
@@ -1024,7 +1236,7 @@ export function runExport({ check = false, dir = EXPORTS_DIR } = {}) {
     const bytes = renderEntry(entry);
     const info = verifyExportBytes(entry, bytes);
     const target = resolve(dir, entry.out);
-    manifest.push({ file: entry.out, source: entry.source, mode: entry.mode, ...(info.kind === "ico" ? { sizes: info.sizes } : { width: info.width, height: info.height }), ...(entry.background ? { background: entry.background } : {}), ...(entry.color ? { color: entry.color } : {}), ...(entry.glyphScale ? { glyph_scale: entry.glyphScale } : {}) });
+    manifest.push({ file: entry.out, source: entry.source, mode: entry.mode, ...(info.kind === "ico" ? { sizes: info.sizes } : { width: info.width, height: info.height }), ...(entry.background ? { background: entry.background } : {}), ...(entry.color ? { color: entry.color } : {}), ...(entry.glyphScale ? { glyph_scale: entry.glyphScale } : {}), ...(entry.inset ? { inset: entry.inset } : {}) });
     if (check) {
       // pixel equality, not byte equality (see exportsEquivalent)
       if (!existsSync(target) || !exportsEquivalent(entry, readFileSync(target), bytes)) drifted.push(entry.out);

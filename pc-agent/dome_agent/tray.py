@@ -67,15 +67,77 @@ _COLOURS = {
 }
 
 
-def _icon_image(colour: tuple[int, int, int]) -> Any:
+# The DoMe app icon (brand/icon.svg rendered by brand/scripts/export.mjs, copied here by
+# brand/scripts/sync-consumers.mjs; a brand test fails when this copy is stale).
+TRAY_ICON_PNG = Path(__file__).resolve().parent / "assets" / "tray-256.png"
+# Brand colours for the drawn fallback (brand/BRAND.md): DoMe Blue tile, white ring, coral cursor.
+_BRAND_BLUE = (1, 66, 251, 255)
+_BRAND_WHITE = (255, 255, 255, 255)
+_BRAND_CORAL = (249, 96, 84, 255)
+_ICON_SIZE = 256
+_base_icon_cache: list[Any] = []
+
+
+def _drawn_brand_icon() -> Any:
+    """A simplified DoMe icon drawn with Pillow, for when the PNG cannot be read (missing from a build)."""
     from PIL import Image, ImageDraw
 
-    size = 64
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    s = _ICON_SIZE
+    image = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.ellipse((4, 4, size - 4, size - 4), fill=colour + (255,))
-    draw.rounded_rectangle((20, 18, 44, 46), radius=6, fill=(255, 255, 255, 255))
-    draw.ellipse((28, 36, 36, 44), fill=colour + (255,))
+    draw.rounded_rectangle((0, 0, s - 1, s - 1), radius=round(s * 0.211), fill=_BRAND_BLUE)
+    # the ring: a thick white annulus, slightly left of and below the centre as in the icon
+    cx, cy, r_out, r_in = s * 0.52, s * 0.54, s * 0.31, s * 0.15
+    draw.ellipse((cx - r_out, cy - r_out, cx + r_out, cy + r_out), fill=_BRAND_WHITE)
+    draw.ellipse((cx - r_in, cy - r_in, cx + r_in, cy + r_in), fill=_BRAND_BLUE)
+    # the coral cursor at the ring's top-right, pointing up-left
+    draw.polygon(
+        [
+            (s * 0.66, s * 0.19),
+            (s * 0.90, s * 0.30),
+            (s * 0.84, s * 0.34),
+            (s * 0.88, s * 0.44),
+            (s * 0.83, s * 0.46),
+            (s * 0.79, s * 0.37),
+            (s * 0.73, s * 0.42),
+        ],
+        fill=_BRAND_CORAL,
+    )
+    return image
+
+
+def _base_icon() -> Any:
+    """The brand tile at 256 px: the bundled PNG when Pillow can read it, otherwise the drawn fallback."""
+    if not _base_icon_cache:
+        from PIL import Image
+
+        try:
+            with Image.open(TRAY_ICON_PNG) as png:
+                image = png.convert("RGBA")
+            if image.size != (_ICON_SIZE, _ICON_SIZE):
+                image = image.resize((_ICON_SIZE, _ICON_SIZE), Image.Resampling.LANCZOS)
+        except (OSError, ValueError) as exc:
+            log.warning("tray icon png unreadable; drawing the icon instead", error=exc.__class__.__name__)
+            image = _drawn_brand_icon()
+        _base_icon_cache.append(image)
+    return _base_icon_cache[0].copy()
+
+
+def _icon_image(colour: tuple[int, int, int]) -> Any:
+    """The DoMe tile with the connection state as a small badge in the bottom-right corner: a status-coloured
+    dot in a white ring, so it reads on the blue tile and on light or dark taskbars (Windows scales the 256 px
+    image down to the tray size; at 16 px the badge is about 6 px)."""
+    from PIL import ImageDraw
+
+    image = _base_icon()
+    s = image.width
+    diameter = round(s * 0.42)
+    ring = max(1, round(s * 0.05))
+    x1 = y1 = s - 1
+    x0 = y0 = s - 1 - diameter
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((x0, y0, x1, y1), fill=_BRAND_WHITE)
+    draw.ellipse((x0 + ring, y0 + ring, x1 - ring, y1 - ring), fill=colour + (255,))
     return image
 
 

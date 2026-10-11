@@ -33,8 +33,22 @@ describe("manifest.json (spec §9/§15, design)", () => {
   it("uses a module service worker, a top-frame-only YouTube content script and the status popup", () => {
     expect(manifest.background).toEqual({ service_worker: "background.js", type: "module" });
     expect(manifest.content_scripts).toEqual([{ matches: ["https://www.youtube.com/*"], js: [CONTENT_SCRIPT_FILE], run_at: "document_idle" }]);
-    expect(manifest.action).toEqual({ default_title: "DoMe", default_popup: "popup.html" });
+    expect(manifest.action).toEqual({
+      default_title: "DoMe",
+      default_popup: "popup.html",
+      default_icon: { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png" },
+    });
     expect(manifest.minimum_chrome_version).toBe("116");
+  });
+
+  it("ships the DoMe brand icons it names (copied from brand/exports/extension by brand/scripts/sync-consumers.mjs)", () => {
+    const icons = manifest.icons as Record<string, string>;
+    expect(icons).toEqual({ "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" });
+    for (const [size, rel] of Object.entries(icons)) {
+      const png = readFileSync(resolve(import.meta.dirname, "../public", rel));
+      expect(png.subarray(1, 4).toString("ascii")).toBe("PNG");
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([Number(size), Number(size)]);
+    }
   });
 
   it("has a restrictive CSP with no remote code or eval, and no pinned key in the development build", () => {
