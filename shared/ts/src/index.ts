@@ -49,7 +49,9 @@ export {
   type FrameDirection,
   type BridgeDirection,
 } from "./registry.ts";
+export { INPUT_BATCH_PROTOCOL_VERSION, negotiateVersion, parseVersion, versionBelow } from "./versions.ts";
 export {
+  minVersion,
   buildCommandPayload,
   signCommand,
   buildConfirmationPayload,

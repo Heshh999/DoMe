@@ -9,8 +9,10 @@ import secrets
 import uuid
 from typing import Any
 
+import pytest
 from dome_protocol import (
     KeyRecord,
+    build_hello_proof_payload,
     challenge_digest,
     dumps_compact,
     format_rfc3339,
@@ -30,9 +32,11 @@ from tests.conftest import (
     ControllerSim,
     Env,
     close_code,
+    dump,
     expect_nothing,
     free_port,
     recv_frame,
+    sql,
 )
 
 
@@ -129,7 +133,7 @@ async def test_hello_is_required_and_validated(env: Env, alice: Browser) -> None
         )
     )
     err = await recv_frame(ws, "relay_to_controller")
-    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.1"]
+    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.2"]
     assert await close_code(ws) == 4000
 
 
@@ -584,3 +588,122 @@ async def test_relay_connection_cap_returns_503(env: Env, alice: Browser, online
 
 def test_free_port_helper_is_sane() -> None:
     assert 1024 < free_port() < 65536
+
+
+# ----- protocol 1.2: new actions, per-action `since` stamps, older peers (rules.command_version_stamping) -----
+
+
+async def _phone_with(env: Env, alice: Browser, agent: AgentSim, *capabilities: str) -> ControllerSim:
+    ctrl = ControllerSim(env, alice, name="Updated phone")
+    await ctrl.pair(agent, ("status", *capabilities))
+    await ctrl.connect()
+    return ctrl
+
+
+async def test_1_2_actions_are_forwarded_verbatim_and_the_query_is_kept_nowhere(
+    env: Env, alice: Browser, online_agent: AgentSim, capfd: pytest.CaptureFixture[str]
+) -> None:
+    pc = online_agent.pc_id
+    ctrl = await _phone_with(env, alice, online_agent, "apps", "media")
+    try:
+        cid, envl = ctrl.envelope(pc, "app.maximize", target={"app_id": "notepad"})
+        assert loads_strict(envl["payload"])["protocol_version"] == "1.2"
+        await ctrl.send_envelope(pc, envl)
+        assert (await online_agent.recv_type("command"))["envelope"] == envl
+        state = {"app_id": "notepad", "window_id": "h1", "state": "maximized", "fullscreen": False, "foreground": True}
+        await online_agent.ack(cid, "accepted")
+        await online_agent.result(cid, "succeeded", result=REGISTRY.validate_result("app.maximize", state))
+        result = await ctrl.recv_type("result", command_id=cid)
+        assert result["origin"] == "agent" and result["state"] == "succeeded" and result["result"] == state
+        # a 1.2 error code with the best-known state passes through unchanged
+        cid = await ctrl.command(pc, "app.set_fullscreen", {"enabled": True}, {"app_id": "notepad"})
+        await online_agent.recv_type("command")
+        await online_agent.ack(cid, "accepted")
+        error = {"code": "FULLSCREEN_UNSUPPORTED", "message": "No full screen", "retryable": False}
+        await online_agent.result(cid, "failed", result=dict(state, state="normal"), error=error)
+        result = await ctrl.recv_type("result", command_id=cid)
+        assert result["state"] == "failed" and result["error"]["code"] == "FULLSCREEN_UNSUPPORTED"
+        # youtube.search is forwarded verbatim; the relay keeps only id, action and digest (rules.search_queries)
+        cid, envl = ctrl.envelope(pc, "youtube.search", {"query": "SENTINEL lofi"}, {"browser_instance_id": "abcdefgh"})
+        await ctrl.send_envelope(pc, envl)
+        assert (await online_agent.recv_type("command"))["envelope"] == envl
+        await online_agent.ack(cid, "accepted")
+        error = {"code": "EXTENSION_UPDATE_REQUIRED", "message": "Update the extension", "retryable": False}
+        await online_agent.result(cid, "failed", error=error)
+        assert (await ctrl.recv_type("result", command_id=cid))["error"]["code"] == "EXTENSION_UPDATE_REQUIRED"
+        # a rejected query is not echoed back, and nothing reaches the PC
+        cid = await ctrl.command(
+            pc, "youtube.search", {"query": "SENTINEL" + "q" * 100}, {"browser_instance_id": "abcdefgh"}
+        )
+        assert "SENTINEL" not in dump(await _expect_relay_failure(ctrl, cid, "INVALID_PARAMETERS"))
+        await expect_nothing(online_agent.ws)  # type: ignore[arg-type]
+        rows = (await alice.get(f"/v1/commands?pc_id={pc}", schema="commands_response"))["commands"]
+        assert rows[0]["action"] == "youtube.search" and "SENTINEL" not in dump(rows)
+        events = (await alice.get("/v1/account/security-events?limit=50"))["events"]
+        assert "SENTINEL" not in dump(events)
+        tables = sql(env.database_url, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+        for (table,) in tables:
+            stored = sql(env.database_url, f'SELECT t::text FROM "{table}" t')
+            assert not any("SENTINEL" in row[0] for row in stored), table
+        logged = capfd.readouterr()
+        assert "command.forwarded" in logged.out and "SENTINEL" not in logged.out + logged.err
+    finally:
+        await ctrl.close()
+
+
+async def test_action_stamped_below_its_since_is_refused_before_forwarding(
+    env: Env, alice: Browser, online_agent: AgentSim
+) -> None:
+    pc = online_agent.pc_id
+    ctrl = await _phone_with(env, alice, online_agent, "apps", "media")
+    try:
+        for action, params, target in (
+            ("app.maximize", {}, {"app_id": "notepad"}),
+            ("youtube.search", {"query": "lofi"}, {"browser_instance_id": "abcdefgh"}),
+        ):
+            for stamp in ("1.1", "1.0"):
+                cid = await ctrl.command(pc, action, params, target, protocol_version=stamp)
+                failure = await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
+                assert failure["error"]["detail"] == {"peer": stamp, "required": "1.2"}
+        cid = await ctrl.command(pc, "app.maximize", {}, {"app_id": "notepad"}, protocol_version="1.3")
+        await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
+        await expect_nothing(online_agent.ws)  # type: ignore[arg-type]
+        assert (await alice.get(f"/v1/commands?pc_id={pc}"))["commands"] == []
+    finally:
+        await ctrl.close()
+
+
+async def test_old_actions_stamped_1_0_or_1_1_are_still_forwarded(
+    env: Env, alice: Browser, online_agent: AgentSim, paired: ControllerSim
+) -> None:
+    pc = online_agent.pc_id
+    cid, envl = paired.envelope(pc, "windows.set_volume", {"value": 35})
+    assert loads_strict(envl["payload"])["protocol_version"] == "1.0"  # the phone stamps the action's since
+    await paired.send_envelope(pc, envl)
+    assert (await online_agent.serve_one())["command_id"] == cid
+    assert (await paired.recv_type("result", command_id=cid))["state"] == "succeeded"
+    for stamp in ("1.0", "1.1", "1.2"):  # 1.1 phones stamp their own version on everything
+        cid = await paired.command(pc, "system.ping", protocol_version=stamp)
+        payload = await online_agent.serve_one()
+        assert payload["command_id"] == cid and payload["protocol_version"] == stamp
+        assert (await paired.recv_type("result", command_id=cid))["state"] == "succeeded"
+
+
+async def test_1_1_agent_and_1_1_phone_are_still_accepted_by_a_1_2_relay(
+    env: Env, alice: Browser, linked_agent: AgentSim
+) -> None:
+    ack = await linked_agent.connect(protocol_versions=("1.0", "1.1"), registry_version="1.1")
+    assert ack["type"] == "hello_ack"
+    phone = ControllerSim(env, alice, name="1.1 phone")
+    try:
+        await phone.pair(linked_agent)
+        proof = build_hello_proof_payload(kid=phone.kid, account_id=alice.account_id)
+        proof["protocol_version"] = "1.1"  # a 1.1 phone proves possession with its own version
+        signed = sign_payload(phone.key, dumps_compact(proof)).to_dict()
+        ack = await phone.connect(proof=signed, protocol_versions=("1.1",), registry_version="1.1")
+        assert ack["controller_id"] == phone.controller_id
+        cid = await phone.command(linked_agent.pc_id, "windows.set_volume", {"value": 20}, protocol_version="1.1")
+        assert (await linked_agent.serve_one())["command_id"] == cid
+        assert (await phone.recv_type("result", command_id=cid))["state"] == "succeeded"
+    finally:
+        await phone.close()

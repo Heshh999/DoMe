@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { CAPABILITIES, ERRORS, PROTOCOL_VERSION, ProtocolError, protocolCompatible, registry, schemas, capabilitySatisfied } from "../src/index.ts";
+import { CAPABILITIES, ERRORS, LIMITS, PROTOCOL_VERSION, REGISTRY_VERSION, ProtocolError, minVersion, negotiateVersion, protocolCompatible, registry, schemas, capabilitySatisfied, versionBelow } from "../src/index.ts";
+
+const NEW_IN_1_2 = ["app.maximize", "app.restore", "app.set_fullscreen", "youtube.search", "youtube.open_result"];
+const TAB = { browser_instance_id: "abcdefgh", tab_id: 5, tab_token: "AAAAAAAAAAAAAAAAAAAAAA" };
+const RESULTS_TAB = { ...TAB, tab_token: "BBBBBBBBBBBBBBBBBBBBBB", script_attached: true, context: "other", ad_showing: false, is_live: false, in_playlist: false };
 
 describe("registry", () => {
   it("loads a consistent action registry", () => {
-    expect(PROTOCOL_VERSION).toBe("1.1");
+    expect(PROTOCOL_VERSION).toBe("1.2");
+    expect(REGISTRY_VERSION).toBe("1.2");
     const start = registry.get("input.session_start");
     expect(capabilitySatisfied(start, ["keyboard"])).toBe(true);
     expect(capabilitySatisfied(start, ["media"])).toBe(false);
@@ -74,5 +79,94 @@ describe("registry", () => {
     expect(protocolCompatible("x", ["1.0"])).toBe(false);
     expect(protocolCompatible("1.0\n", ["1.0"])).toBe(false);
     expect(protocolCompatible("１.０", ["1.0"])).toBe(false);
+    // rules.bridge_negotiation (the full table is in the shared negotiation_cases)
+    expect(negotiateVersion(["1.0"], ["1.0", "1.1"])).toBe("1.0");
+    expect(negotiateVersion(["1.0", "1.1", "1.2"], ["1.0", "1.1"])).toBe("1.1");
+    expect(negotiateVersion(["2.0"], ["1.0", "1.1"])).toBeNull();
+    expect(versionBelow("1.1", "1.2")).toBe(true);
+    expect(versionBelow("1.2", "1.2")).toBe(false);
+    expect(versionBelow("1.10", "1.2")).toBe(false);
+    expect(() => versionBelow("x", "1.2")).toThrow();
+  });
+});
+
+describe("protocol 1.2", () => {
+  it("marks every action with the version that introduced it", () => {
+    for (const [name, spec] of registry.actions()) {
+      const expected = NEW_IN_1_2.includes(name) ? "1.2" : name.startsWith("input.") ? "1.1" : "1.0";
+      expect([name, spec.since, minVersion(name)]).toEqual([name, expected, expected]);
+    }
+    expect(() => minVersion("app.nope")).toThrow(/UNKNOWN_ACTION/);
+    const fullscreen = registry.get("app.set_fullscreen");
+    expect([fullscreen.capability, fullscreen.targetName, fullscreen.resultName, fullscreen.risk, fullscreen.idempotent, fullscreen.routineAllowed]).toEqual(["apps", "window_target", "app_window_state_result", "moderate", false, false]);
+    expect(registry.get("app.maximize").routineAllowed).toBe(true);
+    expect(registry.get("youtube.search").targetName).toBe("youtube_browser_target");
+    expect(registry.get("youtube.search").coalesce).toBeNull();
+    for (const code of ["WINDOW_STATE_UNCHANGED", "FULLSCREEN_UNSUPPORTED", "APP_ELEVATED", "SEARCH_RESULT_UNAVAILABLE", "EXTENSION_UPDATE_REQUIRED"]) {
+      expect(ERRORS[code]?.retryable).toBe(false);
+    }
+    expect(LIMITS.youtube_search_query_max_chars).toBe(100);
+    expect(LIMITS.youtube_search_results_max).toBe(10);
+  });
+
+  it("validates the new params and the youtube_browser_target (tab_id and tab_token only together)", () => {
+    expect(registry.validateParams("youtube.search", { query: "lofi beats" })).toEqual({ query: "lofi beats" });
+    expect(registry.validateParams("youtube.search", { query: "🎵".repeat(100) })).toBeTruthy(); // 100 code points
+    for (const params of [{}, { query: "" }, { query: "x".repeat(101) }, { query: "lofi\n" }, { query: " lofi" }, { query: "lo\u0085fi" }, { query: "lofi", open_index: 1 }]) {
+      expect(() => registry.validateParams("youtube.search", params)).toThrow(/INVALID_PARAMETERS/);
+    }
+    expect(registry.validateTarget("youtube.search", { browser_instance_id: "abcdefgh" })).toEqual({ browser_instance_id: "abcdefgh" });
+    expect(registry.validateTarget("youtube.search", TAB)).toEqual(TAB);
+    expect(() => registry.validateTarget("youtube.search", { browser_instance_id: "abcdefgh", tab_id: 5 })).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateTarget("youtube.search", { browser_instance_id: "abcdefgh", tab_token: TAB.tab_token })).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateTarget("youtube.search", { tab_id: 5, tab_token: TAB.tab_token })).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateTarget("youtube.search", null)).toThrow(/TARGET_REQUIRED/);
+    expect(registry.validateParams("youtube.open_result", { index: 3, video_id: "dQw4w9WgXcQ" })).toBeTruthy();
+    for (const params of [{ index: 0 }, { index: 11 }, { index: "1" }, { index: 1, video_id: "../x" }, {}]) {
+      expect(() => registry.validateParams("youtube.open_result", params)).toThrow(/INVALID_PARAMETERS/);
+    }
+    expect(() => registry.validateTarget("youtube.open_result", { browser_instance_id: "abcdefgh" })).toThrow(/INVALID_PARAMETERS/);
+    expect(registry.validateParams("app.set_fullscreen", { enabled: true })).toEqual({ enabled: true });
+    expect(() => registry.validateParams("app.set_fullscreen", {})).toThrow(/INVALID_PARAMETERS/);
+    expect(() => registry.validateParams("app.maximize", { state: "maximized" })).toThrow(/INVALID_PARAMETERS/);
+    expect(registry.validateTarget("app.restore", { app_id: "notepad", window_id: "h1234" })).toBeTruthy();
+  });
+
+  it("never echoes a rejected query in the error message", () => {
+    const sentinel = `SENTINEL-${"q".repeat(100)}`;
+    for (const query of [sentinel, `${sentinel.slice(0, 20)}\n`, ` ${sentinel.slice(0, 20)}`]) {
+      try {
+        registry.validateParams("youtube.search", { query });
+        throw new Error("accepted");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ProtocolError);
+        expect(String((e as ProtocolError).message)).not.toContain("SENTINEL");
+      }
+    }
+  });
+
+  it("validates the new result shapes and leaves the 1.1 shapes unchanged", () => {
+    const state = { app_id: "notepad", window_id: "h1234", state: "maximized", fullscreen: false, foreground: true };
+    for (const action of ["app.maximize", "app.restore", "app.set_fullscreen"]) expect(registry.validateResult(action, state)).toEqual(state);
+    expect(() => registry.validateResult("app.maximize", { ...state, state: "fullscreen" })).toThrow(ProtocolError);
+    expect(() => registry.validateResult("app.maximize", { ...state, title: "x" })).toThrow(ProtocolError);
+    const items = Array.from({ length: 10 }, (_, i) => ({ index: i + 1, video_id: `vid${i + 1}`, title: `Video ${i + 1}` }));
+    expect(registry.validateResult("youtube.search", { tab: RESULTS_TAB, results: items })).toBeTruthy();
+    expect(registry.validateResult("youtube.search", { tab: RESULTS_TAB, results: [] })).toBeTruthy();
+    expect(() => registry.validateResult("youtube.search", { tab: RESULTS_TAB, results: [...items, { index: 10, video_id: "x", title: "y" }] })).toThrow(ProtocolError);
+    expect(() => registry.validateResult("youtube.search", { tab: RESULTS_TAB, results: items, query: "lofi" })).toThrow(ProtocolError);
+    expect(() => registry.validateResult("youtube.search", { tab: RESULTS_TAB, results: [{ index: 0, video_id: "x", title: "y" }] })).toThrow(ProtocolError);
+    // app_window is unchanged: a 1.1 phone must accept a new agent's app.list
+    expect(() => registry.validateResult("app.list", { apps: [{ app_id: "notepad", display_name: "Notepad", running: true, windows: [{ window_id: "h1", title: "x", maximized: true }] }] })).toThrow(ProtocolError);
+  });
+
+  it("validates the new bridge ops and the search result", () => {
+    const rid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: rid, op: "search", args: { query: "lofi beats" }, timeout_ms: 15000 });
+    schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: rid, op: "open_result", args: { tab_id: 5, tab_token: TAB.tab_token, index: 2, video_id: "dQw4w9WgXcQ" } });
+    expect(() => schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: rid, op: "search", args: { query: "x".repeat(101) } })).toThrow(ProtocolError);
+    expect(() => schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: rid, op: "read_results", args: {} })).toThrow(ProtocolError);
+    schemas.validateBridgeFrame("extension_to_agent", { type: "bridge_response", request_id: rid, ok: true, result: { tab: RESULTS_TAB, results: [{ index: 1, video_id: "v1", title: "t" }] } });
+    schemas.validateBridgeFrame("extension_to_agent", { type: "bridge_response", request_id: rid, ok: true, result: { tab: RESULTS_TAB } });
   });
 });

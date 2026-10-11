@@ -7,7 +7,6 @@ never sign a payload that names another controller's id (and thereby another gra
 
 from __future__ import annotations
 
-import re
 import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -21,8 +20,29 @@ from .registry import ActionSpec, Registry, load_registry
 from .schemas import Schemas, load_schemas
 from .signing import Envelope, verify_envelope
 from .timeutil import check_command_window, format_rfc3339, now_utc, parse_rfc3339
+from .versions import INPUT_BATCH_PROTOCOL_VERSION, negotiate_version, protocol_compatible, version_below
 
-_VERSION_RE = re.compile(r"\A([0-9]+)\.([0-9]+)\Z", re.ASCII)
+# The version helpers live in .versions (the registry needs them while loading) and are re-exported here.
+__all__ = [
+    "INPUT_BATCH_PROTOCOL_VERSION",
+    "KEYBOARD_EVENT_TYPES",
+    "POINTER_EVENT_TYPES",
+    "KeyRecord",
+    "KeyResolver",
+    "VerifiedCommand",
+    "VerifiedConfirmation",
+    "VerifiedHelloProof",
+    "VerifiedInputBatch",
+    "build_hello_proof_payload",
+    "build_input_batch_payload",
+    "input_event_capabilities",
+    "negotiate_version",
+    "protocol_compatible",
+    "verify_and_parse_command",
+    "verify_and_parse_confirmation",
+    "verify_and_parse_input_batch",
+    "verify_hello_proof",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,19 +104,14 @@ class VerifiedConfirmation:
         return self.payload["decision"] == "approve"
 
 
-def protocol_compatible(peer_version: str, supported: tuple[str, ...]) -> bool:
-    if not isinstance(peer_version, str):
-        return False
-    m = _VERSION_RE.match(peer_version)
-    if not m:
-        return False
-    major, minor = int(m.group(1)), int(m.group(2))
-    best_minor = -1
-    for v in supported:
-        sm = _VERSION_RE.match(v)
-        if sm and int(sm.group(1)) == major:
-            best_minor = max(best_minor, int(sm.group(2)))
-    return best_minor >= 0 and minor <= best_minor
+def _require_since(payload_version: str, since: str) -> None:
+    """rules.command_version_stamping: a payload stamped below the version that defines it is refused."""
+    if version_below(payload_version, since):
+        raise ProtocolError(
+            "PROTOCOL_INCOMPATIBLE",
+            f"stamped protocol version is below {since}, which introduced it",
+            detail={"peer": payload_version, "required": since},
+        )
 
 
 def _verify(raw_envelope: Any, resolve_key: KeyResolver, registry: Registry) -> tuple[Envelope, dict[str, Any], KeyRecord]:
@@ -152,6 +167,7 @@ def verify_and_parse_command(
         max_skew_seconds=registry.limits["max_clock_skew_seconds"],
     )
     spec = registry.get(payload["action"])
+    _require_since(payload["protocol_version"], spec.since)
     params = registry.validate_params(spec.name, payload["params"])
     target = registry.validate_target(spec.name, payload["target"])
     return VerifiedCommand(
@@ -319,7 +335,8 @@ def build_input_batch_payload(
     issued = now or now_utc()
     return {
         "type": "input_batch",
-        "protocol_version": registry.protocol_version,
+        # rules.command_version_stamping: the version that defined input batches, so older PCs accept it
+        "protocol_version": INPUT_BATCH_PROTOCOL_VERSION,
         "account_id": account_id,
         "controller_id": controller_id,
         "target_pc_id": target_pc_id,
@@ -348,6 +365,7 @@ def verify_and_parse_input_batch(
     schemas.validate_input_batch_payload(payload)
     if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
         raise ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version")
+    _require_since(payload["protocol_version"], INPUT_BATCH_PROTOCOL_VERSION)
     _bind(payload, key)
     skew = registry.limits["max_clock_skew_seconds"]
     check_command_window(

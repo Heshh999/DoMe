@@ -387,6 +387,107 @@
           "minimum": 0
         }
       }
+    },
+    "app_window_state_result": {
+      "description": "Window placement read back after app.maximize / app.restore / app.set_fullscreen (since 1.2). On failure (WINDOW_STATE_UNCHANGED, FULLSCREEN_UNSUPPORTED, FOCUS_DENIED, ...) the same shape may carry the best-known state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "window_id",
+        "state",
+        "fullscreen",
+        "foreground"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "maxLength": 64
+        },
+        "window_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "minimized",
+            "maximized"
+          ]
+        },
+        "fullscreen": {
+          "type": "boolean"
+        },
+        "foreground": {
+          "type": "boolean"
+        }
+      }
+    },
+    "youtube_search_item": {
+      "description": "One video result of youtube.search, in page order (since 1.2). Ads, shorts shelves and other renderers are not results.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "video_id",
+        "title"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "1-based position among the returned results; youtube.open_result takes it"
+        },
+        "video_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Untrusted display text"
+        },
+        "channel": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Untrusted display text"
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "is_live": {
+          "type": "boolean"
+        }
+      }
+    },
+    "youtube_search_result": {
+      "description": "Result of youtube.search (since 1.2): the results-page tab (with its NEW tab_token, because the page loaded again; no title) and up to 10 video results. Never echoes the query (rules.search_queries).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tab",
+        "results"
+      ],
+      "properties": {
+        "tab": {
+          "$ref": "relay-frames.schema.json#/$defs/youtube_tab"
+        },
+        "results": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/youtube_search_item"
+          }
+        }
+      }
     }
   }
 }

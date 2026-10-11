@@ -8,10 +8,12 @@ This package gives the backend and the Windows agent one tested implementation o
 * RFC 7638 key ids and JWK conversion
 * action registry loading and parameter/target validation
 * relay / bridge frame validation by direction
+* protocol version compatibility, negotiation and per-action stamping (``since``)
 * small helpers (timestamps, digests, pairing verification codes)
 """
 
 from .commands import (
+    INPUT_BATCH_PROTOCOL_VERSION,
     KeyRecord,
     VerifiedCommand,
     VerifiedConfirmation,
@@ -20,6 +22,7 @@ from .commands import (
     build_hello_proof_payload,
     build_input_batch_payload,
     input_event_capabilities,
+    negotiate_version,
     protocol_compatible,
     verify_and_parse_command,
     verify_and_parse_confirmation,
@@ -52,6 +55,7 @@ from .strict_json import dumps_compact, loads_strict
 from .timeutil import format_rfc3339, now_utc, parse_rfc3339
 
 __all__ = [
+    "INPUT_BATCH_PROTOCOL_VERSION",
     "ActionSpec",
     "Envelope",
     "KeyRecord",
@@ -77,6 +81,7 @@ __all__ = [
     "load_registry",
     "load_schemas",
     "loads_strict",
+    "negotiate_version",
     "normalize_pairing_code",
     "now_utc",
     "pairing_code_handle",

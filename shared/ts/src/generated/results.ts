@@ -757,3 +757,101 @@ export interface InputSessionStopResult {
   stopped: boolean;
   released_holds: number;
 }
+/**
+ * Window placement read back after app.maximize / app.restore / app.set_fullscreen (since 1.2). On failure (WINDOW_STATE_UNCHANGED, FULLSCREEN_UNSUPPORTED, FOCUS_DENIED, ...) the same shape may carry the best-known state.
+ *
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "app_window_state_result".
+ */
+export interface AppWindowStateResult {
+  app_id: string;
+  window_id: string;
+  state: "normal" | "minimized" | "maximized";
+  fullscreen: boolean;
+  foreground: boolean;
+}
+/**
+ * One video result of youtube.search, in page order (since 1.2). Ads, shorts shelves and other renderers are not results.
+ *
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "youtube_search_item".
+ */
+export interface YoutubeSearchItem {
+  /**
+   * 1-based position among the returned results; youtube.open_result takes it
+   */
+  index: number;
+  video_id: string;
+  /**
+   * Untrusted display text
+   */
+  title: string;
+  /**
+   * Untrusted display text
+   */
+  channel?: string;
+  duration_seconds?: number;
+  is_live?: boolean;
+}
+/**
+ * Result of youtube.search (since 1.2): the results-page tab (with its NEW tab_token, because the page loaded again; no title) and up to 10 video results. Never echoes the query (rules.search_queries).
+ *
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "youtube_search_result".
+ */
+export interface YoutubeSearchResult {
+  tab: YoutubeTab;
+  /**
+   * @maxItems 10
+   */
+  results:
+    | []
+    | [YoutubeSearchItem]
+    | [YoutubeSearchItem, YoutubeSearchItem]
+    | [YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem]
+    | [YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem]
+    | [YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem]
+    | [YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem, YoutubeSearchItem]
+    | [
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem
+      ]
+    | [
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem
+      ]
+    | [
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem
+      ]
+    | [
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem,
+        YoutubeSearchItem
+      ];
+}
