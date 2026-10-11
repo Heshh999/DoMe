@@ -6,6 +6,7 @@ exercised on a Windows device (README → verification checklist)."""
 from __future__ import annotations
 
 import ctypes
+import sys
 from typing import Any
 
 import pytest
@@ -188,6 +189,7 @@ def test_foreground_never_reads_a_browsers_window_title() -> None:
     assert leaky.as_result() == {"process_name": "msedge.exe", "browser": "edge", "elevated": False}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the behaviour off Windows; on Windows the real call works")
 def test_windows_adapter_is_not_constructible_off_windows_without_dlls() -> None:
     adapter = w.WindowsInput()
     with pytest.raises((AttributeError, OSError)):
