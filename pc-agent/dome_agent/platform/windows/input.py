@@ -24,9 +24,12 @@ functions so it can be unit-tested on Linux; only :class:`WindowsInput` loads ``
             ``GetLastError() == ERROR_ACCESS_DENIED`` while :meth:`WindowsInput.input_restricted` is
             true → ``INPUT_RESTRICTED``. The return value alone is never read as "blocked by UIPI".
 * foreground: ``GetForegroundWindow`` → ``GetWindowThreadProcessId`` → ``GetWindowTextW`` + ``psutil``
-            process name; browser from the executable name; elevation by comparing the foreground
-            process's token integrity level with ours (``OpenProcess`` + ``GetTokenInformation``
-            ``TokenIntegrityLevel``) — unknown (None) when the process cannot be opened
+            process name; browser from the executable name (a browser's title is never read: it is its
+            tab's page title, and a YouTube results page's is the search query); elevation by comparing
+            the foreground process's token integrity level with ours (``OpenProcess`` + ``GetTokenInformation``
+            ``TokenIntegrityLevel``) — unknown (None) when the process cannot be opened. The integrity
+            check is the module-level :func:`process_is_elevated`, shared with the window actions
+            (``window_control``: a window of an elevated process is ``APP_ELEVATED``)
 """
 
 from __future__ import annotations
@@ -37,7 +40,14 @@ from typing import Any
 
 from dome_protocol import ProtocolError
 
-from ..protocol import NAMED_KEYS, POINTER_BUTTONS, SHORTCUTS, BrowserKind, ForegroundApp, InputHoldError
+from ..protocol import (
+    NAMED_KEYS,
+    POINTER_BUTTONS,
+    SHORTCUTS,
+    ForegroundApp,
+    InputHoldError,
+    browser_for_process,
+)
 
 # ----- Win32 constants -------------------------------------------------------------------------------
 
@@ -119,14 +129,6 @@ BUTTON_FLAGS: dict[str, tuple[int, int]] = {
     "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
     "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
     "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
-}
-BROWSER_PROCESSES: dict[str, BrowserKind] = {
-    "chrome.exe": "chrome",
-    "msedge.exe": "edge",
-    "firefox.exe": "other",
-    "brave.exe": "other",
-    "opera.exe": "other",
-    "vivaldi.exe": "other",
 }
 assert set(VK_FOR_KEY) == set(NAMED_KEYS)
 assert set(SHORTCUT_KEY) == set(SHORTCUTS)
@@ -328,8 +330,90 @@ def shortcut_release_inputs(name: str, scan_for: Any = None) -> list[INPUT]:
     return [key_input(vk, up=True, scan=scan), key_input(VK_CONTROL, up=True, scan=ctrl_scan)]
 
 
-def browser_for_process(process_name: str) -> BrowserKind | None:
-    return BROWSER_PROCESSES.get(process_name.lower())
+# ----- process integrity level (shared with window_control) -----------------------------------------
+
+_security: tuple[Any, Any] | None = None
+_own_integrity: int | None = None
+
+
+def _security_libs() -> tuple[Any, Any]:
+    """``kernel32`` + ``advapi32`` with the declarations the integrity check needs (loaded once)."""
+    global _security
+    if _security is None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        advapi32.OpenProcessToken.restype = wintypes.BOOL
+        advapi32.GetTokenInformation.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        advapi32.GetTokenInformation.restype = wintypes.BOOL
+        advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+        advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+        advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
+        _security = (kernel32, advapi32)
+    return _security
+
+
+def token_integrity_level(process_handle: Any) -> int | None:
+    """The mandatory integrity RID of the process's token, or None when it cannot be read."""
+    kernel32, advapi32 = _security_libs()
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(process_handle, TOKEN_QUERY, ctypes.byref(token)):
+        return None
+    try:
+        needed = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, None, 0, ctypes.byref(needed))
+        if needed.value == 0:
+            return None
+        buffer = ctypes.create_string_buffer(needed.value)
+        if not advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, buffer, needed.value, ctypes.byref(needed)):
+            return None
+        # TOKEN_MANDATORY_LABEL { SID_AND_ATTRIBUTES Label { PSID Sid; DWORD Attributes; } }
+        sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        if not sid:
+            return None
+        count = advapi32.GetSidSubAuthorityCount(sid).contents.value
+        return int(advapi32.GetSidSubAuthority(sid, count - 1).contents.value)
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def own_integrity_level() -> int | None:
+    global _own_integrity
+    if _own_integrity is None:
+        kernel32, _advapi32 = _security_libs()
+        _own_integrity = token_integrity_level(kernel32.GetCurrentProcess())
+    return _own_integrity
+
+
+def process_is_elevated(pid: int) -> bool | None:
+    """True when the process runs at a higher integrity level than the agent; None when undeterminable."""
+    if pid <= 0:
+        return None
+    kernel32, _advapi32 = _security_libs()
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None  # access denied is typical for elevated processes, but it is not proof: report unknown
+    try:
+        theirs = token_integrity_level(handle)
+    finally:
+        kernel32.CloseHandle(handle)
+    ours = own_integrity_level()
+    if theirs is None or ours is None:
+        return None
+    return theirs > ours
 
 
 # ----- the adapter ----------------------------------------------------------------------------------
@@ -340,12 +424,9 @@ class WindowsInput:
 
     def __init__(self) -> None:
         self._user32: Any = None
-        self._kernel32: Any = None
-        self._advapi32: Any = None
-        self._own_integrity: int | None = None
 
     # -- DLL access --
-    def _libs(self) -> tuple[Any, Any, Any]:
+    def _libs(self) -> Any:
         if self._user32 is None:
             user32 = ctypes.WinDLL("user32", use_last_error=True)
             user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
@@ -368,31 +449,11 @@ class WindowsInput:
                 ctypes.POINTER(wintypes.DWORD),
             ]
             user32.GetUserObjectInformationW.restype = wintypes.BOOL
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-            kernel32.OpenProcess.restype = wintypes.HANDLE
-            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-            advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-            advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
-            advapi32.OpenProcessToken.restype = wintypes.BOOL
-            advapi32.GetTokenInformation.argtypes = [
-                wintypes.HANDLE,
-                ctypes.c_int,
-                ctypes.c_void_p,
-                wintypes.DWORD,
-                ctypes.POINTER(wintypes.DWORD),
-            ]
-            advapi32.GetTokenInformation.restype = wintypes.BOOL
-            advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
-            advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
-            advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wintypes.DWORD]
-            advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
-            self._user32, self._kernel32, self._advapi32 = user32, kernel32, advapi32
-        return self._user32, self._kernel32, self._advapi32
+            self._user32 = user32
+        return self._user32
 
     def _scan(self, vk: int) -> int:
-        user32, _k, _a = self._libs()
+        user32 = self._libs()
         try:
             return int(user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)) & 0xFFFF
         except OSError:
@@ -402,7 +463,7 @@ class WindowsInput:
     def _send(self, inputs: list[INPUT], what: str) -> None:
         if not inputs:
             return
-        user32, _k, _a = self._libs()
+        user32 = self._libs()
         array = (INPUT * len(inputs))(*inputs)
         ctypes.set_last_error(0)
         inserted = int(user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT)))
@@ -475,17 +536,19 @@ class WindowsInput:
         return len(inputs)
 
     def foreground(self) -> ForegroundApp | None:
-        user32, _k, _a = self._libs()
+        user32 = self._libs()
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
         pid = wintypes.DWORD(0)
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        buffer = ctypes.create_unicode_buffer(MAX_TITLE_CHARS)
-        length = user32.GetWindowTextW(hwnd, buffer, MAX_TITLE_CHARS)
-        title = buffer.value[:200] if length > 0 else ""
         process_name = self._process_name(int(pid.value))
         browser = browser_for_process(process_name)
+        title = ""
+        if browser is None:  # a browser's title is its tab's page title (a search query): never read
+            buffer = ctypes.create_unicode_buffer(MAX_TITLE_CHARS)
+            length = user32.GetWindowTextW(hwnd, buffer, MAX_TITLE_CHARS)
+            title = buffer.value[:200] if length > 0 else ""
         return ForegroundApp(
             process_name=process_name[:64],
             window_title=title,
@@ -512,7 +575,7 @@ class WindowsInput:
 
     def secure_desktop_active(self) -> bool:
         """The input desktop cannot be opened (secure desktop / lock screen) or is not ``Default``."""
-        user32, _k, _a = self._libs()
+        user32 = self._libs()
         handle = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
         if not handle:
             return True
@@ -527,7 +590,7 @@ class WindowsInput:
             user32.CloseDesktop(handle)
 
     def _foreground_elevated(self) -> bool | None:
-        user32, _k, _a = self._libs()
+        user32 = self._libs()
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
@@ -535,49 +598,7 @@ class WindowsInput:
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         return self._elevated(int(pid.value))
 
-    def _integrity_of(self, process_handle: Any) -> int | None:
-        _u, kernel32, advapi32 = self._libs()
-        token = wintypes.HANDLE()
-        if not advapi32.OpenProcessToken(process_handle, TOKEN_QUERY, ctypes.byref(token)):
-            return None
-        try:
-            needed = wintypes.DWORD(0)
-            advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, None, 0, ctypes.byref(needed))
-            if needed.value == 0:
-                return None
-            buffer = ctypes.create_string_buffer(needed.value)
-            if not advapi32.GetTokenInformation(
-                token, TOKEN_INTEGRITY_LEVEL, buffer, needed.value, ctypes.byref(needed)
-            ):
-                return None
-            # TOKEN_MANDATORY_LABEL { SID_AND_ATTRIBUTES Label { PSID Sid; DWORD Attributes; } }
-            sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            if not sid:
-                return None
-            count = advapi32.GetSidSubAuthorityCount(sid).contents.value
-            return int(advapi32.GetSidSubAuthority(sid, count - 1).contents.value)
-        finally:
-            kernel32.CloseHandle(token)
-
-    def _own_integrity_level(self) -> int | None:
-        if self._own_integrity is None:
-            _u, kernel32, _a = self._libs()
-            self._own_integrity = self._integrity_of(kernel32.GetCurrentProcess())
-        return self._own_integrity
-
-    def _elevated(self, pid: int) -> bool | None:
+    @staticmethod
+    def _elevated(pid: int) -> bool | None:
         """True when the process runs at a higher integrity level than we do; None when undeterminable."""
-        if pid <= 0:
-            return None
-        _u, kernel32, _a = self._libs()
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return None  # access denied is typical for elevated processes, but it is not proof: report unknown
-        try:
-            theirs = self._integrity_of(handle)
-        finally:
-            kernel32.CloseHandle(handle)
-        ours = self._own_integrity_level()
-        if theirs is None or ours is None:
-            return None
-        return theirs > ours
+        return process_is_elevated(pid)

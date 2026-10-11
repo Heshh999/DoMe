@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dome_protocol import ProtocolError
 
-from .protocol import AppWindow, ForegroundApp, MediaSession, PlatformSet, VolumeState
+from .protocol import AppWindow, ForegroundApp, MediaSession, PlatformSet, VolumeState, WindowState
 
 
 def _unsupported(what: str) -> ProtocolError:
@@ -65,6 +65,30 @@ class UnsupportedApps:
         raise _unsupported("application control")
 
     def request_close(self, window_id: str) -> None:
+        raise _unsupported("application control")
+
+    def window_state(self, window_id: str) -> WindowState:
+        raise _unsupported("application control")
+
+    def maximize(
+        self, window_id: str, *, deadline: float | None = None, keys_held: bool = False, fullscreen_f11: bool = False
+    ) -> WindowState:
+        raise _unsupported("application control")
+
+    def restore(
+        self, window_id: str, *, deadline: float | None = None, keys_held: bool = False, fullscreen_f11: bool = False
+    ) -> WindowState:
+        raise _unsupported("application control")
+
+    def set_fullscreen(
+        self,
+        window_id: str,
+        enabled: bool,
+        *,
+        deadline: float | None = None,
+        keys_held: bool = False,
+        fullscreen_f11: bool = False,
+    ) -> WindowState:
         raise _unsupported("application control")
 
 

@@ -51,7 +51,7 @@ from . import __version__
 from .actions.context import AgentServices
 from .actions.power import PowerManager
 from .api import ApiClient
-from .approved_apps import ApprovedApps
+from .approved_apps import ApprovedApps, f11_built_in
 from .authz import MISMATCH_CODES, Authorizer, Decision
 from .bridge.server import BridgeServer
 from .confirmations import ConfirmationError, ConfirmationManager, compute_target_state_digest
@@ -68,7 +68,7 @@ from .queue import Emitter, Executor
 from .relay_client import ConnectionState, RelayClient, StopReason, TokenManager
 from .settings import Settings
 from .state import ReadFailureLog, StateAggregator
-from .store import Store
+from .store import ApprovedAppRow, Store
 from .ui import AgentUI, NullUI, StatusView
 
 log = get_logger(__name__)
@@ -751,6 +751,39 @@ class Agent:
         self.state.request_update()
         return True
 
+    async def approve_app_local(
+        self,
+        app_id: str,
+        exe_path: str,
+        display_name: str | None = None,
+        *,
+        replace: bool = False,
+        fullscreen_f11: bool | None = None,
+    ) -> ApprovedAppRow:
+        """Approve (or re-approve) a program on this PC. ``dome-agent approve-app`` (control channel) and the
+        tray's Approved apps window both come here, so the rules are identical (:meth:`ApprovedApps.approve`;
+        ApprovalError on refusal). The file is hashed in a worker thread: an Electron app is ~150 MB, and
+        neither the event loop nor the Tk thread may stall on it. ``fullscreen_f11`` None keeps a re-approved
+        app's *Full screen with F11* choice."""
+        row = await asyncio.to_thread(
+            self.apps.approve, app_id, exe_path, display_name, replace=replace, fullscreen_f11=fullscreen_f11
+        )
+        self.state.request_update()  # on the loop: request_update is a no-op from another thread
+        return row
+
+    async def set_app_fullscreen_f11_local(self, app_id: str, enabled: bool) -> ApprovedAppRow | None:
+        """*Full screen with F11* for one approved app, from the tray's Approved apps window or
+        ``dome-agent app-option`` (never from the phone). None when the app is not approved; ApprovalError
+        for an invalid ``app_id``. One indexed UPDATE, so it runs inline like every store call."""
+        row = self.apps.set_fullscreen_f11(app_id, enabled)
+        self.state.request_update()
+        return row
+
+    async def remove_app_local(self, app_id: str) -> bool:
+        removed = await asyncio.to_thread(self.apps.remove, app_id)
+        self.state.request_update()
+        return removed
+
     def status(self) -> dict[str, Any]:
         grants = [
             {
@@ -900,21 +933,55 @@ class Agent:
             released = await self.input.end("stopped")
             return {"released_holds": released}
 
+        def fullscreen_f11_arg(args: dict[str, Any], *, required: bool) -> bool | None:
+            value = args.get("fullscreen_f11")
+            if value is None and not required:
+                return None
+            if not isinstance(value, bool):
+                raise ControlError("INVALID_PARAMETERS", "fullscreen_f11 must be true or false")
+            return value
+
         async def approve_app(args: dict[str, Any]) -> dict[str, Any]:
+            fullscreen_f11 = fullscreen_f11_arg(args, required=False)
             try:
-                row = self.apps.approve(str(args["app_id"]), str(args["exe_path"]), args.get("display_name"))
+                row = await self.approve_app_local(
+                    str(args["app_id"]),
+                    str(args["exe_path"]),
+                    args.get("display_name"),
+                    replace=args.get("replace") is True,
+                    fullscreen_f11=fullscreen_f11,
+                )
             except ValueError as exc:
                 raise ControlError("INVALID_APP", str(exc)) from exc
-            self.state.request_update()
             return {
                 "app_id": row.app_id,
                 "display_name": row.display_name,
                 "exe_path": row.exe_path,
                 "exe_sha256": row.exe_sha256,
+                "fullscreen_f11": row.fullscreen_f11,
+                "f11_built_in": f11_built_in(row.exe_path),
             }
 
         async def remove_app(args: dict[str, Any]) -> dict[str, Any]:
-            return {"removed": self.apps.remove(str(args["app_id"]))}
+            try:
+                return {"removed": await self.remove_app_local(str(args["app_id"]))}
+            except ValueError as exc:
+                raise ControlError("INVALID_APP", str(exc)) from exc
+
+        async def app_option(args: dict[str, Any]) -> dict[str, Any]:
+            enabled = fullscreen_f11_arg(args, required=True)
+            try:
+                row = await self.set_app_fullscreen_f11_local(str(args["app_id"]), bool(enabled))
+            except ValueError as exc:
+                raise ControlError("INVALID_APP", str(exc)) from exc
+            if row is None:
+                raise ControlError("UNKNOWN_APP", "No approved app has that id.")
+            return {
+                "app_id": row.app_id,
+                "display_name": row.display_name,
+                "fullscreen_f11": row.fullscreen_f11,
+                "f11_built_in": f11_built_in(row.exe_path),
+            }
 
         async def reconnect(_: dict[str, Any]) -> dict[str, Any]:
             if self.relay is None:
@@ -949,6 +1016,7 @@ class Agent:
             "input_stop": input_stop,
             "approve_app": approve_app,
             "remove_app": remove_app,
+            "app_option": app_option,
             "reconnect": reconnect,
             "diagnostics": diagnostics,
             "power_cancel": power_cancel,

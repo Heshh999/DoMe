@@ -73,9 +73,21 @@ let rt: Runtime;
 let timers: FakeTimers;
 let frames: Array<() => void>;
 
+/**
+ * Wait until `cond` holds, for at most `ms` of wall-clock time. Every command and batch is signed with
+ * WebCrypto ECDSA, which on a loaded machine can take longer than any fixed number of flush rounds,
+ * so tests wait for what they are about to assert instead. The assertion that follows reports a miss.
+ */
+async function until(cond: () => boolean, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await flush(1);
+}
+
+/** Run the scheduled animation frames, then wait until every batch they queued is signed and sent. */
 async function runFrames(): Promise<void> {
   const fns = frames.splice(0, frames.length);
   for (const fn of fns) fn();
+  await rt.input.whenSent();
   await flush(8);
 }
 
@@ -115,9 +127,15 @@ function answerStart(overrides: Partial<{ pointer: boolean; keyboard: boolean; s
   });
 }
 
+/** Wait for one more `input.session_start` command than `before` (it is signed asynchronously). */
+async function untilStartSent(before: number): Promise<void> {
+  await until(() => commandFrames("input.session_start").length > before);
+}
+
 async function startLive(): Promise<void> {
+  const before = commandFrames("input.session_start").length;
   const p = rt.input.start(PC);
-  await flush();
+  await untilStartSent(before);
   answerStart();
   await p;
   expect(rt.input.snapshot.phase).toBe("live");
@@ -232,19 +250,20 @@ describe("InputSessionClient", () => {
     await startLive();
     expect(batchFrames()).toHaveLength(0);
     await timers.advance(KEEPALIVE_MS);
-    await flush();
+    await rt.input.whenSent();
     let batches = batchFrames();
     expect(batches).toHaveLength(1);
     expect(batches[0]!.payload.events).toEqual([]);
     expect(batches[0]!.payload.seq).toBe(1);
     await timers.advance(KEEPALIVE_MS * 3);
-    await flush();
+    await rt.input.whenSent();
     expect(batchFrames()).toHaveLength(4);
     // real traffic resets the cadence: a batch just sent means no keepalive at the next tick
     rt.input.enqueue({ type: "pointer_move", dx: 1, dy: 0 });
     await runFrames();
     const before = batchFrames().length;
     await timers.advance(KEEPALIVE_MS - 100);
+    await rt.input.whenSent();
     await flush();
     batches = batchFrames();
     expect(batches.length).toBe(before);
@@ -302,7 +321,7 @@ describe("InputSessionClient", () => {
 
   it("INPUT_SESSION_OWNED marks the takeover prompt; a takeover start carries params.takeover=true", async () => {
     const p = rt.input.start(PC);
-    await flush();
+    await untilStartSent(0);
     const start = commandFrames("input.session_start")[0]!;
     socket.receive({ type: "result", command_id: start.payload.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 3, error: { code: "INPUT_SESSION_OWNED", message: "owned", retryable: false } });
     await p;
@@ -310,7 +329,7 @@ describe("InputSessionClient", () => {
     expect(rt.input.snapshot.owned).toBe(true);
     expect(rt.input.snapshot.problem?.code).toBe("INPUT_SESSION_OWNED");
     const p2 = rt.input.start(PC, { takeover: true });
-    await flush();
+    await untilStartSent(1);
     const starts = commandFrames("input.session_start");
     expect(starts).toHaveLength(2);
     expect(starts[1]!.payload.params).toEqual({ takeover: true });
@@ -325,7 +344,7 @@ describe("InputSessionClient", () => {
     rt.input.enqueue({ type: "pointer_move", dx: 5, dy: 5 });
     Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));
-    await flush();
+    await until(() => commandFrames("input.session_stop").length > 0);
     const stops = commandFrames("input.session_stop");
     expect(stops).toHaveLength(1);
     expect(stops[0]!.payload.params).toEqual({ input_session_id: SESSION_ID });
@@ -338,14 +357,15 @@ describe("InputSessionClient", () => {
   it("switching the selected PC stops the old session before anything can target the new PC", async () => {
     await startLive();
     await useDevicesStore.getState().select(OTHER_PC);
-    await flush();
+    await until(() => commandFrames("input.session_stop").length > 0);
     expect(commandFrames("input.session_stop")).toHaveLength(1);
     expect(rt.input.snapshot.phase).toBe("idle");
     // starting on the other PC while an old session is still recorded also stops it first
     useDevicesStore.setState({ selectedPcId: PC });
     await startLive();
     const p = rt.input.start(OTHER_PC);
-    await flush();
+    // two signatures in a row: the stop for the old session, then the start on the new PC
+    await until(() => commandFrames("input.session_start").at(-1)?.frame.pc_id === OTHER_PC);
     expect(commandFrames("input.session_stop")).toHaveLength(2);
     const starts = commandFrames("input.session_start");
     expect(starts[starts.length - 1]!.frame.pc_id).toBe(OTHER_PC);
@@ -405,7 +425,7 @@ describe("InputSessionClient", () => {
 
   it("a session start whose grant lacks keyboard refuses text events locally; pointer-only flags are honoured", async () => {
     const p = rt.input.start(PC);
-    await flush();
+    await untilStartSent(0);
     answerStart({ keyboard: false });
     await p;
     expect(rt.input.enqueue({ type: "text", text: "a" })).toBe(false);

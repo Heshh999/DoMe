@@ -160,7 +160,8 @@ describe("Runtime", () => {
 
     // the socket comes back and the relay's deadline result still lands on the record
     rt!.relay.nudge();
-    await flush();
+    // the new socket opens only after its hello proof is signed (bounded wait, as in connected())
+    for (let i = 0; i < 50 && sockets.length < 2; i++) await flush();
     const s2 = sockets[1]!;
     s2.open();
     s2.receive(helloAck);
@@ -177,7 +178,7 @@ describe("Runtime", () => {
     s.serverClose(1006);
     expect(pendingConfirmation(useLiveStore.getState().commands)!.confirmation!.connectionLost).toBe(true);
     rt!.relay.nudge();
-    await flush();
+    for (let i = 0; i < 50 && sockets.length < 2; i++) await flush();
     sockets[1]!.open();
     sockets[1]!.receive(helloAck);
     expect(pendingConfirmation(useLiveStore.getState().commands)!.confirmation!.connectionLost).toBe(false);

@@ -14,6 +14,7 @@ export type ExtensionToAgent = bridge.ExtensionToAgent;
 export type YoutubeTab = bridge.YoutubeTab;
 export type TabsResult = bridge.TabsResult;
 export type YoutubeStateResult = bridge.YoutubeStateResult;
+export type YoutubeSearchResult = bridge.YoutubeSearchResult;
 
 export function helloFrame(input: { browserInstanceId: string; browser: BrowserKind; extensionVersion: string; protocolVersions: readonly string[]; profileLabel: string }): BridgeHello {
   const frame: BridgeHello = {
@@ -27,7 +28,7 @@ export function helloFrame(input: { browserInstanceId: string; browser: BrowserK
   return frame;
 }
 
-export function responseOk(requestId: string, result: TabsResult | YoutubeStateResult): BridgeResponse {
+export function responseOk(requestId: string, result: TabsResult | YoutubeStateResult | YoutubeSearchResult): BridgeResponse {
   return { type: "bridge_response", request_id: requestId, ok: true, result };
 }
 

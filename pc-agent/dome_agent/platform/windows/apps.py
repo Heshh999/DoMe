@@ -2,9 +2,14 @@
 
 * launch: ``subprocess.Popen([exe_path])`` — a one-element argv, no shell, no arguments, cwd = the
   executable's directory. The path comes from the local ``approved_apps`` table only.
-* windows: ``EnumWindows`` filtered to visible, titled, un-owned top-level windows of the app's pids
-* focus: ``ShowWindow(SW_RESTORE)`` + ``SetForegroundWindow``; success only if ``GetForegroundWindow``
-  is the target afterwards (Windows may refuse → ``FOCUS_DENIED`` by the handler)
+* windows: ``EnumWindows`` filtered to visible, titled, un-owned, uncloaked top-level windows of the
+  app's pids (DWM cloaks windows on other virtual desktops and suspended Store frames)
+* focus: :meth:`WindowControl.bring_to_front` (restore, SetForegroundWindow, empty-input retry,
+  AttachThreadInput); success only if ``GetForegroundWindow`` is the target afterwards (Windows may
+  refuse → ``FOCUS_DENIED`` by the handler)
+* maximize / restore / set_fullscreen: :mod:`.window_control` (``ShowWindowAsync`` + style read-back; one
+  verified F11 for full screen, judged from DPI-aware geometry, only in apps on the F11 list or opted in with
+  *Full screen with F11*, one sequence at a time). The app is never started here.
 * close: ``PostMessage(WM_CLOSE)`` only; the process is never terminated
 """
 
@@ -17,7 +22,8 @@ from typing import Any
 import psutil
 from dome_protocol import ProtocolError
 
-from ..protocol import AppWindow
+from ..protocol import AppWindow, WindowState
+from .window_control import Win32Windows, WindowControl
 
 
 def _norm(path: str) -> str:
@@ -31,6 +37,16 @@ def _hwnd(window_id: str) -> int:
 
 
 class WindowsApps:
+    def __init__(self) -> None:
+        self._win = Win32Windows()
+        self._control = WindowControl(self._win)
+
+    def _live_hwnd(self, window_id: str) -> int:
+        hwnd = _hwnd(window_id)
+        if not self._win.is_window(hwnd):
+            raise ProtocolError("TARGET_GONE", "That window is no longer there")
+        return hwnd
+
     def running_pids(self, exe_path: str) -> list[int]:
         wanted = _norm(exe_path)
         pids: list[int] = []
@@ -85,6 +101,8 @@ class WindowsApps:
                 return True
             if pid not in wanted:
                 return True
+            if self._win.is_cloaked(hwnd):  # other virtual desktop / suspended frame: "visible" but not shown
+                return True
             title = win32gui.GetWindowText(hwnd) or ""
             if not title:
                 return True
@@ -111,20 +129,7 @@ class WindowsApps:
             return False
 
     def focus(self, window_id: str) -> bool:
-        import win32con
-        import win32gui
-
-        hwnd = _hwnd(window_id)
-        if not win32gui.IsWindow(hwnd):
-            raise ProtocolError("TARGET_GONE", "That window is no longer there")
-        try:
-            if win32gui.IsIconic(hwnd):
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.BringWindowToTop(hwnd)
-            win32gui.SetForegroundWindow(hwnd)
-        except Exception:  # noqa: S110 - pywintypes.error: Windows refused the focus change; reported via GetForegroundWindow
-            pass
-        return bool(win32gui.GetForegroundWindow() == hwnd)
+        return self._control.bring_to_front(self._live_hwnd(window_id))
 
     def minimize(self, window_id: str) -> bool:
         import win32con
@@ -138,6 +143,37 @@ class WindowsApps:
         except Exception as exc:
             raise ProtocolError("OS_ERROR", "Windows refused to minimise the window") from exc
         return bool(win32gui.IsIconic(hwnd))
+
+    def window_state(self, window_id: str) -> WindowState:
+        hwnd = self._live_hwnd(window_id)
+        return self._control.read_state(hwnd, elevated=self._win.elevated(hwnd))
+
+    def maximize(
+        self, window_id: str, *, deadline: float | None = None, keys_held: bool = False, fullscreen_f11: bool = False
+    ) -> WindowState:
+        return self._control.maximize(
+            self._live_hwnd(window_id), deadline=deadline, keys_held=keys_held, fullscreen_f11=fullscreen_f11
+        )
+
+    def restore(
+        self, window_id: str, *, deadline: float | None = None, keys_held: bool = False, fullscreen_f11: bool = False
+    ) -> WindowState:
+        return self._control.restore(
+            self._live_hwnd(window_id), deadline=deadline, keys_held=keys_held, fullscreen_f11=fullscreen_f11
+        )
+
+    def set_fullscreen(
+        self,
+        window_id: str,
+        enabled: bool,
+        *,
+        deadline: float | None = None,
+        keys_held: bool = False,
+        fullscreen_f11: bool = False,
+    ) -> WindowState:
+        return self._control.set_fullscreen(
+            self._live_hwnd(window_id), enabled, deadline=deadline, keys_held=keys_held, fullscreen_f11=fullscreen_f11
+        )
 
     def request_close(self, window_id: str) -> None:
         import win32con

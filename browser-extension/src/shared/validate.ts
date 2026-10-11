@@ -3,7 +3,7 @@
  * shared/protocol/schemas (see scripts/gen-validators.ts). API shape mirrors
  * `schemas.validateBridgeFrame` in @dome/protocol.
  */
-import { agentToExtension, extensionToAgent, tabsResult, youtubeStateResult, youtubeTab, type Validator } from "../generated/validators.js";
+import { agentToExtension, extensionToAgent, tabsResult, youtubeSearchResult, youtubeStateResult, youtubeTab, type Validator } from "../generated/validators.js";
 import { OpError } from "./errors.ts";
 
 export type BridgeDirection = "extension_to_agent" | "agent_to_extension";
@@ -28,8 +28,10 @@ export function validateYoutubeTab(value: unknown): void {
   if (!youtubeTab(value)) fail(youtubeTab, "youtube_tab: ");
 }
 
-export function validateResult(kind: "tabs_result" | "youtube_state_result", value: unknown): void {
-  const v = kind === "tabs_result" ? tabsResult : youtubeStateResult;
+const RESULT_VALIDATORS = { tabs_result: tabsResult, youtube_state_result: youtubeStateResult, youtube_search_result: youtubeSearchResult } as const;
+
+export function validateResult(kind: keyof typeof RESULT_VALIDATORS, value: unknown): void {
+  const v = RESULT_VALIDATORS[kind];
   if (!v(value)) fail(v, "result: ");
 }
 

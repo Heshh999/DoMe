@@ -128,6 +128,50 @@ scripts/         gen-validators.ts, make-icons.mjs
 - **Permissions UX**: Devices shows "Touchpad / keyboard: Allowed … / Not allowed — the PC owner grants
   it on the PC" per grant with the broad-scope explanation; INPUT_NOT_PERMITTED recovery steps say how.
 
+### Window controls and YouTube search (protocol 1.2)
+
+- **Version stamping** (`src/protocol/registry.ts` mirrors `since`; DECISIONS 42): every command is
+  stamped with its action's `since` by the shared builder (1.0 actions `1.0`, input `1.1`, the new
+  actions `1.2`), so a 1.1 PC keeps accepting everything it knows and answers a new action with
+  PROTOCOL_INCOMPATIBLE ("update the PC agent"). `CommandRecord.protocolVersion` keeps the stamp and
+  a confirmation carries the confirmed command's stamp.
+- **Apps** (`AppsPage`, component-tested): Maximise, Restore and a Full screen toggle per app and per
+  window, disabled for an app that is not running (they never start it), for one running without a
+  window ("Running in the background": Edge's Startup boost, a player closed to the tray; Open shows
+  it, and TARGET_GONE on an app says "no open window", not "refresh the tab") and while the PC is locked.
+  Opening or closing an app re-reads the list at once, after 1.5 s and after 5 s, so the window buttons
+  follow the app's first window without Refresh.
+  The toggle follows the last `app_window_state_result` the PC read back (unknown = not full screen).
+  FULLSCREEN_UNSUPPORTED shows the PC's own message (why nothing was pressed in that app and how to
+  allow full screen for it on the PC; only an agent-reported message, as plain text) and offers
+  "Maximise instead" as a separate, visible command — never a silent maximise. The list is re-read from the PC on entry and whenever the app returns to the foreground
+  (`useApprovedApps`, also for the Type page), so apps added with the tray's **Add an app…** appear by
+  themselves; the empty state and APP_NOT_APPROVED point there (DECISIONS 45).
+- **Search YouTube** (Remote → YouTube, `YoutubeSearch`, component-tested; DECISIONS 44): ≤ 100
+  characters, trimmed; searches in the tab the customer chose, else again in the last results tab
+  while it still shows results, otherwise opens a new tab in the one connected browser or the one
+  picked. The results tab is **not** selected (a list has no player: Pause, volume and seek keep
+  reaching the video being watched, and a results page is never the implicit target); results are
+  plain text and a tap first pauses a video playing in another tab, then sends `youtube.open_result`
+  `{index, video_id}` to the results tab, and the opened video's tab becomes the selected one. Once a
+  video was opened from the list (or its tab closed, judged only from a state report newer than the
+  search's answer), the list is off with "Search again". The query is never logged (`log.ts` drops
+  `query`/`*search*`), never in diagnostics, and the box clears once sent; results live in memory only
+  (`lastSearchByPc`, dropped on PC switch and sign-out). Captions and playback speed are not in 1.2.
+- **Typed commands** (Type page, `intents.ts` + `commandPlan.ts`, unit- and component-tested;
+  DECISIONS 46): a search query is taken exactly as typed (no "%"/"'s" rewrites, "now" and "thanks"
+  kept) and is free text (the injection guard applies to the words around it); a bare "and" or comma
+  after an open-ended query stays in it unless a result pick follows, while "then" always starts a
+  step; an approved app named like a media word (Spotify) wins by exact name; after an app step a bare
+  "full screen"/"maximise" is that app; a player step right after a search asks to pick a result first.
+  Opening a result while another tab plays adds a listed "Pause YouTube" step first (not counted in the
+  three). A window step right after its app was started is retried twice, 2 s apart, on TARGET_GONE
+  ("Waiting for … to open its window…"); Stop and a dropped connection end the plan at once and say
+  the step on its way may still run. The examples and the "Which app?" help name the customer's own
+  approved apps in words that parse back ("Full screen ZStream", "Exit full screen ZStream"; Notepad
+  only while none is approved). A step that ends in FULLSCREEN_UNSUPPORTED shows the PC's message and
+  a "Maximise instead" chip that fills "maximise <app>" (sent only with Send).
+
 ### Now Playing, health, support, upgrade
 
 - **Now Playing** (`NowPlaying`, `lib/nowPlaying.ts`, unit- and component-tested): PC name, app or
@@ -163,8 +207,23 @@ scripts/         gen-validators.ts, make-icons.mjs
 
 ## Tests
 
-`pnpm test` — **32 files / 293 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
-network). New in 1.1: `gestures` (tap/double thresholds, finger-count change never clicks, scroll
+`pnpm test` — **40 files / 715 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
+network). New in 1.2: `commands`/`confirmations` (each action stamped with its `since`, verified by the
+real verifier; confirmations carry the command's stamp), `protocol-parity` (`since` per action, 1.2
+params/targets/results, a below-`since` stamp refused), `targets` (search target: chosen tab, new tab,
+browser choice; results-tab target), `labels` (1.2 labels, steps, help categories, result summaries),
+`liveStore` (app.list and search results applied centrally, the results tab never selected and the
+opened video's tab selected once, cleared on PC switch/sign-out), `log` (query/search redaction), components `AppsPage` (Maximise/Restore/Full screen
+targets and stamps, disabled states, toggle from read-back state, "Maximise instead", Add an app…
+empty state, re-read on foreground), `ApprovedApps` (hook waits for fresh state, no duplicate request)
+and `YoutubeSearch` (new tab by default, trimmed query, box cleared, query absent from log and
+diagnostics, playing video kept as the target, pause-then-open, list off after an open, no false
+"closed" before the next state report, browser choice, closed results tab). Review fixes added
+`intents.grammar` "review findings", `intents.plan` (pause step, window retry, Stop/disconnect),
+`CommandPage` (pause step, Stop, disconnect, window wait, examples) and `AppsPage` (windowless apps,
+re-read after Open) cases.
+`relay.test.ts` now expects `hello` to offer this build's `PROTOCOL_VERSION`/`REGISTRY_VERSION` instead
+of pinned strings. New in 1.1: `gestures` (tap/double thresholds, finger-count change never clicks, scroll
 without tap, drag lock + End Drag, cancel releases, sensitivity/clamp, guide coverage), `typing`
 (append once, IME commits once in either event order, autocorrect mapping, middle edit → pause,
 uncertain deletion → pause, bare backspace, grapheme-safe splitting), `input` (session start via
@@ -196,6 +255,9 @@ Nothing below has been run on a device. Each row is **not yet verified**.
 
 | Area | Step |
 | --- | --- |
+| Add an app (1.2) | Add an app with the tray's **Add an app…**, switch back to the PWA (already on Apps or Type): the app appears without tapping Refresh. |
+| Window controls (1.2) | Apps → Notepad: Maximise, Restore, Full screen; Edge: Full screen on/off (F11); Notepad Full screen → the PC's message (how to allow full screen for that app on the PC) and "Maximise instead" offered, nothing maximised until tapped; a closed app's window buttons are disabled. Type "full screen zstream": the same message and a "Maximise instead" chip, unless full screen is allowed for ZStream on the PC. |
+| YouTube search (1.2) | Remote → Search YouTube "lofi": a new Edge tab opens with results, the list appears on the phone, tapping result 2 plays it; a second search reuses that tab; the query is absent from Settings → Diagnostics. |
 | iOS Safari key persistence | Install to Home Screen, pair, kill the app, reopen after 24 h and after a device restart: Devices must still show "This phone" without re-pairing. |
 | Camera QR scan on iPhone | Devices → Pair → Scan: camera prompt appears once, QR from the PC's tray window is read within ~2 s; denial falls back to typing. |
 | Background/resume | Pause YouTube from the remote, background the PWA for 2 minutes, resume: status shows "Online · refreshing" then "Online"; no queued command replays. |

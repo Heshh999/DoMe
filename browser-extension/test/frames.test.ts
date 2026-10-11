@@ -2,7 +2,7 @@
 import { ProtocolError, protocolCompatible as sharedCompatible, schemas } from "@dome/protocol";
 import { describe, expect, it } from "vitest";
 
-import { errorFrame, helloFrame, playerStateEvent, responseError, responseOk, tabsChangedEvent, type YoutubeTab } from "../src/background/frames.ts";
+import { errorFrame, helloFrame, playerStateEvent, responseError, responseOk, tabsChangedEvent, type YoutubeSearchResult, type YoutubeTab } from "../src/background/frames.ts";
 import { OpError } from "../src/shared/errors.ts";
 import { checkOutgoing, validateBridgeFrame, validateResult, validateYoutubeTab } from "../src/shared/validate.ts";
 import { protocolCompatible } from "../src/shared/version.ts";
@@ -33,6 +33,11 @@ const TAB: YoutubeTab = {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- drop tab_token for the unattached variant
 const { tab_token: _dropped, ...UNATTACHED_BASE } = TAB;
 const UNATTACHED: YoutubeTab = { ...UNATTACHED_BASE, script_attached: false };
+/** A results-page tab as search answers it: new token, context other, no title. */
+const RESULTS_TAB: YoutubeTab = { browser_instance_id: "abcdefghijklmnopqrstuv", tab_id: 57, tab_token: "cmVzdWx0cy10YWItMDAwMQ", script_attached: true, context: "other", ad_showing: false, is_live: false, in_playlist: false, fullscreen: false, active: true };
+const ITEM = { index: 1, video_id: "jfKfPfyJRdk", title: "lofi hip hop radio - beats to relax/study to", channel: "Lofi Girl", is_live: true };
+const ITEM2 = { index: 2, video_id: "5qap5aO4i9A", title: "lofi hip hop radio - beats to sleep/chill to", duration_seconds: 3600, is_live: false };
+const SEARCH_RESULT = { tab: RESULTS_TAB, results: [ITEM, ITEM2] } as YoutubeSearchResult;
 
 const GOOD_OUT: unknown[] = [
   helloFrame({ browserInstanceId: "abcdefghijklmnopqrstuv", browser: "edge", extensionVersion: "0.1.0", protocolVersions: ["1.0"], profileLabel: "Work" }),
@@ -40,6 +45,10 @@ const GOOD_OUT: unknown[] = [
   responseOk("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { tabs: [TAB, { ...UNATTACHED, tab_id: 12 }] }),
   responseOk("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { tab: TAB, previous_video_id: "9bZkp7q19f0" }),
   responseOk("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { tab: TAB }),
+  responseOk("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", SEARCH_RESULT),
+  responseOk("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { tab: RESULTS_TAB, results: [] }),
+  responseError("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { code: "SEARCH_RESULT_UNAVAILABLE", message: "That search result is no longer on the page. Search again." }),
+  helloFrame({ browserInstanceId: "abcdefghijklmnopqrstuv", browser: "edge", extensionVersion: "0.2.0", protocolVersions: ["1.0", "1.1", "1.2"], profileLabel: "" }),
   responseError("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", { code: "NO_NEXT_VIDEO", message: "x".repeat(600) }),
   tabsChangedEvent([TAB], "2026-10-08T12:00:00.000Z"),
   tabsChangedEvent([], "2026-10-08T12:00:00.000Z"),
@@ -59,6 +68,12 @@ const BAD_OUT: unknown[] = [
   { type: "bridge_event", event: "player_state", at: "t", tab: { ...TAB, tab_token: "tooshort" } },
   { type: "bridge_event", event: "tabs_changed", at: "t", tabs: Array.from({ length: 33 }, () => TAB) },
   { type: "bridge_error", error: { code: "X", message: "m" }, extra: true },
+  { type: "bridge_response", request_id: "x", ok: true, result: { tab: RESULTS_TAB, results: Array.from({ length: 11 }, (_, i) => ({ ...ITEM, index: Math.min(10, i + 1) })) } },
+  { type: "bridge_response", request_id: "x", ok: true, result: { tab: RESULTS_TAB, results: [{ ...ITEM, query: "lofi" }] } },
+  { type: "bridge_response", request_id: "x", ok: true, result: { tab: RESULTS_TAB, results: [{ ...ITEM, title: "x".repeat(201) }] } },
+  { type: "bridge_response", request_id: "x", ok: true, result: { tab: RESULTS_TAB, results: [{ ...ITEM, index: 0 }] } },
+  { type: "bridge_response", request_id: "x", ok: true, result: { tab: RESULTS_TAB, results: [{ ...ITEM, video_id: "bad id" }] } },
+  { type: "bridge_response", request_id: "x", ok: true, result: { tab: RESULTS_TAB, results: [ITEM], query: "lofi" } },
   "string",
   null,
   42,
@@ -69,6 +84,10 @@ const GOOD_IN: unknown[] = [
   { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "next", args: { tab_id: 1, tab_token: "AAAAAAAAAAAAAAAAAAAAAA", expected_video_id: "abc" }, timeout_ms: 10000 },
   { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "list_tabs", args: {} },
   { type: "bridge_error", error: { code: "AGENT_NOT_RUNNING", message: "not running" } },
+  { type: "bridge_hello_ack", protocol_version: "1.2", agent_version: "0.2.0" },
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "search", args: { query: "lofi hip hop" }, timeout_ms: 15000 },
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "search", args: { query: "Ünïcode ✓ 🎧", tab_id: 3, tab_token: "AAAAAAAAAAAAAAAAAAAAAA" }, timeout_ms: 15000 },
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "open_result", args: { tab_id: 3, tab_token: "AAAAAAAAAAAAAAAAAAAAAA", index: 10, video_id: "jfKfPfyJRdk" }, timeout_ms: 10000 },
 ];
 const BAD_IN: unknown[] = [
   { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "eval", args: {} },
@@ -79,6 +98,12 @@ const BAD_IN: unknown[] = [
   { type: "bridge_hello", browser_instance_id: "abcdefghij", browser: "chrome", extension_version: "1", protocol_versions: ["1.0"] }, // wrong direction
   { type: "bridge_hello_ack", protocol_version: "1.0" },
   {},
+  // read_results is internal to the extension, never a bridge op.
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "read_results", args: { tab_id: 3, tab_token: "AAAAAAAAAAAAAAAAAAAAAA" } },
+  ...["", " leading space", "line\nbreak", "c1\u0085control", "x".repeat(101)].map((query) => ({ type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "search", args: { query } })),
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "open_result", args: { tab_id: 3, tab_token: "AAAAAAAAAAAAAAAAAAAAAA", index: 0 } },
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "open_result", args: { tab_id: 3, tab_token: "AAAAAAAAAAAAAAAAAAAAAA", index: 11 } },
+  { type: "bridge_request", request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", op: "open_result", args: { tab_id: 3, tab_token: "AAAAAAAAAAAAAAAAAAAAAA", index: 1, video_id: "../x" } },
 ];
 
 describe("emitted frames", () => {
@@ -131,6 +156,12 @@ describe("generated validators agree with @dome/protocol", () => {
     }
     validateResult("tabs_result", { tabs: [TAB] });
     validateResult("youtube_state_result", { tab: TAB, previous_video_id: "abc" });
+    validateResult("youtube_search_result", SEARCH_RESULT);
+    schemas.validateDef("results", "youtube_search_result", SEARCH_RESULT);
+    for (const bad of [{ tab: RESULTS_TAB }, { results: [ITEM] }, { tab: RESULTS_TAB, results: [{ ...ITEM, duration_seconds: 1.5 }] }, { tab: TAB, previous_video_id: "abc", results: [] }]) {
+      expect(() => validateResult("youtube_search_result", bad), JSON.stringify(bad)).toThrow(OpError);
+      expect(() => schemas.validateDef("results", "youtube_search_result", bad)).toThrow(ProtocolError);
+    }
     expect(() => validateResult("youtube_state_result", { tab: TAB, previous_video_id: "x".repeat(33) })).toThrow(OpError);
     expect(() => validateResult("tabs_result", { tab: TAB })).toThrow(OpError);
   });

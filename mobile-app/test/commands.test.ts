@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { generateControllerKeyPair, schemas, type relayFrames, verifyAndParseCommand, exportPublicJwk, kidFromJwk } from "@dome/protocol";
+import { generateControllerKeyPair, minVersion, PROTOCOL_VERSION, schemas, type JsonValue, type relayFrames, verifyAndParseCommand, versionBelow, exportPublicJwk, kidFromJwk } from "@dome/protocol";
 
 import { CommandService, isTerminal, type CommandRecord } from "../src/lib/commands.ts";
 
@@ -286,5 +286,46 @@ describe("confirmation transaction through the service", () => {
     expect(h.service.handleFrame({ type: "confirmation_required", command_id: rec.commandId, challenge_text: '{"evil":true}' })).toBe(true);
     expect(h.service.get(rec.commandId)!.confirmation).toBeNull();
     expect(h.service.get(rec.commandId)!.state).toBe("created");
+  });
+});
+
+describe("version stamping (rules.command_version_stamping)", () => {
+  async function payloadOf(frame: relayFrames.ControllerToRelay): Promise<{ protocol_version: string; action?: string }> {
+    const env = (frame as relayFrames.ControllerCommand | relayFrames.ControllerConfirmation).envelope;
+    return JSON.parse(env.payload) as { protocol_version: string; action?: string };
+  }
+
+  it("each command carries its action's `since`, not this app's newest version, and the record remembers it", async () => {
+    const h = await harness();
+    expect(versionBelow("1.1", PROTOCOL_VERSION)).toBe(true); // otherwise stamping by `since` would be indistinguishable from the newest version
+    const cases: Array<[string, Record<string, JsonValue>, Record<string, JsonValue> | null, string]> = [
+      ["app.list", {}, null, "1.0"],
+      ["windows.set_volume", { value: 35 }, null, "1.0"],
+      ["input.session_start", {}, null, "1.1"],
+      ["app.maximize", {}, { app_id: "notepad" }, "1.2"],
+      ["app.set_fullscreen", { enabled: true }, { app_id: "notepad", window_id: "w1" }, "1.2"],
+      ["youtube.search", { query: "lofi beats" }, { browser_instance_id: "bi_test0001" }, "1.2"],
+    ];
+    for (const [action, params, target, version] of cases) {
+      const rec = await h.service.send({ pcId: PC, action, params, target });
+      expect(rec.protocolVersion, action).toBe(version);
+      expect(minVersion(action)).toBe(version);
+      const payload = await payloadOf(h.sent.at(-1)!);
+      expect(payload).toMatchObject({ action, protocol_version: version });
+      // The real verifier (relay/PC side) accepts exactly this stamp.
+      const verified = await verifyAndParseCommand((h.sent.at(-1) as relayFrames.ControllerCommand).envelope, (k) => (k === h.kid ? { controllerId: CONTROLLER, accountId: ACCOUNT, jwk: h.jwk } : null), new Date("2026-10-08T12:00:00.500Z"));
+      expect(verified.payload.protocol_version).toBe(version);
+    }
+  });
+
+  it("a confirmation answers with the confirmed command's stamp", async () => {
+    const h = await harness();
+    const rec = await h.service.send({ pcId: PC, action: "power.shutdown" });
+    expect(rec.protocolVersion).toBe("1.0");
+    h.service.handleFrame({ type: "confirmation_required", command_id: rec.commandId, challenge_text: fixture.digests.challenge_text });
+    await h.service.respondToChallenge(rec.commandId, "decline");
+    const frame = h.sent.at(-1)!;
+    expect(frame.type).toBe("confirmation");
+    expect((await payloadOf(frame)).protocol_version).toBe("1.0");
   });
 });

@@ -19,7 +19,10 @@ export interface FakeVideoOptions {
   volume?: number;
   muted?: boolean;
   ended?: boolean;
-  /** When set, play() rejects with an error of this name (e.g. "NotAllowedError"). */
+  /**
+   * When set, play() rejects with a DOMException of this name, as browsers do (e.g. "NotAllowedError" under the
+   * autoplay policy). jsdom's DOMException, like one from the page's realm, is not `instanceof Error` here.
+   */
   playRejects?: string;
   /** When true, property writes are ignored (simulates a player that refuses changes). */
   inert?: boolean;
@@ -86,11 +89,7 @@ export function installFakeVideo(video: HTMLVideoElement, opts: FakeVideoOptions
     play: {
       value: (): Promise<void> => {
         state.playCalls += 1;
-        if (opts.playRejects) {
-          const err = new Error("play() failed");
-          err.name = opts.playRejects;
-          return Promise.reject(err);
-        }
+        if (opts.playRejects) return Promise.reject(new DOMException("play() failed", opts.playRejects));
         if (inert) return Promise.resolve();
         state.paused = false;
         fire("play");
@@ -168,3 +167,42 @@ export function video(): HTMLVideoElement {
 }
 
 export const TOKEN = "AAAAAAAAAAAAAAAAAAAAAA";
+
+export interface LinkNavigationOptions {
+  /** Delay between the URL change and `yt-navigate-finish`. Default 80 ms. */
+  finishDelayMs?: number;
+  /** false: clicks on result links do nothing (a dead link). */
+  navigate?: boolean;
+  /** Title of the opened video, written into a watch heading when the navigation finishes; omitted: the document title is left as it was. */
+  newTitle?: string;
+}
+
+/**
+ * Make every watch link in the page navigate like YouTube's own link handler does: the click is
+ * handled in the page (no browser navigation), pushState to the link, `yt-navigate-start`, then
+ * (asynchronously) `yt-navigate-finish`. Returns the hrefs clicked, in order.
+ */
+export function wireLinkNavigation(options: LinkNavigationOptions = {}): string[] {
+  const clicked: string[] = [];
+  // On the body, which the next loadFixture() replaces, so listeners never leak into later tests.
+  document.body.addEventListener("click", (event) => {
+    const link = (event.target as Element | null)?.closest("a[href]");
+    const href = link?.getAttribute("href");
+    if (!href?.startsWith("/watch")) return;
+    event.preventDefault();
+    clicked.push(href);
+    if (options.navigate === false) return;
+    window.history.pushState({}, "", href);
+    document.dispatchEvent(new Event("yt-navigate-start"));
+    setTimeout(() => {
+      if (options.newTitle !== undefined) {
+        const heading = document.createElement("h1");
+        heading.className = "style-scope ytd-watch-metadata";
+        heading.textContent = options.newTitle;
+        document.body.append(heading);
+      }
+      document.dispatchEvent(new Event("yt-navigate-finish"));
+    }, options.finishDelayMs ?? 80);
+  });
+  return clicked;
+}

@@ -23,6 +23,15 @@ describe("redacting logger", () => {
     expect(recentLogs()[0]!.fields!.code).toBe("PC_OFFLINE");
     expect(errorSummary(Object.assign(new Error("x"), { code: "GRANT_MISSING" })).code).toBe("GRANT_MISSING");
   });
+  it("never keeps YouTube search text, whatever the field is called", () => {
+    const out = redact({ query: "my private search", search: "x", search_query: "y", youtube_search: { q: "z" }, lastSearch: "w", action: "youtube.search", count: 3 }) as Record<string, unknown>;
+    for (const k of ["query", "search", "search_query", "youtube_search", "lastSearch"]) expect(out[k], k).toBe("[redacted]");
+    expect(out.action).toBe("youtube.search"); // action names are values, not search text
+    expect(out.count).toBe(3);
+    log.info("search.sent", { params: { query: "my private search" } });
+    expect(JSON.stringify(recentLogs())).not.toContain("my private search");
+  });
+
   it("keeps a bounded ring buffer and truncates long strings", () => {
     for (let i = 0; i < 200; i++) log.info("event", { i, long: "x".repeat(500) });
     const entries = recentLogs();

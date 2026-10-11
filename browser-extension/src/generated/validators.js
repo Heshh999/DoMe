@@ -4,13 +4,13 @@
 export const extensionToAgent = validate21;
 const schema32 = {"oneOf":[{"$ref":"#/$defs/bridge_hello"},{"$ref":"#/$defs/bridge_response"},{"$ref":"#/$defs/bridge_event"},{"$ref":"#/$defs/bridge_error"}]};
 const schema33 = {"description":"Extension → host → agent on port connect. `browser_instance_id` is a random id generated once per extension installation (chrome.storage.local) and identifies the browser profile.","type":"object","additionalProperties":false,"required":["type","browser_instance_id","browser","extension_version","protocol_versions"],"properties":{"type":{"const":"bridge_hello"},"browser_instance_id":{"type":"string","minLength":8,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"},"browser":{"type":"string","enum":["chrome","edge","unknown"]},"extension_version":{"type":"string","maxLength":32},"protocol_versions":{"type":"array","minItems":1,"items":{"type":"string","pattern":"^[0-9]+\\.[0-9]+$"}},"profile_label":{"type":"string","maxLength":64}}};
-const schema44 = {"description":"Either direction. Protocol incompatibility on hello (carries both version lists in detail) or a request that could not be processed at all. Request-scoped failures use bridge_response{ok:false}.","type":"object","additionalProperties":false,"required":["type","error"],"properties":{"type":{"const":"bridge_error"},"ref_request_id":{"type":"string"},"error":{"type":"object","additionalProperties":false,"required":["code","message"],"properties":{"code":{"type":"string","pattern":"^[A-Z_]+$"},"message":{"type":"string","maxLength":512},"detail":{"type":"object"}}}}};
+const schema47 = {"description":"Either direction. Protocol incompatibility on hello (carries both version lists in detail) or a request that could not be processed at all. Request-scoped failures use bridge_response{ok:false}.","type":"object","additionalProperties":false,"required":["type","error"],"properties":{"type":{"const":"bridge_error"},"ref_request_id":{"type":"string"},"error":{"type":"object","additionalProperties":false,"required":["code","message"],"properties":{"code":{"type":"string","pattern":"^[A-Z_]+$"},"message":{"type":"string","maxLength":512},"detail":{"type":"object"}}}}};
 import __rt1 from "ajv/dist/runtime/ucs2length.js";
 const func1 = __rt1.default ?? __rt1;
 const pattern4 = new RegExp("^[A-Za-z0-9_-]+$", "u");
 const pattern5 = new RegExp("^[0-9]+\\.[0-9]+$", "u");
-const pattern8 = new RegExp("^[A-Z_]+$", "u");
-const schema34 = {"type":"object","additionalProperties":false,"required":["type","request_id","ok"],"properties":{"type":{"const":"bridge_response"},"request_id":{"type":"string"},"ok":{"type":"boolean"},"result":{"oneOf":[{"$ref":"results.schema.json#/$defs/tabs_result"},{"$ref":"results.schema.json#/$defs/youtube_state_result"}]},"error":{"type":"object","additionalProperties":false,"required":["code","message"],"properties":{"code":{"type":"string","pattern":"^[A-Z_]+$"},"message":{"type":"string","maxLength":512}}}}};
+const pattern10 = new RegExp("^[A-Z_]+$", "u");
+const schema34 = {"type":"object","additionalProperties":false,"required":["type","request_id","ok"],"properties":{"type":{"const":"bridge_response"},"request_id":{"type":"string"},"ok":{"type":"boolean"},"result":{"oneOf":[{"$ref":"results.schema.json#/$defs/tabs_result"},{"$ref":"results.schema.json#/$defs/youtube_state_result"},{"$ref":"results.schema.json#/$defs/youtube_search_result"}]},"error":{"type":"object","additionalProperties":false,"required":["code","message"],"properties":{"code":{"type":"string","pattern":"^[A-Z_]+$"},"message":{"type":"string","maxLength":512}}}}};
 const schema36 = {"type":"object","additionalProperties":false,"required":["tabs"],"properties":{"tabs":{"type":"array","maxItems":32,"items":{"$ref":"relay-frames.schema.json#/$defs/youtube_tab"}}}};
 const schema38 = {"type":"object","additionalProperties":false,"required":["browser_instance_id","tab_id","script_attached","context","ad_showing","is_live","in_playlist"],"properties":{"browser_instance_id":{"type":"string"},"tab_id":{"type":"integer"},"tab_token":{"type":"string","pattern":"^[A-Za-z0-9_-]{22}$","description":"Present when script_attached; changes on every content-script attach"},"script_attached":{"type":"boolean","description":"False means the tab exists but DoMe's content script is not running in it (reload needed); such a tab cannot be a target"},"title":{"type":"string","maxLength":200},"video_id":{"type":"string","maxLength":32},"paused":{"type":"boolean"},"muted":{"type":"boolean"},"volume":{"type":"integer","minimum":0,"maximum":100},"position_seconds":{"type":"number","minimum":0},"duration_seconds":{"type":"number","minimum":0},"context":{"type":"string","enum":["watch","shorts","music","other"],"description":"Page kind. Orthogonal flags below refine it."},"ad_showing":{"type":"boolean"},"is_live":{"type":"boolean"},"in_playlist":{"type":"boolean"},"theater":{"type":"boolean"},"fullscreen":{"type":"boolean"},"has_next":{"type":"boolean"},"has_previous":{"type":"boolean"},"active":{"type":"boolean"}}};
 const func5 = Object.prototype.hasOwnProperty;
@@ -856,6 +856,606 @@ return errors === 0;
 }
 validate27.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 
+const schema41 = {"description":"Result of youtube.search (since 1.2): the results-page tab (with its NEW tab_token, because the page loaded again; no title) and up to 10 video results. Never echoes the query (rules.search_queries).","type":"object","additionalProperties":false,"required":["tab","results"],"properties":{"tab":{"$ref":"relay-frames.schema.json#/$defs/youtube_tab"},"results":{"type":"array","maxItems":10,"items":{"$ref":"#/$defs/youtube_search_item"}}}};
+const schema43 = {"description":"One video result of youtube.search, in page order (since 1.2). Ads, shorts shelves and other renderers are not results.","type":"object","additionalProperties":false,"required":["index","video_id","title"],"properties":{"index":{"type":"integer","minimum":1,"maximum":10,"description":"1-based position among the returned results; youtube.open_result takes it"},"video_id":{"type":"string","minLength":1,"maxLength":32,"pattern":"^[A-Za-z0-9_-]+$"},"title":{"type":"string","maxLength":200,"description":"Untrusted display text"},"channel":{"type":"string","maxLength":100,"description":"Untrusted display text"},"duration_seconds":{"type":"integer","minimum":0},"is_live":{"type":"boolean"}}};
+
+function validate29(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+let vErrors = null;
+let errors = 0;
+const evaluated0 = validate29.evaluated;
+if(evaluated0.dynamicProps){
+evaluated0.props = undefined;
+}
+if(evaluated0.dynamicItems){
+evaluated0.items = undefined;
+}
+if(errors === 0){
+if(data && typeof data == "object" && !Array.isArray(data)){
+let missing0;
+if(((data.tab === undefined) && (missing0 = "tab")) || ((data.results === undefined) && (missing0 = "results"))){
+validate29.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
+return false;
+}
+else {
+const _errs1 = errors;
+for(const key0 in data){
+if(!((key0 === "tab") || (key0 === "results"))){
+validate29.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
+return false;
+break;
+}
+}
+if(_errs1 === errors){
+if(data.tab !== undefined){
+let data0 = data.tab;
+const _errs2 = errors;
+const _errs3 = errors;
+if(errors === _errs3){
+if(data0 && typeof data0 == "object" && !Array.isArray(data0)){
+let missing1;
+if((((((((data0.browser_instance_id === undefined) && (missing1 = "browser_instance_id")) || ((data0.tab_id === undefined) && (missing1 = "tab_id"))) || ((data0.script_attached === undefined) && (missing1 = "script_attached"))) || ((data0.context === undefined) && (missing1 = "context"))) || ((data0.ad_showing === undefined) && (missing1 = "ad_showing"))) || ((data0.is_live === undefined) && (missing1 = "is_live"))) || ((data0.in_playlist === undefined) && (missing1 = "in_playlist"))){
+validate29.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
+return false;
+}
+else {
+const _errs5 = errors;
+for(const key1 in data0){
+if(!(func5.call(schema38.properties, key1))){
+validate29.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
+return false;
+break;
+}
+}
+if(_errs5 === errors){
+if(data0.browser_instance_id !== undefined){
+const _errs6 = errors;
+if(typeof data0.browser_instance_id !== "string"){
+validate29.errors = [{instancePath:instancePath+"/tab/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+var valid2 = _errs6 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.tab_id !== undefined){
+let data2 = data0.tab_id;
+const _errs8 = errors;
+if(!(((typeof data2 == "number") && (!(data2 % 1) && !isNaN(data2))) && (isFinite(data2)))){
+validate29.errors = [{instancePath:instancePath+"/tab/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+var valid2 = _errs8 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.tab_token !== undefined){
+let data3 = data0.tab_token;
+const _errs10 = errors;
+if(errors === _errs10){
+if(typeof data3 === "string"){
+if(!pattern6.test(data3)){
+validate29.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid2 = _errs10 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.script_attached !== undefined){
+const _errs12 = errors;
+if(typeof data0.script_attached !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs12 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.title !== undefined){
+let data5 = data0.title;
+const _errs14 = errors;
+if(errors === _errs14){
+if(typeof data5 === "string"){
+if(func1(data5) > 200){
+validate29.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid2 = _errs14 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.video_id !== undefined){
+let data6 = data0.video_id;
+const _errs16 = errors;
+if(errors === _errs16){
+if(typeof data6 === "string"){
+if(func1(data6) > 32){
+validate29.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid2 = _errs16 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.paused !== undefined){
+const _errs18 = errors;
+if(typeof data0.paused !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs18 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.muted !== undefined){
+const _errs20 = errors;
+if(typeof data0.muted !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs20 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.volume !== undefined){
+let data9 = data0.volume;
+const _errs22 = errors;
+if(!(((typeof data9 == "number") && (!(data9 % 1) && !isNaN(data9))) && (isFinite(data9)))){
+validate29.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+if(errors === _errs22){
+if((typeof data9 == "number") && (isFinite(data9))){
+if(data9 > 100 || isNaN(data9)){
+validate29.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+return false;
+}
+else {
+if(data9 < 0 || isNaN(data9)){
+validate29.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
+}
+var valid2 = _errs22 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.position_seconds !== undefined){
+let data10 = data0.position_seconds;
+const _errs24 = errors;
+if(errors === _errs24){
+if((typeof data10 == "number") && (isFinite(data10))){
+if(data10 < 0 || isNaN(data10)){
+validate29.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+return false;
+}
+}
+var valid2 = _errs24 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.duration_seconds !== undefined){
+let data11 = data0.duration_seconds;
+const _errs26 = errors;
+if(errors === _errs26){
+if((typeof data11 == "number") && (isFinite(data11))){
+if(data11 < 0 || isNaN(data11)){
+validate29.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+return false;
+}
+}
+var valid2 = _errs26 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.context !== undefined){
+let data12 = data0.context;
+const _errs28 = errors;
+if(typeof data12 !== "string"){
+validate29.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+if(!((((data12 === "watch") || (data12 === "shorts")) || (data12 === "music")) || (data12 === "other"))){
+validate29.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+return false;
+}
+var valid2 = _errs28 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.ad_showing !== undefined){
+const _errs30 = errors;
+if(typeof data0.ad_showing !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs30 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.is_live !== undefined){
+const _errs32 = errors;
+if(typeof data0.is_live !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs32 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.in_playlist !== undefined){
+const _errs34 = errors;
+if(typeof data0.in_playlist !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs34 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.theater !== undefined){
+const _errs36 = errors;
+if(typeof data0.theater !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs36 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.fullscreen !== undefined){
+const _errs38 = errors;
+if(typeof data0.fullscreen !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs38 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.has_next !== undefined){
+const _errs40 = errors;
+if(typeof data0.has_next !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs40 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.has_previous !== undefined){
+const _errs42 = errors;
+if(typeof data0.has_previous !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs42 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.active !== undefined){
+const _errs44 = errors;
+if(typeof data0.active !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/tab/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs44 === errors;
+}
+else {
+var valid2 = true;
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+return false;
+}
+}
+var valid0 = _errs2 === errors;
+}
+else {
+var valid0 = true;
+}
+if(valid0){
+if(data.results !== undefined){
+let data21 = data.results;
+const _errs46 = errors;
+if(errors === _errs46){
+if(Array.isArray(data21)){
+if(data21.length > 10){
+validate29.errors = [{instancePath:instancePath+"/results",schemaPath:"#/properties/results/maxItems",keyword:"maxItems",params:{limit: 10},message:"must NOT have more than 10 items"}];
+return false;
+}
+else {
+var valid3 = true;
+const len0 = data21.length;
+for(let i0=0; i0<len0; i0++){
+let data22 = data21[i0];
+const _errs48 = errors;
+const _errs49 = errors;
+if(errors === _errs49){
+if(data22 && typeof data22 == "object" && !Array.isArray(data22)){
+let missing2;
+if((((data22.index === undefined) && (missing2 = "index")) || ((data22.video_id === undefined) && (missing2 = "video_id"))) || ((data22.title === undefined) && (missing2 = "title"))){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0,schemaPath:"#/$defs/youtube_search_item/required",keyword:"required",params:{missingProperty: missing2},message:"must have required property '"+missing2+"'"}];
+return false;
+}
+else {
+const _errs51 = errors;
+for(const key2 in data22){
+if(!((((((key2 === "index") || (key2 === "video_id")) || (key2 === "title")) || (key2 === "channel")) || (key2 === "duration_seconds")) || (key2 === "is_live"))){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0,schemaPath:"#/$defs/youtube_search_item/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"}];
+return false;
+break;
+}
+}
+if(_errs51 === errors){
+if(data22.index !== undefined){
+let data23 = data22.index;
+const _errs52 = errors;
+if(!(((typeof data23 == "number") && (!(data23 % 1) && !isNaN(data23))) && (isFinite(data23)))){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/index",schemaPath:"#/$defs/youtube_search_item/properties/index/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+if(errors === _errs52){
+if((typeof data23 == "number") && (isFinite(data23))){
+if(data23 > 10 || isNaN(data23)){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/index",schemaPath:"#/$defs/youtube_search_item/properties/index/maximum",keyword:"maximum",params:{comparison: "<=", limit: 10},message:"must be <= 10"}];
+return false;
+}
+else {
+if(data23 < 1 || isNaN(data23)){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/index",schemaPath:"#/$defs/youtube_search_item/properties/index/minimum",keyword:"minimum",params:{comparison: ">=", limit: 1},message:"must be >= 1"}];
+return false;
+}
+}
+}
+}
+var valid5 = _errs52 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.video_id !== undefined){
+let data24 = data22.video_id;
+const _errs54 = errors;
+if(errors === _errs54){
+if(typeof data24 === "string"){
+if(func1(data24) > 32){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+return false;
+}
+else {
+if(func1(data24) < 1){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"}];
+return false;
+}
+else {
+if(!pattern4.test(data24)){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]+$"},message:"must match pattern \""+"^[A-Za-z0-9_-]+$"+"\""}];
+return false;
+}
+}
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid5 = _errs54 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.title !== undefined){
+let data25 = data22.title;
+const _errs56 = errors;
+if(errors === _errs56){
+if(typeof data25 === "string"){
+if(func1(data25) > 200){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/title",schemaPath:"#/$defs/youtube_search_item/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/title",schemaPath:"#/$defs/youtube_search_item/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid5 = _errs56 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.channel !== undefined){
+let data26 = data22.channel;
+const _errs58 = errors;
+if(errors === _errs58){
+if(typeof data26 === "string"){
+if(func1(data26) > 100){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/channel",schemaPath:"#/$defs/youtube_search_item/properties/channel/maxLength",keyword:"maxLength",params:{limit: 100},message:"must NOT have more than 100 characters"}];
+return false;
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/channel",schemaPath:"#/$defs/youtube_search_item/properties/channel/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid5 = _errs58 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.duration_seconds !== undefined){
+let data27 = data22.duration_seconds;
+const _errs60 = errors;
+if(!(((typeof data27 == "number") && (!(data27 % 1) && !isNaN(data27))) && (isFinite(data27)))){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/duration_seconds",schemaPath:"#/$defs/youtube_search_item/properties/duration_seconds/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+if(errors === _errs60){
+if((typeof data27 == "number") && (isFinite(data27))){
+if(data27 < 0 || isNaN(data27)){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/duration_seconds",schemaPath:"#/$defs/youtube_search_item/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
+var valid5 = _errs60 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.is_live !== undefined){
+const _errs62 = errors;
+if(typeof data22.is_live !== "boolean"){
+validate29.errors = [{instancePath:instancePath+"/results/" + i0+"/is_live",schemaPath:"#/$defs/youtube_search_item/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid5 = _errs62 === errors;
+}
+else {
+var valid5 = true;
+}
+}
+}
+}
+}
+}
+}
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/results/" + i0,schemaPath:"#/$defs/youtube_search_item/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+return false;
+}
+}
+var valid3 = _errs48 === errors;
+if(!valid3){
+break;
+}
+}
+}
+}
+else {
+validate29.errors = [{instancePath:instancePath+"/results",schemaPath:"#/properties/results/type",keyword:"type",params:{type: "array"},message:"must be array"}];
+return false;
+}
+}
+var valid0 = _errs46 === errors;
+}
+else {
+var valid0 = true;
+}
+}
+}
+}
+}
+else {
+validate29.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+return false;
+}
+}
+validate29.errors = vErrors;
+return errors === 0;
+}
+validate29.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
+
 
 function validate22(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
 let vErrors = null;
@@ -955,6 +1555,25 @@ if(props0 !== true){
 props0 = true;
 }
 }
+const _errs11 = errors;
+if(!(validate29(data3, {instancePath:instancePath+"/result",parentData:data,parentDataProperty:"result",rootData,dynamicAnchors}))){
+vErrors = vErrors === null ? validate29.errors : vErrors.concat(validate29.errors);
+errors = vErrors.length;
+}
+var _valid0 = _errs11 === errors;
+if(_valid0 && valid1){
+valid1 = false;
+passing0 = [passing0, 2];
+}
+else {
+if(_valid0){
+valid1 = true;
+passing0 = 2;
+if(props0 !== true){
+props0 = true;
+}
+}
+}
 }
 if(!valid1){
 const err0 = {instancePath:instancePath+"/result",schemaPath:"#/properties/result/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};
@@ -987,8 +1606,8 @@ var valid0 = true;
 if(valid0){
 if(data.error !== undefined){
 let data4 = data.error;
-const _errs11 = errors;
-if(errors === _errs11){
+const _errs12 = errors;
+if(errors === _errs12){
 if(data4 && typeof data4 == "object" && !Array.isArray(data4)){
 let missing1;
 if(((data4.code === undefined) && (missing1 = "code")) || ((data4.message === undefined) && (missing1 = "message"))){
@@ -996,7 +1615,7 @@ validate22.errors = [{instancePath:instancePath+"/error",schemaPath:"#/propertie
 return false;
 }
 else {
-const _errs13 = errors;
+const _errs14 = errors;
 for(const key1 in data4){
 if(!((key1 === "code") || (key1 === "message"))){
 validate22.errors = [{instancePath:instancePath+"/error",schemaPath:"#/properties/error/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
@@ -1004,13 +1623,13 @@ return false;
 break;
 }
 }
-if(_errs13 === errors){
+if(_errs14 === errors){
 if(data4.code !== undefined){
 let data5 = data4.code;
-const _errs14 = errors;
-if(errors === _errs14){
+const _errs15 = errors;
+if(errors === _errs15){
 if(typeof data5 === "string"){
-if(!pattern8.test(data5)){
+if(!pattern10.test(data5)){
 validate22.errors = [{instancePath:instancePath+"/error/code",schemaPath:"#/properties/error/properties/code/pattern",keyword:"pattern",params:{pattern: "^[A-Z_]+$"},message:"must match pattern \""+"^[A-Z_]+$"+"\""}];
 return false;
 }
@@ -1020,7 +1639,7 @@ validate22.errors = [{instancePath:instancePath+"/error/code",schemaPath:"#/prop
 return false;
 }
 }
-var valid2 = _errs14 === errors;
+var valid2 = _errs15 === errors;
 }
 else {
 var valid2 = true;
@@ -1028,8 +1647,8 @@ var valid2 = true;
 if(valid2){
 if(data4.message !== undefined){
 let data6 = data4.message;
-const _errs16 = errors;
-if(errors === _errs16){
+const _errs17 = errors;
+if(errors === _errs17){
 if(typeof data6 === "string"){
 if(func1(data6) > 512){
 validate22.errors = [{instancePath:instancePath+"/error/message",schemaPath:"#/properties/error/properties/message/maxLength",keyword:"maxLength",params:{limit: 512},message:"must NOT have more than 512 characters"}];
@@ -1041,7 +1660,7 @@ validate22.errors = [{instancePath:instancePath+"/error/message",schemaPath:"#/p
 return false;
 }
 }
-var valid2 = _errs16 === errors;
+var valid2 = _errs17 === errors;
 }
 else {
 var valid2 = true;
@@ -1055,7 +1674,7 @@ validate22.errors = [{instancePath:instancePath+"/error",schemaPath:"#/propertie
 return false;
 }
 }
-var valid0 = _errs11 === errors;
+var valid0 = _errs12 === errors;
 }
 else {
 var valid0 = true;
@@ -1077,12 +1696,12 @@ return errors === 0;
 }
 validate22.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 
-const schema41 = {"description":"Extension → agent. `tabs_changed` is emitted on tab open/close/navigation AND on content-script attach/detach; `player_state` is debounced to at most 2 per second per tab.","type":"object","additionalProperties":false,"required":["type","event","at"],"properties":{"type":{"const":"bridge_event"},"event":{"type":"string","enum":["tabs_changed","player_state"]},"at":{"type":"string"},"tabs":{"type":"array","maxItems":32,"items":{"$ref":"relay-frames.schema.json#/$defs/youtube_tab"}},"tab":{"$ref":"relay-frames.schema.json#/$defs/youtube_tab"}}};
+const schema44 = {"description":"Extension → agent. `tabs_changed` is emitted on tab open/close/navigation AND on content-script attach/detach; `player_state` is debounced to at most 2 per second per tab.","type":"object","additionalProperties":false,"required":["type","event","at"],"properties":{"type":{"const":"bridge_event"},"event":{"type":"string","enum":["tabs_changed","player_state"]},"at":{"type":"string"},"tabs":{"type":"array","maxItems":32,"items":{"$ref":"relay-frames.schema.json#/$defs/youtube_tab"}},"tab":{"$ref":"relay-frames.schema.json#/$defs/youtube_tab"}}};
 
-function validate30(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+function validate32(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
 let vErrors = null;
 let errors = 0;
-const evaluated0 = validate30.evaluated;
+const evaluated0 = validate32.evaluated;
 if(evaluated0.dynamicProps){
 evaluated0.props = undefined;
 }
@@ -1093,14 +1712,14 @@ if(errors === 0){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing0;
 if((((data.type === undefined) && (missing0 = "type")) || ((data.event === undefined) && (missing0 = "event"))) || ((data.at === undefined) && (missing0 = "at"))){
-validate30.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
+validate32.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
 return false;
 }
 else {
 const _errs1 = errors;
 for(const key0 in data){
 if(!(((((key0 === "type") || (key0 === "event")) || (key0 === "at")) || (key0 === "tabs")) || (key0 === "tab"))){
-validate30.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
+validate32.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -1109,7 +1728,7 @@ if(_errs1 === errors){
 if(data.type !== undefined){
 const _errs2 = errors;
 if("bridge_event" !== data.type){
-validate30.errors = [{instancePath:instancePath+"/type",schemaPath:"#/properties/type/const",keyword:"const",params:{allowedValue: "bridge_event"},message:"must be equal to constant"}];
+validate32.errors = [{instancePath:instancePath+"/type",schemaPath:"#/properties/type/const",keyword:"const",params:{allowedValue: "bridge_event"},message:"must be equal to constant"}];
 return false;
 }
 var valid0 = _errs2 === errors;
@@ -1122,11 +1741,11 @@ if(data.event !== undefined){
 let data1 = data.event;
 const _errs3 = errors;
 if(typeof data1 !== "string"){
-validate30.errors = [{instancePath:instancePath+"/event",schemaPath:"#/properties/event/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/event",schemaPath:"#/properties/event/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 if(!((data1 === "tabs_changed") || (data1 === "player_state"))){
-validate30.errors = [{instancePath:instancePath+"/event",schemaPath:"#/properties/event/enum",keyword:"enum",params:{allowedValues: schema41.properties.event.enum},message:"must be equal to one of the allowed values"}];
+validate32.errors = [{instancePath:instancePath+"/event",schemaPath:"#/properties/event/enum",keyword:"enum",params:{allowedValues: schema44.properties.event.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }
 var valid0 = _errs3 === errors;
@@ -1138,7 +1757,7 @@ if(valid0){
 if(data.at !== undefined){
 const _errs5 = errors;
 if(typeof data.at !== "string"){
-validate30.errors = [{instancePath:instancePath+"/at",schemaPath:"#/properties/at/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/at",schemaPath:"#/properties/at/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid0 = _errs5 === errors;
@@ -1153,7 +1772,7 @@ const _errs7 = errors;
 if(errors === _errs7){
 if(Array.isArray(data3)){
 if(data3.length > 32){
-validate30.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/maxItems",keyword:"maxItems",params:{limit: 32},message:"must NOT have more than 32 items"}];
+validate32.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/maxItems",keyword:"maxItems",params:{limit: 32},message:"must NOT have more than 32 items"}];
 return false;
 }
 else {
@@ -1167,14 +1786,14 @@ if(errors === _errs10){
 if(data4 && typeof data4 == "object" && !Array.isArray(data4)){
 let missing1;
 if((((((((data4.browser_instance_id === undefined) && (missing1 = "browser_instance_id")) || ((data4.tab_id === undefined) && (missing1 = "tab_id"))) || ((data4.script_attached === undefined) && (missing1 = "script_attached"))) || ((data4.context === undefined) && (missing1 = "context"))) || ((data4.ad_showing === undefined) && (missing1 = "ad_showing"))) || ((data4.is_live === undefined) && (missing1 = "is_live"))) || ((data4.in_playlist === undefined) && (missing1 = "in_playlist"))){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
 return false;
 }
 else {
 const _errs12 = errors;
 for(const key1 in data4){
 if(!(func5.call(schema38.properties, key1))){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -1183,7 +1802,7 @@ if(_errs12 === errors){
 if(data4.browser_instance_id !== undefined){
 const _errs13 = errors;
 if(typeof data4.browser_instance_id !== "string"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid3 = _errs13 === errors;
@@ -1196,7 +1815,7 @@ if(data4.tab_id !== undefined){
 let data6 = data4.tab_id;
 const _errs15 = errors;
 if(!(((typeof data6 == "number") && (!(data6 % 1) && !isNaN(data6))) && (isFinite(data6)))){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 var valid3 = _errs15 === errors;
@@ -1211,12 +1830,12 @@ const _errs17 = errors;
 if(errors === _errs17){
 if(typeof data7 === "string"){
 if(!pattern6.test(data7)){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -1229,7 +1848,7 @@ if(valid3){
 if(data4.script_attached !== undefined){
 const _errs19 = errors;
 if(typeof data4.script_attached !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs19 === errors;
@@ -1244,12 +1863,12 @@ const _errs21 = errors;
 if(errors === _errs21){
 if(typeof data9 === "string"){
 if(func1(data9) > 200){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -1265,12 +1884,12 @@ const _errs23 = errors;
 if(errors === _errs23){
 if(typeof data10 === "string"){
 if(func1(data10) > 32){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -1283,7 +1902,7 @@ if(valid3){
 if(data4.paused !== undefined){
 const _errs25 = errors;
 if(typeof data4.paused !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs25 === errors;
@@ -1295,7 +1914,7 @@ if(valid3){
 if(data4.muted !== undefined){
 const _errs27 = errors;
 if(typeof data4.muted !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs27 === errors;
@@ -1308,18 +1927,18 @@ if(data4.volume !== undefined){
 let data13 = data4.volume;
 const _errs29 = errors;
 if(!(((typeof data13 == "number") && (!(data13 % 1) && !isNaN(data13))) && (isFinite(data13)))){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 if(errors === _errs29){
 if((typeof data13 == "number") && (isFinite(data13))){
 if(data13 > 100 || isNaN(data13)){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
 return false;
 }
 else {
 if(data13 < 0 || isNaN(data13)){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
@@ -1337,12 +1956,12 @@ const _errs31 = errors;
 if(errors === _errs31){
 if((typeof data14 == "number") && (isFinite(data14))){
 if(data14 < 0 || isNaN(data14)){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -1358,12 +1977,12 @@ const _errs33 = errors;
 if(errors === _errs33){
 if((typeof data15 == "number") && (isFinite(data15))){
 if(data15 < 0 || isNaN(data15)){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -1377,11 +1996,11 @@ if(data4.context !== undefined){
 let data16 = data4.context;
 const _errs35 = errors;
 if(typeof data16 !== "string"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 if(!((((data16 === "watch") || (data16 === "shorts")) || (data16 === "music")) || (data16 === "other"))){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }
 var valid3 = _errs35 === errors;
@@ -1393,7 +2012,7 @@ if(valid3){
 if(data4.ad_showing !== undefined){
 const _errs37 = errors;
 if(typeof data4.ad_showing !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs37 === errors;
@@ -1405,7 +2024,7 @@ if(valid3){
 if(data4.is_live !== undefined){
 const _errs39 = errors;
 if(typeof data4.is_live !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs39 === errors;
@@ -1417,7 +2036,7 @@ if(valid3){
 if(data4.in_playlist !== undefined){
 const _errs41 = errors;
 if(typeof data4.in_playlist !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs41 === errors;
@@ -1429,7 +2048,7 @@ if(valid3){
 if(data4.theater !== undefined){
 const _errs43 = errors;
 if(typeof data4.theater !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs43 === errors;
@@ -1441,7 +2060,7 @@ if(valid3){
 if(data4.fullscreen !== undefined){
 const _errs45 = errors;
 if(typeof data4.fullscreen !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs45 === errors;
@@ -1453,7 +2072,7 @@ if(valid3){
 if(data4.has_next !== undefined){
 const _errs47 = errors;
 if(typeof data4.has_next !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs47 === errors;
@@ -1465,7 +2084,7 @@ if(valid3){
 if(data4.has_previous !== undefined){
 const _errs49 = errors;
 if(typeof data4.has_previous !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs49 === errors;
@@ -1477,7 +2096,7 @@ if(valid3){
 if(data4.active !== undefined){
 const _errs51 = errors;
 if(typeof data4.active !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0+"/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0+"/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs51 === errors;
@@ -1508,7 +2127,7 @@ var valid3 = true;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate32.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
@@ -1520,7 +2139,7 @@ break;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/type",keyword:"type",params:{type: "array"},message:"must be array"}];
+validate32.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/type",keyword:"type",params:{type: "array"},message:"must be array"}];
 return false;
 }
 }
@@ -1538,14 +2157,14 @@ if(errors === _errs54){
 if(data25 && typeof data25 == "object" && !Array.isArray(data25)){
 let missing2;
 if((((((((data25.browser_instance_id === undefined) && (missing2 = "browser_instance_id")) || ((data25.tab_id === undefined) && (missing2 = "tab_id"))) || ((data25.script_attached === undefined) && (missing2 = "script_attached"))) || ((data25.context === undefined) && (missing2 = "context"))) || ((data25.ad_showing === undefined) && (missing2 = "ad_showing"))) || ((data25.is_live === undefined) && (missing2 = "is_live"))) || ((data25.in_playlist === undefined) && (missing2 = "in_playlist"))){
-validate30.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing2},message:"must have required property '"+missing2+"'"}];
+validate32.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing2},message:"must have required property '"+missing2+"'"}];
 return false;
 }
 else {
 const _errs56 = errors;
 for(const key2 in data25){
 if(!(func5.call(schema38.properties, key2))){
-validate30.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"}];
+validate32.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -1554,7 +2173,7 @@ if(_errs56 === errors){
 if(data25.browser_instance_id !== undefined){
 const _errs57 = errors;
 if(typeof data25.browser_instance_id !== "string"){
-validate30.errors = [{instancePath:instancePath+"/tab/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tab/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid5 = _errs57 === errors;
@@ -1567,7 +2186,7 @@ if(data25.tab_id !== undefined){
 let data27 = data25.tab_id;
 const _errs59 = errors;
 if(!(((typeof data27 == "number") && (!(data27 % 1) && !isNaN(data27))) && (isFinite(data27)))){
-validate30.errors = [{instancePath:instancePath+"/tab/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate32.errors = [{instancePath:instancePath+"/tab/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 var valid5 = _errs59 === errors;
@@ -1582,12 +2201,12 @@ const _errs61 = errors;
 if(errors === _errs61){
 if(typeof data28 === "string"){
 if(!pattern6.test(data28)){
-validate30.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+validate32.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -1600,7 +2219,7 @@ if(valid5){
 if(data25.script_attached !== undefined){
 const _errs63 = errors;
 if(typeof data25.script_attached !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs63 === errors;
@@ -1615,12 +2234,12 @@ const _errs65 = errors;
 if(errors === _errs65){
 if(typeof data30 === "string"){
 if(func1(data30) > 200){
-validate30.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+validate32.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -1636,12 +2255,12 @@ const _errs67 = errors;
 if(errors === _errs67){
 if(typeof data31 === "string"){
 if(func1(data31) > 32){
-validate30.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+validate32.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -1654,7 +2273,7 @@ if(valid5){
 if(data25.paused !== undefined){
 const _errs69 = errors;
 if(typeof data25.paused !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs69 === errors;
@@ -1666,7 +2285,7 @@ if(valid5){
 if(data25.muted !== undefined){
 const _errs71 = errors;
 if(typeof data25.muted !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs71 === errors;
@@ -1679,18 +2298,18 @@ if(data25.volume !== undefined){
 let data34 = data25.volume;
 const _errs73 = errors;
 if(!(((typeof data34 == "number") && (!(data34 % 1) && !isNaN(data34))) && (isFinite(data34)))){
-validate30.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate32.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 if(errors === _errs73){
 if((typeof data34 == "number") && (isFinite(data34))){
 if(data34 > 100 || isNaN(data34)){
-validate30.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+validate32.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
 return false;
 }
 else {
 if(data34 < 0 || isNaN(data34)){
-validate30.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate32.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
@@ -1708,12 +2327,12 @@ const _errs75 = errors;
 if(errors === _errs75){
 if((typeof data35 == "number") && (isFinite(data35))){
 if(data35 < 0 || isNaN(data35)){
-validate30.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate32.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate32.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -1729,12 +2348,12 @@ const _errs77 = errors;
 if(errors === _errs77){
 if((typeof data36 == "number") && (isFinite(data36))){
 if(data36 < 0 || isNaN(data36)){
-validate30.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate32.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate32.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -1748,11 +2367,11 @@ if(data25.context !== undefined){
 let data37 = data25.context;
 const _errs79 = errors;
 if(typeof data37 !== "string"){
-validate30.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate32.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 if(!((((data37 === "watch") || (data37 === "shorts")) || (data37 === "music")) || (data37 === "other"))){
-validate30.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+validate32.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }
 var valid5 = _errs79 === errors;
@@ -1764,7 +2383,7 @@ if(valid5){
 if(data25.ad_showing !== undefined){
 const _errs81 = errors;
 if(typeof data25.ad_showing !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs81 === errors;
@@ -1776,7 +2395,7 @@ if(valid5){
 if(data25.is_live !== undefined){
 const _errs83 = errors;
 if(typeof data25.is_live !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs83 === errors;
@@ -1788,7 +2407,7 @@ if(valid5){
 if(data25.in_playlist !== undefined){
 const _errs85 = errors;
 if(typeof data25.in_playlist !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs85 === errors;
@@ -1800,7 +2419,7 @@ if(valid5){
 if(data25.theater !== undefined){
 const _errs87 = errors;
 if(typeof data25.theater !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs87 === errors;
@@ -1812,7 +2431,7 @@ if(valid5){
 if(data25.fullscreen !== undefined){
 const _errs89 = errors;
 if(typeof data25.fullscreen !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs89 === errors;
@@ -1824,7 +2443,7 @@ if(valid5){
 if(data25.has_next !== undefined){
 const _errs91 = errors;
 if(typeof data25.has_next !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs91 === errors;
@@ -1836,7 +2455,7 @@ if(valid5){
 if(data25.has_previous !== undefined){
 const _errs93 = errors;
 if(typeof data25.has_previous !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs93 === errors;
@@ -1848,7 +2467,7 @@ if(valid5){
 if(data25.active !== undefined){
 const _errs95 = errors;
 if(typeof data25.active !== "boolean"){
-validate30.errors = [{instancePath:instancePath+"/tab/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate32.errors = [{instancePath:instancePath+"/tab/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid5 = _errs95 === errors;
@@ -1879,7 +2498,7 @@ var valid5 = true;
 }
 }
 else {
-validate30.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate32.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
@@ -1896,14 +2515,14 @@ var valid0 = true;
 }
 }
 else {
-validate30.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate32.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
-validate30.errors = vErrors;
+validate32.errors = vErrors;
 return errors === 0;
 }
-validate30.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
+validate32.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 
 
 function validate21(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
@@ -2232,8 +2851,8 @@ props0 = true;
 }
 }
 const _errs19 = errors;
-if(!(validate30(data, {instancePath,parentData,parentDataProperty,rootData,dynamicAnchors}))){
-vErrors = vErrors === null ? validate30.errors : vErrors.concat(validate30.errors);
+if(!(validate32(data, {instancePath,parentData,parentDataProperty,rootData,dynamicAnchors}))){
+vErrors = vErrors === null ? validate32.errors : vErrors.concat(validate32.errors);
 errors = vErrors.length;
 }
 var _valid0 = _errs19 === errors;
@@ -2353,7 +2972,7 @@ let data10 = data9.code;
 const _errs30 = errors;
 if(errors === _errs30){
 if(typeof data10 === "string"){
-if(!pattern8.test(data10)){
+if(!pattern10.test(data10)){
 const err24 = {instancePath:instancePath+"/error/code",schemaPath:"#/$defs/bridge_error/properties/error/properties/code/pattern",keyword:"pattern",params:{pattern: "^[A-Z_]+$"},message:"must match pattern \""+"^[A-Z_]+$"+"\""};
 if(vErrors === null){
 vErrors = [err24];
@@ -2514,16 +3133,17 @@ return errors === 0;
 }
 validate21.evaluated = {"dynamicProps":true,"dynamicItems":false};
 
-export const agentToExtension = validate32;
-const schema45 = {"oneOf":[{"$ref":"#/$defs/bridge_hello_ack"},{"$ref":"#/$defs/bridge_request"},{"$ref":"#/$defs/bridge_error"}]};
-const schema46 = {"type":"object","additionalProperties":false,"required":["type","protocol_version","agent_version"],"properties":{"type":{"const":"bridge_hello_ack"},"protocol_version":{"type":"string"},"agent_version":{"type":"string"}}};
-const schema47 = {"description":"Agent → host → extension. `op` is a browser-adapter operation, not the public action name; the agent maps actions to ops. For tab ops the extension verifies tab_token matches the current attachment (else TARGET_CHANGED / TAB_NOT_CONTROLLABLE).","type":"object","additionalProperties":false,"required":["type","request_id","op","args"],"properties":{"type":{"const":"bridge_request"},"request_id":{"type":"string","pattern":"^[0-9a-f-]{36}$"},"op":{"type":"string","enum":["list_tabs","get_state","set_paused","next","previous","seek_relative","seek_to","set_muted","set_volume","set_theater","request_fullscreen"]},"args":{"type":"object","additionalProperties":false,"properties":{"tab_id":{"type":"integer","minimum":0},"tab_token":{"type":"string","pattern":"^[A-Za-z0-9_-]{22}$"},"expected_video_id":{"type":"string","maxLength":32},"paused":{"type":"boolean"},"seconds":{"type":"integer"},"position_seconds":{"type":"number"},"muted":{"type":"boolean"},"value":{"type":"integer","minimum":0,"maximum":100},"enabled":{"type":"boolean"}}},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000}}};
-const pattern12 = new RegExp("^[0-9a-f-]{36}$", "u");
+export const agentToExtension = validate34;
+const schema48 = {"oneOf":[{"$ref":"#/$defs/bridge_hello_ack"},{"$ref":"#/$defs/bridge_request"},{"$ref":"#/$defs/bridge_error"}]};
+const schema49 = {"type":"object","additionalProperties":false,"required":["type","protocol_version","agent_version"],"properties":{"type":{"const":"bridge_hello_ack"},"protocol_version":{"type":"string","description":"The negotiated version: the highest MINOR both sides support (version.json rules.bridge_negotiation)."},"agent_version":{"type":"string"}}};
+const schema50 = {"description":"Agent → host → extension. `op` is a browser-adapter operation, not the public action name; the agent maps actions to ops. For tab ops the extension verifies tab_token matches the current attachment (else TARGET_CHANGED / TAB_NOT_CONTROLLABLE).","type":"object","additionalProperties":false,"required":["type","request_id","op","args"],"properties":{"type":{"const":"bridge_request"},"request_id":{"type":"string","pattern":"^[0-9a-f-]{36}$"},"op":{"type":"string","enum":["list_tabs","get_state","set_paused","next","previous","seek_relative","seek_to","set_muted","set_volume","set_theater","request_fullscreen","search","open_result"]},"args":{"type":"object","additionalProperties":false,"properties":{"tab_id":{"type":"integer","minimum":0},"tab_token":{"type":"string","pattern":"^[A-Za-z0-9_-]{22}$"},"expected_video_id":{"type":"string","maxLength":32},"paused":{"type":"boolean"},"seconds":{"type":"integer"},"position_seconds":{"type":"number"},"muted":{"type":"boolean"},"value":{"type":"integer","minimum":0,"maximum":100},"enabled":{"type":"boolean"},"query":{"type":"string","minLength":1,"maxLength":100,"pattern":"^[^\\u0000-\\u0020\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$","description":"search only: the youtube.search query (rules.search_queries)"},"index":{"type":"integer","minimum":1,"maximum":10},"video_id":{"type":"string","minLength":1,"maxLength":32,"pattern":"^[A-Za-z0-9_-]+$"}}},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000}}};
+const pattern14 = new RegExp("^[0-9a-f-]{36}$", "u");
+const pattern16 = new RegExp("^[^\\u0000-\\u0020\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$", "u");
 
-function validate32(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+function validate34(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
 let vErrors = null;
 let errors = 0;
-const evaluated0 = validate32.evaluated;
+const evaluated0 = validate34.evaluated;
 if(evaluated0.dynamicProps){
 evaluated0.props = undefined;
 }
@@ -2693,7 +3313,7 @@ let data4 = data.request_id;
 const _errs15 = errors;
 if(errors === _errs15){
 if(typeof data4 === "string"){
-if(!pattern12.test(data4)){
+if(!pattern14.test(data4)){
 const err9 = {instancePath:instancePath+"/request_id",schemaPath:"#/$defs/bridge_request/properties/request_id/pattern",keyword:"pattern",params:{pattern: "^[0-9a-f-]{36}$"},message:"must match pattern \""+"^[0-9a-f-]{36}$"+"\""};
 if(vErrors === null){
 vErrors = [err9];
@@ -2734,8 +3354,8 @@ vErrors.push(err11);
 }
 errors++;
 }
-if(!(((((((((((data5 === "list_tabs") || (data5 === "get_state")) || (data5 === "set_paused")) || (data5 === "next")) || (data5 === "previous")) || (data5 === "seek_relative")) || (data5 === "seek_to")) || (data5 === "set_muted")) || (data5 === "set_volume")) || (data5 === "set_theater")) || (data5 === "request_fullscreen"))){
-const err12 = {instancePath:instancePath+"/op",schemaPath:"#/$defs/bridge_request/properties/op/enum",keyword:"enum",params:{allowedValues: schema47.properties.op.enum},message:"must be equal to one of the allowed values"};
+if(!(((((((((((((data5 === "list_tabs") || (data5 === "get_state")) || (data5 === "set_paused")) || (data5 === "next")) || (data5 === "previous")) || (data5 === "seek_relative")) || (data5 === "seek_to")) || (data5 === "set_muted")) || (data5 === "set_volume")) || (data5 === "set_theater")) || (data5 === "request_fullscreen")) || (data5 === "search")) || (data5 === "open_result"))){
+const err12 = {instancePath:instancePath+"/op",schemaPath:"#/$defs/bridge_request/properties/op/enum",keyword:"enum",params:{allowedValues: schema50.properties.op.enum},message:"must be equal to one of the allowed values"};
 if(vErrors === null){
 vErrors = [err12];
 }
@@ -2757,7 +3377,7 @@ if(errors === _errs19){
 if(data6 && typeof data6 == "object" && !Array.isArray(data6)){
 const _errs21 = errors;
 for(const key2 in data6){
-if(!(func5.call(schema47.properties.args.properties, key2))){
+if(!(func5.call(schema50.properties.args.properties, key2))){
 const err13 = {instancePath:instancePath+"/args",schemaPath:"#/$defs/bridge_request/properties/args/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"};
 if(vErrors === null){
 vErrors = [err13];
@@ -3005,23 +3625,185 @@ var valid5 = _errs38 === errors;
 else {
 var valid5 = true;
 }
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-else {
-const err28 = {instancePath:instancePath+"/args",schemaPath:"#/$defs/bridge_request/properties/args/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(valid5){
+if(data6.query !== undefined){
+let data16 = data6.query;
+const _errs40 = errors;
+if(errors === _errs40){
+if(typeof data16 === "string"){
+if(func1(data16) > 100){
+const err28 = {instancePath:instancePath+"/args/query",schemaPath:"#/$defs/bridge_request/properties/args/properties/query/maxLength",keyword:"maxLength",params:{limit: 100},message:"must NOT have more than 100 characters"};
 if(vErrors === null){
 vErrors = [err28];
 }
 else {
 vErrors.push(err28);
+}
+errors++;
+}
+else {
+if(func1(data16) < 1){
+const err29 = {instancePath:instancePath+"/args/query",schemaPath:"#/$defs/bridge_request/properties/args/properties/query/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
+if(vErrors === null){
+vErrors = [err29];
+}
+else {
+vErrors.push(err29);
+}
+errors++;
+}
+else {
+if(!pattern16.test(data16)){
+const err30 = {instancePath:instancePath+"/args/query",schemaPath:"#/$defs/bridge_request/properties/args/properties/query/pattern",keyword:"pattern",params:{pattern: "^[^\\u0000-\\u0020\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$"},message:"must match pattern \""+"^[^\\u0000-\\u0020\\u007F-\\u009F][^\\u0000-\\u001F\\u007F-\\u009F]*$"+"\""};
+if(vErrors === null){
+vErrors = [err30];
+}
+else {
+vErrors.push(err30);
+}
+errors++;
+}
+}
+}
+}
+else {
+const err31 = {instancePath:instancePath+"/args/query",schemaPath:"#/$defs/bridge_request/properties/args/properties/query/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err31];
+}
+else {
+vErrors.push(err31);
+}
+errors++;
+}
+}
+var valid5 = _errs40 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data6.index !== undefined){
+let data17 = data6.index;
+const _errs42 = errors;
+if(!(((typeof data17 == "number") && (!(data17 % 1) && !isNaN(data17))) && (isFinite(data17)))){
+const err32 = {instancePath:instancePath+"/args/index",schemaPath:"#/$defs/bridge_request/properties/args/properties/index/type",keyword:"type",params:{type: "integer"},message:"must be integer"};
+if(vErrors === null){
+vErrors = [err32];
+}
+else {
+vErrors.push(err32);
+}
+errors++;
+}
+if(errors === _errs42){
+if((typeof data17 == "number") && (isFinite(data17))){
+if(data17 > 10 || isNaN(data17)){
+const err33 = {instancePath:instancePath+"/args/index",schemaPath:"#/$defs/bridge_request/properties/args/properties/index/maximum",keyword:"maximum",params:{comparison: "<=", limit: 10},message:"must be <= 10"};
+if(vErrors === null){
+vErrors = [err33];
+}
+else {
+vErrors.push(err33);
+}
+errors++;
+}
+else {
+if(data17 < 1 || isNaN(data17)){
+const err34 = {instancePath:instancePath+"/args/index",schemaPath:"#/$defs/bridge_request/properties/args/properties/index/minimum",keyword:"minimum",params:{comparison: ">=", limit: 1},message:"must be >= 1"};
+if(vErrors === null){
+vErrors = [err34];
+}
+else {
+vErrors.push(err34);
+}
+errors++;
+}
+}
+}
+}
+var valid5 = _errs42 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data6.video_id !== undefined){
+let data18 = data6.video_id;
+const _errs44 = errors;
+if(errors === _errs44){
+if(typeof data18 === "string"){
+if(func1(data18) > 32){
+const err35 = {instancePath:instancePath+"/args/video_id",schemaPath:"#/$defs/bridge_request/properties/args/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"};
+if(vErrors === null){
+vErrors = [err35];
+}
+else {
+vErrors.push(err35);
+}
+errors++;
+}
+else {
+if(func1(data18) < 1){
+const err36 = {instancePath:instancePath+"/args/video_id",schemaPath:"#/$defs/bridge_request/properties/args/properties/video_id/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
+if(vErrors === null){
+vErrors = [err36];
+}
+else {
+vErrors.push(err36);
+}
+errors++;
+}
+else {
+if(!pattern4.test(data18)){
+const err37 = {instancePath:instancePath+"/args/video_id",schemaPath:"#/$defs/bridge_request/properties/args/properties/video_id/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]+$"},message:"must match pattern \""+"^[A-Za-z0-9_-]+$"+"\""};
+if(vErrors === null){
+vErrors = [err37];
+}
+else {
+vErrors.push(err37);
+}
+errors++;
+}
+}
+}
+}
+else {
+const err38 = {instancePath:instancePath+"/args/video_id",schemaPath:"#/$defs/bridge_request/properties/args/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err38];
+}
+else {
+vErrors.push(err38);
+}
+errors++;
+}
+}
+var valid5 = _errs44 === errors;
+}
+else {
+var valid5 = true;
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+else {
+const err39 = {instancePath:instancePath+"/args",schemaPath:"#/$defs/bridge_request/properties/args/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err39];
+}
+else {
+vErrors.push(err39);
 }
 errors++;
 }
@@ -3033,45 +3815,45 @@ var valid4 = true;
 }
 if(valid4){
 if(data.timeout_ms !== undefined){
-let data16 = data.timeout_ms;
-const _errs40 = errors;
-if(!(((typeof data16 == "number") && (!(data16 % 1) && !isNaN(data16))) && (isFinite(data16)))){
-const err29 = {instancePath:instancePath+"/timeout_ms",schemaPath:"#/$defs/bridge_request/properties/timeout_ms/type",keyword:"type",params:{type: "integer"},message:"must be integer"};
+let data19 = data.timeout_ms;
+const _errs46 = errors;
+if(!(((typeof data19 == "number") && (!(data19 % 1) && !isNaN(data19))) && (isFinite(data19)))){
+const err40 = {instancePath:instancePath+"/timeout_ms",schemaPath:"#/$defs/bridge_request/properties/timeout_ms/type",keyword:"type",params:{type: "integer"},message:"must be integer"};
 if(vErrors === null){
-vErrors = [err29];
+vErrors = [err40];
 }
 else {
-vErrors.push(err29);
+vErrors.push(err40);
 }
 errors++;
 }
-if(errors === _errs40){
-if((typeof data16 == "number") && (isFinite(data16))){
-if(data16 > 60000 || isNaN(data16)){
-const err30 = {instancePath:instancePath+"/timeout_ms",schemaPath:"#/$defs/bridge_request/properties/timeout_ms/maximum",keyword:"maximum",params:{comparison: "<=", limit: 60000},message:"must be <= 60000"};
+if(errors === _errs46){
+if((typeof data19 == "number") && (isFinite(data19))){
+if(data19 > 60000 || isNaN(data19)){
+const err41 = {instancePath:instancePath+"/timeout_ms",schemaPath:"#/$defs/bridge_request/properties/timeout_ms/maximum",keyword:"maximum",params:{comparison: "<=", limit: 60000},message:"must be <= 60000"};
 if(vErrors === null){
-vErrors = [err30];
+vErrors = [err41];
 }
 else {
-vErrors.push(err30);
+vErrors.push(err41);
 }
 errors++;
 }
 else {
-if(data16 < 100 || isNaN(data16)){
-const err31 = {instancePath:instancePath+"/timeout_ms",schemaPath:"#/$defs/bridge_request/properties/timeout_ms/minimum",keyword:"minimum",params:{comparison: ">=", limit: 100},message:"must be >= 100"};
+if(data19 < 100 || isNaN(data19)){
+const err42 = {instancePath:instancePath+"/timeout_ms",schemaPath:"#/$defs/bridge_request/properties/timeout_ms/minimum",keyword:"minimum",params:{comparison: ">=", limit: 100},message:"must be >= 100"};
 if(vErrors === null){
-vErrors = [err31];
+vErrors = [err42];
 }
 else {
-vErrors.push(err31);
+vErrors.push(err42);
 }
 errors++;
 }
 }
 }
 }
-var valid4 = _errs40 === errors;
+var valid4 = _errs46 === errors;
 }
 else {
 var valid4 = true;
@@ -3084,12 +3866,12 @@ var valid4 = true;
 }
 }
 else {
-const err32 = {instancePath,schemaPath:"#/$defs/bridge_request/type",keyword:"type",params:{type: "object"},message:"must be object"};
+const err43 = {instancePath,schemaPath:"#/$defs/bridge_request/type",keyword:"type",params:{type: "object"},message:"must be object"};
 if(vErrors === null){
-vErrors = [err32];
+vErrors = [err43];
 }
 else {
-vErrors.push(err32);
+vErrors.push(err43);
 }
 errors++;
 }
@@ -3107,196 +3889,13 @@ if(props0 !== true){
 props0 = true;
 }
 }
-const _errs42 = errors;
-const _errs43 = errors;
-if(errors === _errs43){
+const _errs48 = errors;
+const _errs49 = errors;
+if(errors === _errs49){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing2;
 if(((data.type === undefined) && (missing2 = "type")) || ((data.error === undefined) && (missing2 = "error"))){
-const err33 = {instancePath,schemaPath:"#/$defs/bridge_error/required",keyword:"required",params:{missingProperty: missing2},message:"must have required property '"+missing2+"'"};
-if(vErrors === null){
-vErrors = [err33];
-}
-else {
-vErrors.push(err33);
-}
-errors++;
-}
-else {
-const _errs45 = errors;
-for(const key3 in data){
-if(!(((key3 === "type") || (key3 === "ref_request_id")) || (key3 === "error"))){
-const err34 = {instancePath,schemaPath:"#/$defs/bridge_error/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key3},message:"must NOT have additional properties"};
-if(vErrors === null){
-vErrors = [err34];
-}
-else {
-vErrors.push(err34);
-}
-errors++;
-break;
-}
-}
-if(_errs45 === errors){
-if(data.type !== undefined){
-const _errs46 = errors;
-if("bridge_error" !== data.type){
-const err35 = {instancePath:instancePath+"/type",schemaPath:"#/$defs/bridge_error/properties/type/const",keyword:"const",params:{allowedValue: "bridge_error"},message:"must be equal to constant"};
-if(vErrors === null){
-vErrors = [err35];
-}
-else {
-vErrors.push(err35);
-}
-errors++;
-}
-var valid7 = _errs46 === errors;
-}
-else {
-var valid7 = true;
-}
-if(valid7){
-if(data.ref_request_id !== undefined){
-const _errs47 = errors;
-if(typeof data.ref_request_id !== "string"){
-const err36 = {instancePath:instancePath+"/ref_request_id",schemaPath:"#/$defs/bridge_error/properties/ref_request_id/type",keyword:"type",params:{type: "string"},message:"must be string"};
-if(vErrors === null){
-vErrors = [err36];
-}
-else {
-vErrors.push(err36);
-}
-errors++;
-}
-var valid7 = _errs47 === errors;
-}
-else {
-var valid7 = true;
-}
-if(valid7){
-if(data.error !== undefined){
-let data19 = data.error;
-const _errs49 = errors;
-if(errors === _errs49){
-if(data19 && typeof data19 == "object" && !Array.isArray(data19)){
-let missing3;
-if(((data19.code === undefined) && (missing3 = "code")) || ((data19.message === undefined) && (missing3 = "message"))){
-const err37 = {instancePath:instancePath+"/error",schemaPath:"#/$defs/bridge_error/properties/error/required",keyword:"required",params:{missingProperty: missing3},message:"must have required property '"+missing3+"'"};
-if(vErrors === null){
-vErrors = [err37];
-}
-else {
-vErrors.push(err37);
-}
-errors++;
-}
-else {
-const _errs51 = errors;
-for(const key4 in data19){
-if(!(((key4 === "code") || (key4 === "message")) || (key4 === "detail"))){
-const err38 = {instancePath:instancePath+"/error",schemaPath:"#/$defs/bridge_error/properties/error/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key4},message:"must NOT have additional properties"};
-if(vErrors === null){
-vErrors = [err38];
-}
-else {
-vErrors.push(err38);
-}
-errors++;
-break;
-}
-}
-if(_errs51 === errors){
-if(data19.code !== undefined){
-let data20 = data19.code;
-const _errs52 = errors;
-if(errors === _errs52){
-if(typeof data20 === "string"){
-if(!pattern8.test(data20)){
-const err39 = {instancePath:instancePath+"/error/code",schemaPath:"#/$defs/bridge_error/properties/error/properties/code/pattern",keyword:"pattern",params:{pattern: "^[A-Z_]+$"},message:"must match pattern \""+"^[A-Z_]+$"+"\""};
-if(vErrors === null){
-vErrors = [err39];
-}
-else {
-vErrors.push(err39);
-}
-errors++;
-}
-}
-else {
-const err40 = {instancePath:instancePath+"/error/code",schemaPath:"#/$defs/bridge_error/properties/error/properties/code/type",keyword:"type",params:{type: "string"},message:"must be string"};
-if(vErrors === null){
-vErrors = [err40];
-}
-else {
-vErrors.push(err40);
-}
-errors++;
-}
-}
-var valid8 = _errs52 === errors;
-}
-else {
-var valid8 = true;
-}
-if(valid8){
-if(data19.message !== undefined){
-let data21 = data19.message;
-const _errs54 = errors;
-if(errors === _errs54){
-if(typeof data21 === "string"){
-if(func1(data21) > 512){
-const err41 = {instancePath:instancePath+"/error/message",schemaPath:"#/$defs/bridge_error/properties/error/properties/message/maxLength",keyword:"maxLength",params:{limit: 512},message:"must NOT have more than 512 characters"};
-if(vErrors === null){
-vErrors = [err41];
-}
-else {
-vErrors.push(err41);
-}
-errors++;
-}
-}
-else {
-const err42 = {instancePath:instancePath+"/error/message",schemaPath:"#/$defs/bridge_error/properties/error/properties/message/type",keyword:"type",params:{type: "string"},message:"must be string"};
-if(vErrors === null){
-vErrors = [err42];
-}
-else {
-vErrors.push(err42);
-}
-errors++;
-}
-}
-var valid8 = _errs54 === errors;
-}
-else {
-var valid8 = true;
-}
-if(valid8){
-if(data19.detail !== undefined){
-let data22 = data19.detail;
-const _errs56 = errors;
-if(!(data22 && typeof data22 == "object" && !Array.isArray(data22))){
-const err43 = {instancePath:instancePath+"/error/detail",schemaPath:"#/$defs/bridge_error/properties/error/properties/detail/type",keyword:"type",params:{type: "object"},message:"must be object"};
-if(vErrors === null){
-vErrors = [err43];
-}
-else {
-vErrors.push(err43);
-}
-errors++;
-}
-var valid8 = _errs56 === errors;
-}
-else {
-var valid8 = true;
-}
-}
-}
-}
-}
-}
-else {
-const err44 = {instancePath:instancePath+"/error",schemaPath:"#/$defs/bridge_error/properties/error/type",keyword:"type",params:{type: "object"},message:"must be object"};
+const err44 = {instancePath,schemaPath:"#/$defs/bridge_error/required",keyword:"required",params:{missingProperty: missing2},message:"must have required property '"+missing2+"'"};
 if(vErrors === null){
 vErrors = [err44];
 }
@@ -3305,8 +3904,191 @@ vErrors.push(err44);
 }
 errors++;
 }
+else {
+const _errs51 = errors;
+for(const key3 in data){
+if(!(((key3 === "type") || (key3 === "ref_request_id")) || (key3 === "error"))){
+const err45 = {instancePath,schemaPath:"#/$defs/bridge_error/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key3},message:"must NOT have additional properties"};
+if(vErrors === null){
+vErrors = [err45];
 }
-var valid7 = _errs49 === errors;
+else {
+vErrors.push(err45);
+}
+errors++;
+break;
+}
+}
+if(_errs51 === errors){
+if(data.type !== undefined){
+const _errs52 = errors;
+if("bridge_error" !== data.type){
+const err46 = {instancePath:instancePath+"/type",schemaPath:"#/$defs/bridge_error/properties/type/const",keyword:"const",params:{allowedValue: "bridge_error"},message:"must be equal to constant"};
+if(vErrors === null){
+vErrors = [err46];
+}
+else {
+vErrors.push(err46);
+}
+errors++;
+}
+var valid7 = _errs52 === errors;
+}
+else {
+var valid7 = true;
+}
+if(valid7){
+if(data.ref_request_id !== undefined){
+const _errs53 = errors;
+if(typeof data.ref_request_id !== "string"){
+const err47 = {instancePath:instancePath+"/ref_request_id",schemaPath:"#/$defs/bridge_error/properties/ref_request_id/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err47];
+}
+else {
+vErrors.push(err47);
+}
+errors++;
+}
+var valid7 = _errs53 === errors;
+}
+else {
+var valid7 = true;
+}
+if(valid7){
+if(data.error !== undefined){
+let data22 = data.error;
+const _errs55 = errors;
+if(errors === _errs55){
+if(data22 && typeof data22 == "object" && !Array.isArray(data22)){
+let missing3;
+if(((data22.code === undefined) && (missing3 = "code")) || ((data22.message === undefined) && (missing3 = "message"))){
+const err48 = {instancePath:instancePath+"/error",schemaPath:"#/$defs/bridge_error/properties/error/required",keyword:"required",params:{missingProperty: missing3},message:"must have required property '"+missing3+"'"};
+if(vErrors === null){
+vErrors = [err48];
+}
+else {
+vErrors.push(err48);
+}
+errors++;
+}
+else {
+const _errs57 = errors;
+for(const key4 in data22){
+if(!(((key4 === "code") || (key4 === "message")) || (key4 === "detail"))){
+const err49 = {instancePath:instancePath+"/error",schemaPath:"#/$defs/bridge_error/properties/error/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key4},message:"must NOT have additional properties"};
+if(vErrors === null){
+vErrors = [err49];
+}
+else {
+vErrors.push(err49);
+}
+errors++;
+break;
+}
+}
+if(_errs57 === errors){
+if(data22.code !== undefined){
+let data23 = data22.code;
+const _errs58 = errors;
+if(errors === _errs58){
+if(typeof data23 === "string"){
+if(!pattern10.test(data23)){
+const err50 = {instancePath:instancePath+"/error/code",schemaPath:"#/$defs/bridge_error/properties/error/properties/code/pattern",keyword:"pattern",params:{pattern: "^[A-Z_]+$"},message:"must match pattern \""+"^[A-Z_]+$"+"\""};
+if(vErrors === null){
+vErrors = [err50];
+}
+else {
+vErrors.push(err50);
+}
+errors++;
+}
+}
+else {
+const err51 = {instancePath:instancePath+"/error/code",schemaPath:"#/$defs/bridge_error/properties/error/properties/code/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err51];
+}
+else {
+vErrors.push(err51);
+}
+errors++;
+}
+}
+var valid8 = _errs58 === errors;
+}
+else {
+var valid8 = true;
+}
+if(valid8){
+if(data22.message !== undefined){
+let data24 = data22.message;
+const _errs60 = errors;
+if(errors === _errs60){
+if(typeof data24 === "string"){
+if(func1(data24) > 512){
+const err52 = {instancePath:instancePath+"/error/message",schemaPath:"#/$defs/bridge_error/properties/error/properties/message/maxLength",keyword:"maxLength",params:{limit: 512},message:"must NOT have more than 512 characters"};
+if(vErrors === null){
+vErrors = [err52];
+}
+else {
+vErrors.push(err52);
+}
+errors++;
+}
+}
+else {
+const err53 = {instancePath:instancePath+"/error/message",schemaPath:"#/$defs/bridge_error/properties/error/properties/message/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(vErrors === null){
+vErrors = [err53];
+}
+else {
+vErrors.push(err53);
+}
+errors++;
+}
+}
+var valid8 = _errs60 === errors;
+}
+else {
+var valid8 = true;
+}
+if(valid8){
+if(data22.detail !== undefined){
+let data25 = data22.detail;
+const _errs62 = errors;
+if(!(data25 && typeof data25 == "object" && !Array.isArray(data25))){
+const err54 = {instancePath:instancePath+"/error/detail",schemaPath:"#/$defs/bridge_error/properties/error/properties/detail/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err54];
+}
+else {
+vErrors.push(err54);
+}
+errors++;
+}
+var valid8 = _errs62 === errors;
+}
+else {
+var valid8 = true;
+}
+}
+}
+}
+}
+}
+else {
+const err55 = {instancePath:instancePath+"/error",schemaPath:"#/$defs/bridge_error/properties/error/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err55];
+}
+else {
+vErrors.push(err55);
+}
+errors++;
+}
+}
+var valid7 = _errs55 === errors;
 }
 else {
 var valid7 = true;
@@ -3317,17 +4099,17 @@ var valid7 = true;
 }
 }
 else {
-const err45 = {instancePath,schemaPath:"#/$defs/bridge_error/type",keyword:"type",params:{type: "object"},message:"must be object"};
+const err56 = {instancePath,schemaPath:"#/$defs/bridge_error/type",keyword:"type",params:{type: "object"},message:"must be object"};
 if(vErrors === null){
-vErrors = [err45];
+vErrors = [err56];
 }
 else {
-vErrors.push(err45);
+vErrors.push(err56);
 }
 errors++;
 }
 }
-var _valid0 = _errs42 === errors;
+var _valid0 = _errs48 === errors;
 if(_valid0 && valid0){
 valid0 = false;
 passing0 = [passing0, 2];
@@ -3343,15 +4125,15 @@ props0 = true;
 }
 }
 if(!valid0){
-const err46 = {instancePath,schemaPath:"#/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};
+const err57 = {instancePath,schemaPath:"#/oneOf",keyword:"oneOf",params:{passingSchemas: passing0},message:"must match exactly one schema in oneOf"};
 if(vErrors === null){
-vErrors = [err46];
+vErrors = [err57];
 }
 else {
-vErrors.push(err46);
+vErrors.push(err57);
 }
 errors++;
-validate32.errors = vErrors;
+validate34.errors = vErrors;
 return false;
 }
 else {
@@ -3365,18 +4147,18 @@ vErrors = null;
 }
 }
 }
-validate32.errors = vErrors;
+validate34.errors = vErrors;
 evaluated0.props = props0;
 return errors === 0;
 }
-validate32.evaluated = {"dynamicProps":true,"dynamicItems":false};
+validate34.evaluated = {"dynamicProps":true,"dynamicItems":false};
 
-export const youtubeTab = validate33;
+export const youtubeTab = validate35;
 
-function validate33(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+function validate35(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
 let vErrors = null;
 let errors = 0;
-const evaluated0 = validate33.evaluated;
+const evaluated0 = validate35.evaluated;
 if(evaluated0.dynamicProps){
 evaluated0.props = undefined;
 }
@@ -3387,14 +4169,14 @@ if(errors === 0){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing0;
 if((((((((data.browser_instance_id === undefined) && (missing0 = "browser_instance_id")) || ((data.tab_id === undefined) && (missing0 = "tab_id"))) || ((data.script_attached === undefined) && (missing0 = "script_attached"))) || ((data.context === undefined) && (missing0 = "context"))) || ((data.ad_showing === undefined) && (missing0 = "ad_showing"))) || ((data.is_live === undefined) && (missing0 = "is_live"))) || ((data.in_playlist === undefined) && (missing0 = "in_playlist"))){
-validate33.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
+validate35.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
 return false;
 }
 else {
 const _errs1 = errors;
 for(const key0 in data){
 if(!(func5.call(schema38.properties, key0))){
-validate33.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
+validate35.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -3403,7 +4185,7 @@ if(_errs1 === errors){
 if(data.browser_instance_id !== undefined){
 const _errs2 = errors;
 if(typeof data.browser_instance_id !== "string"){
-validate33.errors = [{instancePath:instancePath+"/browser_instance_id",schemaPath:"#/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate35.errors = [{instancePath:instancePath+"/browser_instance_id",schemaPath:"#/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid0 = _errs2 === errors;
@@ -3416,7 +4198,7 @@ if(data.tab_id !== undefined){
 let data1 = data.tab_id;
 const _errs4 = errors;
 if(!(((typeof data1 == "number") && (!(data1 % 1) && !isNaN(data1))) && (isFinite(data1)))){
-validate33.errors = [{instancePath:instancePath+"/tab_id",schemaPath:"#/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate35.errors = [{instancePath:instancePath+"/tab_id",schemaPath:"#/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 var valid0 = _errs4 === errors;
@@ -3431,12 +4213,12 @@ const _errs6 = errors;
 if(errors === _errs6){
 if(typeof data2 === "string"){
 if(!pattern6.test(data2)){
-validate33.errors = [{instancePath:instancePath+"/tab_token",schemaPath:"#/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+validate35.errors = [{instancePath:instancePath+"/tab_token",schemaPath:"#/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
 return false;
 }
 }
 else {
-validate33.errors = [{instancePath:instancePath+"/tab_token",schemaPath:"#/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate35.errors = [{instancePath:instancePath+"/tab_token",schemaPath:"#/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -3449,7 +4231,7 @@ if(valid0){
 if(data.script_attached !== undefined){
 const _errs8 = errors;
 if(typeof data.script_attached !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/script_attached",schemaPath:"#/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/script_attached",schemaPath:"#/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs8 === errors;
@@ -3464,12 +4246,12 @@ const _errs10 = errors;
 if(errors === _errs10){
 if(typeof data4 === "string"){
 if(func1(data4) > 200){
-validate33.errors = [{instancePath:instancePath+"/title",schemaPath:"#/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+validate35.errors = [{instancePath:instancePath+"/title",schemaPath:"#/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
 return false;
 }
 }
 else {
-validate33.errors = [{instancePath:instancePath+"/title",schemaPath:"#/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate35.errors = [{instancePath:instancePath+"/title",schemaPath:"#/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -3485,12 +4267,12 @@ const _errs12 = errors;
 if(errors === _errs12){
 if(typeof data5 === "string"){
 if(func1(data5) > 32){
-validate33.errors = [{instancePath:instancePath+"/video_id",schemaPath:"#/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+validate35.errors = [{instancePath:instancePath+"/video_id",schemaPath:"#/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
 return false;
 }
 }
 else {
-validate33.errors = [{instancePath:instancePath+"/video_id",schemaPath:"#/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate35.errors = [{instancePath:instancePath+"/video_id",schemaPath:"#/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -3503,7 +4285,7 @@ if(valid0){
 if(data.paused !== undefined){
 const _errs14 = errors;
 if(typeof data.paused !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/paused",schemaPath:"#/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/paused",schemaPath:"#/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs14 === errors;
@@ -3515,7 +4297,7 @@ if(valid0){
 if(data.muted !== undefined){
 const _errs16 = errors;
 if(typeof data.muted !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/muted",schemaPath:"#/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/muted",schemaPath:"#/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs16 === errors;
@@ -3528,18 +4310,18 @@ if(data.volume !== undefined){
 let data8 = data.volume;
 const _errs18 = errors;
 if(!(((typeof data8 == "number") && (!(data8 % 1) && !isNaN(data8))) && (isFinite(data8)))){
-validate33.errors = [{instancePath:instancePath+"/volume",schemaPath:"#/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate35.errors = [{instancePath:instancePath+"/volume",schemaPath:"#/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 if(errors === _errs18){
 if((typeof data8 == "number") && (isFinite(data8))){
 if(data8 > 100 || isNaN(data8)){
-validate33.errors = [{instancePath:instancePath+"/volume",schemaPath:"#/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+validate35.errors = [{instancePath:instancePath+"/volume",schemaPath:"#/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
 return false;
 }
 else {
 if(data8 < 0 || isNaN(data8)){
-validate33.errors = [{instancePath:instancePath+"/volume",schemaPath:"#/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate35.errors = [{instancePath:instancePath+"/volume",schemaPath:"#/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
@@ -3557,12 +4339,12 @@ const _errs20 = errors;
 if(errors === _errs20){
 if((typeof data9 == "number") && (isFinite(data9))){
 if(data9 < 0 || isNaN(data9)){
-validate33.errors = [{instancePath:instancePath+"/position_seconds",schemaPath:"#/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate35.errors = [{instancePath:instancePath+"/position_seconds",schemaPath:"#/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate33.errors = [{instancePath:instancePath+"/position_seconds",schemaPath:"#/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate35.errors = [{instancePath:instancePath+"/position_seconds",schemaPath:"#/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -3578,12 +4360,12 @@ const _errs22 = errors;
 if(errors === _errs22){
 if((typeof data10 == "number") && (isFinite(data10))){
 if(data10 < 0 || isNaN(data10)){
-validate33.errors = [{instancePath:instancePath+"/duration_seconds",schemaPath:"#/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate35.errors = [{instancePath:instancePath+"/duration_seconds",schemaPath:"#/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate33.errors = [{instancePath:instancePath+"/duration_seconds",schemaPath:"#/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate35.errors = [{instancePath:instancePath+"/duration_seconds",schemaPath:"#/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -3597,11 +4379,11 @@ if(data.context !== undefined){
 let data11 = data.context;
 const _errs24 = errors;
 if(typeof data11 !== "string"){
-validate33.errors = [{instancePath:instancePath+"/context",schemaPath:"#/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate35.errors = [{instancePath:instancePath+"/context",schemaPath:"#/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 if(!((((data11 === "watch") || (data11 === "shorts")) || (data11 === "music")) || (data11 === "other"))){
-validate33.errors = [{instancePath:instancePath+"/context",schemaPath:"#/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+validate35.errors = [{instancePath:instancePath+"/context",schemaPath:"#/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }
 var valid0 = _errs24 === errors;
@@ -3613,7 +4395,7 @@ if(valid0){
 if(data.ad_showing !== undefined){
 const _errs26 = errors;
 if(typeof data.ad_showing !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/ad_showing",schemaPath:"#/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/ad_showing",schemaPath:"#/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs26 === errors;
@@ -3625,7 +4407,7 @@ if(valid0){
 if(data.is_live !== undefined){
 const _errs28 = errors;
 if(typeof data.is_live !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/is_live",schemaPath:"#/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/is_live",schemaPath:"#/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs28 === errors;
@@ -3637,7 +4419,7 @@ if(valid0){
 if(data.in_playlist !== undefined){
 const _errs30 = errors;
 if(typeof data.in_playlist !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/in_playlist",schemaPath:"#/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/in_playlist",schemaPath:"#/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs30 === errors;
@@ -3649,7 +4431,7 @@ if(valid0){
 if(data.theater !== undefined){
 const _errs32 = errors;
 if(typeof data.theater !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/theater",schemaPath:"#/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/theater",schemaPath:"#/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs32 === errors;
@@ -3661,7 +4443,7 @@ if(valid0){
 if(data.fullscreen !== undefined){
 const _errs34 = errors;
 if(typeof data.fullscreen !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/fullscreen",schemaPath:"#/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/fullscreen",schemaPath:"#/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs34 === errors;
@@ -3673,7 +4455,7 @@ if(valid0){
 if(data.has_next !== undefined){
 const _errs36 = errors;
 if(typeof data.has_next !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/has_next",schemaPath:"#/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/has_next",schemaPath:"#/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs36 === errors;
@@ -3685,7 +4467,7 @@ if(valid0){
 if(data.has_previous !== undefined){
 const _errs38 = errors;
 if(typeof data.has_previous !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/has_previous",schemaPath:"#/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/has_previous",schemaPath:"#/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs38 === errors;
@@ -3697,7 +4479,7 @@ if(valid0){
 if(data.active !== undefined){
 const _errs40 = errors;
 if(typeof data.active !== "boolean"){
-validate33.errors = [{instancePath:instancePath+"/active",schemaPath:"#/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate35.errors = [{instancePath:instancePath+"/active",schemaPath:"#/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid0 = _errs40 === errors;
@@ -3728,21 +4510,21 @@ var valid0 = true;
 }
 }
 else {
-validate33.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate35.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
-validate33.errors = vErrors;
+validate35.errors = vErrors;
 return errors === 0;
 }
-validate33.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
+validate35.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 
-export const tabsResult = validate34;
+export const tabsResult = validate36;
 
-function validate34(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+function validate36(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
 let vErrors = null;
 let errors = 0;
-const evaluated0 = validate34.evaluated;
+const evaluated0 = validate36.evaluated;
 if(evaluated0.dynamicProps){
 evaluated0.props = undefined;
 }
@@ -3753,14 +4535,14 @@ if(errors === 0){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing0;
 if((data.tabs === undefined) && (missing0 = "tabs")){
-validate34.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
+validate36.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
 return false;
 }
 else {
 const _errs1 = errors;
 for(const key0 in data){
 if(!(key0 === "tabs")){
-validate34.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
+validate36.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -3772,7 +4554,7 @@ const _errs2 = errors;
 if(errors === _errs2){
 if(Array.isArray(data0)){
 if(data0.length > 32){
-validate34.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/maxItems",keyword:"maxItems",params:{limit: 32},message:"must NOT have more than 32 items"}];
+validate36.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/maxItems",keyword:"maxItems",params:{limit: 32},message:"must NOT have more than 32 items"}];
 return false;
 }
 else {
@@ -3786,14 +4568,14 @@ if(errors === _errs5){
 if(data1 && typeof data1 == "object" && !Array.isArray(data1)){
 let missing1;
 if((((((((data1.browser_instance_id === undefined) && (missing1 = "browser_instance_id")) || ((data1.tab_id === undefined) && (missing1 = "tab_id"))) || ((data1.script_attached === undefined) && (missing1 = "script_attached"))) || ((data1.context === undefined) && (missing1 = "context"))) || ((data1.ad_showing === undefined) && (missing1 = "ad_showing"))) || ((data1.is_live === undefined) && (missing1 = "is_live"))) || ((data1.in_playlist === undefined) && (missing1 = "in_playlist"))){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
 return false;
 }
 else {
 const _errs7 = errors;
 for(const key1 in data1){
 if(!(func5.call(schema38.properties, key1))){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -3802,7 +4584,7 @@ if(_errs7 === errors){
 if(data1.browser_instance_id !== undefined){
 const _errs8 = errors;
 if(typeof data1.browser_instance_id !== "string"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid3 = _errs8 === errors;
@@ -3815,7 +4597,7 @@ if(data1.tab_id !== undefined){
 let data3 = data1.tab_id;
 const _errs10 = errors;
 if(!(((typeof data3 == "number") && (!(data3 % 1) && !isNaN(data3))) && (isFinite(data3)))){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 var valid3 = _errs10 === errors;
@@ -3830,12 +4612,12 @@ const _errs12 = errors;
 if(errors === _errs12){
 if(typeof data4 === "string"){
 if(!pattern6.test(data4)){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
 return false;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -3848,7 +4630,7 @@ if(valid3){
 if(data1.script_attached !== undefined){
 const _errs14 = errors;
 if(typeof data1.script_attached !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs14 === errors;
@@ -3863,12 +4645,12 @@ const _errs16 = errors;
 if(errors === _errs16){
 if(typeof data6 === "string"){
 if(func1(data6) > 200){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
 return false;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -3884,12 +4666,12 @@ const _errs18 = errors;
 if(errors === _errs18){
 if(typeof data7 === "string"){
 if(func1(data7) > 32){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
 return false;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -3902,7 +4684,7 @@ if(valid3){
 if(data1.paused !== undefined){
 const _errs20 = errors;
 if(typeof data1.paused !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs20 === errors;
@@ -3914,7 +4696,7 @@ if(valid3){
 if(data1.muted !== undefined){
 const _errs22 = errors;
 if(typeof data1.muted !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs22 === errors;
@@ -3927,18 +4709,18 @@ if(data1.volume !== undefined){
 let data10 = data1.volume;
 const _errs24 = errors;
 if(!(((typeof data10 == "number") && (!(data10 % 1) && !isNaN(data10))) && (isFinite(data10)))){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 if(errors === _errs24){
 if((typeof data10 == "number") && (isFinite(data10))){
 if(data10 > 100 || isNaN(data10)){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
 return false;
 }
 else {
 if(data10 < 0 || isNaN(data10)){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
@@ -3956,12 +4738,12 @@ const _errs26 = errors;
 if(errors === _errs26){
 if((typeof data11 == "number") && (isFinite(data11))){
 if(data11 < 0 || isNaN(data11)){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -3977,12 +4759,12 @@ const _errs28 = errors;
 if(errors === _errs28){
 if((typeof data12 == "number") && (isFinite(data12))){
 if(data12 < 0 || isNaN(data12)){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -3996,11 +4778,11 @@ if(data1.context !== undefined){
 let data13 = data1.context;
 const _errs30 = errors;
 if(typeof data13 !== "string"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 if(!((((data13 === "watch") || (data13 === "shorts")) || (data13 === "music")) || (data13 === "other"))){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }
 var valid3 = _errs30 === errors;
@@ -4012,7 +4794,7 @@ if(valid3){
 if(data1.ad_showing !== undefined){
 const _errs32 = errors;
 if(typeof data1.ad_showing !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs32 === errors;
@@ -4024,7 +4806,7 @@ if(valid3){
 if(data1.is_live !== undefined){
 const _errs34 = errors;
 if(typeof data1.is_live !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs34 === errors;
@@ -4036,7 +4818,7 @@ if(valid3){
 if(data1.in_playlist !== undefined){
 const _errs36 = errors;
 if(typeof data1.in_playlist !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs36 === errors;
@@ -4048,7 +4830,7 @@ if(valid3){
 if(data1.theater !== undefined){
 const _errs38 = errors;
 if(typeof data1.theater !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs38 === errors;
@@ -4060,7 +4842,7 @@ if(valid3){
 if(data1.fullscreen !== undefined){
 const _errs40 = errors;
 if(typeof data1.fullscreen !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs40 === errors;
@@ -4072,7 +4854,7 @@ if(valid3){
 if(data1.has_next !== undefined){
 const _errs42 = errors;
 if(typeof data1.has_next !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs42 === errors;
@@ -4084,7 +4866,7 @@ if(valid3){
 if(data1.has_previous !== undefined){
 const _errs44 = errors;
 if(typeof data1.has_previous !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs44 === errors;
@@ -4096,7 +4878,7 @@ if(valid3){
 if(data1.active !== undefined){
 const _errs46 = errors;
 if(typeof data1.active !== "boolean"){
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0+"/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0+"/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid3 = _errs46 === errors;
@@ -4127,7 +4909,7 @@ var valid3 = true;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate36.errors = [{instancePath:instancePath+"/tabs/" + i0,schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
@@ -4139,7 +4921,7 @@ break;
 }
 }
 else {
-validate34.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/type",keyword:"type",params:{type: "array"},message:"must be array"}];
+validate36.errors = [{instancePath:instancePath+"/tabs",schemaPath:"#/properties/tabs/type",keyword:"type",params:{type: "array"},message:"must be array"}];
 return false;
 }
 }
@@ -4148,21 +4930,21 @@ return false;
 }
 }
 else {
-validate34.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate36.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
-validate34.errors = vErrors;
+validate36.errors = vErrors;
 return errors === 0;
 }
-validate34.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
+validate36.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 
-export const youtubeStateResult = validate35;
+export const youtubeStateResult = validate37;
 
-function validate35(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+function validate37(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
 let vErrors = null;
 let errors = 0;
-const evaluated0 = validate35.evaluated;
+const evaluated0 = validate37.evaluated;
 if(evaluated0.dynamicProps){
 evaluated0.props = undefined;
 }
@@ -4173,14 +4955,14 @@ if(errors === 0){
 if(data && typeof data == "object" && !Array.isArray(data)){
 let missing0;
 if((data.tab === undefined) && (missing0 = "tab")){
-validate35.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
+validate37.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
 return false;
 }
 else {
 const _errs1 = errors;
 for(const key0 in data){
 if(!((key0 === "tab") || (key0 === "previous_video_id"))){
-validate35.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
+validate37.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -4194,14 +4976,14 @@ if(errors === _errs3){
 if(data0 && typeof data0 == "object" && !Array.isArray(data0)){
 let missing1;
 if((((((((data0.browser_instance_id === undefined) && (missing1 = "browser_instance_id")) || ((data0.tab_id === undefined) && (missing1 = "tab_id"))) || ((data0.script_attached === undefined) && (missing1 = "script_attached"))) || ((data0.context === undefined) && (missing1 = "context"))) || ((data0.ad_showing === undefined) && (missing1 = "ad_showing"))) || ((data0.is_live === undefined) && (missing1 = "is_live"))) || ((data0.in_playlist === undefined) && (missing1 = "in_playlist"))){
-validate35.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
+validate37.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
 return false;
 }
 else {
 const _errs5 = errors;
 for(const key1 in data0){
 if(!(func5.call(schema38.properties, key1))){
-validate35.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
+validate37.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
 return false;
 break;
 }
@@ -4210,7 +4992,7 @@ if(_errs5 === errors){
 if(data0.browser_instance_id !== undefined){
 const _errs6 = errors;
 if(typeof data0.browser_instance_id !== "string"){
-validate35.errors = [{instancePath:instancePath+"/tab/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate37.errors = [{instancePath:instancePath+"/tab/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 var valid2 = _errs6 === errors;
@@ -4223,7 +5005,7 @@ if(data0.tab_id !== undefined){
 let data2 = data0.tab_id;
 const _errs8 = errors;
 if(!(((typeof data2 == "number") && (!(data2 % 1) && !isNaN(data2))) && (isFinite(data2)))){
-validate35.errors = [{instancePath:instancePath+"/tab/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate37.errors = [{instancePath:instancePath+"/tab/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 var valid2 = _errs8 === errors;
@@ -4238,12 +5020,12 @@ const _errs10 = errors;
 if(errors === _errs10){
 if(typeof data3 === "string"){
 if(!pattern6.test(data3)){
-validate35.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+validate37.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
 return false;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate37.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -4256,7 +5038,7 @@ if(valid2){
 if(data0.script_attached !== undefined){
 const _errs12 = errors;
 if(typeof data0.script_attached !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs12 === errors;
@@ -4271,12 +5053,12 @@ const _errs14 = errors;
 if(errors === _errs14){
 if(typeof data5 === "string"){
 if(func1(data5) > 200){
-validate35.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+validate37.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
 return false;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate37.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -4292,12 +5074,12 @@ const _errs16 = errors;
 if(errors === _errs16){
 if(typeof data6 === "string"){
 if(func1(data6) > 32){
-validate35.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+validate37.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
 return false;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate37.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -4310,7 +5092,7 @@ if(valid2){
 if(data0.paused !== undefined){
 const _errs18 = errors;
 if(typeof data0.paused !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs18 === errors;
@@ -4322,7 +5104,7 @@ if(valid2){
 if(data0.muted !== undefined){
 const _errs20 = errors;
 if(typeof data0.muted !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs20 === errors;
@@ -4335,18 +5117,18 @@ if(data0.volume !== undefined){
 let data9 = data0.volume;
 const _errs22 = errors;
 if(!(((typeof data9 == "number") && (!(data9 % 1) && !isNaN(data9))) && (isFinite(data9)))){
-validate35.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+validate37.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
 return false;
 }
 if(errors === _errs22){
 if((typeof data9 == "number") && (isFinite(data9))){
 if(data9 > 100 || isNaN(data9)){
-validate35.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+validate37.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
 return false;
 }
 else {
 if(data9 < 0 || isNaN(data9)){
-validate35.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate37.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
@@ -4364,12 +5146,12 @@ const _errs24 = errors;
 if(errors === _errs24){
 if((typeof data10 == "number") && (isFinite(data10))){
 if(data10 < 0 || isNaN(data10)){
-validate35.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate37.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate37.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -4385,12 +5167,12 @@ const _errs26 = errors;
 if(errors === _errs26){
 if((typeof data11 == "number") && (isFinite(data11))){
 if(data11 < 0 || isNaN(data11)){
-validate35.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+validate37.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
 return false;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+validate37.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
 return false;
 }
 }
@@ -4404,11 +5186,11 @@ if(data0.context !== undefined){
 let data12 = data0.context;
 const _errs28 = errors;
 if(typeof data12 !== "string"){
-validate35.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate37.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 if(!((((data12 === "watch") || (data12 === "shorts")) || (data12 === "music")) || (data12 === "other"))){
-validate35.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+validate37.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
 return false;
 }
 var valid2 = _errs28 === errors;
@@ -4420,7 +5202,7 @@ if(valid2){
 if(data0.ad_showing !== undefined){
 const _errs30 = errors;
 if(typeof data0.ad_showing !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs30 === errors;
@@ -4432,7 +5214,7 @@ if(valid2){
 if(data0.is_live !== undefined){
 const _errs32 = errors;
 if(typeof data0.is_live !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs32 === errors;
@@ -4444,7 +5226,7 @@ if(valid2){
 if(data0.in_playlist !== undefined){
 const _errs34 = errors;
 if(typeof data0.in_playlist !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs34 === errors;
@@ -4456,7 +5238,7 @@ if(valid2){
 if(data0.theater !== undefined){
 const _errs36 = errors;
 if(typeof data0.theater !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs36 === errors;
@@ -4468,7 +5250,7 @@ if(valid2){
 if(data0.fullscreen !== undefined){
 const _errs38 = errors;
 if(typeof data0.fullscreen !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs38 === errors;
@@ -4480,7 +5262,7 @@ if(valid2){
 if(data0.has_next !== undefined){
 const _errs40 = errors;
 if(typeof data0.has_next !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs40 === errors;
@@ -4492,7 +5274,7 @@ if(valid2){
 if(data0.has_previous !== undefined){
 const _errs42 = errors;
 if(typeof data0.has_previous !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs42 === errors;
@@ -4504,7 +5286,7 @@ if(valid2){
 if(data0.active !== undefined){
 const _errs44 = errors;
 if(typeof data0.active !== "boolean"){
-validate35.errors = [{instancePath:instancePath+"/tab/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+validate37.errors = [{instancePath:instancePath+"/tab/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
 return false;
 }
 var valid2 = _errs44 === errors;
@@ -4535,7 +5317,7 @@ var valid2 = true;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate37.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
@@ -4551,12 +5333,12 @@ const _errs46 = errors;
 if(errors === _errs46){
 if(typeof data21 === "string"){
 if(func1(data21) > 32){
-validate35.errors = [{instancePath:instancePath+"/previous_video_id",schemaPath:"#/properties/previous_video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+validate37.errors = [{instancePath:instancePath+"/previous_video_id",schemaPath:"#/properties/previous_video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
 return false;
 }
 }
 else {
-validate35.errors = [{instancePath:instancePath+"/previous_video_id",schemaPath:"#/properties/previous_video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+validate37.errors = [{instancePath:instancePath+"/previous_video_id",schemaPath:"#/properties/previous_video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
 return false;
 }
 }
@@ -4570,12 +5352,611 @@ var valid0 = true;
 }
 }
 else {
-validate35.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+validate37.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
 return false;
 }
 }
-validate35.errors = vErrors;
+validate37.errors = vErrors;
 return errors === 0;
 }
-validate35.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
+validate37.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
+
+export const youtubeSearchResult = validate38;
+
+function validate38(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
+let vErrors = null;
+let errors = 0;
+const evaluated0 = validate38.evaluated;
+if(evaluated0.dynamicProps){
+evaluated0.props = undefined;
+}
+if(evaluated0.dynamicItems){
+evaluated0.items = undefined;
+}
+if(errors === 0){
+if(data && typeof data == "object" && !Array.isArray(data)){
+let missing0;
+if(((data.tab === undefined) && (missing0 = "tab")) || ((data.results === undefined) && (missing0 = "results"))){
+validate38.errors = [{instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: missing0},message:"must have required property '"+missing0+"'"}];
+return false;
+}
+else {
+const _errs1 = errors;
+for(const key0 in data){
+if(!((key0 === "tab") || (key0 === "results"))){
+validate38.errors = [{instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"}];
+return false;
+break;
+}
+}
+if(_errs1 === errors){
+if(data.tab !== undefined){
+let data0 = data.tab;
+const _errs2 = errors;
+const _errs3 = errors;
+if(errors === _errs3){
+if(data0 && typeof data0 == "object" && !Array.isArray(data0)){
+let missing1;
+if((((((((data0.browser_instance_id === undefined) && (missing1 = "browser_instance_id")) || ((data0.tab_id === undefined) && (missing1 = "tab_id"))) || ((data0.script_attached === undefined) && (missing1 = "script_attached"))) || ((data0.context === undefined) && (missing1 = "context"))) || ((data0.ad_showing === undefined) && (missing1 = "ad_showing"))) || ((data0.is_live === undefined) && (missing1 = "is_live"))) || ((data0.in_playlist === undefined) && (missing1 = "in_playlist"))){
+validate38.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/required",keyword:"required",params:{missingProperty: missing1},message:"must have required property '"+missing1+"'"}];
+return false;
+}
+else {
+const _errs5 = errors;
+for(const key1 in data0){
+if(!(func5.call(schema38.properties, key1))){
+validate38.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"}];
+return false;
+break;
+}
+}
+if(_errs5 === errors){
+if(data0.browser_instance_id !== undefined){
+const _errs6 = errors;
+if(typeof data0.browser_instance_id !== "string"){
+validate38.errors = [{instancePath:instancePath+"/tab/browser_instance_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/browser_instance_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+var valid2 = _errs6 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.tab_id !== undefined){
+let data2 = data0.tab_id;
+const _errs8 = errors;
+if(!(((typeof data2 == "number") && (!(data2 % 1) && !isNaN(data2))) && (isFinite(data2)))){
+validate38.errors = [{instancePath:instancePath+"/tab/tab_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_id/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+var valid2 = _errs8 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.tab_token !== undefined){
+let data3 = data0.tab_token;
+const _errs10 = errors;
+if(errors === _errs10){
+if(typeof data3 === "string"){
+if(!pattern6.test(data3)){
+validate38.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]{22}$"},message:"must match pattern \""+"^[A-Za-z0-9_-]{22}$"+"\""}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/tab/tab_token",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/tab_token/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid2 = _errs10 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.script_attached !== undefined){
+const _errs12 = errors;
+if(typeof data0.script_attached !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/script_attached",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/script_attached/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs12 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.title !== undefined){
+let data5 = data0.title;
+const _errs14 = errors;
+if(errors === _errs14){
+if(typeof data5 === "string"){
+if(func1(data5) > 200){
+validate38.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/tab/title",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid2 = _errs14 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.video_id !== undefined){
+let data6 = data0.video_id;
+const _errs16 = errors;
+if(errors === _errs16){
+if(typeof data6 === "string"){
+if(func1(data6) > 32){
+validate38.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/tab/video_id",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid2 = _errs16 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.paused !== undefined){
+const _errs18 = errors;
+if(typeof data0.paused !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/paused",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/paused/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs18 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.muted !== undefined){
+const _errs20 = errors;
+if(typeof data0.muted !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/muted",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/muted/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs20 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.volume !== undefined){
+let data9 = data0.volume;
+const _errs22 = errors;
+if(!(((typeof data9 == "number") && (!(data9 % 1) && !isNaN(data9))) && (isFinite(data9)))){
+validate38.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+if(errors === _errs22){
+if((typeof data9 == "number") && (isFinite(data9))){
+if(data9 > 100 || isNaN(data9)){
+validate38.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/maximum",keyword:"maximum",params:{comparison: "<=", limit: 100},message:"must be <= 100"}];
+return false;
+}
+else {
+if(data9 < 0 || isNaN(data9)){
+validate38.errors = [{instancePath:instancePath+"/tab/volume",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/volume/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
+}
+var valid2 = _errs22 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.position_seconds !== undefined){
+let data10 = data0.position_seconds;
+const _errs24 = errors;
+if(errors === _errs24){
+if((typeof data10 == "number") && (isFinite(data10))){
+if(data10 < 0 || isNaN(data10)){
+validate38.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/tab/position_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/position_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+return false;
+}
+}
+var valid2 = _errs24 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.duration_seconds !== undefined){
+let data11 = data0.duration_seconds;
+const _errs26 = errors;
+if(errors === _errs26){
+if((typeof data11 == "number") && (isFinite(data11))){
+if(data11 < 0 || isNaN(data11)){
+validate38.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/tab/duration_seconds",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/duration_seconds/type",keyword:"type",params:{type: "number"},message:"must be number"}];
+return false;
+}
+}
+var valid2 = _errs26 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.context !== undefined){
+let data12 = data0.context;
+const _errs28 = errors;
+if(typeof data12 !== "string"){
+validate38.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+if(!((((data12 === "watch") || (data12 === "shorts")) || (data12 === "music")) || (data12 === "other"))){
+validate38.errors = [{instancePath:instancePath+"/tab/context",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/context/enum",keyword:"enum",params:{allowedValues: schema38.properties.context.enum},message:"must be equal to one of the allowed values"}];
+return false;
+}
+var valid2 = _errs28 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.ad_showing !== undefined){
+const _errs30 = errors;
+if(typeof data0.ad_showing !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/ad_showing",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/ad_showing/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs30 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.is_live !== undefined){
+const _errs32 = errors;
+if(typeof data0.is_live !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/is_live",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs32 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.in_playlist !== undefined){
+const _errs34 = errors;
+if(typeof data0.in_playlist !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/in_playlist",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/in_playlist/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs34 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.theater !== undefined){
+const _errs36 = errors;
+if(typeof data0.theater !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/theater",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/theater/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs36 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.fullscreen !== undefined){
+const _errs38 = errors;
+if(typeof data0.fullscreen !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/fullscreen",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/fullscreen/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs38 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.has_next !== undefined){
+const _errs40 = errors;
+if(typeof data0.has_next !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/has_next",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_next/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs40 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.has_previous !== undefined){
+const _errs42 = errors;
+if(typeof data0.has_previous !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/has_previous",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/has_previous/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs42 === errors;
+}
+else {
+var valid2 = true;
+}
+if(valid2){
+if(data0.active !== undefined){
+const _errs44 = errors;
+if(typeof data0.active !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/tab/active",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/properties/active/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid2 = _errs44 === errors;
+}
+else {
+var valid2 = true;
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/tab",schemaPath:"relay-frames.schema.json#/$defs/youtube_tab/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+return false;
+}
+}
+var valid0 = _errs2 === errors;
+}
+else {
+var valid0 = true;
+}
+if(valid0){
+if(data.results !== undefined){
+let data21 = data.results;
+const _errs46 = errors;
+if(errors === _errs46){
+if(Array.isArray(data21)){
+if(data21.length > 10){
+validate38.errors = [{instancePath:instancePath+"/results",schemaPath:"#/properties/results/maxItems",keyword:"maxItems",params:{limit: 10},message:"must NOT have more than 10 items"}];
+return false;
+}
+else {
+var valid3 = true;
+const len0 = data21.length;
+for(let i0=0; i0<len0; i0++){
+let data22 = data21[i0];
+const _errs48 = errors;
+const _errs49 = errors;
+if(errors === _errs49){
+if(data22 && typeof data22 == "object" && !Array.isArray(data22)){
+let missing2;
+if((((data22.index === undefined) && (missing2 = "index")) || ((data22.video_id === undefined) && (missing2 = "video_id"))) || ((data22.title === undefined) && (missing2 = "title"))){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0,schemaPath:"#/$defs/youtube_search_item/required",keyword:"required",params:{missingProperty: missing2},message:"must have required property '"+missing2+"'"}];
+return false;
+}
+else {
+const _errs51 = errors;
+for(const key2 in data22){
+if(!((((((key2 === "index") || (key2 === "video_id")) || (key2 === "title")) || (key2 === "channel")) || (key2 === "duration_seconds")) || (key2 === "is_live"))){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0,schemaPath:"#/$defs/youtube_search_item/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"}];
+return false;
+break;
+}
+}
+if(_errs51 === errors){
+if(data22.index !== undefined){
+let data23 = data22.index;
+const _errs52 = errors;
+if(!(((typeof data23 == "number") && (!(data23 % 1) && !isNaN(data23))) && (isFinite(data23)))){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/index",schemaPath:"#/$defs/youtube_search_item/properties/index/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+if(errors === _errs52){
+if((typeof data23 == "number") && (isFinite(data23))){
+if(data23 > 10 || isNaN(data23)){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/index",schemaPath:"#/$defs/youtube_search_item/properties/index/maximum",keyword:"maximum",params:{comparison: "<=", limit: 10},message:"must be <= 10"}];
+return false;
+}
+else {
+if(data23 < 1 || isNaN(data23)){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/index",schemaPath:"#/$defs/youtube_search_item/properties/index/minimum",keyword:"minimum",params:{comparison: ">=", limit: 1},message:"must be >= 1"}];
+return false;
+}
+}
+}
+}
+var valid5 = _errs52 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.video_id !== undefined){
+let data24 = data22.video_id;
+const _errs54 = errors;
+if(errors === _errs54){
+if(typeof data24 === "string"){
+if(func1(data24) > 32){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/maxLength",keyword:"maxLength",params:{limit: 32},message:"must NOT have more than 32 characters"}];
+return false;
+}
+else {
+if(func1(data24) < 1){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"}];
+return false;
+}
+else {
+if(!pattern4.test(data24)){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9_-]+$"},message:"must match pattern \""+"^[A-Za-z0-9_-]+$"+"\""}];
+return false;
+}
+}
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/video_id",schemaPath:"#/$defs/youtube_search_item/properties/video_id/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid5 = _errs54 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.title !== undefined){
+let data25 = data22.title;
+const _errs56 = errors;
+if(errors === _errs56){
+if(typeof data25 === "string"){
+if(func1(data25) > 200){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/title",schemaPath:"#/$defs/youtube_search_item/properties/title/maxLength",keyword:"maxLength",params:{limit: 200},message:"must NOT have more than 200 characters"}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/title",schemaPath:"#/$defs/youtube_search_item/properties/title/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid5 = _errs56 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.channel !== undefined){
+let data26 = data22.channel;
+const _errs58 = errors;
+if(errors === _errs58){
+if(typeof data26 === "string"){
+if(func1(data26) > 100){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/channel",schemaPath:"#/$defs/youtube_search_item/properties/channel/maxLength",keyword:"maxLength",params:{limit: 100},message:"must NOT have more than 100 characters"}];
+return false;
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/channel",schemaPath:"#/$defs/youtube_search_item/properties/channel/type",keyword:"type",params:{type: "string"},message:"must be string"}];
+return false;
+}
+}
+var valid5 = _errs58 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.duration_seconds !== undefined){
+let data27 = data22.duration_seconds;
+const _errs60 = errors;
+if(!(((typeof data27 == "number") && (!(data27 % 1) && !isNaN(data27))) && (isFinite(data27)))){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/duration_seconds",schemaPath:"#/$defs/youtube_search_item/properties/duration_seconds/type",keyword:"type",params:{type: "integer"},message:"must be integer"}];
+return false;
+}
+if(errors === _errs60){
+if((typeof data27 == "number") && (isFinite(data27))){
+if(data27 < 0 || isNaN(data27)){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/duration_seconds",schemaPath:"#/$defs/youtube_search_item/properties/duration_seconds/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"}];
+return false;
+}
+}
+}
+var valid5 = _errs60 === errors;
+}
+else {
+var valid5 = true;
+}
+if(valid5){
+if(data22.is_live !== undefined){
+const _errs62 = errors;
+if(typeof data22.is_live !== "boolean"){
+validate38.errors = [{instancePath:instancePath+"/results/" + i0+"/is_live",schemaPath:"#/$defs/youtube_search_item/properties/is_live/type",keyword:"type",params:{type: "boolean"},message:"must be boolean"}];
+return false;
+}
+var valid5 = _errs62 === errors;
+}
+else {
+var valid5 = true;
+}
+}
+}
+}
+}
+}
+}
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/results/" + i0,schemaPath:"#/$defs/youtube_search_item/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+return false;
+}
+}
+var valid3 = _errs48 === errors;
+if(!valid3){
+break;
+}
+}
+}
+}
+else {
+validate38.errors = [{instancePath:instancePath+"/results",schemaPath:"#/properties/results/type",keyword:"type",params:{type: "array"},message:"must be array"}];
+return false;
+}
+}
+var valid0 = _errs46 === errors;
+}
+else {
+var valid0 = true;
+}
+}
+}
+}
+}
+else {
+validate38.errors = [{instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"}];
+return false;
+}
+}
+validate38.errors = vErrors;
+return errors === 0;
+}
+validate38.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 

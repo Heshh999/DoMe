@@ -25,6 +25,18 @@ def test_rejects_non_finite(text):
         loads_strict(text)
 
 
+@pytest.mark.parametrize("text", ['{"a":1e999}', '{"a":-1e999}', '{"a":[0.5,{"b":1e999}]}'])
+def test_rejects_literals_that_overflow_to_infinity(text):
+    # Plain number literals never reach parse_constant; only the float check after parsing catches them.
+    with pytest.raises(ProtocolError) as ei:
+        loads_strict(text)
+    assert (ei.value.code, ei.value.message) == ("MALFORMED_MESSAGE", "non-finite number")
+
+
+def test_accepts_finite_floats():
+    assert loads_strict('{"a":[0.0,-0.0,1.5e308,-1e-300]}') == {"a": [0.0, -0.0, 1.5e308, -1e-300]}
+
+
 def test_rejects_too_deep():
     text = '{"a":' * 9 + "1" + "}" * 9
     with pytest.raises(ProtocolError) as ei:

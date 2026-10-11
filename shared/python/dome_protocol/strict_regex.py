@@ -29,9 +29,7 @@ def pattern_matches(pattern: str, instance: str) -> bool:
         return False
     # Python lets `$` match before a final "\n"; ECMA-262 does not. If the pattern is
     # end-anchored and the match stops before the end of the string, reject.
-    if _end_anchored(pattern) and m.end() != len(instance):
-        return False
-    return True
+    return not (_end_anchored(pattern) and m.end() != len(instance))
 
 
 def _end_anchored(pattern: str) -> bool:

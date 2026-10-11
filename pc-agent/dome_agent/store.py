@@ -8,7 +8,8 @@ Tables (see docs/design/pc-agent.md → "Local state"):
 * ``journal``        durable, bounded (5,000 rows) command journal keyed by command_id with the
                      digest of the exact signed payload bytes and the last emitted frame
 * ``challenges``     confirmation challenges (exact challenge_text, pinned kid, single-use)
-* ``approved_apps``  app_id → validated executable identity (never editable remotely)
+* ``approved_apps``  app_id → validated executable identity (never editable remotely), plus the PC owner's
+                     per-app *Full screen with F11* choice (``fullscreen_f11``)
 * ``pending_power``  at most one armed power countdown
 * ``pending_revocations`` local revocations the relay has not acknowledged receiving yet
                      (``revoke_controller`` is re-sent after every ``grants_snapshot`` until it is written)
@@ -18,6 +19,11 @@ Tables (see docs/design/pc-agent.md → "Local state"):
 
 All methods are synchronous and protected by one re-entrant lock; every call is an indexed point
 operation (sub-millisecond), so they are invoked inline from the event loop (see DECISIONS.md).
+
+Schema changes: a new table is a ``CREATE TABLE IF NOT EXISTS`` in ``_SCHEMA``; a new column of an existing
+table is also listed in ``_ADDED_COLUMNS`` with a constant default, and :meth:`Store._add_missing_columns`
+adds it to a database written by an older agent (``ALTER TABLE ... ADD COLUMN``: existing rows get the
+default, nothing is rewritten or dropped, and an older agent still reads the table: it names its columns).
 """
 
 from __future__ import annotations
@@ -95,11 +101,12 @@ CREATE TABLE IF NOT EXISTS challenges (
 );
 CREATE INDEX IF NOT EXISTS challenges_command_idx ON challenges(command_id);
 CREATE TABLE IF NOT EXISTS approved_apps (
-    app_id       TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    exe_path     TEXT NOT NULL,
-    exe_sha256   TEXT NOT NULL,
-    added_at     TEXT NOT NULL
+    app_id         TEXT PRIMARY KEY,
+    display_name   TEXT NOT NULL,
+    exe_path       TEXT NOT NULL,
+    exe_sha256     TEXT NOT NULL,
+    added_at       TEXT NOT NULL,
+    fullscreen_f11 INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS pending_power (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -124,6 +131,11 @@ CREATE TABLE IF NOT EXISTS security_events (
     detail TEXT NOT NULL
 );
 """
+# (table, column, definition) added after the table first shipped; a database from an older agent gets them
+# at start-up. The definition must carry a constant DEFAULT (SQLite's rule for ADD COLUMN ... NOT NULL).
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("approved_apps", "fullscreen_f11", "INTEGER NOT NULL DEFAULT 0"),  # protocol 1.2 window actions
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +201,9 @@ class ApprovedAppRow:
     exe_path: str
     exe_sha256: str
     added_at: str
+    # The PC owner turned on "Full screen with F11" for this app: DoMe may press F11 in it although it is not
+    # on the built-in F11 list (platform.protocol.F11_FULLSCREEN_PROCESSES). Never set remotely.
+    fullscreen_f11: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +242,15 @@ class Store:
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
+            self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        """Bring a database written by an older agent up to ``_ADDED_COLUMNS`` (idempotent)."""
+        for table, column, definition in _ADDED_COLUMNS:
+            present = {str(r["name"]) for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            if column not in present:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                log.info("local database upgraded", table=table, column=column)
 
     @property
     def path(self) -> str:
@@ -633,16 +657,32 @@ class Store:
         return cur.rowcount
 
     # ----- approved apps -----------------------------------------------------------------------
-    def add_approved_app(self, app_id: str, display_name: str, exe_path: str, exe_sha256: str) -> ApprovedAppRow:
+    def add_approved_app(
+        self, app_id: str, display_name: str, exe_path: str, exe_sha256: str, *, fullscreen_f11: bool | None = None
+    ) -> ApprovedAppRow:
+        """Insert, or refresh an existing approval (re-approve after an update, *Find it again…*).
+        ``fullscreen_f11`` None keeps an existing approval's choice (False for a new one)."""
         now = format_rfc3339(now_utc())
-        with self._lock:
+        keep = fullscreen_f11 is None
+        with self._tx():
             self._conn.execute(
-                "INSERT INTO approved_apps(app_id, display_name, exe_path, exe_sha256, added_at) VALUES (?,?,?,?,?) "
-                "ON CONFLICT(app_id) DO UPDATE SET display_name = excluded.display_name, exe_path = excluded.exe_path, "
-                "exe_sha256 = excluded.exe_sha256, added_at = excluded.added_at",
-                (app_id, display_name[:64], exe_path, exe_sha256, now),
+                "INSERT INTO approved_apps(app_id, display_name, exe_path, exe_sha256, added_at, fullscreen_f11) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(app_id) DO UPDATE SET display_name = excluded.display_name, "
+                "exe_path = excluded.exe_path, exe_sha256 = excluded.exe_sha256, added_at = excluded.added_at, "
+                "fullscreen_f11 = CASE WHEN ? THEN approved_apps.fullscreen_f11 ELSE excluded.fullscreen_f11 END",
+                (app_id, display_name[:64], exe_path, exe_sha256, now, 1 if fullscreen_f11 else 0, 1 if keep else 0),
             )
-        return ApprovedAppRow(app_id, display_name[:64], exe_path, exe_sha256, now)
+            row = self.get_approved_app(app_id)
+        assert row is not None
+        return row
+
+    def set_approved_app_fullscreen_f11(self, app_id: str, enabled: bool) -> ApprovedAppRow | None:
+        """The PC owner's *Full screen with F11* choice for one app; None when the app is not approved."""
+        with self._tx():
+            cur = self._conn.execute(
+                "UPDATE approved_apps SET fullscreen_f11 = ? WHERE app_id = ?", (1 if enabled else 0, app_id)
+            )
+            return self.get_approved_app(app_id) if cur.rowcount > 0 else None
 
     def remove_approved_app(self, app_id: str) -> bool:
         with self._lock:
@@ -652,18 +692,12 @@ class Store:
     def get_approved_app(self, app_id: str) -> ApprovedAppRow | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM approved_apps WHERE app_id = ?", (app_id,)).fetchone()
-        return (
-            ApprovedAppRow(row["app_id"], row["display_name"], row["exe_path"], row["exe_sha256"], row["added_at"])
-            if row
-            else None
-        )
+        return _approved_app(row) if row else None
 
     def list_approved_apps(self) -> list[ApprovedAppRow]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM approved_apps ORDER BY app_id").fetchall()
-        return [
-            ApprovedAppRow(r["app_id"], r["display_name"], r["exe_path"], r["exe_sha256"], r["added_at"]) for r in rows
-        ]
+        return [_approved_app(r) for r in rows]
 
     # ----- pending power -----------------------------------------------------------------------
     def set_pending_power(self, command_id: str, action: str, fires_at: str) -> None:
@@ -815,6 +849,17 @@ def _grant(row: sqlite3.Row) -> GrantRow:
         snapshot_id=row["snapshot_id"],
         snapshot_capabilities=tuple(json.loads(snap_caps)) if snap_caps else None,
         snapshot_status=row["snapshot_status"],
+    )
+
+
+def _approved_app(row: sqlite3.Row) -> ApprovedAppRow:
+    return ApprovedAppRow(
+        app_id=row["app_id"],
+        display_name=row["display_name"],
+        exe_path=row["exe_path"],
+        exe_sha256=row["exe_sha256"],
+        added_at=row["added_at"],
+        fullscreen_f11=bool(row["fullscreen_f11"]),
     )
 
 

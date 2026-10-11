@@ -93,21 +93,42 @@ would not know the test server's current address.
 Everything below **really happens on this PC**.
 
 - **Remote**: Windows volume and mute; play/pause/next for whatever is playing (Spotify, a video).
-- **YouTube** (Remote, YouTube tab): open a video in Chrome or Edge with the extension loaded.
+- **YouTube** (Remote, YouTube tab): play/pause, next, seek and volume for a video playing in Chrome
+  or Edge with the extension loaded.
+- **Search YouTube** (Remote, YouTube tab, at the bottom): works with no YouTube tab open; Chrome
+  or Edge only has to be running with the extension. Type a few words and tap **Search**: the PC
+  opens the results in a new tab (or in the YouTube tab DoMe is controlling, with **Use the YouTube
+  tab DoMe is controlling** switched on) and the phone lists them. Tap a result to play it on the PC.
 - **Touchpad**: move the mouse, click, scroll and drag. Its **Keyboard** button types text into the
   active window on the PC. If it says the phone has no touchpad or keyboard permission: on the PC,
   right-click the DoMe tray icon, **Paired phones**, your phone, tick **Allow touchpad** (and again
   for **Allow keyboard**). The Touchpad page then unlocks by itself (an older app version needs the page
   reloaded in Safari).
-- **Type**: write a command in words, for example "Set my PC volume to 35 percent" or "Pause
-  YouTube"; DoMe shows exactly what it will do before sending it.
-- **Apps**: opens apps you approved on the PC. To approve one, open a Command Prompt in the
-  repository folder and run, for example (Microsoft Edge is on every Windows PC):
-  `pc-agent\.venv\Scripts\dome-agent.exe approve-app edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --name Edge`
-  (the tray menu's **Approved apps...** lists them).
+- **Apps**: opens and controls apps you approved on the PC. To approve one, on the PC right-click the
+  DoMe tray icon, choose **Add an app...** and pick the program, for example Microsoft Edge (on every
+  Windows PC): `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`. Check the name your
+  phone will show and click **Add**. It appears on the phone's Apps page by itself. **Approved
+  apps...** in the same menu lists them, re-approves one that updated itself and removes them.
+- **Window controls** (Apps, on an app that is running): **Bring to front**, **Minimise**,
+  **Maximise**, **Restore** (normal size) and **Full screen**, which presses F11 in the app (Edge and
+  Chrome should switch to full screen and back). For other apps DoMe only presses F11 when you allow
+  it, because some apps use F11 for something else: in **Approved apps...** select the app (for
+  example ZStream) and tick **Full screen with F11**. Until then the phone says how to turn it on and
+  offers **Maximise** instead. **Close...** asks first and never force-quits.
+- **Type**: write a command in words; DoMe shows exactly what it will do before sending it, and asks
+  when it is not sure. For example: "Set my PC volume to 35 percent", "make the volume 100%", "Pause
+  YouTube", "search lofi beats on YouTube" and then "play the second video", "bring Edge to the
+  front", "full screen Edge", "open Edge and maximise it" (the app's name as the Apps page shows
+  it; "Edge" also finds "Microsoft Edge"). YouTube captions and playback speed are not supported
+  yet; DoMe says so and points to the Touchpad.
 - **Lock** (happens right away) and **sleep, restart, shut down** (if you granted power control;
   these always ask for confirmation first). They really lock or shut down the PC.
 - **More -> Devices**: rename or revoke phones, see the PC's status.
+
+Without the tray menu (for example to script it), an app can also be approved from a Command Prompt
+in the repository folder:
+`pc-agent\.venv\Scripts\dome-agent.exe approve-app edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --name Edge`.
+Add `--replace` to point an app that is already approved at a different program file.
 
 Please write down what worked, what did not, and anything confusing. For a problem with the app,
 **More -> Settings & help** has a diagnostics report you can download and attach.
@@ -142,7 +163,9 @@ When you get a newer copy of this repository as a ZIP:
    `edge://extensions` in Edge (`chrome://extensions` in Chrome), click the reload arrow on the
    DoMe card (or close the browser completely and open it again) and press Enter in the window.
    Open YouTube tabs need no reload. If the window was closed before you pressed Enter, the next
-   run of step 2 asks again.
+   run of step 2 asks again. If the phone says **Update the DoMe browser extension on the PC to use
+   this control** (for example when you search YouTube), the reload was skipped: reload the DoMe
+   card now. The other YouTube controls keep working with the old extension meanwhile.
 
 Changes to notes and tests alone never ask for step 1 or a new extension build.
 
@@ -211,6 +234,7 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 | The phone says the browser extension is not connected | The extension finds DoMe by itself, usually within 10 seconds of DoMe starting (at most 30 seconds when the browser has been open a while). To connect it at once: in Edge, open the DoMe extension (puzzle-piece icon next to the address bar, then DoMe) and press **Retry connection**. Still not connected after an update? Reload it: the reload arrow on the DoMe card at `edge://extensions`. |
 | "Building the browser extension failed" | Docker could not build the extension, most often because a download failed; the lines above the message say why. Check the internet connection and that Docker Desktop shows "Engine running", then run step 2 again (Docker keeps what it already downloaded). The first build has nothing to fall back on, so step 2 stops; after an update step 2 only warns, starts DoMe with the previous extension and tries again on its next run. |
 | "Could not replace the extension" | The new build could not be moved into `testkit\.state\extension`, usually because a browser or a virus scanner had a file open. Any previous extension is put back. Close Chrome and Edge, then run step 2 again. |
+| The phone says "Update the DoMe browser extension on the PC to use this control" | The browser still runs the previous extension (YouTube search needs the new one). Click the reload arrow on the DoMe card at `edge://extensions` (`chrome://extensions` in Chrome); see "After downloading a new version", step 5. |
 | YouTube controls stay greyed out | Check that the extension is loaded and switched on; YouTube tabs that were already open pick it up by themselves, so reload a tab only if it still does not respond. Step 2 rebuilds the extension by itself when it changed; to rebuild it anyway: quit DoMe from the tray, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
 | Pairing says the device limit is reached | The free plan allows 2 phones per account (this happens with a stable address, where the account is kept). Tap **Manage devices**, revoke phones you no longer use, pair again. |
 | The iPhone and the PC do not see each other | Both must be signed in with the same email in the same test account. After a new start, run step 2 again and use the new address on the iPhone. |

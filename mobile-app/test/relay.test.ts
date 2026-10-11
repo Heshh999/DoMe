@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { relayFrames } from "@dome/protocol";
+import { PROTOCOL_VERSION, REGISTRY_VERSION, type relayFrames } from "@dome/protocol";
 
 import { NUDGE_DEADLINE_MS, RelayClient, relayUrl, type RelayClientOptions, type RelayStatus, type WebSocketLike } from "../src/lib/relay.ts";
 
@@ -110,7 +110,7 @@ async function setup(extra: Partial<RelayClientOptions> = {}) {
   return { client, sockets, ft, statuses, frames, flush };
 }
 
-const helloAck = (controllerId?: string) => ({ type: "hello_ack", protocol_version: "1.1", server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", ...(controllerId ? { controller_id: controllerId } : {}) });
+const helloAck = (controllerId?: string) => ({ type: "hello_ack", protocol_version: PROTOCOL_VERSION, server_time: TS, connection_id: "44444444-4444-4444-8444-444444444444", ...(controllerId ? { controller_id: controllerId } : {}) });
 
 describe("RelayClient", () => {
   it("relayUrl derives wss from the page origin or the configured API origin", () => {
@@ -127,7 +127,8 @@ describe("RelayClient", () => {
     const s = sockets[0]!;
     s.open();
     const hello = s.frames()[0]!;
-    expect(hello).toMatchObject({ type: "hello", component: "controller", kid: KID, protocol_versions: ["1.1"], registry_version: "1.1" });
+    // The phone announces the contract it was built from (the relay serves this PWA, so they deploy together).
+    expect(hello).toMatchObject({ type: "hello", component: "controller", kid: KID, protocol_versions: [PROTOCOL_VERSION], registry_version: REGISTRY_VERSION });
     expect(client.isOpen).toBe(false);
     s.receive(helloAck(CONTROLLER));
     expect(client.isOpen).toBe(true);

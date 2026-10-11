@@ -45,6 +45,11 @@ export interface CommandRecord {
   action: string;
   params: Record<string, JsonValue>;
   target: Record<string, JsonValue> | null;
+  /**
+   * protocol_version the command was stamped with (its action's `since`, rules.command_version_stamping). A
+   * confirmation for it carries the same stamp, so a PC that predates this phone still verifies it.
+   */
+  protocolVersion: string;
   createdAt: number;
   expiresAt: string;
   state: LifecycleState;
@@ -129,6 +134,7 @@ export class CommandService {
       action: payload.action,
       params: payload.params,
       target: payload.target,
+      protocolVersion: payload.protocol_version,
       createdAt: now.getTime(),
       expiresAt: payload.expires_at,
       state: "created",
@@ -178,7 +184,7 @@ export class CommandService {
     const identity = this.deps.identity();
     if (!identity) throw new ProtocolError("UNKNOWN_KEY", "This phone is not paired yet.");
     const keyPair = await this.deps.keyPair();
-    const frame = await buildConfirmationEnvelope({ parsed: record.confirmation.parsed, controllerId: identity.controllerId, decision, keyPair, ...(this.deps.now ? { now: this.deps.now() } : {}) });
+    const frame = await buildConfirmationEnvelope({ parsed: record.confirmation.parsed, controllerId: identity.controllerId, decision, commandProtocolVersion: record.protocolVersion, keyPair, ...(this.deps.now ? { now: this.deps.now() } : {}) });
     this.deps.send(frame);
     record.confirmation = { ...record.confirmation, decision };
     this.store(record);

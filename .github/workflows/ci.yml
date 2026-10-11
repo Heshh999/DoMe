@@ -134,8 +134,12 @@ jobs:
     # The Linux job runs these suites over Unix sockets, which are full duplex by nature; only a real
     # Windows named pipe shows whether the browser bridge's reader and writer threads block each other
     # (they did: the extension never connected). The Windows adapter tests replace the system calls
-    # (audio, media, power, lock state, the Run key) with stand-ins, so nothing here changes the
-    # runner's volume, locks it, puts it to sleep or shuts it down.
+    # (audio, media, power, lock state, the Run key, user32/dwmapi window calls, SendInput) with
+    # stand-ins, so nothing here changes the runner's volume, locks it, puts it to sleep, shuts it
+    # down, moves its windows or presses a key. test_tray_apps_window.py opens real Tk windows (Tk
+    # ships with this Python on windows-latest): it destroys them itself, every wait on Tk gives up
+    # after 10 s, a watchdog ends the run after 120 s with every thread's traceback, and it skips
+    # with the reason when Tk cannot open a window.
     name: pc-agent (Windows)
     runs-on: windows-latest
     timeout-minutes: 25
@@ -159,8 +163,9 @@ jobs:
         working-directory: pc-agent
         run: uv run mypy --config-file mypy-windows.ini
 
-      - name: pc-agent - pytest (overlapped named pipes, dome-native-host.exe, named mutex, Windows adapters)
+      - name: pc-agent - pytest (overlapped named pipes, dome-native-host.exe, named mutex, Windows adapters, tray window)
         working-directory: pc-agent
+        timeout-minutes: 15
         run: >-
           uv run pytest -q -p no:cacheprovider
           tests/test_ipc_duplex.py
@@ -178,6 +183,12 @@ jobs:
           tests/test_status_reporting.py
           tests/test_extension_protocol_parity.py
           tests/test_windows_state_read_failures.py
+          tests/test_windows_window_control.py
+          tests/test_windows_input_layout.py
+          tests/test_youtube_search.py
+          tests/test_app_approval_local.py
+          tests/test_app_fullscreen_f11.py
+          tests/test_tray_apps_window.py
 
   node:
     name: Node (shared/ts, mobile-app, browser-extension)
@@ -293,7 +304,7 @@ jobs:
         run: uv sync --locked
 
       # Evidence tag for this job: integration-tested (Linux, fake platform, fake extension).
-      # Last local run: 20 passed in 214 s. The load smoke prints numbers; it is not a pass/fail promise.
+      # Last local run (2026-10-11): 30 passed in 330 s. The load smoke prints numbers; it is not a pass/fail promise.
       - name: tests - pytest
         working-directory: tests
         run: uv run pytest -q -p no:cacheprovider

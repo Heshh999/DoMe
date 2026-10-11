@@ -27,7 +27,7 @@ from typing import Any
 from dome_protocol import ProtocolError, load_registry
 from dome_protocol.commands import VerifiedCommand
 
-from .actions import ActionFailed, Deferred, handler_for
+from .actions import ActionFailed, Deferred, handler_for, journal_copy
 from .actions.context import AgentServices, ExecutionContext
 from .frames import ack_frame, result_frame
 from .logsetup import get_logger
@@ -67,11 +67,15 @@ class Emitter:
         duration_ms: int = 0,
         journal: bool = True,
         send: bool = True,
+        journal_result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """``journal_result``: the result as the journal keeps it when it differs from the one sent
+        (:func:`dome_agent.actions.journal_copy`); a late or duplicate re-send carries that copy."""
         frame = result_frame(command_id, state, result=result, error=error, warning=warning, duration_ms=duration_ms)
         if journal:
+            stored = frame if journal_result is None or result is None else {**frame, "result": journal_result}
             self._store.journal_set_state(
-                command_id, state, frame=frame, error_code=error.code if error else None, sent=not send
+                command_id, state, frame=stored, error_code=error.code if error else None, sent=not send
             )
         if send:
             ok = await self._send(frame)
@@ -245,7 +249,14 @@ class Executor:
                     None,
                     self._registry.make_error("INTERNAL", "The PC produced an invalid result."),
                 )
-        await self._emit.result(command_id, state, result=result, error=error, duration_ms=duration)
+        await self._emit.result(
+            command_id,
+            state,
+            result=result,
+            error=error,
+            duration_ms=duration,
+            journal_result=journal_copy(vc.spec.name, result),
+        )
 
     # ----- worker ------------------------------------------------------------------------------------------
     async def _run(self) -> None:
@@ -324,18 +335,24 @@ class Executor:
                 )
                 return
             await self._emit.result(
-                vc.command_id, "succeeded", result=validated, duration_ms=_ms_since(entry.enqueued_at)
+                vc.command_id,
+                "succeeded",
+                result=validated,
+                duration_ms=_ms_since(entry.enqueued_at),
+                journal_result=journal_copy(vc.spec.name, validated),
             )
         except ActionFailed as exc:
             if self._is_outcome_unknown(vc, ctx, exc):
                 await self._outcome_unknown(vc, entry, exc)
                 return
+            failed_result = _safe_result(self._registry, vc, exc.result)
             await self._emit.result(
                 vc.command_id,
                 "failed",
-                result=_safe_result(self._registry, vc, exc.result),
+                result=failed_result,
                 error=exc,
                 duration_ms=_ms_since(entry.enqueued_at),
+                journal_result=journal_copy(vc.spec.name, failed_result),
             )
         except ProtocolError as exc:
             if self._is_outcome_unknown(vc, ctx, exc):

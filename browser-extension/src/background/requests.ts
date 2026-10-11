@@ -1,16 +1,20 @@
 /**
- * bridge_request routing: list_tabs is answered from the tab registry; tab ops are forwarded to the
- * content script of the addressed tab with a deadline. Every failure maps to a stable error code.
+ * bridge_request routing: list_tabs is answered from the tab registry; search navigates or opens a
+ * tab itself (search.ts); tab ops are forwarded to the content script of the addressed tab with a
+ * deadline. Every failure maps to a stable error code. Logs carry the op, request id, code and
+ * duration only: never arguments (a search query), URLs or titles.
  */
 import { OpError, toErrorObject } from "../shared/errors.ts";
 import { log } from "../shared/log.ts";
 import { BG_KIND, isTabOp, type OpArgs } from "../shared/messages.ts";
+import { realTimers, type Timers } from "../shared/throttle.ts";
 import { validateResult } from "../shared/validate.ts";
-import { isYoutubeUrl } from "../shared/youtubeUrl.ts";
+import { isYoutubeUrl, parseYoutubeUrl } from "../shared/youtubeUrl.ts";
 import { isMutatingOp } from "../content/adapter.ts";
 import type { ExtensionApi } from "./api.ts";
 import { responseError, responseOk, type BridgeRequest, type BridgeResponse, type YoutubeStateResult } from "./frames.ts";
-import { NoReceiverError, TabTimeoutError, type TabRegistry } from "./tabs.ts";
+import { search } from "./search.ts";
+import { NoReceiverError, ReceiverGoneError, replyFailure, TabTimeoutError, type TabRegistry } from "./tabs.ts";
 
 export const DEFAULT_TIMEOUT_MS = 8000;
 /** Margin so the content script answers before the agent's own deadline. */
@@ -38,6 +42,8 @@ export interface RequestContext {
   registry: TabRegistry;
   /** Called after a tab op changed the cached state so the service can emit player_state. */
   onTabState?: (tabId: number) => void;
+  /** Clock for ops that wait in several steps (search, open_result after a page load); real time when absent. */
+  timers?: Timers;
 }
 
 export async function handleRequest(request: BridgeRequest, ctx: RequestContext): Promise<BridgeResponse> {
@@ -54,13 +60,17 @@ export async function handleRequest(request: BridgeRequest, ctx: RequestContext)
 }
 
 async function route(request: BridgeRequest, ctx: RequestContext): Promise<BridgeResponse> {
-  const { bgWaitMs, deadlineMs } = computeBudget(request.timeout_ms);
+  const budget = computeBudget(request.timeout_ms);
+  const { bgWaitMs, deadlineMs } = budget;
+  const timers = ctx.timers ?? realTimers;
+  const startedAt = timers.now();
   if (request.op === "list_tabs") {
     const tabs = await ctx.registry.list({ fresh: true });
     const result = { tabs };
     validateResult("tabs_result", result);
     return responseOk(request.request_id, result);
   }
+  if (request.op === "search") return search(request, ctx, budget);
   if (!isTabOp(request.op)) throw new OpError("UNKNOWN_ACTION", `unsupported op ${request.op}`);
   const { tab_id: tabId, ...rest } = request.args;
   if (typeof tabId !== "number" || !Number.isInteger(tabId) || tabId < 0) throw new OpError("INVALID_PARAMETERS", "tab_id is required for tab operations");
@@ -79,6 +89,7 @@ async function route(request: BridgeRequest, ctx: RequestContext): Promise<Bridg
   try {
     reply = await ctx.registry.sendToTab(tabId, { kind: BG_KIND, type: "op", op: request.op, args, deadline_ms: deadlineMs }, bgWaitMs);
   } catch (err) {
+    if (err instanceof ReceiverGoneError && request.op === "open_result") return openedByPageLoad(request.request_id, tabId, args, ctx, bgWaitMs - (timers.now() - startedAt));
     if (err instanceof NoReceiverError) throw new OpError("TAB_NOT_CONTROLLABLE", "DoMe is not running in that tab yet; reload the YouTube tab on the PC");
     if (err instanceof TabTimeoutError) {
       if (isMutatingOp(request.op)) throw new OpError("OUTCOME_UNKNOWN", "The YouTube tab did not report back in time; the action may or may not have happened");
@@ -89,11 +100,7 @@ async function route(request: BridgeRequest, ctx: RequestContext): Promise<Bridg
 
   const recorded = reply.token !== undefined && reply.state !== undefined ? ctx.registry.record(tabId, reply.token, reply.state) : null;
   if (recorded) ctx.onTabState?.(tabId);
-  if (!reply.ok) {
-    const code = typeof reply.code === "string" && /^[A-Z_]+$/.test(reply.code) ? reply.code : "INTERNAL";
-    const message = typeof reply.message === "string" ? reply.message : "the YouTube tab reported a failure";
-    throw new OpError(code, message);
-  }
+  if (!reply.ok) throw replyFailure(reply);
   if (!recorded) throw new OpError("INTERNAL", "the YouTube tab reported success without a usable state");
   // Compose from the attachment just recorded: a tabs.onUpdated event caused by this very action
   // (e.g. the URL change of `next`) may be dispatched between the reply and here.
@@ -105,4 +112,30 @@ async function route(request: BridgeRequest, ctx: RequestContext): Promise<Bridg
   }
   validateResult("youtube_state_result", result);
   return responseOk(request.request_id, result);
+}
+
+const OPEN_RESULT_UNKNOWN = "The search result was clicked, but the YouTube tab loaded a new page before it reported which video opened; check the PC";
+
+/**
+ * open_result whose click made the browser load a whole new page instead of YouTube navigating in
+ * place: the content script that clicked is gone before it could reply. Success still means seeing the
+ * chosen video, so wait for the next attachment in the tab and accept it only on that video's watch
+ * page. Without a video_id to look for, the outcome is unknown.
+ */
+async function openedByPageLoad(requestId: string, tabId: number, args: OpArgs, ctx: RequestContext, remainingMs: number): Promise<BridgeResponse> {
+  const videoId = args.video_id;
+  if (videoId === undefined) throw new OpError("OUTCOME_UNKNOWN", OPEN_RESULT_UNKNOWN);
+  const accept = (url: string): boolean => {
+    const facts = parseYoutubeUrl(url);
+    return facts.context === "watch" && facts.video_id === videoId;
+  };
+  const outcome = await ctx.registry.waitForAttachment(tabId, { notToken: args.tab_token, accept }, remainingMs);
+  if (outcome === "gone") throw new OpError("TARGET_GONE", "The tab closed while the video was opening");
+  if (outcome === null) throw new OpError("OUTCOME_UNKNOWN", OPEN_RESULT_UNKNOWN);
+  ctx.onTabState?.(tabId);
+  const composed = await ctx.registry.composeById(tabId, outcome);
+  if (!composed) throw new OpError("TARGET_GONE", "The tab closed or left YouTube while the video was opening");
+  const result: YoutubeStateResult = { tab: composed };
+  validateResult("youtube_state_result", result);
+  return responseOk(requestId, result);
 }

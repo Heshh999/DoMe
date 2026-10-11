@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { challengeDigest, generateControllerKeyPair, verifyAndParseConfirmation, exportPublicJwk, kidFromJwk } from "@dome/protocol";
+import { challengeDigest, generateControllerKeyPair, verifyAndParseConfirmation, exportPublicJwk, kidFromJwk, PROTOCOL_VERSION } from "@dome/protocol";
 
 import { buildConfirmationEnvelope, checkChallengeBinding, describeChallenge, parseChallenge } from "../src/lib/confirmations.ts";
 
@@ -63,7 +63,7 @@ describe("confirmations", () => {
     const keyPair = await generateControllerKeyPair();
     const jwk = await exportPublicJwk(keyPair.publicKey);
     const kid = await kidFromJwk(jwk);
-    const frame = await buildConfirmationEnvelope({ parsed, controllerId: parsed.challenge.controller_id, decision: "approve", keyPair, now: new Date("2026-10-08T12:00:05.000Z") });
+    const frame = await buildConfirmationEnvelope({ parsed, controllerId: parsed.challenge.controller_id, decision: "approve", commandProtocolVersion: "1.0", keyPair, now: new Date("2026-10-08T12:00:05.000Z") });
     expect(frame.type).toBe("confirmation");
     expect(frame.pc_id).toBe(parsed.challenge.pc_id);
     const verified = await verifyAndParseConfirmation(frame.envelope, (k) => (k === kid ? { controllerId: parsed.challenge.controller_id, accountId: "11111111-1111-4111-8111-111111111111", jwk } : null), new Date("2026-10-08T12:00:06.000Z"));
@@ -71,5 +71,23 @@ describe("confirmations", () => {
     expect(verified.payload.challenge_digest).toBe(fixture.digests.challenge_digest);
     expect(verified.payload.challenge_id).toBe(parsed.challenge.challenge_id);
     expect(verified.payload.command_id).toBe(parsed.challenge.command_id);
+    expect(verified.payload.protocol_version).toBe("1.0");
+  });
+
+  it("stamps the confirmation with the confirmed command's protocol version, never this app's newest (rules.command_version_stamping)", async () => {
+    const parsed = parseChallenge(TEXT);
+    const keyPair = await generateControllerKeyPair();
+    const jwk = await exportPublicJwk(keyPair.publicKey);
+    const kid = await kidFromJwk(jwk);
+    const resolver = (k: string) => (k === kid ? { controllerId: parsed.challenge.controller_id, accountId: "11111111-1111-4111-8111-111111111111", jwk } : null);
+    const now = new Date("2026-10-08T12:00:05.000Z");
+    expect(PROTOCOL_VERSION).not.toBe("1.0"); // otherwise this test proves nothing
+    for (const version of ["1.0", "1.1", PROTOCOL_VERSION]) {
+      const frame = await buildConfirmationEnvelope({ parsed, controllerId: parsed.challenge.controller_id, decision: "decline", commandProtocolVersion: version, keyPair, now });
+      expect((JSON.parse(frame.envelope.payload) as { protocol_version: string }).protocol_version).toBe(version);
+      expect((await verifyAndParseConfirmation(frame.envelope, resolver, new Date("2026-10-08T12:00:06.000Z"))).payload.protocol_version).toBe(version);
+    }
+    // A version this app does not speak is never signed.
+    await expect(buildConfirmationEnvelope({ parsed, controllerId: parsed.challenge.controller_id, decision: "approve", commandProtocolVersion: "9.0", keyPair, now })).rejects.toThrow(/PROTOCOL_INCOMPATIBLE/);
   });
 });

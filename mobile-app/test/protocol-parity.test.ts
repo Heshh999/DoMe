@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 // Through the package (registry substituted by the Vite plugin — the code path the app ships).
 import * as viaPackage from "@dome/protocol";
-import { buildCommandPayload, generateControllerKeyPair, signCommand, verifyAndParseCommand, exportPublicJwk, kidFromJwk, ProtocolError } from "@dome/protocol";
+import { buildCommandPayload, generateControllerKeyPair, signCommand, verifyAndParseCommand, exportPublicJwk, kidFromJwk, ProtocolError, type JsonValue } from "@dome/protocol";
 // The real module, imported by path (the plugin only redirects imports made from inside shared/ts/src).
 import * as realRegistry from "../../shared/ts/src/registry.ts";
 import * as pwaRegistry from "../src/protocol/registry.ts";
@@ -20,6 +20,30 @@ import { generateValidatorsSource, generateDtsSource, OUTPUT_JS, OUTPUT_DTS } fr
 const UUID = "33333333-3333-4333-8333-333333333333";
 const UUID2 = "11111111-1111-4111-8111-111111111111";
 const TS = "2026-10-08T12:00:00.000Z";
+
+/** Valid params/targets per action and target schema, so every action can be built through the facade. */
+const SAMPLE_PARAMS: Record<string, Record<string, JsonValue>> = {
+  "youtube.set_paused": { paused: true },
+  "youtube.seek_relative": { seconds: 10 },
+  "youtube.seek_to": { position_seconds: 5 },
+  "youtube.set_muted": { muted: true },
+  "youtube.set_volume": { value: 10 },
+  "youtube.set_theater": { enabled: true },
+  "youtube.search": { query: "lofi" },
+  "youtube.open_result": { index: 1 },
+  "media.set_paused": { paused: true },
+  "windows.set_volume": { value: 10 },
+  "windows.set_muted": { muted: true },
+  "app.launch": { app_id: "notepad" },
+  "app.set_fullscreen": { enabled: true },
+  "input.session_stop": { input_session_id: "S".repeat(22) },
+};
+const SAMPLE_TARGETS: Record<string, Record<string, JsonValue>> = {
+  youtube_target: { browser_instance_id: "abcdefgh", tab_id: 1, tab_token: "A".repeat(22) },
+  youtube_browser_target: { browser_instance_id: "abcdefgh" },
+  media_session_target: { session_id: "s1" },
+  window_target: { app_id: "notepad" },
+};
 
 function codeOf(fn: () => unknown): string {
   try {
@@ -58,8 +82,51 @@ describe("protocol facade parity", () => {
 
   it("agrees on params, targets and results for every action", () => {
     const samples: Record<string, unknown[]> = {
-      params: [{}, { paused: true }, { paused: "yes" }, { value: 50 }, { value: 101 }, { seconds: -10 }, { seconds: 0 }, { position_seconds: 12.5 }, { app_id: "discord" }, { app_id: "Dis cord" }, { countdown_seconds: 10 }, { countdown_seconds: 61 }, { extra: 1 }, { muted: false }, { enabled: true }],
-      target: [null, {}, { browser_instance_id: "abcdefgh", tab_id: 1, tab_token: "A".repeat(22) }, { browser_instance_id: "abcdefgh", tab_id: 1 }, { session_id: "s1" }, { app_id: "notepad" }, { app_id: "notepad", window_id: "w1" }, { app_id: "Bad Id" }],
+      params: [
+        {},
+        { paused: true },
+        { paused: "yes" },
+        { value: 50 },
+        { value: 101 },
+        { seconds: -10 },
+        { seconds: 0 },
+        { position_seconds: 12.5 },
+        { app_id: "discord" },
+        { app_id: "Dis cord" },
+        { countdown_seconds: 10 },
+        { countdown_seconds: 61 },
+        { extra: 1 },
+        { muted: false },
+        { enabled: true },
+        { enabled: "yes" },
+        // protocol 1.2: youtube.search / youtube.open_result
+        { query: "lofi beats" },
+        { query: "Ünïcode ✓ 🎵" },
+        { query: "" },
+        { query: " leading" },
+        { query: "x\n" },
+        { query: "x\u0085" },
+        { query: "x".repeat(100) },
+        { query: "x".repeat(101) },
+        { index: 2 },
+        { index: 2, video_id: "dQw4w9WgXcQ" },
+        { index: 0 },
+        { index: 11 },
+        { index: 1, video_id: "bad id" },
+      ],
+      target: [
+        null,
+        {},
+        { browser_instance_id: "abcdefgh", tab_id: 1, tab_token: "A".repeat(22) },
+        { browser_instance_id: "abcdefgh", tab_id: 1 },
+        { browser_instance_id: "abcdefgh" },
+        { browser_instance_id: "abcdefgh", tab_token: "A".repeat(22) },
+        { browser_instance_id: "short" },
+        { session_id: "s1" },
+        { app_id: "notepad" },
+        { app_id: "notepad", window_id: "w1" },
+        { app_id: "Bad Id" },
+      ],
       result: [
         {},
         { value: 35, muted: false },
@@ -79,6 +146,13 @@ describe("protocol facade parity", () => {
         { canceled: false },
         { agent_time: TS, agent_version: "0.1", protocol_version: "1.1" },
         { remote_enabled: true, session_locked: false, extension_connected: false },
+        // protocol 1.2: app_window_state_result, youtube_search_result
+        { app_id: "notepad", window_id: "w1", state: "maximized", fullscreen: false, foreground: true },
+        { app_id: "notepad", window_id: "w1", state: "fullscreen", fullscreen: true, foreground: true },
+        { app_id: "notepad", window_id: "w1", state: "normal", fullscreen: false },
+        { tab: { browser_instance_id: "b", tab_id: 1, script_attached: true, context: "other", ad_showing: false, is_live: false, in_playlist: false }, results: [{ index: 1, video_id: "abc", title: "A", channel: "C", duration_seconds: 61, is_live: false }] },
+        { tab: { browser_instance_id: "b", tab_id: 1, script_attached: true, context: "other", ad_showing: false, is_live: false, in_playlist: false }, results: Array.from({ length: 11 }, (_, i) => ({ index: (i % 10) + 1, video_id: "abc", title: "A" })) },
+        { tab: { browser_instance_id: "b", tab_id: 1, script_attached: true, context: "other", ad_showing: false, is_live: false, in_playlist: false }, results: [{ index: 1, video_id: "abc" }] },
       ],
     };
     for (const [action] of realRegistry.registry.actions()) {
@@ -159,6 +233,17 @@ describe("protocol facade parity", () => {
     }
   });
 
+  it("both registries agree on every action's `since`, and the facade stamps commands with it", () => {
+    for (const [name, spec] of realRegistry.registry.actions()) {
+      expect(pwaRegistry.registry.get(name).since, name).toBe(spec.since);
+      const payload = buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: name, params: SAMPLE_PARAMS[name] ?? {}, target: SAMPLE_TARGETS[spec.targetName ?? ""] ?? null });
+      expect(payload.protocol_version, name).toBe(spec.since);
+    }
+    expect(pwaRegistry.registry.get("app.set_fullscreen").since).toBe("1.2");
+    expect(pwaRegistry.registry.get("input.session_start").since).toBe("1.1");
+    expect(pwaRegistry.registry.get("app.list").since).toBe("1.0");
+  });
+
   it("commands built and signed through the swapped library verify with the real verifier", async () => {
     const pair = await generateControllerKeyPair();
     const jwk = await exportPublicJwk(pair.publicKey);
@@ -170,5 +255,12 @@ describe("protocol facade parity", () => {
     expect(verified.params).toEqual({ value: 35 });
     expect(verified.spec.name).toBe("windows.set_volume");
     expect(() => buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: "windows.set_volume", params: { value: 135 } })).toThrow(/INVALID_PARAMETERS/);
+
+    // A 1.2 action is stamped 1.2 and verifies; the same command stamped below its since is refused by the real verifier.
+    const search = buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: "youtube.search", params: { query: "lofi" }, target: { browser_instance_id: "abcdefgh" } });
+    expect(search.protocol_version).toBe("1.2");
+    const resolve = (k: string) => (k === kid ? { controllerId: UUID, accountId: UUID2, jwk } : null);
+    expect((await verifyAndParseCommand(await signCommand(pair.privateKey, pair.publicKey, search), resolve)).payload.protocol_version).toBe("1.2");
+    await expect(verifyAndParseCommand(await signCommand(pair.privateKey, pair.publicKey, { ...search, protocol_version: "1.1" }), resolve)).rejects.toThrow(/PROTOCOL_INCOMPATIBLE/);
   });
 });

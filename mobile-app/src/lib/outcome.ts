@@ -35,6 +35,15 @@ export function resultSummary(record: CommandRecord): string | null {
       const tab = r.tab as { paused?: boolean } | undefined;
       return tab?.paused === undefined ? "Done." : tab.paused ? "YouTube is paused." : "YouTube is playing.";
     }
+    case "youtube.search": {
+      const n = Array.isArray(r.results) ? r.results.length : 0;
+      return n === 0 ? "YouTube showed no video results for that search." : `Found ${n} video${n === 1 ? "" : "s"}. Tap one to play it.`;
+    }
+    case "youtube.open_result": {
+      const tab = r.tab as { paused?: boolean } | undefined;
+      // Play from the phone is a script call the browser's autoplay rule may refuse too; a click on the PC never is.
+      return tab?.paused ? "Opened the video. If it does not start, press Play on the PC, or click the video with the Touchpad." : "Opened the video.";
+    }
     case "youtube.set_volume": {
       const tab = r.tab as { volume?: number } | undefined;
       return tab?.volume === undefined ? "Done." : `YouTube volume is now ${tab.volume}%.`;
@@ -47,6 +56,10 @@ export function resultSummary(record: CommandRecord): string | null {
       return r.focused ? "The app is in front." : "The app is running but Windows did not bring it to the front.";
     case "app.minimize":
       return r.minimized ? "The window was minimised." : "Done.";
+    case "app.maximize":
+    case "app.restore":
+    case "app.set_fullscreen":
+      return windowStateSummary(r);
     case "app.close":
       return r.closed ? "The app closed." : "The app stayed open.";
     case "power.sleep":
@@ -62,3 +75,8 @@ export function resultSummary(record: CommandRecord): string | null {
   }
 }
 
+/** app_window_state_result read back by the PC: what the window looks like now, and whether it came to the front. */
+function windowStateSummary(r: Record<string, unknown>): string {
+  const shape = r.fullscreen === true ? "in full screen" : r.state === "maximized" ? "maximised" : r.state === "minimized" ? "minimised" : "at normal size";
+  return `The window is ${shape}.${r.foreground === false && r.state !== "minimized" ? " Windows did not bring it to the front." : ""}`;
+}

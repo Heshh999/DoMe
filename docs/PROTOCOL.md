@@ -1172,6 +1172,11 @@ test suite.
   and a 1.1 phone, and keeps a search query out of its database, command history, security events
   and logs (`cloud-api/tests/test_relay_routing.py`; cloud-api 126 passed on 2026-10-10, no relay
   source change).
+- integration-tested with the real agent process (`tests/test_e2e_versions.py`): the §18.7 row
+  "1.2 phone with a 1.1 agent". An agent with the 1.1 release's version checks
+  (`tests/older_agent.py`) runs a confirmed `power.sleep` whose command and confirmation are both
+  stamped `"1.0"`. It refuses the same confirmation stamped `"1.2"` and keeps the challenge open,
+  and it answers `app.maximize` and `app.set_fullscreen` with `PROTOCOL_INCOMPATIBLE`.
 - not yet implemented at the time of the contract change: the agent handlers and Windows window
   control, the extension's search and result reading, and the phone's buttons, labels and stamping
   (they follow the contract in later steps).

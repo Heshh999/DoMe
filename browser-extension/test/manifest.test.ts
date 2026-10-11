@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { CONTENT_SCRIPT_FILE } from "../src/background/tabs.ts";
 
 const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, "../public/manifest.json"), "utf8")) as Record<string, unknown>;
+const pkg = JSON.parse(readFileSync(resolve(import.meta.dirname, "../package.json"), "utf8")) as { version: string };
 
 describe("manifest.json (spec §9/§15, design)", () => {
   it("has exactly the designed permissions and the narrow YouTube host permission", () => {
@@ -13,6 +14,8 @@ describe("manifest.json (spec §9/§15, design)", () => {
     expect(manifest.name).toBe("DoMe for YouTube");
     // scripting: re-run the extension's own content.js in YouTube tabs open before install/reload
     // (DECISIONS D26); the YouTube host permission below is what limits where it can run.
+    // YouTube search (protocol 1.2) uses tabs.update/tabs.create, which need no "tabs" permission,
+    // and reads only YouTube tabs' URLs, which the host permission already covers (DECISIONS D27).
     expect([...(manifest.permissions as string[])].sort()).toEqual(["alarms", "nativeMessaging", "scripting", "storage"]);
     expect(manifest.host_permissions).toEqual(["https://www.youtube.com/*"]);
     expect(manifest.optional_permissions).toBeUndefined();
@@ -20,6 +23,11 @@ describe("manifest.json (spec §9/§15, design)", () => {
     for (const forbidden of ["tabs", "history", "cookies", "debugger", "webRequest", "<all_urls>"]) {
       expect(JSON.stringify(manifest)).not.toContain(`"${forbidden}"`);
     }
+  });
+
+  it("carries the package version (0.2.0 speaks protocol 1.2: YouTube search and open result)", () => {
+    expect(manifest.version).toBe(pkg.version);
+    expect(manifest.version).toBe("0.2.0");
   });
 
   it("uses a module service worker, a top-frame-only YouTube content script and the status popup", () => {

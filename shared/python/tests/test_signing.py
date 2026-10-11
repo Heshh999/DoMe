@@ -179,6 +179,6 @@ def test_jwk_validation():
 def test_kid_is_rfc7638_thumbprint(jwk):
     import hashlib
 
-    canonical = '{"crv":"P-256","kty":"EC","x":"%s","y":"%s"}' % (jwk["x"], jwk["y"])
+    canonical = f'{{"crv":"P-256","kty":"EC","x":"{jwk["x"]}","y":"{jwk["y"]}"}}'
     expected = b64url_encode(hashlib.sha256(canonical.encode()).digest())
     assert kid_from_jwk(jwk) == expected

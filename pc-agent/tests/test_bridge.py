@@ -9,7 +9,7 @@ from dome_protocol import ProtocolError
 
 from dome_agent.bridge.framing import MAX_FRAME_BYTES, decode_frame, encode_frame, make_exact_reader, read_frame
 from dome_agent.bridge.manifest import allowed_origins, build_manifest
-from dome_agent.bridge.server import BridgeServer, negotiate_protocol_version
+from dome_agent.bridge.server import OP_SINCE, BridgeServer, negotiate_protocol_version, op_supported
 from dome_agent.settings import Settings
 from dome_agent.testing.fake_extension import FakeExtension, FakeTab
 
@@ -152,11 +152,11 @@ async def test_hello_tabs_and_request(settings: Settings, bridge: Any) -> None:
     server, _events, changes = bridge
     ext = await connect(settings)
     try:
-        # FakeExtension lists what the shipped extension lists ("1.0", "1.1"): the highest version both
-        # sides speak is acked (a 1.0-only extension is the explicit case in the next tests)
-        assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == "1.1"
+        # FakeExtension lists what the shipped extension lists ("1.0", "1.1", "1.2"): the highest version
+        # both sides speak is acked (a 1.0-only extension is the explicit case in the next tests)
+        assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == "1.2"
         assert server.connected and server.instances()[0].browser == "chrome"
-        assert server.instances()[0].protocol_version == "1.1"
+        assert server.instances()[0].protocol_version == "1.2"
         assert server.unavailable_reason == ""
         tab = ext.add_tab(FakeTab(tab_id=4))
         ext.publish_tabs()
@@ -201,7 +201,7 @@ async def test_incompatible_extension_is_refused(settings: Settings, bridge: Any
             break
         await asyncio.sleep(0.02)
     assert ext.errors and ext.errors[0]["error"]["code"] == "PROTOCOL_INCOMPATIBLE"
-    assert ext.errors[0]["error"]["detail"]["supported"] == ["1.0", "1.1"]  # both MINORs the agent speaks
+    assert ext.errors[0]["error"]["detail"]["supported"] == ["1.0", "1.1", "1.2"]  # every MINOR the agent speaks
     assert not server.connected
     ext.close()
 
@@ -216,7 +216,8 @@ async def test_incompatible_extension_is_refused(settings: Settings, bridge: Any
         (["1.0"], ("1.0",), "1.0"),
         (["2.0", "1.0"], ("1.0", "1.1"), "1.0"),
         (["2.0", "2.1"], ("1.0", "1.1"), None),
-        (["1.2"], ("1.0", "1.1"), None),
+        (["1.2"], ("1.0", "1.1"), "1.1"),  # rules.bridge_negotiation: a 1.2 extension also accepts 1.1
+        (["1.0", "1.1"], ("1.0", "1.1", "1.2"), "1.1"),  # a 1.1 extension talking to a 1.2 agent
         (["x", "1"], ("1.0",), None),
     ],
 )
@@ -229,7 +230,8 @@ def test_negotiate_protocol_version(peer: list[str], agent: tuple[str, ...], exp
     [
         (("1.0",), "1.0"),  # an extension the owner has not reloaded since the 1.0 build: never acked "1.1"
         (("1.0", "1.1"), "1.1"),
-        (("1.0", "1.1", "1.2"), "1.1"),
+        (("1.0", "1.1", "1.2"), "1.2"),
+        (("1.0", "1.1", "1.2", "1.3"), "1.2"),  # a newer extension talking to this agent
     ],
 )
 async def test_hello_ack_is_the_highest_common_version(
@@ -325,3 +327,118 @@ async def test_request_timeout_non_idempotent_is_outcome_unknown(settings: Setti
         assert ei2.value.code == "EXTENSION_DISCONNECTED"
     finally:
         ext.close()
+
+
+# ----- ops added in a later MINOR (version.json rules.bridge_negotiation) ------------------------------
+
+
+def test_op_since_matches_the_contract() -> None:
+    """OP_SINCE names only real bridge ops, and each op is as old as the action that uses it: an action an
+    agent accepts (stamped >= its since) must not need an op an extension of that version lacks."""
+    from dome_protocol import load_registry, load_schemas
+
+    from dome_agent.actions.youtube import OPS
+
+    bridge_schema = load_schemas().document("bridge")
+    ops = set(bridge_schema["$defs"]["bridge_request"]["properties"]["op"]["enum"])
+    assert set(OP_SINCE) <= ops
+    assert set(OPS.values()) == ops  # every bridge op is reachable from exactly the YouTube actions
+    registry = load_registry()
+    for action, op in OPS.items():
+        assert OP_SINCE.get(op, "1.0") == registry.min_version(action), action
+    assert op_supported("search", "1.2") and op_supported("set_paused", "1.0")
+    assert not op_supported("search", "1.1") and not op_supported("open_result", "1.0")
+
+
+@pytest.mark.parametrize("versions", [("1.0",), ("1.0", "1.1")])
+async def test_newer_ops_are_never_sent_to_an_older_extension(
+    settings: Settings, bridge: Any, versions: tuple[str, ...]
+) -> None:
+    server, _events, _changes = bridge
+    ext = await connect(settings, protocol_versions=versions)
+    try:
+        tab = ext.add_tab(FakeTab.results_page(5))
+        for op, args in (
+            ("search", {"query": "lofi beats"}),
+            ("search", {"query": "lofi beats", "tab_id": 5, "tab_token": tab.tab_token}),
+            ("open_result", {"tab_id": 5, "tab_token": tab.tab_token, "index": 1}),
+        ):
+            with pytest.raises(ProtocolError) as ei:
+                await server.request(ext.browser_instance_id, op, args, timeout_ms=2000, non_idempotent=True)
+            assert ei.value.code == "EXTENSION_UPDATE_REQUIRED" and ei.value.retryable is False
+            assert ei.value.detail == {"negotiated": versions[-1], "required": "1.2"}
+        # an op the extension speaks still works over the same connection
+        result = await server.request(ext.browser_instance_id, "list_tabs", {}, timeout_ms=2000)
+        assert [t["tab_id"] for t in result["tabs"]] == [5]
+        await asyncio.sleep(0.1)
+        assert [r["op"] for r in ext.requests] == ["list_tabs"]  # no frame was written for the refused ops
+        assert all(f["type"] != "bridge_request" or f["op"] == "list_tabs" for f in ext.received)
+    finally:
+        ext.close()
+
+
+async def test_a_1_2_extension_receives_search(settings: Settings, bridge: Any) -> None:
+    server, _events, _changes = bridge
+    ext = await connect(settings, protocol_versions=("1.0", "1.1", "1.2"))
+    try:
+        result = await server.request(ext.browser_instance_id, "search", {"query": "lofi"}, timeout_ms=2000)
+        assert result["tab"]["context"] == "other" and len(result["results"]) == 5
+        assert [r["op"] for r in ext.requests] == ["search"]
+    finally:
+        ext.close()
+
+
+async def test_titles_of_pages_without_a_video_are_not_kept(settings: Settings, bridge: Any) -> None:
+    """A results page's title is the search query (rules.search_queries): even an extension that still
+    reports it (pre-1.2) does not get it into the agent's tab cache, state frames or results."""
+    server, _events, _changes = bridge
+    ext = await connect(settings)
+    try:
+        leaky = ext.add_tab(FakeTab(tab_id=1, context="other", video_id=None, title="my private query - YouTube"))
+        ext.add_tab(FakeTab(tab_id=2, title="A video"))
+        ext.publish_tabs()
+        for _ in range(100):
+            if server.find_tab(ext.browser_instance_id, 2):
+                break
+            await asyncio.sleep(0.01)
+        cached = server.find_tab(ext.browser_instance_id, 1)
+        assert cached is not None and "title" not in cached and cached["tab_token"] == leaky.tab_token
+        assert server.find_tab(ext.browser_instance_id, 2)["title"] == "A video"  # type: ignore[index]
+        ext.publish_player_state(1)
+        await asyncio.sleep(0.1)
+        assert "title" not in (server.find_tab(ext.browser_instance_id, 1) or {"title": "missing"})
+        assert "my private query" not in repr(server.all_tabs())
+        # a tab reported in a bridge_response is recorded the same way
+        server.note_tab({**leaky.as_frame(ext.browser_instance_id), "tab_token": "N" * 22}, ext.browser_instance_id)
+        cached = server.find_tab(ext.browser_instance_id, 1)
+        assert cached is not None and cached["tab_token"] == "N" * 22 and "title" not in cached
+        server.note_tab({**leaky.as_frame("bi_other0001"), "tab_id": 77}, ext.browser_instance_id)  # ignored
+        assert server.find_tab(ext.browser_instance_id, 77) is None
+    finally:
+        ext.close()
+
+
+async def test_an_answer_never_rewrites_another_browsers_tabs(settings: Settings, bridge: Any) -> None:
+    """note_tab records a tab from the answer to a request sent to one browser: a tab naming another
+    connected browser (a buggy or hostile connection) is ignored, as tabs_changed/player_state are."""
+    server, _events, _changes = bridge
+    ext = await connect(settings)
+    other = await connect(settings, browser_instance_id="bi_fake0002")
+    try:
+        theirs = other.add_tab(FakeTab(tab_id=5, title="Their video"))
+        other.publish_tabs()
+        for _ in range(100):
+            if server.find_tab(other.browser_instance_id, 5):
+                break
+            await asyncio.sleep(0.01)
+        before = server.find_tab(other.browser_instance_id, 5)
+        assert before is not None and before["tab_token"] == theirs.tab_token
+        forged = {**theirs.as_frame(other.browser_instance_id), "tab_token": "F" * 22, "title": "Injected"}
+        server.note_tab(forged, ext.browser_instance_id)  # the answer came from ext's connection
+        assert server.find_tab(other.browser_instance_id, 5) == before
+        assert server.find_tab(ext.browser_instance_id, 5) is None
+        server.note_tab(forged, other.browser_instance_id)  # the same tab from its own browser is recorded
+        assert server.find_tab(other.browser_instance_id, 5)["tab_token"] == "F" * 22  # type: ignore[index]
+    finally:
+        ext.close()
+        other.close()

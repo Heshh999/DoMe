@@ -22,9 +22,17 @@ export function findPlayer(doc: Document): PlayerDom {
 }
 
 export function readTitle(doc: Document): string | undefined {
+  return headingTitle(doc) ?? documentTitle(doc);
+}
+
+/** The watch page's title heading. */
+export function headingTitle(doc: Document): string | undefined {
   const heading = doc.querySelector("h1.ytd-watch-metadata yt-formatted-string") ?? doc.querySelector("h1.ytd-watch-metadata");
-  const fromHeading = cleanText(heading?.textContent, 200);
-  if (fromHeading) return fromHeading;
+  return cleanText(heading?.textContent, 200);
+}
+
+/** document.title without YouTube's " - YouTube" suffix (the fallback of readTitle). */
+export function documentTitle(doc: Document): string | undefined {
   const t = cleanText(doc.title, 220);
   if (!t) return undefined;
   return cleanText(t.replace(/\s*-\s*YouTube\s*$/u, ""), 200);
@@ -89,7 +97,9 @@ export function readSnapshot(doc: Document, win: Window, dom: PlayerDom = findPl
     in_playlist: url.in_playlist,
   };
   if (url.video_id) snapshot.video_id = url.video_id;
-  const title = readTitle(doc);
+  // No title on pages without a player (results, channel, history, home): a results page's title is
+  // the customer's search query, and none of them names a video (rules.search_queries).
+  const title = url.context === "other" ? undefined : readTitle(doc);
   if (title) snapshot.title = title;
   if (video) {
     snapshot.paused = video.paused;

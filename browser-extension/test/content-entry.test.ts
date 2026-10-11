@@ -153,4 +153,18 @@ describe("content script entry", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(rt.sent.length).toBe(n);
   });
+
+  it("on a results page: attaches without the page title (the query) and answers read_results", async () => {
+    loadFixture("search-results-ads-shorts", "/results?search_query=lofi+beats");
+    const rt = fakeRuntime();
+    const { token } = startContentScript(rt.runtime, document, window);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(rt.sent[0]).toMatchObject({ kind: CS_KIND, type: "attached", token, state: { context: "other" } });
+    expect(JSON.stringify(rt.sent)).not.toContain("lofi beats");
+    let reply: ContentReply | undefined;
+    const keepOpen = rt.listeners[0]!({ kind: BG_KIND, type: "op", op: "read_results", args: { tab_token: token }, deadline_ms: 5000 }, EXT_SENDER, (r) => (reply = r));
+    expect(keepOpen).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(reply).toMatchObject({ ok: true, token, results: [{ index: 1, video_id: "DWcJFNfaw9c" }, { index: 2, video_id: "rUxyKA_-grg" }] });
+  });
 });

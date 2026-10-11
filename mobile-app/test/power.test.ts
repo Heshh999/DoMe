@@ -8,7 +8,7 @@ const AT = "2026-10-08T12:00:00.000Z";
 const NOW = new Date("2026-10-08T12:03:00.000Z");
 
 function rec(over: Partial<CommandRecord>): CommandRecord {
-  return { commandId: "c1", pcId: PC, action: "power.shutdown", params: {}, target: null, createdAt: Date.parse(AT), expiresAt: AT, state: "created", ackAt: null, confirmation: null, terminal: null, noAnswer: false, source: "button", ...over };
+  return { commandId: "c1", pcId: PC, action: "power.shutdown", params: {}, target: null, protocolVersion: "1.0", createdAt: Date.parse(AT), expiresAt: AT, state: "created", ackAt: null, confirmation: null, terminal: null, noAnswer: false, source: "button", ...over };
 }
 
 describe("power request evidence", () => {

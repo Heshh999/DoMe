@@ -276,3 +276,67 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     confirm whether support received this request", with a "Refresh your requests" button that
     re-reads `GET /v1/support/tickets` before the customer decides to send again. Nothing is resent
     automatically. A client request id would make retries safe (CONTRACT_ISSUES 11).
+
+42. **Commands are stamped with their action's `since`; confirmations with the command's stamp
+    (protocol 1.2, rules.command_version_stamping).** The PWA is served by cloud-api, so phones update
+    before PCs. Stamping every payload with the newest version would make a 1.1 agent refuse every
+    command. The no-eval registry facade parses `since` exactly like `@dome/protocol` (absent = 1.0,
+    checked against the protocol version at load; parity-tested per action), the shared
+    `buildCommandPayload` stamps it, `CommandRecord.protocolVersion` keeps it, and
+    `buildConfirmationEnvelope` requires it (`commandProtocolVersion`). Input batches are stamped 1.1
+    by the shared builder. The relay `hello` still offers only this build's version: relay and PWA
+    deploy together.
+
+43. **Window controls never start an app and never substitute one state for another.** Maximise,
+    Restore and Full screen are disabled for an app that is not running (the PC would answer
+    APP_NOT_RUNNING; the step says "Open it first from Apps"). Full screen is an absolute
+    `enabled` value: pc_state and app.list do not report it, so the toggle sends the opposite of the
+    last `app_window_state_result` the PC read back for that app or window (success, or the
+    best-known state carried by a failure), defaulting to "not full screen"; a stale guess costs one
+    tap that the PC answers without pressing anything. After FULLSCREEN_UNSUPPORTED the outcome card
+    offers "Maximise instead" — a second, visible command (spec: no silent fallback); on the Type page
+    it is a chip that fills "maximise <app>". For that code the headline is the agent's own message
+    (`errorMessage` with `origin: "agent"`; the relay's never), because only the PC knows why it pressed
+    nothing in that app and how to allow full screen for it there; it is shown as plain text with
+    control/format characters as spaces, and the shared copy stays the fallback. "Try Maximise
+    instead." stays the first recovery step.
+
+44. **YouTube search never navigates the watched video away implicitly.** `resolveYoutubeBrowserTarget`
+    reuses a tab only when the customer chose it (the tab picker, the card's "Use the YouTube tab"
+    switch) or it is the last results tab still showing results; otherwise it opens a new tab in the
+    one connected browser, or asks which browser. A successful search does **not** select its results
+    tab (review fix: a list has no player, so Pause/volume/seek then failed with "ad, live stream or
+    Shorts" copy while the video kept playing); `resolveYoutubeTarget` never picks a context-"other"
+    tab implicitly. A successful `youtube.open_result` selects the tab the video opened in (also
+    covering a token change after a full page load). Results are recorded in memory
+    (`lastSearchByPc`: commandId, createdAt, the PC's `stateSeq` at the answer, tab, results — never the
+    query); a slower older search never replaces a newer one. The new tab is missing from `pc_state`
+    until the PC's next (debounced) report, so "closed" is only concluded from a later report. Opening
+    a result while another tab plays pauses that tab first (a visible step on the Type page, stated in
+    the Remote's hint), so two videos never play at once. The query lives only in the in-memory command record (for the
+    outcome line, quoted ≤ 60 characters); `log.ts` redacts `query` and any `*search*` key, and
+    diagnostics never include params.
+
+45. **The approved-app list refreshes itself on entry and on return to the foreground.** pc_state
+    carries no app list (adding one is versioned protocol work), so the phone asks: `useApprovedApps`
+    sends `app.list` when the Apps or Type page mounts and after every `visibilitychange`/window
+    `focus`, waiting for fresh PC state (never into a reconnecting socket). `refreshApprovedApps`
+    skips while an `app.list` for that PC is being signed or awaiting its answer, so the two events a
+    resume fires send one request. `app.list` results are applied in the live store whichever page
+    asked (an older answer never replaces a newer one), replacing the Apps page's own effect.
+
+46. **Typed commands keep the customer's words where they are data, and say what they will do.**
+    (Review fixes.) `normalizeParts` tracks where every character came from, so a search query is
+    sliced from what was typed (control characters as spaces, quotes straightened, nothing else
+    rewritten) and "now"/"for me"/"thanks" stay at the end of a search unless a comma sets them apart.
+    INJECTION applies per part and, in a search, only to the words around the query: the query only
+    becomes the `search_query` of a results URL on the PC and no model reads it; a refused part says
+    why. Splitting: a bare "and"/comma right after an open-ended query ("search YouTube for …") stays
+    in the query unless a result pick follows; a segmentation whose query swallowed "then" ranks below
+    one that splits there, even when that one asks a question. Reserved words (spotify, music, …) lose
+    to an approved app of exactly that name or alias (`strongMatch`). App names allow any letters
+    (NFKC); the Type page's examples use `appPhrase`. The pause step DoMe adds before a result
+    (`added: true`, target "playing_elsewhere", resolved at send time and skipped when nothing else
+    plays any more) does not count toward the three steps. `runPlan` retries a window step after its
+    app's launch on TARGET_GONE (the PC refuses that before any side effect) and races every wait
+    against Stop and the relay status.

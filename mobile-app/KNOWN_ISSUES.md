@@ -81,7 +81,11 @@ Items from the review that were recorded rather than fully closed, plus residual
     `makeRuntime().connect()` in `test/helpers/harness.ts` assumed the socket existed after 10 macrotasks;
     with 30 files in parallel the key generation + hello-proof signing occasionally took longer and two
     unrelated tests failed intermittently. Both helpers now poll (bounded, 50 rounds). No shipped code
-    changed for this.
+    changed for this. `test/input.test.ts` had the same race for every signed command and batch (a
+    session switch signs a stop and then a start): it now waits for the frame it is about to check
+    (bounded, 3 s) and for `whenSent()` after batches, and passes with each signature slowed by 25 ms
+    and by 200 ms. The two reconnect tests in `runtime.test.ts` now wait for the second socket the same
+    way; the whole suite passes with signatures slowed by 25 ms and 60 ms.
 
 18. **Live-typing pause is conservative.** Any batch rejection or increase in dropped events pauses
     live typing when text was typed in that run, even if the dropped batch held only pointer events,
@@ -98,3 +102,27 @@ Items from the review that were recorded rather than fully closed, plus residual
 20. **"Not confirmed" support submissions are not reconciled automatically.** After "Refresh your
     requests" the customer compares the list by eye; the page does not match a new ticket to the
     unconfirmed draft (there is no request id to match on, CONTRACT_ISSUES 11).
+
+21. **The Full screen toggle only knows what this phone last read back.** F11 pressed on the PC, or
+    another phone's command, is not visible until this phone sends a window action for that app
+    (DECISIONS 43). The first tap may then only confirm the current state; the PC presses nothing
+    in that case.
+
+22. **The results list follows `pc_state`.** Once a video was opened from it (the tab's context turns
+    "watch"/"shorts") or its tab closed, the list is turned off with "Search again", but only once the
+    PC's (debounced, about 0.5 s) state report says so; a tap in that window fails honestly
+    (UNSUPPORTED_CONTEXT, "not showing the search results any more"). A results tab navigated to a
+    YouTube page other than a video still looks like a results page (both are context "other").
+
+23. **An app added on the PC appears on the next page entry or foreground return.** While the Apps or
+    Type page stays open and in the foreground, a tray addition shows after Refresh (Apps) or after
+    leaving and returning; the PC does not push app-list changes (pc_state has no app list).
+
+24. **Timings for slow apps and the autoplay rule are not verified on hardware.** A window step after
+    its app's launch is retried twice, 2 s apart (three tries, each with the PC's own 3 s wait for a
+    first window: about 13 s in all); an app slower than that still ends with "The app has no open
+    window on the PC". The Apps page re-reads the list
+    at 0, 1.5 and 5 s after Open. Play from the phone after a blocked autoplay is still a script call
+    the browser may refuse (shown as "That control is not available right now" until the extension
+    maps it to ACTIVATION_REQUIRED); the outcome copy therefore points at Play on the PC or a Touchpad
+    click.

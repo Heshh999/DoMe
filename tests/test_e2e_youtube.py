@@ -1,5 +1,6 @@
 """Spec §17.1–2: the first milestone — a paired phone controls YouTube in a background tab through the
-real relay and the real agent process, with a transition-observed Next."""
+real relay and the real agent process, with a transition-observed Next. Protocol 1.2: YouTube search and
+opening a result, and an extension too old for them."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ from typing import Any
 
 from dome_agent.testing.fake_extension import FakeTab
 
-from conftest import REGISTRY, RealAgent, run_command, wait_state, youtube_target
+from conftest import REGISTRY, Env, RealAgent, run_command, sql, wait_state, youtube_target
 
 
 async def test_next_changes_the_intended_video(agent: RealAgent, phone: Any) -> None:
@@ -143,3 +144,82 @@ async def test_target_identity_is_preserved(agent: RealAgent, phone: Any) -> Non
     await agent.wait_status(lambda s: not s["extension_connected"], 10)
     res = await run_command(phone, agent.pc_id, "youtube.next", {}, youtube_target(ext, tab))
     assert res["state"] == "failed" and res["error"]["code"] in ("EXTENSION_DISCONNECTED", "TARGET_GONE")
+
+
+QUERY = "lofi hip hop radio 9417"  # distinctive, so it can be searched for wherever it must not be
+
+
+async def test_search_then_open_the_second_result(env: Env, agent: RealAgent, phone: Any) -> None:
+    watching = FakeTab(tab_id=21, video_id="watching0001")
+    ext = await agent.connect_extension(watching)
+    ext.leak_results_title = True  # even an extension that reports "<query> - YouTube" as the title
+    ext.publish_on_search = False  # the phone acts on the results before the tab list is re-announced
+
+    # no tab selected: the search opens a new tab in that browser
+    res = await run_command(phone, agent.pc_id, "youtube.search", {"query": QUERY}, {"browser_instance_id": ext.browser_instance_id})
+    assert res["origin"] == "agent" and res["state"] == "succeeded", res
+    REGISTRY.validate_result("youtube.search", res["result"])
+    tab = res["result"]["tab"]
+    assert tab["tab_id"] != 21 and tab["context"] == "other" and "title" not in tab
+    results = res["result"]["results"]
+    assert [r["index"] for r in results] == [1, 2, 3, 4, 5] and QUERY not in repr(results)
+    assert [(r["op"], r["args"]) for r in ext.requests] == [("search", {"query": QUERY})]
+
+    # "play the second video" on the tab the search returned (its new token), right away
+    target = {"browser_instance_id": ext.browser_instance_id, "tab_id": tab["tab_id"], "tab_token": tab["tab_token"]}
+    second = results[1]
+    res = await run_command(phone, agent.pc_id, "youtube.open_result", {"index": 2, "video_id": second["video_id"]}, target)
+    assert res["origin"] == "agent" and res["state"] == "succeeded", res
+    REGISTRY.validate_result("youtube.open_result", res["result"])
+    assert res["result"]["tab"]["video_id"] == second["video_id"] and res["result"]["tab"]["context"] == "watch"
+    assert watching.video_id == "watching0001"  # the tab that was playing was left alone
+
+    # searching in the selected tab replaces its page: the old token no longer targets anything
+    in_tab = youtube_target(ext, watching, expected=False)
+    res = await run_command(phone, agent.pc_id, "youtube.search", {"query": QUERY + " live"}, in_tab)
+    assert res["state"] == "succeeded" and res["result"]["tab"]["tab_id"] == 21
+    assert res["result"]["tab"]["tab_token"] != in_tab["tab_token"]
+    res = await run_command(phone, agent.pc_id, "youtube.set_paused", {"paused": True}, in_tab)
+    assert res["state"] == "failed" and res["error"]["code"] == "TARGET_CHANGED"
+    # the extension still reports "<query> - YouTube" as that page's title: no answer carries it
+    res = await run_command(phone, agent.pc_id, "youtube.list_tabs")
+    assert res["state"] == "succeeded" and QUERY not in repr(res), res
+    assert any(t["tab_id"] == 21 and t["context"] == "other" for t in res["result"]["tabs"])
+    res = await run_command(phone, agent.pc_id, "youtube.get_state", {}, {**in_tab, "tab_token": watching.tab_token})
+    assert res["state"] == "succeeded" and res["result"]["tab"]["context"] == "other" and QUERY not in repr(res), res
+    res = await run_command(phone, agent.pc_id, "youtube.open_result", {"index": 9}, {**in_tab, "tab_token": watching.tab_token})
+    assert res["state"] == "failed" and res["error"]["code"] == "SEARCH_RESULT_UNAVAILABLE"
+
+    # rules.search_queries: the query reached the extension and nothing else — not the phone's state
+    # frames, not the relay's database, not the agent's files or log
+    ext.publish_tabs()
+    state = await wait_state(phone, agent.pc_id, lambda s: any(t["tab_id"] == 21 and t["context"] == "other" for t in s["youtube_tabs"]))
+    assert QUERY not in repr(state)
+    rows = await phone.browser.get(f"/v1/commands?pc_id={agent.pc_id}&limit=10", schema="commands_response")
+    assert {r["action"] for r in rows["commands"]} >= {"youtube.search", "youtube.open_result"}
+    tables = sql(env.database_url, "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+    for (table,) in tables:
+        dump = sql(env.database_url, f'SELECT t::text FROM "{table}" t')
+        assert QUERY not in repr(dump), f"search query found in relay table {table}"
+    for path in [agent.log_path, *agent.state_dir.rglob("*")]:
+        if path.is_file():
+            assert QUERY.encode() not in path.read_bytes(), f"search query found in {path}"
+
+
+async def test_an_extension_older_than_search_is_asked_to_update(agent: RealAgent, phone: Any) -> None:
+    for versions in (("1.0",), ("1.0", "1.1")):
+        tab = FakeTab(tab_id=31, video_id="oldextension")
+        ext = await agent.connect_extension(tab, protocol_versions=versions)
+        assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == versions[-1]
+        browser = {"browser_instance_id": ext.browser_instance_id}
+        res = await run_command(phone, agent.pc_id, "youtube.search", {"query": QUERY}, browser)
+        assert res["origin"] == "agent" and res["state"] == "failed", res
+        assert res["error"]["code"] == "EXTENSION_UPDATE_REQUIRED" and res["error"]["retryable"] is False
+        res = await run_command(phone, agent.pc_id, "youtube.open_result", {"index": 1}, youtube_target(ext, tab, expected=False))
+        assert res["state"] == "failed" and res["error"]["code"] == "EXTENSION_UPDATE_REQUIRED"
+        assert ext.requests == []  # nothing — and no query — was written to the old extension
+        # everything the old extension does speak keeps working
+        res = await run_command(phone, agent.pc_id, "youtube.set_paused", {"paused": True}, youtube_target(ext, tab))
+        assert res["state"] == "succeeded" and tab.paused is True
+        ext.close()
+        await agent.wait_status(lambda s: not s["extension_connected"], 10)

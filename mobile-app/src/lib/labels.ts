@@ -25,6 +25,8 @@ const TITLES: Record<ActionName, string> = {
   "youtube.set_volume": "YouTube volume",
   "youtube.set_theater": "Theater mode",
   "youtube.request_fullscreen": "Fullscreen",
+  "youtube.search": "Search YouTube",
+  "youtube.open_result": "Open search result",
   "media.get_sessions": "List media players",
   "media.set_paused": "Play/pause media",
   "media.next": "Next track",
@@ -37,6 +39,9 @@ const TITLES: Record<ActionName, string> = {
   "app.launch": "Open app",
   "app.focus": "Bring app to front",
   "app.minimize": "Minimise app",
+  "app.maximize": "Maximise app",
+  "app.restore": "Restore window",
+  "app.set_fullscreen": "App full screen",
   "app.close": "Close app",
   "power.sleep": "Sleep",
   "power.restart": "Restart",
@@ -57,6 +62,15 @@ function appName(id: unknown, ctx?: LabelContext): string {
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Longest search text quoted back in a label; the rest is elided (the query is never logged or stored). */
+export const QUERY_LABEL_MAX = 60;
+
+function quoted(v: unknown): string {
+  const text = typeof v === "string" ? v : "";
+  const chars = [...text];
+  return `“${chars.length > QUERY_LABEL_MAX ? `${chars.slice(0, QUERY_LABEL_MAX - 1).join("")}…` : text}”`;
 }
 
 /** One sentence saying exactly what the PC will do. Params/target must already be validated. */
@@ -92,6 +106,10 @@ export function describeAction(action: string, params: Record<string, unknown>, 
       return params.enabled ? "Turn theater mode on" : "Turn theater mode off";
     case "youtube.request_fullscreen":
       return "Ask the browser for fullscreen";
+    case "youtube.search":
+      return `Search YouTube for ${quoted(params.query)}`;
+    case "youtube.open_result":
+      return `Open search result ${num(params.index) ?? "?"}`;
     case "media.get_sessions":
       return "List media players on the PC";
     case "media.set_paused":
@@ -116,6 +134,12 @@ export function describeAction(action: string, params: Record<string, unknown>, 
       return `Bring ${appName(target?.app_id, ctx)} to the front`;
     case "app.minimize":
       return `Minimise ${appName(target?.app_id, ctx)}`;
+    case "app.maximize":
+      return `Maximise ${appName(target?.app_id, ctx)}`;
+    case "app.restore":
+      return `Show ${appName(target?.app_id, ctx)} at normal size`;
+    case "app.set_fullscreen":
+      return params.enabled ? `Make ${appName(target?.app_id, ctx)} full screen (F11)` : `Leave full screen in ${appName(target?.app_id, ctx)}`;
     case "app.close":
       return `Close ${appName(target?.app_id, ctx)}`;
     case "power.sleep":
@@ -167,8 +191,8 @@ export function supportCategoryFor(code: string | null | undefined): "connection
   if (code.startsWith("INPUT_")) return "input";
   if (code.startsWith("PAIRING_") || code === "CONTROLLER_REVOKED" || code === "UNKNOWN_KEY" || code === "GRANT_MISSING" || code === "SIGNATURE_INVALID") return "pairing";
   if (code.startsWith("PC_") || code === "NETWORK" || code === "OUTCOME_UNKNOWN" || code === "COMMAND_EXPIRED" || code === "PROTOCOL_INCOMPATIBLE" || code === "RATE_LIMITED" || code === "QUEUE_FULL") return "connection";
-  if (code.startsWith("EXTENSION_") || code.startsWith("TARGET_") || code.startsWith("TAB_") || code === "BROWSER_NOT_RUNNING" || code === "UNSUPPORTED_CONTEXT" || code === "ACTIVATION_REQUIRED") return "media";
-  if (code.startsWith("APP_") || code === "CLOSE_REFUSED" || code === "FOCUS_DENIED") return "apps";
+  if (code.startsWith("EXTENSION_") || code.startsWith("TARGET_") || code.startsWith("TAB_") || code.startsWith("SEARCH_") || code === "BROWSER_NOT_RUNNING" || code === "UNSUPPORTED_CONTEXT" || code === "ACTIVATION_REQUIRED") return "media";
+  if (code.startsWith("APP_") || code.startsWith("WINDOW_") || code.startsWith("FULLSCREEN_") || code === "CLOSE_REFUSED" || code === "FOCUS_DENIED") return "apps";
   if (code.startsWith("POWER_") || code.startsWith("CONFIRMATION_")) return "power";
   if (code.startsWith("ENTITLEMENT_") || code.startsWith("BILLING_") || code.endsWith("_PLAN_DISABLED") || code === "DEVICE_LIMIT_REACHED") return "billing";
   if (code === "UNAUTHENTICATED" || code === "FORBIDDEN") return "account";
@@ -212,8 +236,42 @@ export function lifecycleLabel(state: relayFrames.LifecycleState | "sent", origi
   }
 }
 
-export function errorMessage(error: { code: string; message?: string } | null | undefined): string {
+/** The command an error belongs to, when the same code means something more specific for that action. */
+export interface ErrorContext {
+  action?: string | undefined;
+  /** Who reported the terminal state: an agent-reported OUTCOME_UNKNOWN means the PC answered, unsure of the result. */
+  origin?: "agent" | "relay" | undefined;
+  target?: Record<string, unknown> | null | undefined;
+}
+
+const isSearch = (ctx?: ErrorContext) => ctx?.action === "youtube.search" || ctx?.action === "youtube.open_result";
+/** A window action on an app (not one window picked from its list) that found no window: the app runs without one. */
+const appWithoutWindow = (code: string, ctx?: ErrorContext) => code === "TARGET_GONE" && !!ctx?.action?.startsWith("app.") && !ctx.target?.window_id;
+
+/**
+ * Codes whose explanation is the PC's own: the agent knows why it pressed nothing in that app and how to allow full
+ * screen for it on the PC, which the phone cannot know. Only an answer the agent reported (never the relay's) is
+ * shown, as plain text (≤ 512 characters by the schema), with control and format characters turned into spaces.
+ */
+const PC_EXPLAINS: ReadonlySet<string> = new Set(["FULLSCREEN_UNSUPPORTED", "WINDOW_STATE_UNCHANGED"]);
+
+/** The agent's own message for a code in PC_EXPLAINS, cleaned for display; null when there is none to show. */
+function pcExplanation(error: { code: string; message?: string | undefined }, ctx?: ErrorContext): string | null {
+  if (!PC_EXPLAINS.has(error.code) || ctx?.origin !== "agent" || typeof error.message !== "string") return null;
+  const text = error.message.replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim();
+  return text === "" ? null : text;
+}
+
+export function errorMessage(error: { code: string; message?: string } | null | undefined, ctx?: ErrorContext): string {
   if (!error) return "Something went wrong.";
+  if (appWithoutWindow(error.code, ctx)) return "The app has no open window on the PC.";
+  const fromPc = pcExplanation(error, ctx);
+  if (fromPc) return fromPc;
+  if (error.code === "OUTCOME_UNKNOWN" && ctx?.origin === "agent" && isSearch(ctx)) {
+    return ctx?.action === "youtube.search" ? "YouTube did not finish loading the results on the PC, so DoMe can't tell what it shows." : "YouTube did not finish opening the video on the PC, so DoMe can't tell whether it is playing.";
+  }
+  if (error.code === "UNSUPPORTED_CONTEXT" && ctx?.action === "youtube.open_result") return "That tab on the PC is not showing the search results any more.";
+  if (error.code === "ACTIVATION_REQUIRED" && ctx?.action === "youtube.set_paused") return "The browser on the PC blocked starting the video without a click there.";
   const known = ERRORS[error.code];
   if (known) return known.user_message;
   if (error.code === "NETWORK") return error.message ?? "You appear to be offline.";
@@ -226,8 +284,11 @@ export function errorMessage(error: { code: string; message?: string } | null | 
   return "Something went wrong. Try again.";
 }
 
-/** Specific next steps per error code (spec §11); page-specific steps are added by the pages. */
-export function recoverySteps(code: string): string[] {
+/** Specific next steps per error code (spec §11), more specific where the action tells more; pages add their own. */
+export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
+  if (appWithoutWindow(code, ctx)) return ["The app is running without a window on the PC (for example only in the system tray, or Edge's Startup boost).", "Open it from Apps to show its window, then try again."];
+  if (code === "OUTCOME_UNKNOWN" && ctx?.origin === "agent" && isSearch(ctx)) return ["Look at the browser on the PC: if YouTube asks you to accept cookies or to sign in, do that once there.", ctx?.action === "youtube.search" ? "Then search again." : "Then search again and pick the video."];
+  if (code === "UNSUPPORTED_CONTEXT" && ctx?.action === "youtube.open_result") return ["A video was opened from this list, so that tab plays it now.", "Search again, then pick from the new list."];
   switch (code) {
     case "PC_OFFLINE":
     case "PC_RECONNECTING":
@@ -241,6 +302,8 @@ export function recoverySteps(code: string): string[] {
       return ["Install the DoMe extension in Chrome or Edge on the PC.", "Open a YouTube video, then try again."];
     case "EXTENSION_DISCONNECTED":
       return ["Open Chrome or Edge on the PC.", "Check that the DoMe extension is enabled.", "Reload the YouTube tab if the extension icon shows it is not connected."];
+    case "EXTENSION_UPDATE_REQUIRED":
+      return ["The DoMe browser extension on the PC is older than this control.", "Update it (or reload it from the browser's Extensions page after updating DoMe on the PC), then try again.", "The other YouTube controls keep working meanwhile."];
     case "BROWSER_NOT_RUNNING":
       return ["Open Chrome or Edge on the PC and play a YouTube video."];
     case "TAB_NOT_CONTROLLABLE":
@@ -261,9 +324,11 @@ export function recoverySteps(code: string): string[] {
     case "GRANT_MISSING":
       return ["This phone is no longer trusted by that PC.", "Pair again: on the PC choose Pair a phone, then scan the code here under Devices."];
     case "UNSUPPORTED_CONTEXT":
-      return ["This control is not available for the current page on the PC (for example an ad, a live stream or Shorts).", "Wait for the ad to finish or open a normal video."];
+      return ["This page on the PC has no video player (for example YouTube search results), or an ad, a live stream or a Short is showing.", "Open a normal video, or wait for the ad to finish."];
     case "ACTIVATION_REQUIRED":
-      return ["Browsers only allow fullscreen from a click on the PC itself.", "Use Theater mode instead, or press F on the PC."];
+      return ["Browsers only allow full screen, and sometimes starting a video, after a click on the PC itself.", "For full screen: use Theater mode instead, press F on the PC, or double-click the video with the touchpad.", "For playback: press Play on the PC, or click the video with the touchpad."];
+    case "SEARCH_RESULT_UNAVAILABLE":
+      return ["The YouTube results page changed on the PC, so that result is not there any more.", "Search again, then pick from the new list."];
     case "ACTION_UNAVAILABLE":
     case "UNKNOWN_ACTION":
     case "PLATFORM_UNSUPPORTED":
@@ -287,7 +352,15 @@ export function recoverySteps(code: string): string[] {
     case "FOCUS_DENIED":
       return ["Windows did not allow the app to come to the front.", "The app is running; click it on the PC if needed."];
     case "APP_NOT_APPROVED":
-      return ["Approve the app on the PC first (DoMe tray → Approved apps)."];
+      return ["Approve the app on the PC first: open the DoMe tray menu and choose Add an app…", "It then appears under Apps here by itself."];
+    case "APP_NOT_RUNNING":
+      return ["Open it first from Apps, then try again.", "Maximise, Restore and Full screen never start an app by themselves."];
+    case "FULLSCREEN_UNSUPPORTED":
+      return ["Try Maximise instead.", "Not every app has an F11 full screen, and DoMe never maximises in its place without asking."];
+    case "WINDOW_STATE_UNCHANGED":
+      return ["Some windows have a fixed size and cannot be maximised or resized.", "If the app is busy or not responding, wait for it on the PC and try again."];
+    case "APP_ELEVATED":
+      return ["That app runs as administrator, and Windows does not let other programs control its windows.", "Use it on the PC itself, or start it without administrator rights."];
     case "RATE_LIMITED":
     case "QUEUE_FULL":
       return ["Wait a moment and try again."];

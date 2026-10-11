@@ -58,7 +58,7 @@ export function createBackground(api: ExtensionApi, options: BackgroundOptions =
         profileLabel: await storage.profileLabel(),
       }),
     onRequest: (request: BridgeRequest) => {
-      void handleRequest(request, { api, registry, onTabState: (tabId) => emitPlayerState(tabId) }).then((response) => connection.post(response));
+      void handleRequest(request, { api, registry, timers, onTabState: (tabId) => emitPlayerState(tabId) }).then((response) => connection.post(response));
     },
     onConnected: () => {
       void sendTabsChanged();

@@ -80,7 +80,7 @@ async def test_native_host_process_forwards_frames(settings: Settings) -> None:
         assert raw is not None
         ack = json.loads(raw)
         # the highest version both the agent and the shipped extension list
-        assert ack["type"] == "bridge_hello_ack" and ack["protocol_version"] == "1.1"
+        assert ack["type"] == "bridge_hello_ack" and ack["protocol_version"] == "1.2"
         assert server.connected and server.instances()[0].browser == "edge"
         # an invalid frame from the "extension" is answered with bridge_error and the host keeps running
         proc.stdin.write(struct.pack("<I", 2) + b"{}")

@@ -14,6 +14,7 @@ from typing import Literal, Protocol
 from dome_protocol import ProtocolError
 
 PlatformName = Literal["windows", "unsupported", "fake"]
+WindowPlacement = Literal["normal", "minimized", "maximized"]
 MediaStatus = Literal["playing", "paused", "stopped", "changing", "closed", "opened", "unknown"]
 MediaControl = Literal["play", "pause", "next", "previous"]
 PointerButton = Literal["left", "right", "middle"]
@@ -39,6 +40,68 @@ NAMED_KEYS: tuple[str, ...] = (
     "page_down",
 )
 SHORTCUTS: tuple[str, ...] = ("ctrl_a", "ctrl_c", "ctrl_v", "ctrl_z", "ctrl_l")
+
+# Executable name (lower case) → browser kind, for ``foreground_app.browser``.
+BROWSER_PROCESSES: dict[str, BrowserKind] = {
+    "chrome.exe": "chrome",
+    "msedge.exe": "edge",
+    "firefox.exe": "other",
+    "brave.exe": "other",
+    "opera.exe": "other",
+    "vivaldi.exe": "other",
+}
+# What a browser's window is called instead of its title. A browser window's title is its active tab's page
+# title: browsing history, and on a YouTube results page the search query (rules.search_queries).
+BROWSER_WINDOW_LABELS: dict[str, str] = {
+    "chrome.exe": "Google Chrome",
+    "msedge.exe": "Microsoft Edge",
+    "firefox.exe": "Firefox",
+    "brave.exe": "Brave",
+    "opera.exe": "Opera",
+    "vivaldi.exe": "Vivaldi",
+}
+assert set(BROWSER_WINDOW_LABELS) == set(BROWSER_PROCESSES)
+# Executables (lower case) known to use F11 for their own full screen. F11 is pressed into no other app unless
+# the PC owner turned on "Full screen with F11" for it (ApprovedAppRow.fullscreen_f11): elsewhere it can mean
+# something else (Excel: a new chart sheet from the selection; Visual Studio: Step Into, which starts debugging;
+# Word: next field; Outlook: find a contact), so those apps are FULLSCREEN_UNSUPPORTED with nothing pressed
+# (version.json rules.window_actions).
+F11_FULLSCREEN_PROCESSES: frozenset[str] = frozenset(
+    {
+        *BROWSER_PROCESSES,
+        "explorer.exe",  # File Explorer
+        "code.exe",  # Visual Studio Code
+        "windowsterminal.exe",
+        "notepad++.exe",
+        "sublime_text.exe",
+    }
+)
+
+
+def browser_for_process(process_name: str) -> BrowserKind | None:
+    return BROWSER_PROCESSES.get(process_name.lower())
+
+
+def browser_window_label(process_name: str) -> str | None:
+    """The fixed name shown for a browser's window in place of its title; None for any other app."""
+    return BROWSER_WINDOW_LABELS.get(process_name.lower())
+
+
+def f11_toggles_fullscreen(process_name: str) -> bool:
+    """Whether F11 is this app's own full-screen toggle (:data:`F11_FULLSCREEN_PROCESSES`)."""
+    return process_name.lower() in F11_FULLSCREEN_PROCESSES
+
+
+def f11_not_enabled_message(app_name: str, *, entering: bool) -> str:
+    """What the phone is told when F11 was not pressed because *Full screen with F11* is off for the app: where
+    to turn it on, in the tray's own words. ``app_name`` is the approved display name (never a window title)."""
+    path = f"DoMe tray > Approved apps > {app_name} > Full screen with F11"
+    if entering:
+        return f"Full screen is not turned on for {app_name}. On the PC: {path}. Or use Maximise."
+    return (
+        f"{app_name} is in its own full screen, and Full screen with F11 is not turned on for it. Leave full "
+        f"screen on the PC, or turn it on: {path}."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,13 +155,73 @@ class AppWindow:
 
 
 @dataclass(frozen=True, slots=True)
+class WindowState:
+    """A window's placement as read back from the OS (``results#/$defs/app_window_state_result``).
+
+    ``fullscreen`` is judged from DPI-aware geometry (the window covers its monitor and has no caption),
+    never assumed from a key press. ``can_maximize`` (``WS_MAXIMIZEBOX``) and ``elevated`` (the window's
+    process runs at a higher integrity level than the agent; None when undeterminable) decide errors and
+    are never sent. Deliberately NOT part of :class:`AppWindow`: ``app.list`` results must still validate
+    on 1.1 phones (``app_window`` is unchanged in 1.2)."""
+
+    minimized: bool = False
+    maximized: bool = False
+    fullscreen: bool = False
+    foreground: bool = False
+    can_maximize: bool = True
+    elevated: bool | None = None
+
+    def state_name(self) -> WindowPlacement:
+        if self.minimized:
+            return "minimized"
+        if self.maximized:
+            return "maximized"
+        return "normal"
+
+    def as_result(self, app_id: str, window_id: str) -> dict[str, object]:
+        return {
+            "app_id": app_id,
+            "window_id": window_id,
+            "state": self.state_name(),
+            "fullscreen": bool(self.fullscreen),
+            "foreground": bool(self.foreground),
+        }
+
+
+class WindowStateError(ProtocolError):
+    """A window action failed; ``state`` is the best-known placement read back afterwards (None when the
+    window could not be read), so the handler can report it with the failure (``rules.window_actions``)."""
+
+    def __init__(self, code: str, message: str, state: WindowState | None = None) -> None:
+        super().__init__(code, message)
+        self.state = state
+
+
+class F11NotEnabledError(WindowStateError):
+    """F11 was needed but not pressed: the app is not on the F11 list and its *Full screen with F11* is off.
+    ``FULLSCREEN_UNSUPPORTED`` when entering full screen, ``WINDOW_STATE_UNCHANGED`` when the app is in its own
+    full screen; nothing was pressed and the window is untouched. The handler words the message with the app's
+    approved name (:func:`f11_not_enabled_message`); the adapter's own message is the nameless fallback."""
+
+    def __init__(self, entering: bool, state: WindowState | None = None) -> None:
+        super().__init__(
+            "FULLSCREEN_UNSUPPORTED" if entering else "WINDOW_STATE_UNCHANGED",
+            f11_not_enabled_message("the app", entering=entering),
+            state,
+        )
+        self.entering = entering
+
+
+@dataclass(frozen=True, slots=True)
 class ForegroundApp:
     """What the PC has in front, as far as the agent can observe (``relay-frames#/$defs/foreground_app``).
 
     ``window_id``/``pid`` identify the window for the input session's target-change check and are never
-    sent; ``window_title`` is untrusted display data and is never logged. ``elevated`` is None when the
-    agent could not determine the foreground process's integrity level (reported as unknown, never
-    guessed). Field-level focus inside the window is not observable and is never claimed."""
+    sent; ``window_title`` is untrusted display data and is never logged, and a browser's is never sent
+    (its active tab's page title: browsing history, and a YouTube results page's title is the search query;
+    the phone names the browser from ``browser``). ``elevated`` is None when the agent could not determine
+    the foreground process's integrity level (reported as unknown, never guessed). Field-level focus inside
+    the window is not observable and is never claimed."""
 
     process_name: str
     window_title: str = ""
@@ -113,7 +236,7 @@ class ForegroundApp:
 
     def as_result(self) -> dict[str, object]:
         out: dict[str, object] = {"process_name": self.process_name[:64]}
-        if self.window_title:
+        if self.window_title and self.browser is None:
             out["window_title"] = self.window_title[:200]
         if self.browser is not None:
             out["browser"] = self.browser
@@ -226,6 +349,58 @@ class AppsAdapter(Protocol):
 
     def request_close(self, window_id: str) -> None:
         """Post WM_CLOSE (graceful). Never terminates the process."""
+        ...
+
+    # The window actions below never start an app and raise :class:`WindowStateError` (carrying the
+    # best-known state when the window could be read) or plain ``TARGET_GONE`` / ``PLATFORM_UNSUPPORTED``.
+    # One window sequence runs at a time (a worker thread outlives a timed-out command), and the next one
+    # reads the state the previous one left. F11 is pressed only into an app on the F11 list
+    # (:func:`f11_toggles_fullscreen`) or one the PC owner opted in (``fullscreen_f11``: the approval's
+    # *Full screen with F11*, passed by the handler; otherwise :class:`F11NotEnabledError`, nothing pressed),
+    # never once ``deadline`` (``time.monotonic()``) has passed — the command's time is up, so a worker
+    # still running cannot press it after the phone was answered — and never while ``keys_held`` (keys held
+    # down from the phone's input session would turn F11 into another shortcut): ``ACTION_UNAVAILABLE``,
+    # nothing pressed.
+
+    def window_state(self, window_id: str) -> WindowState:
+        """The window's placement read back now. ``TARGET_GONE`` when the window no longer exists."""
+        ...
+
+    def maximize(
+        self, window_id: str, *, deadline: float | None = None, keys_held: bool = False, fullscreen_f11: bool = False
+    ) -> WindowState:
+        """Maximise (restoring a minimised window, leaving full screen first); the state read back.
+
+        ``APP_ELEVATED``, ``WINDOW_STATE_UNCHANGED`` (hung, no maximise box, not observed, or a full-screen
+        window of an app F11 may not be pressed in), plus the :meth:`set_fullscreen` errors when full screen
+        must be left first."""
+        ...
+
+    def restore(
+        self, window_id: str, *, deadline: float | None = None, keys_held: bool = False, fullscreen_f11: bool = False
+    ) -> WindowState:
+        """Normal placement: neither minimised nor maximised (full screen is left first); the state read
+        back. ``APP_ELEVATED``, ``WINDOW_STATE_UNCHANGED``, plus the :meth:`set_fullscreen` errors."""
+        ...
+
+    def set_fullscreen(
+        self,
+        window_id: str,
+        enabled: bool,
+        *,
+        deadline: float | None = None,
+        keys_held: bool = False,
+        fullscreen_f11: bool = False,
+    ) -> WindowState:
+        """Press F11 exactly once into the window when its observed full-screen state differs from
+        ``enabled`` (nothing is pressed when it already matches; a minimised window is shown again first
+        when it may be hiding a full-screen placement), only after the window was verified foreground right
+        before the press and no modifier key is held.
+
+        ``APP_ELEVATED``, ``FOCUS_DENIED`` / ``ACTION_UNAVAILABLE`` (nothing pressed), ``OS_ERROR`` (Windows
+        did not accept the key press), ``FULLSCREEN_UNSUPPORTED`` (an app off the F11 list and not opted in:
+        :class:`F11NotEnabledError`, nothing pressed; or entering not observed: never replaced by a maximise)
+        and ``WINDOW_STATE_UNCHANGED`` (leaving not observed or impossible, or the window is hung)."""
         ...
 
 

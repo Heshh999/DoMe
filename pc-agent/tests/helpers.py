@@ -15,6 +15,7 @@ from dome_protocol import (
     generate_private_key,
     jwk_from_public_key,
     kid_from_jwk,
+    load_registry,
     now_utc,
     sign_payload,
 )
@@ -30,6 +31,14 @@ def nonce() -> str:
     import secrets
 
     return b64url_encode(secrets.token_bytes(16))
+
+
+def stamp_for(action: str) -> str:
+    """The protocol_version a phone stamps on a command (rules.command_version_stamping): the lowest
+    version that defines the action (its ``since``). Unknown actions get "1.0" so the agent's own
+    UNKNOWN_ACTION path is what a test sees."""
+    registry = load_registry()
+    return registry.min_version(action) if action in registry.actions else "1.0"
 
 
 class Controller:
@@ -83,11 +92,12 @@ class Controller:
         target_pc_id: str | None = None,
         account_id: str | None = None,
         controller_id: str | None = None,
+        protocol_version: str | None = None,
     ) -> dict[str, Any]:
         issued = issued_at or now_utc()
         payload: dict[str, Any] = {
             "type": "command",
-            "protocol_version": "1.0",
+            "protocol_version": protocol_version or stamp_for(action),
             "command_id": command_id or str(uuid.uuid4()),
             "account_id": account_id or self.account_id,
             "controller_id": controller_id or self.controller_id,

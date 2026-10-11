@@ -10,19 +10,25 @@ validation. No remote code, no `eval`, no remotely loaded configuration.
 {
   "manifest_version": 3,
   "name": "DoMe for YouTube",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lets the DoMe agent on this PC control YouTube playback in this browser. Nothing leaves your PC except through the DoMe agent you installed.",
-  "permissions": ["nativeMessaging", "storage"],
+  "permissions": ["nativeMessaging", "storage", "alarms", "scripting"],
   "host_permissions": ["https://www.youtube.com/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{ "matches": ["https://www.youtube.com/*"], "js": ["content.js"], "run_at": "document_idle" }],
   "action": { "default_title": "DoMe", "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" },
   "minimum_chrome_version": "116"
 }
 ```
 
+(`browser-extension/public/manifest.json` is authoritative. `alarms` drives the reconnect schedule;
+`scripting` only runs the extension's own `content.js` in YouTube tabs that were open before the
+extension was installed, updated or re-enabled: `browser-extension/DECISIONS.md` D2, D26.)
+
 No `tabs`, `history`, `cookies`, `debugger`, `<all_urls>`. Tab titles/urls for youtube.com tabs are
-readable through the host permission. The production extension id is pinned via a `key` field once
+readable through the host permission, and `tabs.create`/`tabs.update` (for `search`) need no
+permission. The production extension id is pinned via a `key` field once
 the founder creates the Web Store listing; development builds have no `key` and are loaded unpacked.
 
 ## Background service worker
@@ -43,11 +49,12 @@ the founder creates the Web Store listing; development builds have no `key` and 
   `script_attached:false` and refuse ops with `TAB_NOT_CONTROLLABLE`.
 - Inbound `bridge_request` → validate (`schemas.validateBridgeFrame("agent_to_extension")`) →
   for `list_tabs`: `chrome.tabs.query({url:"https://www.youtube.com/*"})` plus the cached
-  per-tab player state → response. For tab ops: `chrome.tabs.get(tab_id)` (→ `TARGET_GONE` if
-  missing or not youtube.com) → `chrome.tabs.sendMessage(tab_id, {op, args, request_id})` with a
-  timeout (`timeout_ms` or 8000) → response; no content script → `UNSUPPORTED_CONTEXT` after one
-  retry via `chrome.scripting`? **No** (no `scripting` permission): report `UNSUPPORTED_CONTEXT`
-  with message "reload the YouTube tab".
+  per-tab player state → response. For `search` (protocol 1.2): answered by the worker itself
+  (`src/background/search.ts`, table below). For tab ops: `chrome.tabs.get(tab_id)` (→ `TARGET_GONE`
+  if missing or not youtube.com) → `chrome.tabs.sendMessage(tab_id, {op, args, request_id})` with a
+  timeout (`timeout_ms` or 8000) → response; a tab without a content script answers
+  `TAB_NOT_CONTROLLABLE` ("reload the YouTube tab"). The worker injects `content.js` into open
+  YouTube tabs on install, update and start (`browser-extension/DECISIONS.md` D26), so that is rare.
 - Content-script `player_state` messages are cached per tab (`Map` in memory is fine; it is
   rebuilt from `tabs_changed` + fresh `get_state` after a worker restart) and forwarded as
   `bridge_event{event:"player_state"}` at most twice per second per tab.
@@ -61,13 +68,16 @@ done through the `HTMLVideoElement` (`video.html5-main-video`) and YouTube's own
 | op | implementation | success criterion |
 | --- | --- | --- |
 | `get_state` | read `video.paused/currentTime/duration/muted/volume`, title from `h1.ytd-watch-metadata yt-formatted-string` or `document.title` fallback, `video_id` from `URL.searchParams.get("v")` or `/shorts/<id>`, `context` (watch/shorts/music/other) plus `ad_showing`, `is_live`, `in_playlist`, `theater`, `fullscreen` | `youtube_state_result` |
-| `set_paused` | `video.pause()` / `video.play()` (play may reject → `ACTION_UNAVAILABLE`) | `video.paused === paused` after ≤ 1 s |
+| `set_paused` | `video.pause()` / `video.play()` (a `NotAllowedError` rejection from the autoplay policy → `ACTIVATION_REQUIRED`; any other rejection → `ACTION_UNAVAILABLE`) | `video.paused === paused` after ≤ 1 s |
 | `next` | guard `expected_video_id`; find `.ytp-next-button` (must exist, not `aria-disabled`) → `click()` → wait for `yt-navigate-finish` or `video_id` change | new `video_id` ≠ old within timeout, else `NO_NEXT_VIDEO` / `TARGET_CHANGED` |
 | `previous` | `.ytp-prev-button` when present and enabled, else `NO_PREVIOUS_VIDEO` | as above |
 | `seek_relative` / `seek_to` | `video.currentTime = clamp(...)` | `|currentTime - target| < 1.5 s` or ended |
 | `set_muted` / `set_volume` | `video.muted = …` / `video.volume = value/100` **plus** click YouTube mute button when needed so the UI stays consistent | read-back |
 | `set_theater` | `.ytp-size-button` click until `ytd-watch-flexy[theater]` matches | attribute read-back |
 | `request_fullscreen` | `document.querySelector("#movie_player").requestFullscreen()` → rejection → `ACTIVATION_REQUIRED` | `document.fullscreenElement` |
+| `search` (bridge op since 1.2; run by the **worker**, not the content script) | `query` trimmed (empty → `INVALID_PARAMETERS`); URL = `https://www.youtube.com/results` with `search_query` set through `URLSearchParams` only. With `tab_id` + `tab_token`: the tab must still be on YouTube (`TARGET_GONE`), have a content script (`TAB_NOT_CONTROLLABLE`) holding that token (`TARGET_CHANGED`), then `tabs.update(tab_id, {url})`; without them `tabs.create({url, active: true})`. Then wait for the results page's content script to attach with a **new** token on a results URL for this query, and send it `read_results` | `youtube_search_result` `{tab, results}` (validated before sending); `tab` carries the new `tab_token` and **no title**. After the navigation was requested, no attach in time → `OUTCOME_UNKNOWN` (not idempotent), results not readable in time → `ACTION_UNAVAILABLE` |
+| `read_results` (**internal**: worker → content script only, never a bridge op; `bridge.schema.json` does not list it) | only on `/results` (else `UNSUPPORTED_CONTEXT`); primary video results only: `ytd-video-renderer` / `yt-lockup-view-model` children of a section's `#contents` linking to a plain watch page; ads, Shorts, shelves ("People also watched"), channels, playlists and mixes skipped (`src/content/results.ts`); waits for YouTube to render, then up to 800 ms for the first page to fill | numbered from 1 in page order, one per video, at most `youtube_search_results_max` (10), titles/channels cleaned as untrusted page text; YouTube's "No results found" → empty list; watch links but no recognised result → `ACTION_UNAVAILABLE` (layout changed), never an empty success |
+| `open_result` (tab op since 1.2) | only on `/results` (else `UNSUPPORTED_CONTEXT`); `index` 1-10 as `read_results` numbered it (same reader); with `video_id` the entry must still be that video; `click()` on YouTube's own link (in-site navigation, nothing inserted into the page) | tab reaches that `video_id` and settles → `youtube_state_result`; no entry at `index` → `SEARCH_RESULT_UNAVAILABLE`; another video there → `TARGET_CHANGED` (nothing clicked); clicked but the video did not arrive → `OUTCOME_UNKNOWN` |
 
 Context detection: `#movie_player.ad-showing` → `ad_showing:true` (control ops other than
 `set_paused`/`set_muted`/`set_volume` return `UNSUPPORTED_CONTEXT`); `.ytp-live` badge →
@@ -77,6 +87,20 @@ launch); `list=` in URL → `in_playlist:true`; `ytd-watch-flexy[theater]` → `
 permission). `has_next`/`has_previous` derive from button presence/enabled state. Results are
 `results.schema.json#/$defs/youtube_state_result` (`{tab, previous_video_id?}`) and `tabs_result`
 for `list_tabs`; incompatibility on hello is reported with `bridge_error{PROTOCOL_INCOMPATIBLE}`.
+
+Version gating (`rules.bridge_negotiation`, `docs/PROTOCOL.md` §18.3): `bridge_hello` lists every
+MINOR the extension speaks (`src/shared/version.ts`: `1.0`, `1.1`, `1.2`) and the agent's
+`bridge_hello_ack.protocol_version` is the negotiated one. `search` and `open_result` were added in
+1.2: the agent (`OP_SINCE` in `pc-agent/dome_agent/bridge/server.py`) sends them only to an
+extension that negotiated 1.2 or later; an older extension's command fails with
+`EXTENSION_UPDATE_REQUIRED` ("Update the DoMe browser extension on the PC to use this control.")
+and nothing is written to it, while every older op keeps working. `read_results` is internal and has
+no version.
+
+Search text (`rules.search_queries`): the query lives only in `search()`'s locals and in the
+navigation. The worker logs op, request id, code and duration only; error messages are fixed text;
+the results tab is composed without a title (a results page's title is the query), and a snapshot
+taken just after leaving a results page never reports the old document title as the video's.
 
 SPA handling: listen to `yt-navigate-finish`, `yt-page-data-updated`, and a `MutationObserver` on
 `#movie_player` to re-acquire the video element; `video` events (`play`, `pause`, `timeupdate`

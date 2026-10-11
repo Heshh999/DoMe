@@ -9,6 +9,7 @@ exactly the same decisions; ``shared/protocol/fixtures/strict-json-cases.json`` 
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from .errors import ProtocolError
@@ -55,9 +56,8 @@ def _check(value: Any, depth: int, max_depth: int) -> None:
     elif isinstance(value, int):
         if abs(value) > MAX_SAFE_INTEGER:
             raise ProtocolError("MALFORMED_MESSAGE", "integer outside safe range")
-    elif isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
-            raise ProtocolError("MALFORMED_MESSAGE", "non-finite number")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ProtocolError("MALFORMED_MESSAGE", "non-finite number")
 
 
 def _check_str(s: str) -> None:

@@ -35,6 +35,7 @@ const EXPORTS: Record<string, string> = {
   youtubeTab: `${BASE}relay-frames.schema.json#/$defs/youtube_tab`,
   tabsResult: `${BASE}results.schema.json#/$defs/tabs_result`,
   youtubeStateResult: `${BASE}results.schema.json#/$defs/youtube_state_result`,
+  youtubeSearchResult: `${BASE}results.schema.json#/$defs/youtube_search_result`,
 };
 
 export function generateValidatorsSource(): string {
@@ -86,6 +87,7 @@ export const agentToExtension: Validator;
 export const youtubeTab: Validator;
 export const tabsResult: Validator;
 export const youtubeStateResult: Validator;
+export const youtubeSearchResult: Validator;
 `;
 
 function main(): void {

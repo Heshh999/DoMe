@@ -178,7 +178,7 @@ def test_verify_and_parse_command_happy(signer):
 
 
 def test_default_params_applied(signer):
-    key, record, resolve = signer
+    key, _record, resolve = signer
     payload = make_command(action="power.sleep", params={}, target=None)
     payload["target"] = None
     env = sign_payload(key, dumps_compact(payload))
@@ -213,7 +213,7 @@ def test_default_params_applied(signer):
     ],
 )
 def test_verify_and_parse_command_rejections(signer, mutation, code):
-    key, record, resolve = signer
+    key, _record, resolve = signer
     payload = make_command()
     mutation(payload)
     env = sign_payload(key, dumps_compact(payload))
@@ -368,7 +368,7 @@ def test_search_limits_match_the_schemas():
     open_index = reg.get("youtube.open_result").params_schema["properties"]["index"]
     assert results["youtube_search_item"]["properties"]["index"]["maximum"] == open_index["maximum"] == 10
     bridge_args = schemas.document("bridge")["$defs"]["bridge_request"]["properties"]["args"]["properties"]
-    without_text = lambda s: {k: v for k, v in s.items() if k != "description"}  # noqa: E731
+    without_text = lambda s: {k: v for k, v in s.items() if k != "description"}
     assert without_text(bridge_args["query"]) == without_text(query)
     assert bridge_args["index"] == open_index
 
@@ -388,7 +388,7 @@ def test_search_limits_match_the_schemas():
     ],
 )
 def test_1_2_commands_verify(signer, action, params, target):
-    key, record, resolve = signer
+    key, _record, resolve = signer
     payload = make_command(action=action, params=params, target=dict(target), protocol_version="1.2")
     vc = verify_and_parse_command(sign_payload(key, dumps_compact(payload)).to_dict(), resolve)
     assert vc.spec.name == action and vc.params == params and vc.target == target
@@ -404,7 +404,7 @@ def test_1_2_commands_verify(signer, action, params, target):
 )
 def test_older_actions_accept_every_stamp_from_their_since(signer, action, params, target, stamps):
     """rules.command_version_stamping: an updated phone keeps stamping old actions low, and 1.1 phones stamp 1.1."""
-    key, record, resolve = signer
+    key, _record, resolve = signer
     for stamp in stamps:
         payload = make_command(action=action, params=params, target=target, protocol_version=stamp)
         payload["target"] = target
@@ -445,7 +445,7 @@ def test_older_actions_accept_every_stamp_from_their_since(signer, action, param
     ],
 )
 def test_1_2_command_rejections(signer, overrides, code):
-    key, record, resolve = signer
+    key, _record, resolve = signer
     payload = make_command(action="youtube.search", params={"query": "lofi beats"}, target=dict(BROWSER), protocol_version="1.2")
     payload.update(copy.deepcopy(overrides))
     with pytest.raises(ProtocolError) as ei:
@@ -454,7 +454,7 @@ def test_1_2_command_rejections(signer, overrides, code):
 
 
 def test_stamp_below_since_names_both_versions(signer):
-    key, record, resolve = signer
+    key, _record, resolve = signer
     payload = make_command(action="app.maximize", params={}, target=dict(WINDOW), protocol_version="1.1")
     with pytest.raises(ProtocolError) as ei:
         verify_and_parse_command(sign_payload(key, dumps_compact(payload)).to_dict(), resolve)
@@ -550,7 +550,7 @@ def test_validation_messages_never_echo_the_value(signer):
     with pytest.raises(ProtocolError) as ei:
         reg.validate_params("youtube.search", {})
     assert ei.value.message == "<root>: failed required (query)"
-    key, record, resolve = signer
+    key, _record, resolve = signer
     payload = make_command(action="youtube.search", params={"query": sentinel}, target=dict(BROWSER), protocol_version="1.2")
     with pytest.raises(ProtocolError) as ei:
         verify_and_parse_command(sign_payload(key, dumps_compact(payload)).to_dict(), resolve)

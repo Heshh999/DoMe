@@ -7,12 +7,13 @@ video ids are untrusted display data and are never logged.
 
 ``bridge_hello_ack.protocol_version`` is NEGOTIATED (:func:`negotiate_protocol_version`), never the
 agent's own newest version: the extension refuses an ack it does not speak and reconnects only slowly.
+An op added in a later MINOR (:data:`OP_SINCE`) is sent only to an extension whose negotiated version
+includes it; any other extension gets ``EXTENSION_UPDATE_REQUIRED`` before a frame is written.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 import threading
 import uuid
 from collections.abc import Callable, Iterable
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dome_protocol import ProtocolError
+from dome_protocol import ProtocolError, negotiate_version, protocol_compatible
 
 from .. import SUPPORTED_PROTOCOL_VERSIONS, __version__
 from ..logsetup import get_logger
@@ -30,26 +31,38 @@ from .framing import decode_frame, encode_frame, validate_outgoing
 log = get_logger(__name__)
 
 DEFAULT_REQUEST_TIMEOUT_MS = 8000
-_VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)")
+# bridge.schema.json ops added after 1.0 → the MINOR that added them (version.json rules.bridge_negotiation).
+# Every op not listed here is a 1.0 op. tests/test_bridge.py checks this against the schema and actions.json.
+OP_SINCE: dict[str, str] = {"search": "1.2", "open_result": "1.2"}
 
 
 def negotiate_protocol_version(
     peer_versions: Iterable[str], supported: Iterable[str] = SUPPORTED_PROTOCOL_VERSIONS
 ) -> str | None:
-    """The version a ``bridge_hello_ack`` announces: the highest MINOR, within a MAJOR both sides speak,
-    that both lists contain (each side lists every MINOR it speaks), spelled as the extension spelled it.
-    None when the lists share no version: the hello is refused as PROTOCOL_INCOMPATIBLE.
+    """The version a ``bridge_hello_ack`` announces (version.json ``rules.bridge_negotiation``, the shared
+    :func:`dome_protocol.negotiate_version`): the highest MINOR both sides support within their highest
+    common MAJOR — under the compatibility rule a side that supports a MINOR also accepts every lower
+    one. None when no MAJOR is shared: the hello is refused as PROTOCOL_INCOMPATIBLE.
 
-    A 1.0-only extension must get "1.0" from a 1.1 agent: it refuses any ack its own list does not reach
+    A 1.0-only extension must get "1.0" from a 1.2 agent: it refuses any ack its own list does not reach
     (``protocolCompatible`` in browser-extension/src/shared/version.ts)."""
+    return negotiate_version(peer_versions, supported)
 
-    def parse(version: str) -> tuple[int, int] | None:
-        m = _VERSION_RE.fullmatch(version) if isinstance(version, str) else None
-        return (int(m.group(1)), int(m.group(2))) if m else None
 
-    ours = {v for v in map(parse, supported) if v is not None}
-    common = [(parsed, v) for v in peer_versions if (parsed := parse(v)) is not None and parsed in ours]
-    return max(common)[1] if common else None
+def op_supported(op: str, negotiated: str) -> bool:
+    """Whether an extension that negotiated ``negotiated`` speaks bridge op ``op`` (:data:`OP_SINCE`)."""
+    return protocol_compatible(OP_SINCE.get(op, "1.0"), (negotiated,))
+
+
+def scrub_tab(tab: dict[str, Any]) -> dict[str, Any]:
+    """The tab as the agent keeps and republishes it: no title unless the page is a video page.
+
+    A YouTube results page's title is the search query and other non-video pages are unrelated browsing
+    history (rules.search_queries; the 1.2 extension already omits them). Dropping it here as well keeps an
+    older or misbehaving extension from putting it into state frames, the relay's state cache and results."""
+    if tab.get("context") == "other" and "title" in tab:
+        tab = {k: v for k, v in tab.items() if k != "title"}
+    return tab
 
 
 @dataclass(slots=True)
@@ -280,12 +293,14 @@ class BridgeServer:
             tabs = frame.get("tabs")
             if tabs is not None:
                 instance.tabs = {
-                    int(t["tab_id"]): t for t in tabs if t.get("browser_instance_id") == instance.browser_instance_id
+                    int(t["tab_id"]): scrub_tab(t)
+                    for t in tabs
+                    if t.get("browser_instance_id") == instance.browser_instance_id
                 }
         elif frame["event"] == "player_state":
             tab = frame.get("tab")
             if tab is not None and tab.get("browser_instance_id") == instance.browser_instance_id:
-                instance.tabs[int(tab["tab_id"])] = tab
+                instance.tabs[int(tab["tab_id"])] = scrub_tab(tab)
         self._on_change()
 
     async def _disconnected(self, connection: _Connection) -> None:
@@ -327,6 +342,23 @@ class BridgeServer:
             return None
         return inst.tabs.get(int(tab_id))
 
+    def note_tab(self, tab: dict[str, Any], browser_instance_id: str) -> None:
+        """Record a tab the extension reported in a ``bridge_response`` to a request sent to
+        ``browser_instance_id``.
+
+        The extension announces tab changes through a DEBOUNCED ``tabs_changed``, so the answer to an op that
+        replaced the page (``search``: a new tab_token, maybe a new tab) can arrive first; without this the
+        phone's next command for the tab it was just given would fail target resolution as TARGET_CHANGED.
+        Like :meth:`_event`, a tab naming another browser instance is ignored: one connection's answer never
+        rewrites another browser's tab records (their tab_token feeds target resolution)."""
+        if tab.get("browser_instance_id") != browser_instance_id:
+            return
+        inst = self._instances.get(browser_instance_id)
+        if inst is None or not isinstance(tab.get("tab_id"), int):
+            return
+        inst.tabs[tab["tab_id"]] = scrub_tab(tab)
+        self._on_change()
+
     async def request(
         self,
         browser_instance_id: str,
@@ -339,12 +371,26 @@ class BridgeServer:
         """Send one ``bridge_request`` and await its ``bridge_response``.
 
         Before the frame has been written, every failure is ``EXTENSION_DISCONNECTED`` (retryable: the
-        op never reached the browser). Once the frame is on the wire, a lost answer (timeout, native
-        host gone) is ``EXTENSION_DISCONNECTED`` for idempotent ops but ``OUTCOME_UNKNOWN``
-        (non-retryable) when ``non_idempotent`` is set — the browser may well have executed it."""
+        op never reached the browser), except an op the extension's negotiated version does not include
+        (:data:`OP_SINCE`): ``EXTENSION_UPDATE_REQUIRED``, and nothing is written. Once the frame is on the
+        wire, a lost answer (timeout, native host gone) is ``EXTENSION_DISCONNECTED`` for idempotent ops
+        but ``OUTCOME_UNKNOWN`` (non-retryable) when ``non_idempotent`` is set — the browser may well
+        have executed it."""
         instance = self._instances.get(browser_instance_id)
         if instance is None:
             raise ProtocolError("EXTENSION_DISCONNECTED", "That browser is not connected", retryable=True)
+        if not op_supported(op, instance.protocol_version):
+            log.info(
+                "bridge op needs a newer extension",
+                op=op,
+                negotiated=instance.protocol_version,
+                required=OP_SINCE.get(op, "1.0"),
+            )
+            raise ProtocolError(
+                "EXTENSION_UPDATE_REQUIRED",
+                "Update the DoMe browser extension on the PC to use this control.",
+                detail={"negotiated": instance.protocol_version, "required": OP_SINCE.get(op, "1.0")},
+            )
         assert self._loop is not None
         request_id = str(uuid.uuid4())
         timeout_ms = max(100, min(60000, int(timeout_ms)))

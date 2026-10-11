@@ -77,6 +77,8 @@ export async function buildConfirmationEnvelope(input: {
   parsed: ParsedChallenge;
   controllerId: string;
   decision: "approve" | "decline";
+  /** protocol_version of the command being confirmed (`CommandRecord.protocolVersion`); the confirmation carries the same stamp. */
+  commandProtocolVersion: string;
   keyPair: CryptoKeyPair;
   now?: Date;
 }): Promise<relayFrames.ControllerConfirmation> {
@@ -88,6 +90,7 @@ export async function buildConfirmationEnvelope(input: {
     controllerId: input.controllerId,
     targetPcId: challenge.pc_id,
     decision: input.decision,
+    commandProtocolVersion: input.commandProtocolVersion,
     ...(input.now ? { now: input.now } : {}),
   });
   const envelope = await signConfirmation(input.keyPair.privateKey, input.keyPair.publicKey, payload);

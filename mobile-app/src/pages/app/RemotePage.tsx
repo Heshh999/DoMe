@@ -1,7 +1,9 @@
 /**
  * Media remote. Two sources side by side — YouTube (through the PC's browser extension) and
  * Windows media sessions — each with its own picker, and two clearly labelled volume controls:
- * the YouTube player volume and the Windows system volume.
+ * the YouTube player volume and the Windows system volume. YouTube also has a search box whose
+ * results open on the PC. A tab without a player (search results) is never controlled implicitly;
+ * when picked by hand, its player buttons stay off.
  */
 import { useState } from "react";
 
@@ -11,6 +13,7 @@ import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, IconButton, Notice, Steps } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
+import { YoutubeSearch } from "../../components/YoutubeSearch.tsx";
 import { mmss } from "../../lib/format.ts";
 import { errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { browserLabel, controllableTabs, resolveMediaTarget, resolveYoutubeTarget, tabKey } from "../../lib/targets.ts";
@@ -35,8 +38,10 @@ export function RemotePage() {
   const media = resolveMediaTarget(state, selectedSession);
   const sessions = (state?.media_sessions ?? []).filter((s) => s.status !== "closed");
   const volume = state?.volume ?? null;
-  const ytOk = canControl && yt.ok;
   const tab = yt.ok ? yt.tab : null;
+  // Search results and other pages without a player: every player control would be refused there.
+  const noPlayer = tab?.context === "other";
+  const ytOk = canControl && yt.ok && !noPlayer;
   const position = scrub ?? tab?.position_seconds ?? null;
 
   return (
@@ -70,7 +75,7 @@ export function RemotePage() {
                           {t.paused === false ? " · playing" : ""}
                           {!controllable ? " · reload this tab on the PC" : ""}
                         </span>
-                        <span className="block truncate font-medium">{t.title ?? "YouTube"}</span>
+                        <span className="block truncate font-medium">{t.title ?? (t.context === "other" ? "YouTube search results or another page" : "YouTube")}</span>
                       </button>
                     </li>
                   );
@@ -81,7 +86,13 @@ export function RemotePage() {
           ) : null}
 
           <Card className="text-center">
-            {tab ? (
+            {tab && noPlayer ? (
+              <>
+                <p className="text-xs text-text-faint">{browserLabel(state, tab.browser_instance_id)}</p>
+                <p className="font-semibold text-lg leading-snug mt-1">YouTube search results: pick a video below</p>
+                <p className="text-sm text-text-muted mt-1">This tab shows a list, not a player, so the player buttons are off until a video plays in it.</p>
+              </>
+            ) : tab ? (
               <>
                 <p className="text-xs text-text-faint">
                   {browserLabel(state, tab.browser_instance_id)}
@@ -95,7 +106,7 @@ export function RemotePage() {
               </>
             ) : (
               <p className="text-sm text-text-muted">
-                {!fresh ? "The PC’s state is not available right now." : !yt.ok && yt.reason === "no_extension" ? "The DoMe browser extension is not connected on the PC." : !yt.ok && yt.reason === "no_tabs" ? "No YouTube tab is open on the PC." : !yt.ok && yt.reason === "none_attached" ? "Reload the YouTube tab on the PC so DoMe can control it." : "Choose a tab above."}
+                {!fresh ? "The PC’s state is not available right now." : !yt.ok && yt.reason === "no_extension" ? "The DoMe browser extension is not connected on the PC." : !yt.ok && yt.reason === "no_tabs" ? "No YouTube tab is open on the PC." : !yt.ok && yt.reason === "none_attached" ? "Reload the YouTube tab on the PC so DoMe can control it." : !yt.ok && yt.reason === "no_player" ? "No YouTube video is playing: the YouTube tab shows a list. Pick a video below or on the PC." : "Choose a tab above."}
               </p>
             )}
             <div className="mt-4 flex items-center justify-center gap-3">
@@ -146,6 +157,8 @@ export function RemotePage() {
           </Card>
 
           <VolumeSlider label="YouTube player volume" scopeHint="Only the video in this tab. Windows volume is separate, below." value={tab && typeof tab.volume === "number" ? tab.volume : null} muted={tab?.muted ?? null} disabled={!ytOk} onChange={(v) => yt.ok && void send("youtube.set_volume", { value: v }, yt.target, "slider")} onToggleMute={() => yt.ok && void send("youtube.set_muted", { muted: !(yt.tab.muted ?? false) }, yt.target, "button")} />
+
+          <YoutubeSearch pcId={pcId} state={state} canControl={canControl} send={send} />
         </>
       ) : (
         <>

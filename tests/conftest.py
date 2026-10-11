@@ -79,10 +79,20 @@ def _nonce() -> str:
 class RealAgent:
     """The real ``dome-agent`` process on the fake platform, driven exactly as a customer's PC would be."""
 
-    def __init__(self, env: Env, browser: Browser, name: str = "Living room PC") -> None:
+    def __init__(
+        self,
+        env: Env,
+        browser: Browser,
+        name: str = "Living room PC",
+        *,
+        command: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> None:
         self.env = env
         self.browser = browser
         self.name = name
+        self.command = command or [str(AGENT_BIN)]  # what `run` starts (tests may wrap the real CLI)
+        self.extra_env = extra_env or {}
         # Unix socket paths are limited to ~104 bytes: keep the state directory short.
         self.root = Path(tempfile.mkdtemp(prefix="dome-it-"))
         self.state_dir = self.root / "s"
@@ -102,6 +112,7 @@ class RealAgent:
             "DOME_AGENT_PLATFORM": "fake",  # the explicitly isolated test double; never set by the installer
             "DOME_AGENT_HEADLESS": "1",
             "DOME_AGENT_LOG_LEVEL": "DEBUG",
+            **self.extra_env,
         }
 
     def log_tail(self, n: int = 40) -> str:
@@ -149,7 +160,7 @@ class RealAgent:
     async def start(self, *, wait_connected: bool = True, timeout: float = 30) -> None:
         self._stderr = self.log_path.open("ab")
         self.proc = subprocess.Popen(
-            [str(AGENT_BIN), "run", "--headless"], env=self.environ(), stdout=subprocess.DEVNULL, stderr=self._stderr
+            [*self.command, "run", "--headless"], env=self.environ(), stdout=subprocess.DEVNULL, stderr=self._stderr
         )
         if wait_connected:
             await self.wait_status(lambda s: s["connection"] == "connected" and s["snapshot_received"], timeout)
@@ -312,14 +323,18 @@ def confirmation_envelope(
     decision: str = "approve",
     digest: str | None = None,
     key: Any = None,
+    protocol_version: str | None = None,
 ) -> dict[str, Any]:
+    """A signed confirmation of the challenge. Like the phone (rules.command_version_stamping) it carries the
+    protocol_version of the command it confirms: the confirmed action's ``since``, which is what
+    ``ControllerSim.command`` stamps, unless ``protocol_version`` overrides it."""
     from dome_protocol import loads_strict
 
     challenge = loads_strict(challenge_text)
     now = now_utc()
     payload = {
         "type": "confirmation",
-        "protocol_version": REGISTRY.protocol_version,
+        "protocol_version": protocol_version or REGISTRY.min_version(challenge["action"]),
         "command_id": command_id,
         "challenge_id": challenge["challenge_id"],
         "challenge_digest": digest or challenge_digest(challenge_text),

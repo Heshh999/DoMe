@@ -135,7 +135,7 @@
     },
     "UNSUPPORTED_CONTEXT": {
       "retryable": false,
-      "user_message": "This control is not available for the current page (for example an ad, a live stream, or Shorts)."
+      "user_message": "This control is not available for the current page (for example a page with no video player such as search results, an ad, a live stream, or Shorts)."
     },
     "ACTIVATION_REQUIRED": {
       "retryable": false,

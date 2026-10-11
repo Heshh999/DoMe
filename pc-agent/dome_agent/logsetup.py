@@ -42,6 +42,8 @@ SENSITIVE_KEY_PARTS: tuple[str, ...] = (
     "authorization",
     "cookie",
     "assertion",
+    "query",  # youtube.search text is customer-typed content (rules.search_queries)
+    "search",
 )
 _ALLOWED_EXACT_KEYS = frozenset({"challenge_id", "code", "error_code", "close_code", "status_code"})
 _BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")

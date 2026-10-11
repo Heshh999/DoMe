@@ -1,6 +1,6 @@
 {
   "name": "@dome/browser-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "DoMe for YouTube: Chrome/Edge Manifest V3 extension (background service worker + YouTube player adapter + Native Messaging bridge to the DoMe agent)",
   "type": "module",

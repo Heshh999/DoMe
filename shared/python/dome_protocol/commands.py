@@ -20,7 +20,12 @@ from .registry import ActionSpec, Registry, load_registry
 from .schemas import Schemas, load_schemas
 from .signing import Envelope, verify_envelope
 from .timeutil import check_command_window, format_rfc3339, now_utc, parse_rfc3339
-from .versions import INPUT_BATCH_PROTOCOL_VERSION, negotiate_version, protocol_compatible, version_below
+from .versions import (
+    INPUT_BATCH_PROTOCOL_VERSION,
+    negotiate_version,
+    protocol_compatible,
+    version_below,
+)
 
 # The version helpers live in .versions (the registry needs them while loading) and are re-exported here.
 __all__ = [

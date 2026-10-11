@@ -4,10 +4,11 @@ import { detectBrowser } from "../src/background/api.ts";
 import { classifyDisconnect } from "../src/background/connection.ts";
 import { toErrorObject, OpError } from "../src/shared/errors.ts";
 import { isBackgroundToContent, isContentToBackground, isPopupToBackground } from "../src/shared/messages.ts";
-import { sanitizeLabel, sanitizeSnapshot } from "../src/shared/sanitize.ts";
+import { MAX_SEARCH_RESULTS, sanitizeLabel, sanitizeSearchItems, sanitizeSnapshot } from "../src/shared/sanitize.ts";
 import { createDebounce, createThrottle, withTimeout, type Timers } from "../src/shared/throttle.ts";
 import { randomToken22, TOKEN_RE } from "../src/shared/token.ts";
-import { isYoutubeUrl, parseYoutubeUrl } from "../src/shared/youtubeUrl.ts";
+import { isResultsUrlFor, isYoutubeUrl, parseWatchLink, parseYoutubeUrl, searchResultsUrl } from "../src/shared/youtubeUrl.ts";
+import { parseDuration } from "../src/content/results.ts";
 
 function fakeTimers(): Timers {
   return { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>), now: () => Date.now() };
@@ -27,6 +28,38 @@ describe("youtube urls", () => {
     expect(isYoutubeUrl("http://www.youtube.com/")).toBe(false);
     expect(isYoutubeUrl(undefined)).toBe(false);
   });
+
+  it("builds the results URL with the query as its only parameter, whatever the query contains", () => {
+    for (const query of ["lofi", "a&b=c", "#frag", "?x=1", "../../watch?v=x", "100% lofi + jazz", "Ünïcode ✓ 🎧", "https://evil.example/", "%2F%3F"]) {
+      const url = new URL(searchResultsUrl(query));
+      expect([url.origin, url.pathname, url.hash, [...url.searchParams.keys()], url.searchParams.get("search_query")], query).toEqual(["https://www.youtube.com", "/results", "", ["search_query"], query]);
+      expect(isResultsUrlFor(url.href, query), query).toBe(true);
+    }
+    expect(searchResultsUrl("lofi & chill")).toBe("https://www.youtube.com/results?search_query=lofi+%26+chill");
+  });
+
+  it("recognises the results page of one query only", () => {
+    expect(isResultsUrlFor("https://www.youtube.com/results?search_query=lofi+beats", "lofi beats")).toBe(true);
+    expect(isResultsUrlFor("https://www.youtube.com/results?search_query=lofi+beats&sp=EgIQAQ%3D%3D", "lofi  beats ")).toBe(true); // whitespace normalized, extra params fine
+    expect(isResultsUrlFor("https://www.youtube.com/results?search_query=lofi", "lofi beats")).toBe(false);
+    expect(isResultsUrlFor("https://www.youtube.com/results", "lofi")).toBe(false);
+    expect(isResultsUrlFor("https://www.youtube.com/watch?search_query=lofi", "lofi")).toBe(false);
+    expect(isResultsUrlFor("https://evil.example/results?search_query=lofi", "lofi")).toBe(false);
+    expect(isResultsUrlFor(undefined, "lofi")).toBe(false);
+  });
+
+  it("parses watch links and tells playlists apart", () => {
+    expect(parseWatchLink("/watch?v=dQw4w9WgXcQ&pp=abc")).toEqual({ video_id: "dQw4w9WgXcQ", playlist: false });
+    expect(parseWatchLink("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ")).toEqual({ video_id: "dQw4w9WgXcQ", playlist: true });
+    for (const href of ["/shorts/aBcDeFgHiJk", "/@channel", "/watch?v=bad id", "https://evil.example/watch?v=dQw4w9WgXcQ", "", null, undefined, "/playlist?list=PL1"]) {
+      expect(parseWatchLink(href), String(href)).toBeUndefined();
+    }
+  });
+
+  it("parses result durations", () => {
+    expect(["0:59", "3:33", "59:59", "1:02:03", "10:00:00"].map(parseDuration)).toEqual([59, 213, 3599, 3723, 36000]);
+    for (const text of ["LIVE", "SHORTS", "3:3", "1:2:3", "", "Mix"]) expect(parseDuration(text), text).toBeUndefined();
+  });
 });
 
 describe("sanitize", () => {
@@ -38,6 +71,29 @@ describe("sanitize", () => {
     expect(sanitizeLabel("  My\tChrome​ ")).toBe("My Chrome");
     expect(sanitizeLabel("x".repeat(100)).length).toBe(64);
     expect(sanitizeLabel(42)).toBe("");
+  });
+
+  it("drops the title of a page without a player (a results page's title is the search query)", () => {
+    const base = { ad_showing: false, is_live: false, in_playlist: false, title: "lofi beats" };
+    expect(sanitizeSnapshot({ ...base, context: "other" })).toEqual({ context: "other", ad_showing: false, is_live: false, in_playlist: false });
+    expect(sanitizeSnapshot({ ...base, context: "watch" })?.title).toBe("lofi beats");
+  });
+
+  it("re-checks search results: cleaned text, the list cut at the first invalid item, at most 10", () => {
+    const item = (i: number, extra: Record<string, unknown> = {}) => ({ index: i, video_id: `video${String(i).padStart(6, "0")}`, title: `Video ${i}`, ...extra });
+    expect(sanitizeSearchItems([item(1, { title: " a\u0000b ", channel: "c".repeat(150), duration_seconds: 213, is_live: false, extra: 1 })])).toEqual([
+      { index: 1, video_id: "video000001", title: "a b", channel: "c".repeat(100), duration_seconds: 213, is_live: false },
+    ]);
+    expect(sanitizeSearchItems(Array.from({ length: 12 }, (_, i) => item(i + 1)))).toHaveLength(MAX_SEARCH_RESULTS);
+    for (const bad of [{ video_id: "x y" }, { title: "" }, { title: 3 }, { index: 5 }]) {
+      expect(sanitizeSearchItems([item(1), item(2, bad), item(3)]).map((i) => i.index), JSON.stringify(bad)).toEqual([1]);
+    }
+    expect(sanitizeSearchItems([item(1, { duration_seconds: -1, is_live: "yes" }), item(2, { duration_seconds: 1.5 })])).toEqual([
+      { index: 1, video_id: "video000001", title: "Video 1" },
+      { index: 2, video_id: "video000002", title: "Video 2" },
+    ]);
+    expect(sanitizeSearchItems("nope")).toEqual([]);
+    expect(sanitizeSearchItems(undefined)).toEqual([]);
   });
 });
 
@@ -66,6 +122,10 @@ describe("message guards", () => {
     expect(isBackgroundToContent({ kind: "dome_bg", type: "probe" })).toBe(true);
     expect(isBackgroundToContent({ kind: "dome_bg", type: "op", op: "next", args: {}, deadline_ms: 1 })).toBe(true);
     expect(isBackgroundToContent({ kind: "dome_bg", type: "op", op: "list_tabs", args: {}, deadline_ms: 1 })).toBe(false);
+    // read_results and open_result reach the content script; search is the worker's own op.
+    expect(isBackgroundToContent({ kind: "dome_bg", type: "op", op: "read_results", args: {}, deadline_ms: 1 })).toBe(true);
+    expect(isBackgroundToContent({ kind: "dome_bg", type: "op", op: "open_result", args: {}, deadline_ms: 1 })).toBe(true);
+    expect(isBackgroundToContent({ kind: "dome_bg", type: "op", op: "search", args: {}, deadline_ms: 1 })).toBe(false);
     expect(isBackgroundToContent({ kind: "dome_cs", type: "probe" })).toBe(false);
     expect(isContentToBackground({ kind: "dome_cs", type: "attached", token: "t", state: {} })).toBe(true);
     expect(isContentToBackground({ kind: "dome_cs", type: "attached", state: {} })).toBe(false);

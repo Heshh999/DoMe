@@ -36,12 +36,25 @@ export const TAB_OPS = [
   "set_volume",
   "set_theater",
   "request_fullscreen",
+  "open_result",
 ] as const;
 export type TabOp = (typeof TAB_OPS)[number];
-export type BridgeOp = TabOp | "list_tabs";
+/**
+ * Ops the worker sends to a content script: every tab op plus `read_results`, which reads the video
+ * results of a YouTube results page for the `search` bridge op. It is internal to the extension and
+ * never a bridge op (bridge.schema.json does not list it, and route() never forwards it).
+ */
+export const CONTENT_OPS = [...TAB_OPS, "read_results"] as const;
+export type ContentOp = (typeof CONTENT_OPS)[number];
+/** `search` is answered by the worker itself (it navigates or opens a tab) and is not a tab op. */
+export type BridgeOp = TabOp | "list_tabs" | "search";
 
 export function isTabOp(op: string): op is TabOp {
   return (TAB_OPS as readonly string[]).includes(op);
+}
+
+export function isContentOp(op: string): op is ContentOp {
+  return (CONTENT_OPS as readonly string[]).includes(op);
 }
 
 /** Arguments of a tab op as they arrive in `bridge_request.args` (tab_id removed). */
@@ -54,6 +67,22 @@ export interface OpArgs {
   muted?: boolean;
   value?: number;
   enabled?: boolean;
+  /** search only; customer-typed text that is never logged (rules.search_queries). Never sent to a content script. */
+  query?: string;
+  /** open_result: 1-based position among the results read_results reports. */
+  index?: number;
+  /** open_result: the video the customer chose; the result at `index` must still be it. */
+  video_id?: string;
+}
+
+/** One video result of a YouTube results page (results.schema.json#/$defs/youtube_search_item); untrusted page data. */
+export interface SearchItem {
+  index: number;
+  video_id: string;
+  title: string;
+  channel?: string;
+  duration_seconds?: number;
+  is_live?: boolean;
 }
 
 export const CS_KIND = "dome_cs" as const;
@@ -67,10 +96,10 @@ export type ContentToBackground =
 
 export type BackgroundToContent =
   | { kind: typeof BG_KIND; type: "probe" }
-  | { kind: typeof BG_KIND; type: "op"; op: TabOp; args: OpArgs; deadline_ms: number };
+  | { kind: typeof BG_KIND; type: "op"; op: ContentOp; args: OpArgs; deadline_ms: number };
 
 export type ContentReply =
-  | { ok: true; token: string; state: PlayerSnapshot; previous_video_id?: string }
+  | { ok: true; token: string; state: PlayerSnapshot; previous_video_id?: string; results?: SearchItem[] }
   | { ok: false; code: string; message: string; token?: string; state?: PlayerSnapshot };
 
 export type ConnectionStateName =
@@ -114,7 +143,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export function isBackgroundToContent(v: unknown): v is BackgroundToContent {
   if (!isRecord(v) || v.kind !== BG_KIND) return false;
   if (v.type === "probe") return true;
-  return v.type === "op" && typeof v.op === "string" && isTabOp(v.op) && isRecord(v.args) && typeof v.deadline_ms === "number";
+  return v.type === "op" && typeof v.op === "string" && isContentOp(v.op) && isRecord(v.args) && typeof v.deadline_ms === "number";
 }
 
 export function isContentToBackground(v: unknown): v is ContentToBackground {

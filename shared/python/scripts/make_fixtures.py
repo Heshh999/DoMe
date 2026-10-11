@@ -9,8 +9,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dome_protocol import jwk_from_public_key, kid_from_jwk, private_key_from_pem, sign_payload
-from dome_protocol.digest import challenge_digest, command_digest, pairing_code_handle, pairing_verification_code
+from dome_protocol import (
+    jwk_from_public_key,
+    kid_from_jwk,
+    private_key_from_pem,
+    sign_payload,
+)
+from dome_protocol.digest import (
+    challenge_digest,
+    command_digest,
+    pairing_code_handle,
+    pairing_verification_code,
+)
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "protocol" / "fixtures"
 TEST_KEY_PEM = (FIXTURE_DIR / "test-controller-key.pem").read_bytes()

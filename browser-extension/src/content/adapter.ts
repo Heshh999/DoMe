@@ -1,14 +1,17 @@
 /**
  * YouTube player adapter: executes bridge ops against the page through the HTMLVideoElement and
- * YouTube's own control buttons, with the success criteria from docs/design/browser-extension.md.
- * Nothing is inserted into the page and no page JavaScript is called.
+ * YouTube's own control buttons and links, with the success criteria from
+ * docs/design/browser-extension.md. Nothing is inserted into the page and no page JavaScript is called.
  */
 import { OpError, toErrorObject } from "../shared/errors.ts";
-import type { ContentReply, OpArgs, PlayerSnapshot, TabOp } from "../shared/messages.ts";
+import type { ContentOp, ContentReply, OpArgs, PlayerSnapshot } from "../shared/messages.ts";
+import { MAX_SEARCH_RESULTS } from "../shared/sanitize.ts";
 import type { Timers } from "../shared/throttle.ts";
 import { realTimers } from "../shared/throttle.ts";
 import { TOKEN_RE } from "../shared/token.ts";
-import { buttonUsable, currentVideoId, findPlayer, isTheater, nextButton, prevButton, readSnapshot, readTitle, type PlayerDom } from "./detect.ts";
+import { VIDEO_ID_RE } from "../shared/youtubeUrl.ts";
+import { buttonUsable, currentVideoId, documentTitle, findPlayer, headingTitle, isTheater, nextButton, prevButton, readSnapshot, readTitle, type PlayerDom } from "./detect.ts";
+import { isResultsPage, readResultsPage, toSearchItem } from "./results.ts";
 import { waitFor } from "./wait.ts";
 
 export interface AdapterDeps {
@@ -25,26 +28,55 @@ const SETTLE_EVENTS = ["yt-navigate-finish", "yt-page-data-updated"] as const;
 const SETTLE_VIDEO_EVENTS = ["loadedmetadata", "durationchange"] as const;
 const SETTLE_MAX_MS = 1500;
 /** Ops allowed while an advertisement is showing (no ad bypass: nothing here skips the ad). */
-const AD_SAFE_OPS: ReadonlySet<TabOp> = new Set(["get_state", "set_paused", "set_muted", "set_volume"]);
-const SHORTS_UNSUPPORTED: ReadonlySet<TabOp> = new Set(["next", "previous", "set_theater"]);
-const SEEK_OPS: ReadonlySet<TabOp> = new Set(["seek_relative", "seek_to"]);
-const MUTATING_OPS: ReadonlySet<TabOp> = new Set(["set_paused", "next", "previous", "seek_relative", "seek_to", "set_muted", "set_volume", "set_theater", "request_fullscreen"]);
+const AD_SAFE_OPS: ReadonlySet<ContentOp> = new Set(["get_state", "set_paused", "set_muted", "set_volume"]);
+const SHORTS_UNSUPPORTED: ReadonlySet<ContentOp> = new Set(["next", "previous", "set_theater"]);
+const SEEK_OPS: ReadonlySet<ContentOp> = new Set(["seek_relative", "seek_to"]);
+/** Ops on a search results page; they need neither a player nor a watch page. */
+const RESULTS_OPS: ReadonlySet<ContentOp> = new Set(["read_results", "open_result"]);
+const MUTATING_OPS: ReadonlySet<ContentOp> = new Set(["set_paused", "next", "previous", "seek_relative", "seek_to", "set_muted", "set_volume", "set_theater", "request_fullscreen", "open_result"]);
+/** Once the first results are on the page, read_results waits this long for the first page to fill (YouTube renders lists in chunks). */
+const RESULTS_FILL_MS = 800;
+/** open_result waits at most this long for the addressed result to be rendered. */
+const RESULT_PRESENT_MS = 1500;
+const LAYOUT_UNRECOGNISED = "YouTube changed its search results page; DoMe needs an update to read it";
 
-export function isMutatingOp(op: TabOp): boolean {
+export function isMutatingOp(op: ContentOp): boolean {
   return MUTATING_OPS.has(op);
+}
+
+/**
+ * The DOM error name of a rejected media/fullscreen promise ("NotAllowedError", "AbortError", …). Read from the
+ * object rather than through `instanceof Error`, which a DOMException created in another realm (the page's) fails.
+ */
+function domErrorName(err: unknown): string {
+  const name = typeof err === "object" && err !== null ? (err as { name?: unknown }).name : undefined;
+  return typeof name === "string" && /^[A-Za-z]{1,64}$/.test(name) ? name : "Error";
 }
 
 export interface PlayerAdapter {
   readonly token: string;
   snapshot(): PlayerSnapshot;
-  run(op: TabOp, args: OpArgs, deadlineMs: number): Promise<ContentReply>;
+  run(op: ContentOp, args: OpArgs, deadlineMs: number): Promise<ContentReply>;
 }
 
 export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
   const { doc, win, token } = deps;
   const timers = deps.timers ?? realTimers;
 
-  const snapshot = (dom?: PlayerDom): PlayerSnapshot => readSnapshot(doc, win, dom);
+  /**
+   * The document title last seen on a page without a player (results, channel, history). Right after
+   * an in-site navigation from such a page to a video, YouTube can still show the old document title,
+   * and on a results page that is the search query (rules.search_queries); a snapshot never reports it
+   * as the video's title. A title taken from the watch page's own heading is the video's, whatever it
+   * says.
+   */
+  let playerlessTitle: string | undefined;
+  const snapshot = (dom?: PlayerDom): PlayerSnapshot => {
+    const state = readSnapshot(doc, win, dom);
+    if (state.context === "other") playerlessTitle = documentTitle(doc);
+    else if (state.title !== undefined && state.title === playerlessTitle && headingTitle(doc) === undefined) delete state.title;
+    return state;
+  };
   const ok = (state: PlayerSnapshot, previousVideoId?: string): ContentReply =>
     previousVideoId === undefined ? { ok: true, token, state } : { ok: true, token, state, previous_video_id: previousVideoId };
 
@@ -53,13 +85,17 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
     return dom.video;
   }
 
-  function guard(op: TabOp, args: OpArgs, dom: PlayerDom): void {
+  function guard(op: ContentOp, args: OpArgs, dom: PlayerDom): void {
     if (typeof args.tab_token !== "string" || !TOKEN_RE.test(args.tab_token) || args.tab_token !== token) {
       throw new OpError("TARGET_CHANGED", "The tab was reloaded since it was selected; choose it again");
     }
     const current = currentVideoId(win);
     if (args.expected_video_id !== undefined && args.expected_video_id !== current) {
       throw new OpError("TARGET_CHANGED", "The page changed to a different video before the action ran");
+    }
+    if (RESULTS_OPS.has(op)) {
+      if (!isResultsPage(win)) throw new OpError("UNSUPPORTED_CONTEXT", "This tab is not showing YouTube search results");
+      return;
     }
     if (op === "get_state") return;
     const state = snapshot(dom);
@@ -78,7 +114,9 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
       try {
         await video.play();
       } catch (err) {
-        const name = err instanceof Error ? err.name : "Error";
+        const name = domErrorName(err);
+        // Autoplay policy: without a recent click or key press on the PC the browser refuses play() (KNOWN_ISSUES K7, D32).
+        if (name === "NotAllowedError") throw new OpError("ACTIVATION_REQUIRED", "The browser's autoplay rules blocked starting the video without a click on the PC (NotAllowedError); press Play on the PC or click the video with the touchpad");
         throw new OpError("ACTION_UNAVAILABLE", `Playback could not start (${name})`);
       }
     }
@@ -92,13 +130,13 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
   }
 
   /**
-   * Click Next/Previous and wait for a new video_id (the transition itself). Then wait, bounded by
-   * the remaining deadline, for the page to settle (navigate-finish / page data / media metadata)
-   * so the reported title, duration and position describe the new video, not the previous one.
-   * Returns the previous video_id plus whether the snapshot can be trusted.
+   * Run `act` (a click on one of YouTube's own buttons or links) and wait until the URL names a video
+   * that `reached` accepts (the transition itself). Then wait, bounded by the remaining deadline, for
+   * the page to settle (navigate-finish / page data / media metadata) so the reported title, duration
+   * and position describe the new video, not the previous page. `reached` is false when no such video
+   * was observed before the deadline; `settled` says whether the snapshot can be trusted.
    */
-  async function transition(dom: PlayerDom, button: Element, deadlineMs: number, kind: "next" | "previous"): Promise<{ previous: string | undefined; settled: boolean }> {
-    const before = currentVideoId(win);
+  async function navigateAndSettle(act: () => void, reached: (videoId: string | undefined) => boolean, deadlineMs: number, video: HTMLVideoElement | null): Promise<{ reached: boolean; settled: boolean }> {
     const titleBefore = readTitle(doc);
     const startedAt = timers.now();
     // Armed before the click so a settle event that fires during the transition wait is not missed.
@@ -108,22 +146,19 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
     };
     const settleTargets: Array<[EventTarget | null, readonly string[]]> = [
       [doc, SETTLE_EVENTS],
-      [dom.video, SETTLE_VIDEO_EVENTS],
+      [video, SETTLE_VIDEO_EVENTS],
     ];
     for (const [target, events] of settleTargets) for (const ev of events) target?.addEventListener(ev, markSettled);
     const unarm = (): void => {
       for (const [target, events] of settleTargets) for (const ev of events) target?.removeEventListener(ev, markSettled);
     };
-    (button as HTMLElement).click();
+    act();
     const changed = await waitFor({
-      check: () => {
-        const now = currentVideoId(win);
-        return now !== undefined && now !== before;
-      },
+      check: () => reached(currentVideoId(win)),
       listen: [
         { target: doc, events: NAV_EVENTS },
         { target: win, events: ["popstate", "hashchange"] },
-        { target: dom.video, events: VIDEO_SWAP_EVENTS },
+        { target: video, events: VIDEO_SWAP_EVENTS },
       ],
       observe: { node: doc.head, options: { childList: true, subtree: true, characterData: true } },
       timeoutMs: deadlineMs,
@@ -131,7 +166,7 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
     });
     if (!changed) {
       unarm();
-      throw new OpError("OUTCOME_UNKNOWN", `${kind === "next" ? "Next" : "Previous"} was clicked but no video change was observed within ${deadlineMs} ms`);
+      return { reached: false, settled: false };
     }
     const remaining = Math.min(SETTLE_MAX_MS, deadlineMs - (timers.now() - startedAt));
     const settled = await waitFor({
@@ -146,6 +181,14 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
       timers,
     });
     unarm();
+    return { reached: true, settled };
+  }
+
+  /** Click Next/Previous and wait for a new video_id, then for the page to settle. Returns the previous video_id. */
+  async function transition(dom: PlayerDom, button: Element, deadlineMs: number, kind: "next" | "previous"): Promise<{ previous: string | undefined; settled: boolean }> {
+    const before = currentVideoId(win);
+    const { reached, settled } = await navigateAndSettle(() => (button as HTMLElement).click(), (now) => now !== undefined && now !== before, deadlineMs, dom.video);
+    if (!reached) throw new OpError("OUTCOME_UNKNOWN", `${kind === "next" ? "Next" : "Previous"} was clicked but no video change was observed within ${deadlineMs} ms`);
     return { previous: before, settled };
   }
 
@@ -224,14 +267,72 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
     try {
       await target.requestFullscreen();
     } catch (err) {
-      const name = err instanceof Error ? err.name : "Error";
+      const name = domErrorName(err);
       throw new OpError("ACTIVATION_REQUIRED", `The browser refused fullscreen without a user gesture on the PC (${name})`);
     }
     const reached = await waitFor({ check: () => !!doc.fullscreenElement, listen: [{ target: doc, events: ["fullscreenchange"] }], timeoutMs: 1000, timers });
     if (!reached) throw new OpError("ACTIVATION_REQUIRED", "Fullscreen did not start; it must be started on the PC itself");
   }
 
-  async function execute(op: TabOp, args: OpArgs, deadlineMs: number): Promise<ContentReply> {
+  /** Wait options shared by the results waits: YouTube renders the results list after the page attached. */
+  function resultsWait(check: () => boolean, timeoutMs: number): Promise<boolean> {
+    return waitFor({
+      check,
+      listen: [{ target: doc, events: SETTLE_EVENTS }],
+      observe: { node: doc.body ?? doc.documentElement, options: { childList: true, subtree: true, characterData: true } },
+      timeoutMs: Math.max(0, timeoutMs),
+      timers,
+    });
+  }
+
+  /**
+   * The video results of this results page (`search`). Waits for YouTube to render them, then briefly
+   * for the first page to fill. Links to videos but no recognised result is ACTION_UNAVAILABLE (the
+   * layout changed), never an empty success; YouTube's "No results found" panel is an empty success.
+   */
+  async function readResults(deadlineMs: number): Promise<ContentReply> {
+    const startedAt = timers.now();
+    await resultsWait(() => {
+      const page = readResultsPage(doc, win);
+      return page.entries.length > 0 || page.noResults;
+    }, deadlineMs);
+    if (readResultsPage(doc, win).entries.length > 0) {
+      const left = deadlineMs - (timers.now() - startedAt);
+      await resultsWait(() => readResultsPage(doc, win).entries.length >= MAX_SEARCH_RESULTS, Math.min(RESULTS_FILL_MS, left));
+    }
+    const page = readResultsPage(doc, win);
+    if (page.entries.length === 0) {
+      if (page.watchLinks > 0) throw new OpError("ACTION_UNAVAILABLE", LAYOUT_UNRECOGNISED);
+      if (!page.noResults) throw new OpError("ACTION_UNAVAILABLE", "The YouTube search results did not appear in time");
+    }
+    return { ok: true, token, state: snapshot(), results: page.entries.map(toSearchItem) };
+  }
+
+  /**
+   * Click YouTube's own link of result `index` (1-based, as read_results numbered it) and succeed only
+   * when the tab reaches that video. With `video_id` the result must still be that video, so a page
+   * that changed since the results were listed opens nothing (TARGET_CHANGED).
+   */
+  async function openResult(args: OpArgs, deadlineMs: number): Promise<ContentReply> {
+    const index = args.index;
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 1 || index > MAX_SEARCH_RESULTS) throw new OpError("INVALID_PARAMETERS", `index must be an integer 1-${MAX_SEARCH_RESULTS}`);
+    if (args.video_id !== undefined && (typeof args.video_id !== "string" || !VIDEO_ID_RE.test(args.video_id))) throw new OpError("INVALID_PARAMETERS", "video_id is not a YouTube video id");
+    const startedAt = timers.now();
+    // The page may still be rendering the list (just loaded, or re-rendered by YouTube).
+    await resultsWait(() => readResultsPage(doc, win).entries.length >= index, Math.min(RESULT_PRESENT_MS, deadlineMs / 2));
+    const page = readResultsPage(doc, win);
+    if (page.entries.length === 0 && page.watchLinks > 0) throw new OpError("ACTION_UNAVAILABLE", LAYOUT_UNRECOGNISED);
+    const entry = page.entries[index - 1];
+    if (!entry) throw new OpError("SEARCH_RESULT_UNAVAILABLE", "That search result is no longer on the page. Search again.");
+    if (args.video_id !== undefined && entry.video_id !== args.video_id) throw new OpError("TARGET_CHANGED", "The search results changed since they were listed. Nothing was opened.");
+    const left = deadlineMs - (timers.now() - startedAt);
+    playerlessTitle = documentTitle(doc);
+    const { reached, settled } = await navigateAndSettle(() => entry.link.click(), (now) => now === entry.video_id, left, findPlayer(doc).video);
+    if (!reached) throw new OpError("OUTCOME_UNKNOWN", `The search result was clicked but its video did not open within ${Math.round(left)} ms`);
+    return ok(transitionSnapshot(settled));
+  }
+
+  async function execute(op: ContentOp, args: OpArgs, deadlineMs: number): Promise<ContentReply> {
     const dom = findPlayer(doc);
     guard(op, args, dom);
     switch (op) {
@@ -281,6 +382,10 @@ export function createPlayerAdapter(deps: AdapterDeps): PlayerAdapter {
         requireVideo(dom);
         await requestFullscreen(dom);
         return ok(snapshot(dom));
+      case "read_results":
+        return readResults(deadlineMs);
+      case "open_result":
+        return openResult(args, deadlineMs);
     }
   }
 

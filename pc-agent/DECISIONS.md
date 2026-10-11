@@ -166,9 +166,11 @@
 37. **The crash-recovery file carries the session and controller ids** (no content) so the restarted
     agent can send `input_session{ended, agent_restart, holds_released}` after its first snapshot; if
     the release itself fails the file is kept so the next start-up retries.
-38. **`SUPPORTED_PROTOCOL_VERSIONS = ("1.0", "1.1")` is announced everywhere** (relay hello, bridge
-    error detail): the MINOR rule makes both acceptable and the e2e test asserts the hello list. The
-    bridge test that expected `["1.1"]` alone contradicted that and was corrected.
+38. **`SUPPORTED_PROTOCOL_VERSIONS = ("1.0", "1.1", "1.2")` is announced everywhere** (relay hello, bridge
+    error detail): the MINOR rule makes every listed version acceptable and the e2e test asserts the hello
+    list. The bridge test that expected `["1.1"]` alone contradicted that and was corrected; it now expects
+    all three. Commands are stamped with their action's `since` (1.2 only for the window and search
+    actions), so a 1.2 agent still serves 1.0/1.1 phones.
 39. **Input age is judged against the phone's own clock** (review finding). `issued_at` is the phone's
     stamp and `rules.input_sessions` says `now - issued_at <= input_age_budget_ms`, but the envelope
     window admits ±5 s of skew while the budget is 1 s: read literally, a phone 1 s behind kills the
@@ -229,3 +231,66 @@
     `pair-approve --yes` approve the pairing and its non-input capabilities only; `pointer`/`keyboard`
     need `--pointer`/`--keyboard` (or an explicit `--capabilities` list), keeping the PC owner's
     per-capability decision explicit (spec §10A-D).
+46. **F11 only where it means full screen; never decided on a minimised read; one window sequence at a
+    time.** `app.set_fullscreen` (and maximise/restore leaving full screen first) presses F11 only into an
+    app on `platform.protocol.F11_FULLSCREEN_PROCESSES` (browsers, File Explorer, VS Code, Windows
+    Terminal, Notepad++, Sublime Text) or one the PC owner opted in (#49). Elsewhere F11 does something
+    else (Excel: a chart sheet from the selection; Visual Studio: Step Into, which starts debugging; Word:
+    next field), so those apps are `FULLSCREEN_UNSUPPORTED` (or `WINDOW_STATE_UNCHANGED` when already in
+    their own full screen) with nothing pressed and the window untouched. A minimised window reads as not
+    full screen while Windows shows it again in its previous placement, full screen for one minimised in
+    F11 full screen; a minimised window without a caption is therefore shown again (`SW_RESTORE`) and read
+    before anything is decided, and `_press_f11` reads the state again after the window came to the front
+    (no press when it already matches). The handlers accept maximised/normal only when not in full screen.
+    `asyncio` cannot cancel the worker thread of a timed-out command, so `WindowControl` (and the fake)
+    runs one sequence at a time under a re-entrant lock (the next waits, bounded by its deadline, then
+    reads what the previous one left), and the handler passes a deadline 1 s before the command's timeout
+    after which F11 is never pressed, plus whether keys are held from the phone (maximise/restore of a
+    full-screen window press F11 too). `mark_side_effect` is not added to maximise/restore: they are
+    idempotent, so the executor's timeout outcome does not depend on it (queue.py `_timeout`). The
+    `AttachThreadInput` step is skipped when the foreground window is hung: a shared input queue makes the
+    focus calls synchronous and they would wait on the frozen app. Leaving full screen without a
+    `window_id` targets the app's full-screen window (several Edge windows); entering keeps the front-most
+    window.
+47. **A browser window's title never leaves the PC; no window title is journaled.** A browser window's
+    title is its active tab's page title, and on a YouTube results page that is the search query
+    (`rules.search_queries`). `app.list` names a browser's windows (`Microsoft Edge`, `Google Chrome`, ...)
+    from the approved executable's name, `ForegroundApp.as_result` omits `window_title` whenever `browser`
+    is set and `WindowsInput.foreground` does not even read a browser's title, so `pc_state` names the
+    browser only (the phone shows "Edge"; it can no longer tell two tabs apart by title). Other windows'
+    titles still reach the phone in `app.list`, but its journaled copy has every title blanked
+    (`actions.journal_view`; a duplicate or late re-send shows "Untitled window"), like the
+    `input.session_start` result (#45).
+48. **Every YouTube answer is scrubbed and bound to its browser.** `scrub_tab` (no title on a page
+    without a video) is applied to the `list_tabs` merge and to each op's result tab before it is checked,
+    cached, journaled or returned, so an older extension that reports a results page's title (the query)
+    cannot leak it through results either. `open_result` must report the targeted tab (same
+    `browser_instance_id` and `tab_id`), else `INTERNAL`; `BridgeServer.note_tab` takes the instance the
+    request went to and ignores a tab naming another one, as `_event` does, so one connection's answer can
+    never rewrite another browser's tab records (their `tab_token` feeds target resolution).
+49. **Full screen with F11 is the PC owner's per-app opt-in** (round 3: the owner's "full screen zstream"
+    could never work). `approved_apps.fullscreen_f11` (default off) lets F11 be pressed in an app off the
+    built-in list; an app on the list gets F11 whatever the flag says (the tray shows its box ticked and
+    disabled, and the Add dialog pre-ticks it only for those). The column is added to an older database at
+    start-up (`Store._ADDED_COLUMNS`: `ALTER TABLE … ADD COLUMN … NOT NULL DEFAULT 0`, idempotent;
+    existing approvals read as off, nothing is rewritten, and an older agent still reads and writes the
+    table because it names its columns). Re-approving (after an update, *Find it again…*) keeps the
+    choice; only an explicit value changes it. It is set only on the PC — the tray's Approved apps window,
+    `dome-agent app-option <app_id> --fullscreen-f11 on|off` (control op `app_option`; falls back to the
+    store when the agent is not running), `approve-app --fullscreen-f11` — never over the wire: `app.list`
+    and the protocol are unchanged. The handler reads it from the approval for each command and passes it
+    to the adapter (`fullscreen_f11=` on `maximize`/`restore`/`set_fullscreen`, mirrored by the fake).
+    Every other F11 safeguard still applies. When F11 was needed but the app is not opted in, the adapter
+    raises `F11NotEnabledError` (`FULLSCREEN_UNSUPPORTED` entering, `WINDOW_STATE_UNCHANGED` when the app
+    is in its own full screen) with nothing pressed, and the handler words the message with the app's
+    approved display name only (never a window title or search text): "Full screen is not turned on for
+    ZStream. On the PC: DoMe tray > Approved apps > ZStream > Full screen with F11. Or use Maximise." A
+    change calls `state.request_update()` on the agent loop (the tray goes through
+    `Agent.set_app_fullscreen_f11_local`; it is one indexed UPDATE, so it runs inline like every store
+    call).
+50. **A Tk that cannot open a window is reported at once.** `TkThread` treats an exception from `tk.Tk()` (no
+    display, no desktop session) like a missing tkinter: it logs, marks itself ready with no root and ends,
+    instead of dying in its thread and leaving `start()` to wait out its 5 s. The tray then offers the CLI,
+    and the Tk window test skips with that reason. Tests that run a real Tk on a worker thread quit the root
+    and never destroy it: destroying it and then freeing it from another thread aborts the process
+    ("Tcl_AsyncDelete: async handler deleted by the wrong thread"), reproduced under Xvfb.

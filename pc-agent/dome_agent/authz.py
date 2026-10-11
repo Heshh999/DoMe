@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from dome_protocol import KeyRecord, ProtocolError, load_registry, load_schemas, now_utc, verify_and_parse_command
 from dome_protocol.commands import VerifiedCommand
 
-from .actions.youtube import resolve_youtube_target
+from .actions.youtube import resolve_youtube_browser_target, resolve_youtube_target
 from .confirmations import PendingConfirmation, compute_target_state_digest
 from .frames import ack_frame, confirmation_required_frame
 from .logsetup import get_logger
@@ -228,17 +228,23 @@ class Authorizer:
 
     async def resolve_target(self, vc: VerifiedCommand) -> None:
         spec = vc.spec
-        if spec.target_name == "youtube_target":
+        if spec.target_name is None:
+            if spec.name == "app.launch" and self._s.apps.get(str(vc.params["app_id"])) is None:
+                raise self._err("APP_NOT_APPROVED")
+        elif spec.target_name == "youtube_target":
             assert vc.target is not None
             resolve_youtube_target(self._s.bridge, vc.target)
+        elif spec.target_name == "youtube_browser_target":
+            assert vc.target is not None
+            resolve_youtube_browser_target(self._s.bridge, vc.target)
         elif spec.target_name == "window_target":
             assert vc.target is not None
             if self._s.apps.get(str(vc.target["app_id"])) is None:
                 raise self._err("APP_NOT_APPROVED")
-        elif spec.name == "app.launch":
-            if self._s.apps.get(str(vc.params["app_id"])) is None:
-                raise self._err("APP_NOT_APPROVED")
-        # media_session_target: existence is verified by the handler against the live session list
+        elif spec.target_name == "media_session_target":
+            pass  # existence is verified by the handler against the live session list
+        else:  # a target schema this agent does not know how to resolve: refuse rather than run unchecked
+            raise self._err("ACTION_UNAVAILABLE", "This PC cannot resolve that kind of target yet.")
 
     async def _confirmation_detail(self, vc: VerifiedCommand) -> str:
         if vc.spec.name == "app.close" and vc.target is not None:

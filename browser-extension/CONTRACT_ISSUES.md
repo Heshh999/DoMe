@@ -13,7 +13,7 @@ receive") is therefore not literally implementable in the extension runtime.
 
 **Workaround.** `scripts/gen-validators.ts` precompiles the needed validators
 (`bridge#extension_to_agent`, `bridge#agent_to_extension`, `relay-frames#youtube_tab`,
-`results#tabs_result`, `results#youtube_state_result`) from the same frozen schema files with Ajv's
+`results#tabs_result`, `results#youtube_state_result`, `results#youtube_search_result`) from the same frozen schema files with Ajv's
 standalone code generator (plain JavaScript, verified to contain no `eval`/`new Function`; the
 built bundle is smoke-tested with both disabled). `src/shared/validate.ts` exposes the same API
 shape. `test/frames.test.ts` asserts that the generated validators and
@@ -69,3 +69,35 @@ Smaller values are accepted and silently widened rather than rejected with `INVA
 an agent that sends e.g. 500 ms gets an honest answer ~800 ms later instead of an instant error. The
 agent currently sends 8000/10000 ms (actions.json), so this is latent. A schema minimum of 1000 for
 `timeout_ms` would make the invariant explicit.
+
+## 6. `bridge_request.args` does not tie `tab_id` to `tab_token` for `search`
+
+**Observation.** `youtube_browser_target` has `dependentRequired` (`tab_id` ⇔ `tab_token`), but the
+bridge `args` object (shared by every op) cannot express it per op, so a `search` request with only
+one of the two validates against `bridge.schema.json`.
+
+**Workaround.** The worker refuses it with `INVALID_PARAMETERS` before anything is navigated
+(`src/background/search.ts`, test "a stale token, a tab without DoMe, …"). The agent builds both
+from the verified target, so this is latent.
+
+## 7. `youtube_search_item.title` has no `minLength`, and there is no code for "results unreadable after the search ran"
+
+**Observation.** A result with an empty title would validate; the extension skips rows without a
+readable title instead (D28), so every listed result can be shown. After the browser navigated,
+two failures have no dedicated code: the results page never reported back (`OUTCOME_UNKNOWN`, which
+is accurate: the search may or may not have loaded) and the results page attached but its rows could
+not be read in time (`ACTION_UNAVAILABLE`, whose phone copy suggests nothing happened although the
+search is open on the PC; the message says so). A code such as `SEARCH_RESULTS_UNREADABLE`
+("The search opened on the PC, but DoMe could not read its results") would let the phone say it
+plainly.
+
+## 8. `ACTIVATION_REQUIRED`'s `user_message` speaks only of fullscreen
+
+**Observation.** Since D32 `youtube.set_paused{paused:false}` answers `ACTIVATION_REQUIRED` when the
+browser's autoplay policy refuses `play()`. `errors.json` still gives the code the copy "Fullscreen must
+be started on the PC itself; the browser blocks remote fullscreen.", and the phone shows that copy as
+the headline for every `ACTIVATION_REQUIRED` (its recovery steps already cover playback).
+
+**Workaround.** The extension's own message says what happened and what to do on the PC. A generic
+`user_message` (for example "The browser on the PC only allows this after a click on the PC itself.")
+or a phone headline for `youtube.set_paused` would fix the copy; no code or field changes.

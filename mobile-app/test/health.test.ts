@@ -103,7 +103,7 @@ describe("assessHealth", () => {
 });
 
 describe("onboarding walkthrough", () => {
-  const cmd = (over: Partial<CommandRecord>): CommandRecord => ({ commandId: "c", pcId: PC, action: "youtube.set_paused", params: {}, target: null, createdAt: 1, expiresAt: TS, state: "succeeded", ackAt: null, confirmation: null, terminal: { origin: "agent", state: "succeeded", at: TS, durationMs: 1, result: {}, resultInvalid: false, error: null, warning: null }, noAnswer: false, source: "button", ...over });
+  const cmd = (over: Partial<CommandRecord>): CommandRecord => ({ commandId: "c", pcId: PC, action: "youtube.set_paused", params: {}, target: null, protocolVersion: "1.0", createdAt: 1, expiresAt: TS, state: "succeeded", ackAt: null, confirmation: null, terminal: { origin: "agent", state: "succeeded", at: TS, durationMs: 1, result: {}, resultInvalid: false, error: null, warning: null }, noAnswer: false, source: "button", ...over });
   it("returns to the first undone step and marks the rest", () => {
     const steps = onboardingSteps(base({ live: { ...live, connection: "offline", state: null, stale: true } }));
     expect(steps.map((s) => s.done)).toEqual([true, true, true, false, false, false]);

@@ -251,3 +251,101 @@ async def test_duplicate_while_queued_replays_accepted_ack(
     harness.agent.store.journal_set_state(cid, state)
     dup = await authorize(harness, env)
     assert dup.kind == "duplicate" and dup.frames == [dup.frames[0]] and dup.frames[0]["state"] == "accepted"
+
+
+WINDOW_ACTIONS = (("app.maximize", {}), ("app.restore", {}), ("app.set_fullscreen", {"enabled": True}))
+
+
+@pytest.mark.parametrize(("action", "params"), WINDOW_ACTIONS, ids=[a for a, _ in WINDOW_ACTIONS])
+async def test_window_actions_need_an_approved_app_and_an_unlocked_session(
+    harness: AgentHarness, controller: Controller, action: str, params: dict[str, Any]
+) -> None:
+    d = await authorize(harness, controller.command(action, params, {"app_id": "notepad"}))
+    assert d.kind == "rejected" and d.error.code == "APP_NOT_APPROVED" and d.journaled
+    harness.fake.locked = True
+    d = await authorize(harness, controller.command(action, params, {"app_id": "notepad"}))
+    assert d.kind == "rejected" and d.error.code == "PC_SESSION_LOCKED"  # availability (step 6) before target
+
+
+@pytest.mark.parametrize(("action", "params"), WINDOW_ACTIONS, ids=[a for a, _ in WINDOW_ACTIONS])
+async def test_window_actions_unavailable_without_windows(
+    harness: AgentHarness, controller: Controller, action: str, params: dict[str, Any]
+) -> None:
+    from dome_agent.platform.unsupported import build_unsupported_platform
+
+    harness.agent.services.platform = build_unsupported_platform()
+    d = await authorize(harness, controller.command(action, params, {"app_id": "notepad"}))
+    assert d.kind == "rejected" and d.error.code == "PLATFORM_UNSUPPORTED"
+
+
+async def test_commands_are_checked_against_their_action_since(harness: AgentHarness, controller: Controller) -> None:
+    """rules.command_version_stamping: a 1.2 action stamped below 1.2 is refused before it is journaled;
+    an old action keeps working with the phone's lowest stamp, and a MINOR above the agent's is refused."""
+    env = controller.command("app.maximize", {}, {"app_id": "notepad"}, protocol_version="1.1")
+    d = await authorize(harness, env)
+    assert d.kind == "rejected" and d.error.code == "PROTOCOL_INCOMPATIBLE" and not d.journaled
+    assert d.error.detail == {"peer": "1.1", "required": "1.2"}
+    assert harness.agent.store.journal_get(payload_of(env)["command_id"]) is None
+    d = await authorize(harness, controller.command("system.ping", protocol_version="1.0"))
+    assert d.kind == "execute"
+    d = await authorize(harness, controller.command("system.ping", protocol_version="1.2"))
+    assert d.kind == "execute"
+    d = await authorize(harness, controller.command("system.ping", protocol_version="1.3"))
+    assert d.kind == "rejected" and d.error.code == "PROTOCOL_INCOMPATIBLE"
+
+
+async def test_set_fullscreen_requires_enabled(harness: AgentHarness, controller: Controller) -> None:
+    d = await authorize(harness, controller.command("app.set_fullscreen", {}, {"app_id": "notepad"}))
+    assert d.kind == "rejected" and d.error.code == "INVALID_PARAMETERS"
+    d = await authorize(harness, controller.command("app.set_fullscreen", {"enabled": "yes"}, {"app_id": "notepad"}))
+    assert d.error.code == "INVALID_PARAMETERS"
+
+
+async def test_youtube_browser_target_resolution(harness: AgentHarness, controller: Controller) -> None:
+    """youtube.search (step 7): the browser must be connected; a named tab gets youtube_target's checks."""
+    d = await authorize(
+        harness, controller.command("youtube.search", {"query": "lofi"}, {"browser_instance_id": "bi_none0001"})
+    )
+    assert d.kind == "rejected" and d.error.code == "EXTENSION_DISCONNECTED"  # availability first (step 6)
+    tab = FakeTab(tab_id=7)
+    ext = await harness.connect_extension(tab)
+    browser = {"browser_instance_id": ext.browser_instance_id}
+    in_tab = {**browser, "tab_id": 7, "tab_token": tab.tab_token}
+    for target in (browser, in_tab):
+        d = await authorize(harness, controller.command("youtube.search", {"query": "lofi"}, target))
+        assert d.kind == "execute", target
+    for target, code in (
+        ({"browser_instance_id": "bi_other001"}, "TARGET_GONE"),
+        ({**in_tab, "tab_id": 99}, "TARGET_GONE"),
+        ({**in_tab, "tab_token": "B" * 22}, "TARGET_CHANGED"),
+    ):
+        d = await authorize(harness, controller.command("youtube.search", {"query": "lofi"}, target))
+        assert d.kind == "rejected" and d.error.code == code and d.journaled, target
+    d = await authorize(harness, controller.command("youtube.search", {"query": "lofi"}, None))
+    assert d.error.code == "TARGET_REQUIRED"
+    d = await authorize(harness, controller.command("youtube.search", {"query": "lofi"}, {**browser, "tab_id": 7}))
+    assert d.error.code == "INVALID_PARAMETERS"  # tab_id and tab_token travel together
+    harness.fake.locked = True
+    d = await authorize(harness, controller.command("youtube.search", {"query": "lofi"}, browser))
+    assert d.error.code == "PC_SESSION_LOCKED"  # search is not a media-while-locked control
+
+
+async def test_a_target_schema_the_agent_cannot_resolve_is_refused(
+    harness: AgentHarness, controller: Controller
+) -> None:
+    from dome_protocol import load_registry
+
+    harness.fake.add_session("app#0")
+    registry = load_registry()
+    spec = registry.get("media.set_paused")
+    # a target schema newer than this agent's resolver (validated like media_session_target)
+    registry._target_validators["future_target"] = registry._target_validators["media_session_target"]  # noqa: SLF001
+    object.__setattr__(spec, "target_name", "future_target")
+    try:
+        d = await authorize(harness, controller.command("media.set_paused", {"paused": True}, {"session_id": "app#0"}))
+    finally:
+        object.__setattr__(spec, "target_name", "media_session_target")
+        del registry._target_validators["future_target"]  # noqa: SLF001
+    assert d.kind == "rejected" and d.error.code == "ACTION_UNAVAILABLE" and d.journaled
+    d = await authorize(harness, controller.command("media.set_paused", {"paused": True}, {"session_id": "app#0"}))
+    assert d.kind == "execute"

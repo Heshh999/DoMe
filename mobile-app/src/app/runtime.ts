@@ -142,9 +142,12 @@ export class Runtime {
         void this.input.stop("hidden");
       }
     };
-    // Switching the selected PC ends the session on the old one before anything can target the new one.
+    // Switching the selected PC ends the session on the old one before anything can target the new one, and
+    // forgets YouTube search results (memory only; they belong to the PC they were found on).
     const unsubscribePc = useDevicesStore.subscribe((s, prev) => {
-      if (s.selectedPcId !== prev.selectedPcId && this.input.snapshot.pcId && this.input.snapshot.pcId !== s.selectedPcId) void this.input.stop("pc_switch");
+      if (s.selectedPcId === prev.selectedPcId) return;
+      if (this.input.snapshot.pcId && this.input.snapshot.pcId !== s.selectedPcId) void this.input.stop("pc_switch");
+      useLiveStore.getState().clearLastSearch();
     });
     const onOnline = () => {
       useLiveStore.getState().markAllStale();

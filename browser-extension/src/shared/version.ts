@@ -7,10 +7,13 @@
  * both its list and this one (`negotiate_protocol_version` in pc-agent dome_agent/bridge/server.py),
  * and its ack names the highest such version; otherwise it refuses with PROTOCOL_INCOMPATIBLE. 1.1
  * added manual input (touchpad/keyboard) and left bridge.schema.json unchanged, so this extension
- * speaks it as-is. An ack with a higher MINOR is still refused until that MINOR is added here, and the
- * agent's list must name it too.
+ * speaks it as-is. 1.2 added the bridge ops `search` and `open_result`, which this extension
+ * implements; an agent sends them only when the negotiated version is 1.2 or higher
+ * (version.json rules.bridge_negotiation), so a 1.1 agent's ack of 1.1 is accepted and works as
+ * before. An ack with a higher MINOR is still refused until that MINOR is added here, and the agent's
+ * list must name it too.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["1.0", "1.1"];
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["1.0", "1.1", "1.2"];
 
 export function protocolCompatible(peerVersion: unknown, supported: readonly string[] = SUPPORTED_PROTOCOL_VERSIONS): boolean {
   if (typeof peerVersion !== "string") return false;

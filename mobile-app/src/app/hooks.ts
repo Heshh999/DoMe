@@ -1,5 +1,5 @@
 /** React hooks over the stores and runtime used by every app page. */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JsonValue, rest } from "@dome/protocol";
 
@@ -7,18 +7,23 @@ import type { CommandRecord } from "../lib/commands.ts";
 import type { LabelContext } from "../lib/labels.ts";
 import { useDevicesStore } from "../store/devices.ts";
 import { useInputStore } from "../store/input.ts";
-import { EMPTY_LIVE_PC, isFresh, useLiveStore, withTimeStaleness, type LivePc } from "../store/live.ts";
+import { EMPTY_LIVE_PC, isFresh, useLiveStore, withTimeStaleness, type AppEntry, type LivePc } from "../store/live.ts";
 import { describeSendError, getRuntime } from "./runtime.ts";
 
 export function useSelectedPc() {
-  const pcs = useDevicesStore((s) => s.pcs);
   const selectedPcId = useDevicesStore((s) => s.selectedPcId);
-  const rawLive = useLiveStore((s) => (selectedPcId ? s.pcs[selectedPcId] : undefined));
+  return usePcView(selectedPcId);
+}
+
+/** One PC as the pages see it: inventory entry, live view with the 75 s rule applied, and whether controls may be sent. */
+function usePcView(pcId: string | null) {
+  const pcs = useDevicesStore((s) => s.pcs);
+  const rawLive = useLiveStore((s) => (pcId ? s.pcs[pcId] : undefined));
   // The store clock advances every few seconds (Runtime.start) so the 75 s rule is re-evaluated even
   // when no frame arrives; `Math.max` keeps a state frame received after the last tick fresh.
   const now = useLiveStore((s) => s.now);
   const clock = Math.max(now, rawLive?.stateReceivedAt ?? 0);
-  const pc = pcs.find((p) => p.id === selectedPcId);
+  const pc = pcs.find((p) => p.id === pcId);
   const livePc: LivePc = rawLive ? withTimeStaleness(rawLive, clock) : EMPTY_LIVE_PC;
   const fresh = isFresh(rawLive, clock);
   const canControl = fresh && pc?.enabled === true && livePc.state?.remote_enabled !== false;
@@ -71,6 +76,73 @@ export function useSend(pcId: string | null) {
     [pcId],
   );
   return { send, record: record ?? null, sending: state.sending, sendError: state.sendError, clearError: () => setState((s) => ({ ...s, sendError: null })) };
+}
+
+/** PCs with an `app.list` being signed right now (before its record exists), so two triggers never send two. */
+const appListSigning = new Set<string>();
+
+/**
+ * Ask the PC for its approved apps, unless that question is already on its way. The answer lands in
+ * `appsByPc` by itself (live store), whichever page asked. Resolves false when nothing could be sent
+ * (not connected, not paired); callers retry on their next trigger.
+ */
+export async function refreshApprovedApps(pcId: string): Promise<boolean> {
+  const inFlight = useLiveStore.getState().commands.find((c) => c.pcId === pcId && c.action === "app.list" && !c.terminal && !c.noAnswer);
+  if (inFlight || appListSigning.has(pcId)) return true;
+  appListSigning.add(pcId);
+  try {
+    await getRuntime().send({ pcId, action: "app.list", source: "system" });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    appListSigning.delete(pcId);
+  }
+}
+
+export interface ApprovedApps {
+  /** null until the PC answered once (this session). */
+  apps: AppEntry[] | null;
+  /** When the list was received (ms). */
+  at: number | null;
+  /** The most recent `app.list` command for this PC (in flight or finished), for loading and error copy. */
+  listing: CommandRecord | null;
+}
+
+/**
+ * The PC's approved apps, re-read from the PC when the calling page mounts and every time the app comes back
+ * to the foreground (visibilitychange / window focus), once the PC's state is fresh again. Apps the owner adds
+ * on the PC (DoMe tray → Add an app…) therefore appear without a manual Refresh. pc_state carries no app list,
+ * so asking is the only way to learn about them.
+ */
+export function useApprovedApps(pcId: string | null): ApprovedApps {
+  const { canControl } = usePcView(pcId);
+  const cached = useLiveStore((s) => (pcId ? s.appsByPc[pcId] : undefined));
+  const listing = useLiveStore((s) => (pcId ? (s.commands.find((c) => c.pcId === pcId && c.action === "app.list") ?? null) : null));
+  const [wanted, setWanted] = useState(0);
+  const asked = useRef<string | null>(null);
+  useEffect(() => {
+    const again = () => {
+      if (document.visibilityState === "visible") setWanted((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", again);
+    window.addEventListener("focus", again);
+    return () => {
+      document.removeEventListener("visibilitychange", again);
+      window.removeEventListener("focus", again);
+    };
+  }, []);
+  useEffect(() => {
+    // One request per trigger, sent as soon as controls are available (after a resume the state is stale until the
+    // PC's next state frame; the request waits for it instead of failing on a reconnecting socket).
+    const key = `${pcId}:${wanted}`;
+    if (!pcId || !canControl || asked.current === key) return;
+    asked.current = key;
+    void refreshApprovedApps(pcId).then((sent) => {
+      if (!sent && asked.current === key) asked.current = null;
+    });
+  }, [pcId, canControl, wanted]);
+  return { apps: cached?.apps ?? null, at: cached?.at ?? null, listing };
 }
 
 export function useLastCommandFor(pcId: string | null): CommandRecord | null {

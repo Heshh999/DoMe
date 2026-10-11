@@ -34,10 +34,41 @@ export class TabTimeoutError extends Error {
   }
 }
 
+/**
+ * The content script received the message but its page went away before it replied (the browser
+ * closed the message channel): a navigation or reload while the op ran. A NoReceiverError, so every
+ * caller that only cares whether a script answered treats both alike.
+ */
+export class ReceiverGoneError extends NoReceiverError {
+  constructor() {
+    super();
+    this.message = "content script page went away before it replied";
+    this.name = "ReceiverGoneError";
+  }
+}
+
+/** What waitForAttachment observed: the new attachment, the tab closing ("gone"), or nothing before the timeout (null). */
+export type AttachmentOutcome = Attachment | "gone" | null;
+
+interface AttachmentWaiter {
+  tabId: number;
+  offer(attachment: Attachment): void;
+  gone(): void;
+}
+
+/** The error a content script reported, with codes outside the contract's pattern collapsed to INTERNAL. */
+export function replyFailure(reply: Extract<ContentReply, { ok: false }>): OpError {
+  const code = typeof reply.code === "string" && /^[A-Z_]+$/.test(reply.code) ? reply.code : "INTERNAL";
+  const message = typeof reply.message === "string" ? reply.message : "the YouTube tab reported a failure";
+  return new OpError(code, message);
+}
+
 /** The content script's file in dist/, as listed under content_scripts in manifest.json. */
 export const CONTENT_SCRIPT_FILE = "content.js";
 
-const NO_RECEIVER_RE = /Receiving end does not exist|Could not establish connection|No tab with id|message port closed/i;
+const NO_RECEIVER_RE = /Receiving end does not exist|Could not establish connection|No tab with id/i;
+/** Chrome's wording when the receiving page unloads before replying ("The message port closed before a response was received", "…message channel closed…"). */
+const RECEIVER_GONE_RE = /message port closed|message channel closed/i;
 
 export interface TabRegistryDeps {
   api: ExtensionApi;
@@ -49,6 +80,7 @@ export interface TabRegistryDeps {
 
 export class TabRegistry {
   private readonly attachments = new Map<number, Attachment>();
+  private readonly waiters = new Set<AttachmentWaiter>();
   private readonly timers: Timers;
   private readonly probeTimeoutMs: number;
 
@@ -62,10 +94,12 @@ export class TabRegistry {
     tabs.onRemoved.addListener((tabId) => {
       const had = this.attachments.delete(tabId);
       if (had) log.info("tab removed", { tab_id: tabId });
+      this.tabGone(tabId);
       this.deps.onChanged();
     });
     tabs.onReplaced.addListener((_added, removed) => {
       this.attachments.delete(removed);
+      this.tabGone(removed);
       this.deps.onChanged();
     });
     tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -101,7 +135,51 @@ export class TabRegistry {
     if (!snapshot) return null;
     const attachment: Attachment = { token, snapshot, updatedAt: this.timers.now() };
     this.attachments.set(tabId, attachment);
+    for (const waiter of [...this.waiters]) if (waiter.tabId === tabId) waiter.offer(attachment);
     return attachment;
+  }
+
+  /**
+   * Resolve with the first attachment of `tabId` whose token is not `notToken` and whose tab URL
+   * `accept`s: a content script that started in a page this extension navigated to. The current
+   * attachment is offered at once (the page may have attached before the caller started waiting),
+   * then every attachment recorded later, from an `attached` message or a probe alike. The URL is
+   * read with tabs.get when an attachment is offered. "gone" when the tab closes first, null at the
+   * timeout. Callers never log the URL `accept` sees.
+   */
+  waitForAttachment(tabId: number, options: { notToken?: string | undefined; accept: (url: string) => boolean }, timeoutMs: number): Promise<AttachmentOutcome> {
+    return new Promise<AttachmentOutcome>((resolve) => {
+      let done = false;
+      let handle: unknown = null;
+      const finish = (outcome: AttachmentOutcome): void => {
+        if (done) return;
+        done = true;
+        this.waiters.delete(waiter);
+        if (handle !== null) this.timers.clearTimeout(handle);
+        resolve(outcome);
+      };
+      const waiter: AttachmentWaiter = {
+        tabId,
+        offer: (attachment) => {
+          if (done || attachment.token === options.notToken) return;
+          this.deps.api.tabs.get(tabId).then(
+            (tab) => {
+              if (options.accept(tab.url ?? "")) finish(attachment);
+            },
+            () => finish("gone"),
+          );
+        },
+        gone: () => finish("gone"),
+      };
+      this.waiters.add(waiter);
+      handle = this.timers.setTimeout(() => finish(null), Math.max(0, timeoutMs));
+      const current = this.attachments.get(tabId);
+      if (current) waiter.offer(current);
+    });
+  }
+
+  private tabGone(tabId: number): void {
+    for (const waiter of [...this.waiters]) if (waiter.tabId === tabId) waiter.gone();
   }
 
   detach(tabId: number, token?: unknown): boolean {
@@ -118,6 +196,7 @@ export class TabRegistry {
       (reply) => reply,
       (err: unknown) => {
         const text = err instanceof Error ? err.message : String(err);
+        if (RECEIVER_GONE_RE.test(text)) throw new ReceiverGoneError();
         throw NO_RECEIVER_RE.test(text) ? new NoReceiverError() : new OpError("INTERNAL", `tab message failed: ${text.slice(0, 120)}`);
       },
     );
@@ -218,7 +297,12 @@ export class TabRegistry {
     return injected;
   }
 
-  /** Compose the contract's youtube_tab for one browser tab from tab metadata plus the attachment. */
+  /**
+   * Compose the contract's youtube_tab for one browser tab from tab metadata plus the attachment. A
+   * tab whose URL is not a player page (results, channel, history, home: context "other") carries no
+   * title, from the attachment or from the browser: a results page's title is the customer's search
+   * query (rules.search_queries).
+   */
   async compose(tab: chrome.tabs.Tab, attachment: Attachment | undefined): Promise<YoutubeTab> {
     const browserInstanceId = await this.deps.browserInstanceId();
     const base: YoutubeTab = {
@@ -232,16 +316,18 @@ export class TabRegistry {
       active: tab.active === true,
     };
     if (tab.discarded) attachment = undefined;
+    const facts = parseYoutubeUrl(tab.url ?? "");
     if (attachment) {
       const out: YoutubeTab = { ...base, ...attachment.snapshot, script_attached: true, tab_token: attachment.token };
+      // The snapshot can predate an in-site navigation to a results page.
+      if (facts.context === "other" || out.context === "other") delete out.title;
       validateYoutubeTab(out);
       return out;
     }
     // Not attached: only what the URL and tab metadata tell us (untrusted display data).
-    const facts = parseYoutubeUrl(tab.url ?? "");
     const out: YoutubeTab = { ...base, context: facts.context, in_playlist: facts.in_playlist };
     if (facts.video_id) out.video_id = facts.video_id;
-    const title = cleanText(tab.title, 200);
+    const title = facts.context === "other" ? undefined : cleanText(tab.title, 200);
     if (title) out.title = title;
     validateYoutubeTab(out);
     return out;

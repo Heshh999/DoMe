@@ -118,7 +118,7 @@ describe("Dashboard", () => {
   it("power request followed by a disconnect: 'accepted by Windows' only when this phone saw an executing ack for it", () => {
     const at = new Date(Date.now() - 2 * 60_000).toISOString();
     useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: at, last_power_request: { action: "power.shutdown", at } });
-    const record: CommandRecord = { commandId: "c-1", pcId: PC, action: "power.shutdown", params: {}, target: null, createdAt: Date.parse(at) + 500, expiresAt: at, state: "executing", ackAt: at, confirmation: null, terminal: null, noAnswer: false, source: "button" };
+    const record: CommandRecord = { commandId: "c-1", pcId: PC, action: "power.shutdown", params: {}, target: null, protocolVersion: "1.0", createdAt: Date.parse(at) + 500, expiresAt: at, state: "executing", ackAt: at, confirmation: null, terminal: null, noAnswer: false, source: "button" };
     useLiveStore.getState().upsertCommand(record);
     renderDashboard();
     expect(screen.getByText(/Windows accepted the shutdown request 2 min ago; the PC then disconnected\./)).toBeInTheDocument();

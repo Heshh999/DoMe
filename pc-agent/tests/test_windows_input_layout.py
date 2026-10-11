@@ -6,6 +6,7 @@ exercised on a Windows device (README → verification checklist)."""
 from __future__ import annotations
 
 import ctypes
+from typing import Any
 
 import pytest
 
@@ -150,6 +151,41 @@ def test_browser_detection_and_foreground_result_shape() -> None:
     from dome_protocol import load_schemas
 
     load_schemas().validate_def("relay-frames", "foreground_app", fg.as_result())
+
+
+def test_foreground_never_reads_a_browsers_window_title() -> None:
+    """A browser window's title is its tab's page title, and on a YouTube results page that is the search
+    query (rules.search_queries): it is never read, so it can reach no state frame, log or file."""
+    import types
+
+    reads: list[int] = []
+
+    def window_text(hwnd: int, buffer: Any, size: int) -> int:
+        reads.append(hwnd)
+        buffer.value = "ZEBRA query - YouTube - Microsoft Edge"
+        return len(buffer.value)
+
+    def pid_of(hwnd: int, ref: Any) -> int:
+        ref._obj.value = 4321
+        return 77
+
+    adapter = w.WindowsInput()
+    adapter._user32 = types.SimpleNamespace(  # noqa: SLF001
+        GetForegroundWindow=lambda: 0x1234, GetWindowThreadProcessId=pid_of, GetWindowTextW=window_text
+    )
+    adapter._elevated = lambda pid: False  # type: ignore[method-assign]  # noqa: SLF001
+    for name, browser in (("msedge.exe", "edge"), ("Chrome.exe", "chrome"), ("firefox.exe", "other")):
+        adapter._process_name = lambda pid, name=name: name  # type: ignore[method-assign]  # noqa: SLF001
+        fg = adapter.foreground()
+        assert fg is not None and fg.browser == browser and fg.window_title == "" and fg.pid == 4321
+        assert "window_title" not in fg.as_result()
+    assert reads == []
+    adapter._process_name = lambda pid: "notepad.exe"  # type: ignore[method-assign]  # noqa: SLF001
+    fg = adapter.foreground()
+    assert fg is not None and fg.window_title == "ZEBRA query - YouTube - Microsoft Edge" and reads == [0x1234]
+    # and whatever an adapter reports, a browser's title is never sent
+    leaky = ForegroundApp("msedge.exe", "ZEBRA query - YouTube", "edge", False, "1", 2)
+    assert leaky.as_result() == {"process_name": "msedge.exe", "browser": "edge", "elevated": False}
 
 
 def test_windows_adapter_is_not_constructible_off_windows_without_dlls() -> None:

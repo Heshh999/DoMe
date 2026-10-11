@@ -10,7 +10,7 @@ import { computeBudget, MIN_BUDGET_MS } from "../src/background/requests.ts";
 import { CONTENT_SCRIPT_FILE } from "../src/background/tabs.ts";
 import { createBackground, type Background } from "../src/background/service.ts";
 import { KEY_INSTANCE_ID } from "../src/background/storage.ts";
-import { BG_KIND, CS_KIND, POPUP_KIND, type ContentReply, type PlayerSnapshot, type StatusReport } from "../src/shared/messages.ts";
+import { BG_KIND, CS_KIND, POPUP_KIND, type ContentReply, type PlayerSnapshot, type SearchItem, type StatusReport } from "../src/shared/messages.ts";
 import { FakeChrome, type ContentHandler } from "./chrome-stub.ts";
 
 interface FixtureTab {
@@ -94,7 +94,7 @@ describe("startup and hello", () => {
     expect(port.name).toBe(NATIVE_HOST_NAME);
     const hello = port.framesOfType<BridgeHello>("bridge_hello")[0]!;
     expect(hello.browser).toBe("chrome");
-    expect(hello.protocol_versions).toEqual(["1.0", "1.1"]); // every MINOR, so 1.0 and 1.1 agents both accept it
+    expect(hello.protocol_versions).toEqual(["1.0", "1.1", "1.2"]); // every MINOR, so 1.0, 1.1 and 1.2 agents all accept it
     expect(hello.extension_version).toBe("0.1.0-test");
     expect(hello.browser_instance_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(chrome.store.get(KEY_INSTANCE_ID)).toBe(hello.browser_instance_id);
@@ -731,7 +731,7 @@ describe("reconnect and version negotiation", () => {
     port.receive({ type: "bridge_hello_ack", protocol_version: "2.0", agent_version: "9.9.9" });
     const err = port.framesOfType<{ error: { code: string; detail: { peer: string[]; supported: string[] } } }>("bridge_error")[0]!;
     expect(err.error.code).toBe("PROTOCOL_INCOMPATIBLE");
-    expect(err.error.detail).toEqual({ peer: ["2.0"], supported: ["1.0", "1.1"] });
+    expect(err.error.detail).toEqual({ peer: ["2.0"], supported: ["1.0", "1.1", "1.2"] });
     expect(port.disconnected).toBe(true);
     expect(bg.connection.current().state).toBe("incompatible");
     expect(bg.connection.connected).toBe(false);
@@ -741,22 +741,27 @@ describe("reconnect and version negotiation", () => {
     validateAllSent(chrome);
   });
 
-  it("an ack of 1.0 or 1.1 is accepted; 1.2 is refused until the extension speaks it", async () => {
-    for (const version of ["1.0", "1.1"]) {
+  it("an ack of 1.0, 1.1 or 1.2 is accepted (an older agent negotiates down); 1.3 is refused until the extension speaks it", async () => {
+    for (const version of ["1.0", "1.1", "1.2"]) {
       const chrome = new FakeChrome();
+      setupTabs(chrome);
       const bg = await boot(chrome, { ack: false });
       chrome.lastPort.receive({ type: "bridge_hello_ack", protocol_version: version, agent_version: "0.2.0" });
       expect(bg.connection.connected, version).toBe(true);
       expect(bg.connection.current()).toMatchObject({ state: "connected", protocol_version: version });
       expect(chrome.lastPort.framesOfType("bridge_error")).toHaveLength(0);
+      // A 1.1 (or 1.0) agent never sends the 1.2 ops; everything it does send works as before.
+      chrome.lastPort.receive({ type: "bridge_request", request_id: REQ, op: "set_paused", args: { tab_id: 11, tab_token: TOKENS[11], paused: true }, timeout_ms: 8000 });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(chrome.lastPort.framesOfType<BridgeResponse>("bridge_response")[0]!.ok, version).toBe(true);
     }
     const chrome = new FakeChrome();
     const bg = await boot(chrome, { ack: false });
-    chrome.lastPort.receive({ type: "bridge_hello_ack", protocol_version: "1.2", agent_version: "0.3.0" });
+    chrome.lastPort.receive({ type: "bridge_hello_ack", protocol_version: "1.3", agent_version: "0.4.0" });
     expect(bg.connection.connected).toBe(false);
     expect(bg.connection.current().state).toBe("incompatible");
     const err = chrome.lastPort.framesOfType<{ error: { code: string; detail: { peer: string[]; supported: string[] } } }>("bridge_error")[0]!;
-    expect(err.error).toMatchObject({ code: "PROTOCOL_INCOMPATIBLE", detail: { peer: ["1.2"], supported: ["1.0", "1.1"] } });
+    expect(err.error).toMatchObject({ code: "PROTOCOL_INCOMPATIBLE", detail: { peer: ["1.3"], supported: ["1.0", "1.1", "1.2"] } });
     validateAllSent(chrome);
   });
 
@@ -932,5 +937,321 @@ describe("popup messages", () => {
     await boot(chrome);
     expect(await chrome.messageFromPopup({ kind: "something_else" })).toBeUndefined();
     expect(await chrome.messageFromPopup({ kind: BG_KIND, type: "op" })).toBeUndefined();
+  });
+});
+
+describe("search and open_result (protocol 1.2)", () => {
+  const RESULTS_TOKEN = "RRRRRRRRRRRRRRRRRRRRRR";
+  const OTHER_TOKEN = "OOOOOOOOOOOOOOOOOOOOOO";
+  const WATCH_TOKEN = "WWWWWWWWWWWWWWWWWWWWWW";
+  const QUERY = "lofi & chill #1 ?x=2";
+  const ITEMS: SearchItem[] = [
+    { index: 1, video_id: "jfKfPfyJRdk", title: "lofi hip hop radio", channel: "Lofi Girl", is_live: true },
+    { index: 2, video_id: "5qap5aO4i9A", title: "beats to sleep/chill to", duration_seconds: 3723, is_live: false },
+  ];
+  const RESULTS_URL = "https://www.youtube.com/results?search_query=lofi";
+
+  function pageSnapshot(context: PlayerSnapshot["context"], videoId?: string): PlayerSnapshot {
+    const s: PlayerSnapshot = { context, ad_showing: false, is_live: false, in_playlist: false, fullscreen: false };
+    if (videoId) s.video_id = videoId;
+    return s;
+  }
+
+  /** The content script of a loaded results page: answers probes and read_results like the real adapter. */
+  function resultsContent(token: string, items: SearchItem[] = ITEMS, readResults?: (msg: { args: Record<string, unknown>; deadline_ms: number }) => ContentReply | Promise<ContentReply>): ContentHandler {
+    return (raw) => {
+      const msg = raw as { type: string; op: string; args: Record<string, unknown>; deadline_ms: number };
+      if (msg.type === "probe") return { ok: true, token, state: pageSnapshot("other") } satisfies ContentReply;
+      if (msg.args.tab_token !== token) return { ok: false, code: "TARGET_CHANGED", message: "token mismatch", token, state: pageSnapshot("other") } satisfies ContentReply;
+      if (msg.op === "read_results") return readResults ? readResults(msg) : ({ ok: true, token, state: pageSnapshot("other"), results: items } satisfies ContentReply);
+      return { ok: false, code: "UNSUPPORTED_CONTEXT", message: "not here", token, state: pageSnapshot("other") } satisfies ContentReply;
+    };
+  }
+
+  /** Start a scripted content script in `tabId` (now at `url`) and send its `attached` message, like a page that finished loading. */
+  function attachPage(chrome: FakeChrome, tabId: number, url: string, token: string, handler: ContentHandler, state: PlayerSnapshot): void {
+    const tab = chrome.tabList.find((t) => t.id === tabId)!;
+    tab.url = url;
+    chrome.contentHandlers.set(tabId, handler);
+    void chrome.messageFromContent(tabId, { kind: CS_KIND, type: "attached", token, state });
+  }
+
+  /** Every navigation loads a results page whose content script attaches after `delayMs`; the browser titles the tab with the query, as Chrome does. */
+  function loadResultsOnNavigate(chrome: FakeChrome, options: { delayMs?: number; items?: SearchItem[] } = {}): void {
+    chrome.onNavigate = (tabId, url) => {
+      setTimeout(() => {
+        const tab = chrome.tabList.find((t) => t.id === tabId);
+        if (!tab || tab.url !== url) return;
+        tab.title = `${new URL(url).searchParams.get("search_query")} - YouTube`;
+        attachPage(chrome, tabId, url, RESULTS_TOKEN, resultsContent(RESULTS_TOKEN, options.items), pageSnapshot("other"));
+      }, options.delayMs ?? 400);
+    };
+  }
+
+  async function bridgeRequest(chrome: FakeChrome, frame: Record<string, unknown>, maxWaitMs = 20_000): Promise<BridgeResponse> {
+    const port = chrome.lastPort;
+    const before = port.framesOfType<BridgeResponse>("bridge_response").length;
+    port.receive({ type: "bridge_request", request_id: REQ, ...frame });
+    await vi.advanceTimersByTimeAsync(0);
+    for (let waited = 0; waited < maxWaitMs && port.framesOfType("bridge_response").length === before; waited += 50) await vi.advanceTimersByTimeAsync(50);
+    const responses = port.framesOfType<BridgeResponse>("bridge_response");
+    expect(responses.length).toBe(before + 1);
+    schemas.validateBridgeFrame("extension_to_agent", responses[before]);
+    return responses[before]!;
+  }
+
+  type SearchResult = { tab: { tab_id: number; tab_token?: string; context: string; title?: string; script_attached: boolean; video_id?: string }; results: SearchItem[] };
+
+  it("in the chosen tab: navigates it to the exact results URL, waits for the new page and answers with its NEW token and the results", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    loadResultsOnNavigate(chrome);
+    const bg = await boot(chrome);
+    const r = await bridgeRequest(chrome, { op: "search", args: { query: QUERY, tab_id: 11, tab_token: TOKENS[11] }, timeout_ms: 15000 });
+    expect(r.ok).toBe(true);
+    // The query is only the search_query parameter, encoded by URLSearchParams.
+    expect(chrome.navigations).toEqual([{ tabId: 11, url: "https://www.youtube.com/results?search_query=lofi+%26+chill+%231+%3Fx%3D2", created: false }]);
+    const url = new URL(chrome.navigations[0]!.url);
+    expect([url.origin, url.pathname, [...url.searchParams.keys()], url.searchParams.get("search_query"), url.hash]).toEqual(["https://www.youtube.com", "/results", ["search_query"], QUERY, ""]);
+    const result = r.result as SearchResult;
+    expect(result.tab).toMatchObject({ tab_id: 11, tab_token: RESULTS_TOKEN, script_attached: true, context: "other" });
+    expect(result.tab.title).toBeUndefined();
+    expect(result.results).toEqual(ITEMS);
+    expect(bg.registry.get(11)?.token).toBe(RESULTS_TOKEN);
+    validateAllSent(chrome);
+  });
+
+  it("without a tab: opens one new active tab in this browser", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    loadResultsOnNavigate(chrome);
+    await boot(chrome);
+    const r = await bridgeRequest(chrome, { op: "search", args: { query: "lofi" }, timeout_ms: 15000 });
+    expect(r.ok).toBe(true);
+    expect(chrome.navigations).toEqual([{ tabId: 100, url: "https://www.youtube.com/results?search_query=lofi", created: true, active: true }]);
+    expect((r.result as SearchResult).tab).toMatchObject({ tab_id: 100, tab_token: RESULTS_TOKEN, context: "other" });
+    expect((r.result as SearchResult).results).toHaveLength(2);
+    // The other tabs were left alone.
+    expect(chrome.tabList.find((t) => t.id === 11)!.url).toBe(FIXTURE.tabs[0]!.url);
+    validateAllSent(chrome);
+  });
+
+  it("the query never reaches a log line, a bridge frame or a reported tab title", async () => {
+    const SENTINEL = "dome sentinel query 7f3a";
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    loadResultsOnNavigate(chrome);
+    await boot(chrome);
+    const inTab = await bridgeRequest(chrome, { op: "search", args: { query: SENTINEL, tab_id: 11, tab_token: TOKENS[11] }, timeout_ms: 15000 });
+    const newTab = await bridgeRequest(chrome, { op: "search", args: { query: SENTINEL }, timeout_ms: 15000 });
+    expect([inTab.ok, newTab.ok]).toEqual([true, true]);
+    // Failures too: a stale token, and a results page that never attaches.
+    expect((await bridgeRequest(chrome, { op: "search", args: { query: SENTINEL, tab_id: 12, tab_token: "ZZZZZZZZZZZZZZZZZZZZZZ" }, timeout_ms: 15000 })).ok).toBe(false);
+    chrome.onNavigate = null;
+    expect((await bridgeRequest(chrome, { op: "search", args: { query: SENTINEL }, timeout_ms: 15000 })).error?.code).toBe("OUTCOME_UNKNOWN");
+    // The browser now titles two tabs "<query> - YouTube"; let tabs_changed and list_tabs report them.
+    await vi.advanceTimersByTimeAsync(1000);
+    await bridgeRequest(chrome, { op: "list_tabs", args: {} });
+    const forms = [SENTINEL, encodeURIComponent(SENTINEL), new URLSearchParams({ q: SENTINEL }).toString().slice(2), "sentinel"];
+    const frames = JSON.stringify(chrome.ports.flatMap((p) => p.sent));
+    const logs = JSON.stringify([vi.mocked(console.info).mock.calls, vi.mocked(console.warn).mock.calls, error.mock.calls]);
+    for (const form of forms) {
+      expect(frames, form).not.toContain(form);
+      expect(logs, form).not.toContain(form);
+    }
+    expect(chrome.tabList.filter((t) => t.title?.includes(SENTINEL))).toHaveLength(2); // the stub really titled them
+    validateAllSent(chrome);
+  });
+
+  it("a stale token, a tab without DoMe, a closed or non-YouTube tab, or a tab_id without its token navigate nothing", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    loadResultsOnNavigate(chrome);
+    await boot(chrome);
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ query: "lofi", tab_id: 11, tab_token: "ZZZZZZZZZZZZZZZZZZZZZZ" }, "TARGET_CHANGED"],
+      [{ query: "lofi", tab_id: 13, tab_token: TOKENS[11] }, "TAB_NOT_CONTROLLABLE"],
+      [{ query: "lofi", tab_id: 99, tab_token: TOKENS[11] }, "TARGET_GONE"],
+      [{ query: "lofi", tab_id: 20, tab_token: TOKENS[11] }, "TARGET_GONE"],
+      [{ query: "lofi", tab_id: 11 }, "INVALID_PARAMETERS"],
+      [{ query: "lofi", tab_token: TOKENS[11] }, "INVALID_PARAMETERS"],
+    ];
+    for (const [args, code] of cases) {
+      const r = await bridgeRequest(chrome, { op: "search", args, timeout_ms: 15000 });
+      expect(r.error?.code, JSON.stringify(args)).toBe(code);
+    }
+    expect(chrome.navigations).toEqual([]);
+  });
+
+  it("only the new results page counts: the old page still reporting, or a different page attaching, is not the result", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    await boot(chrome);
+    chrome.onNavigate = (tabId, url) => {
+      // The old document reports once more while it unloads.
+      setTimeout(() => void chrome.messageFromContent(tabId, { kind: CS_KIND, type: "player_state", token: TOKENS[11], state: snapshotFor(FIXTURE.tabs[0]!) }), 100);
+      // Someone searches for something else on the PC before ours loads.
+      setTimeout(() => attachPage(chrome, tabId, "https://www.youtube.com/results?search_query=something+else", OTHER_TOKEN, resultsContent(OTHER_TOKEN, []), pageSnapshot("other")), 200);
+      setTimeout(() => attachPage(chrome, tabId, url, RESULTS_TOKEN, resultsContent(RESULTS_TOKEN), pageSnapshot("other")), 700);
+    };
+    const port = chrome.lastPort;
+    port.receive({ type: "bridge_request", request_id: REQ, op: "search", args: { query: "lofi  beats ", tab_id: 11, tab_token: TOKENS[11] }, timeout_ms: 15000 });
+    await vi.advanceTimersByTimeAsync(650);
+    expect(port.framesOfType("bridge_response")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    const r = port.framesOfType<BridgeResponse>("bridge_response")[0]!;
+    expect(r.ok).toBe(true);
+    expect((r.result as SearchResult).tab.tab_token).toBe(RESULTS_TOKEN);
+    expect((r.result as SearchResult).results).toEqual(ITEMS);
+    expect(chrome.navigations[0]!.url).toBe("https://www.youtube.com/results?search_query=lofi++beats"); // trimmed, inner spaces kept
+  });
+
+  it("a results page that never attaches is OUTCOME_UNKNOWN within the budget; a tab closed meanwhile is TARGET_GONE at once", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    await boot(chrome);
+    const port = chrome.lastPort;
+    port.receive({ type: "bridge_request", request_id: REQ, op: "search", args: { query: "lofi", tab_id: 11, tab_token: TOKENS[11] }, timeout_ms: 15000 });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(port.framesOfType("bridge_response")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_700); // the agent's 15 s minus the reply margin
+    expect(port.framesOfType<BridgeResponse>("bridge_response").map((f) => f.error?.code)).toEqual(["OUTCOME_UNKNOWN"]);
+
+    chrome.onNavigate = (tabId) => setTimeout(() => chrome.removeTab(tabId), 300);
+    const started = Date.now();
+    const gone = await bridgeRequest(chrome, { op: "search", args: { query: "lofi" }, timeout_ms: 15000 });
+    expect(gone.error?.code).toBe("TARGET_GONE");
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("failures reported by the results page are passed through; the browser refusing a new tab is ACTION_UNAVAILABLE", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    await boot(chrome);
+    chrome.onNavigate = (tabId, url) =>
+      setTimeout(
+        () => attachPage(chrome, tabId, url, RESULTS_TOKEN, resultsContent(RESULTS_TOKEN, [], () => ({ ok: false, code: "ACTION_UNAVAILABLE", message: "YouTube changed its search results page; DoMe needs an update to read it", token: RESULTS_TOKEN, state: pageSnapshot("other") })), pageSnapshot("other")),
+        300,
+      );
+    const r = await bridgeRequest(chrome, { op: "search", args: { query: "lofi" }, timeout_ms: 15000 });
+    expect(r.error).toEqual({ code: "ACTION_UNAVAILABLE", message: "YouTube changed its search results page; DoMe needs an update to read it" });
+    chrome.createError = new Error("Tabs cannot be edited right now");
+    const refused = await bridgeRequest(chrome, { op: "search", args: { query: "lofi" }, timeout_ms: 15000 });
+    expect(refused.error?.code).toBe("ACTION_UNAVAILABLE");
+    expect(refused.error?.message).not.toContain("Tabs cannot");
+  });
+
+  it("results are re-checked: the list is cut at the first invalid item (indexes keep naming the same videos) and never exceeds 10", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    const many: SearchItem[] = Array.from({ length: 12 }, (_, i) => ({ index: i + 1, video_id: `video${String(i).padStart(6, "0")}`, title: `Video ${i + 1}` }));
+    loadResultsOnNavigate(chrome, { items: many });
+    await boot(chrome);
+    const ten = await bridgeRequest(chrome, { op: "search", args: { query: "lofi" }, timeout_ms: 15000 });
+    expect((ten.result as SearchResult).results.map((i) => i.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    const broken = [ITEMS[0]!, { index: 2, video_id: "not valid!", title: "x" }, { ...ITEMS[1]!, index: 3 }] as SearchItem[];
+    loadResultsOnNavigate(chrome, { items: broken });
+    const cut = await bridgeRequest(chrome, { op: "search", args: { query: "lofi" }, timeout_ms: 15000 });
+    expect((cut.result as SearchResult).results).toEqual([ITEMS[0]]);
+    validateAllSent(chrome);
+  });
+
+  it("open_result goes to the results tab's content script and answers youtube_state_result; a lost reply is OUTCOME_UNKNOWN", async () => {
+    const chrome = new FakeChrome();
+    let seen: Record<string, unknown> | undefined;
+    chrome.addTab({ id: 30, url: RESULTS_URL, title: "lofi - YouTube", active: true }, (raw) => {
+      const msg = raw as { type: string; op: string; args: Record<string, unknown> };
+      if (msg.type === "probe") return { ok: true, token: RESULTS_TOKEN, state: pageSnapshot("other") };
+      seen = msg.args;
+      chrome.tabList.find((t) => t.id === 30)!.url = "https://www.youtube.com/watch?v=5qap5aO4i9A";
+      return { ok: true, token: RESULTS_TOKEN, state: { ...pageSnapshot("watch", "5qap5aO4i9A"), title: "beats to sleep/chill to", paused: false } };
+    });
+    await boot(chrome);
+    const r = await bridgeRequest(chrome, { op: "open_result", args: { tab_id: 30, tab_token: RESULTS_TOKEN, index: 2, video_id: "5qap5aO4i9A" }, timeout_ms: 10000 });
+    expect(seen).toEqual({ tab_token: RESULTS_TOKEN, index: 2, video_id: "5qap5aO4i9A" });
+    expect(r.ok).toBe(true);
+    expect((r.result as { tab: { video_id: string; tab_token: string; title: string } }).tab).toMatchObject({ video_id: "5qap5aO4i9A", tab_token: RESULTS_TOKEN, title: "beats to sleep/chill to" });
+
+    chrome.contentHandlers.set(30, (raw) => ((raw as { type: string }).type === "probe" ? { ok: true, token: RESULTS_TOKEN, state: pageSnapshot("other") } : new Promise(() => undefined)));
+    const lost = await bridgeRequest(chrome, { op: "open_result", args: { tab_id: 30, tab_token: RESULTS_TOKEN, index: 1 }, timeout_ms: 10000 });
+    expect(lost.error?.code).toBe("OUTCOME_UNKNOWN"); // mutating: the click may have happened
+    validateAllSent(chrome);
+  });
+
+  it("open_result whose click loads a whole new page succeeds once the new page shows the chosen video", async () => {
+    const chrome = new FakeChrome();
+    const WATCH = "https://www.youtube.com/watch?v=5qap5aO4i9A";
+    /** The results page clicks, the browser loads the watch page, and the old page's reply channel closes. */
+    const fullLoad = (newVideo: string) => (raw: unknown) => {
+      const msg = raw as { type: string };
+      if (msg.type === "probe") return { ok: true, token: RESULTS_TOKEN, state: pageSnapshot("other") };
+      const url = `https://www.youtube.com/watch?v=${newVideo}`;
+      chrome.reloadTab(30, url);
+      setTimeout(() => attachPage(chrome, 30, url, WATCH_TOKEN, (m) => ((m as { type: string }).type === "probe" ? { ok: true, token: WATCH_TOKEN, state: pageSnapshot("watch", newVideo) } : new Promise(() => undefined)), pageSnapshot("watch", newVideo)), 500);
+      return Promise.reject(new Error("The message port closed before a response was received."));
+    };
+    chrome.addTab({ id: 30, url: RESULTS_URL, active: true }, fullLoad("5qap5aO4i9A"));
+    await boot(chrome);
+    const r = await bridgeRequest(chrome, { op: "open_result", args: { tab_id: 30, tab_token: RESULTS_TOKEN, index: 2, video_id: "5qap5aO4i9A" }, timeout_ms: 10000 });
+    expect(r.ok).toBe(true);
+    expect((r.result as { tab: { video_id: string; tab_token: string; context: string } }).tab).toMatchObject({ video_id: "5qap5aO4i9A", tab_token: WATCH_TOKEN, context: "watch" });
+    expect(chrome.tabList.find((t) => t.id === 30)!.url).toBe(WATCH);
+
+    // Without a video_id there is nothing to recognise: the outcome is unknown, not a guess.
+    chrome.tabList.find((t) => t.id === 30)!.url = RESULTS_URL;
+    chrome.contentHandlers.set(30, fullLoad("5qap5aO4i9A"));
+    const unknown = await bridgeRequest(chrome, { op: "open_result", args: { tab_id: 30, tab_token: RESULTS_TOKEN, index: 2 }, timeout_ms: 10000 });
+    expect(unknown.error?.code).toBe("OUTCOME_UNKNOWN");
+    await vi.advanceTimersByTimeAsync(1000); // that page finishes loading before the next attempt
+
+    // A page load to a different video is not the chosen result.
+    chrome.tabList.find((t) => t.id === 30)!.url = RESULTS_URL;
+    chrome.contentHandlers.set(30, fullLoad("dQw4w9WgXcQ"));
+    const other = await bridgeRequest(chrome, { op: "open_result", args: { tab_id: 30, tab_token: RESULTS_TOKEN, index: 2, video_id: "5qap5aO4i9A" }, timeout_ms: 10000 });
+    expect(other.error?.code).toBe("OUTCOME_UNKNOWN");
+    validateAllSent(chrome);
+  });
+
+  it("read_results is internal: an agent cannot send it", async () => {
+    const chrome = new FakeChrome();
+    chrome.addTab({ id: 30, url: RESULTS_URL, active: true }, resultsContent(RESULTS_TOKEN));
+    await boot(chrome);
+    const port = chrome.lastPort;
+    port.receive({ type: "bridge_request", request_id: REQ, op: "read_results", args: { tab_id: 30, tab_token: RESULTS_TOKEN } });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(port.framesOfType("bridge_response")).toHaveLength(0);
+    expect(port.framesOfType<{ error: { code: string } }>("bridge_error")[0]!.error.code).toBe("MALFORMED_MESSAGE");
+  });
+});
+
+describe("titles of pages without a player never leave the browser", () => {
+  it("results, channel and history tabs are listed without a title, attached or not, even right after an in-site navigation", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    chrome.addTab({ id: 31, url: "https://www.youtube.com/results?search_query=secret+words", title: "secret words - YouTube" });
+    // A content script of an older build that still reported the title of a playerless page.
+    chrome.addTab({ id: 32, url: "https://www.youtube.com/feed/history", title: "secret history - YouTube" }, (raw) => {
+      const state = { context: "other", ad_showing: false, is_live: false, in_playlist: false, title: "secret history" };
+      return (raw as { type: string }).type === "probe" ? { ok: true, token: "HHHHHHHHHHHHHHHHHHHHHH", state } : { ok: false, code: "UNSUPPORTED_CONTEXT", message: "x" };
+    });
+    await boot(chrome);
+    // Tab 11 navigates in-site to a results page; its cached snapshot still describes the video.
+    chrome.updateTab(11, { url: "https://www.youtube.com/results?search_query=secret+search", title: "secret search - YouTube" });
+    await vi.advanceTimersByTimeAsync(400);
+    const port = chrome.lastPort;
+    port.receive({ type: "bridge_request", request_id: REQ, op: "list_tabs", args: {} });
+    await vi.advanceTimersByTimeAsync(100);
+    const listed = (port.framesOfType<BridgeResponse>("bridge_response")[0]!.result as { tabs: Array<{ tab_id: number; title?: string; context: string }> }).tabs;
+    expect(listed.filter((t) => t.tab_id >= 31).map((t) => [t.tab_id, t.context, t.title])).toEqual([
+      [31, "other", undefined],
+      [32, "other", undefined],
+    ]);
+    expect(listed.find((t) => t.tab_id === 12)!.title).toBe("Despacito"); // watch pages keep theirs
+    // Tab 11's content script still reports the video it showed before the in-site navigation.
+    expect(listed.find((t) => t.tab_id === 11)).toMatchObject({ script_attached: true, video_id: "dQw4w9WgXcQ" });
+    expect(listed.find((t) => t.tab_id === 11)!.title).toBeUndefined();
+    expect(JSON.stringify(port.sent)).not.toContain("secret");
+    validateAllSent(chrome);
   });
 });

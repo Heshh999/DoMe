@@ -78,7 +78,8 @@ every end trigger, target change, ack rate, backpressure, crash recovery, grant_
 hygiene, clock skew), `tests/test_windows_input_layout.py` (9), `tests/test_single_instance.py` (8), pairing/CLI
 capability prompts (2), power confirmation copy (1), registry handler coverage for the two input actions.
 Expectations changed on purpose: `test_bridge.py::test_incompatible_extension_is_refused` now expects
-`supported == ["1.0", "1.1"]` (the agent announces every MINOR it speaks; see CONTRACT_ISSUES.md #15);
+`supported == ["1.0", "1.1", "1.2"]` (the agent announces every MINOR it speaks: `SUPPORTED_PROTOCOL_VERSIONS`,
+DECISIONS.md #38; see CONTRACT_ISSUES.md #15);
 `tests/helpers.py::ALL_CAPS` includes `pointer` and `keyboard`.
 
 Run the agent against a local cloud-api (see `cloud-api/README.md`) with the **fake platform**
@@ -254,14 +255,22 @@ new controller approval still needs the local approval flow.
    fixes the key) plus `DOME_AGENT_DEV_EXTENSION_ID` when set.
 4. `DoMe.exe` (= `run`) shows the tray icon (second launch: the running instance's window comes up).
    Menu: status · Disable/Enable remote control · Stop manual input · Paired phones ▸ (Allow touchpad /
-   Allow keyboard per phone) · Pair a phone… · Approved apps… · Start at login (HKCU Run key) ·
-   Reconnect · Diagnostics… · Quit.
+   Allow keyboard per phone) · Pair a phone… · Add an app… · Approved apps… (list, re-approve, remove,
+   *Full screen with F11* per app) · Start at login (HKCU Run key) · Reconnect · Diagnostics… · Quit.
 5. Pair: tray → Pair a phone… shows a QR + 20-symbol code (5 min). The phone scans it; the PC shows the
    phone's name, the 6-digit verification code and the requested permissions; touchpad and keyboard are
    separate, unticked checkboxes with the scope explanation; the customer approves **on the PC**.
-6. Approve apps for remote launch/focus/close: `DoMe.exe approve-app chrome "C:\Program Files\Google\Chrome\Application\chrome.exe"`.
+6. Approve apps for remote launch/focus/close: tray → Add an app… (or
+   `DoMe.exe approve-app chrome "C:\Program Files\Google\Chrome\Application\chrome.exe"`).
    Only absolute, existing `.exe` paths outside temp folders are accepted; the SHA-256 is pinned and a
-   changed binary must be re-approved.
+   changed binary must be re-approved. **Full screen with F11**: the phone's Full screen presses F11, which
+   DoMe does on its own only in apps known to use F11 that way (browsers, File Explorer, VS Code, Windows
+   Terminal, Notepad++, Sublime Text). For any other app (for example ZStream) the PC owner turns it on per
+   app: tray → Approved apps… → select the app → tick *Full screen with F11* (or
+   `DoMe.exe app-option zstream --fullscreen-f11 on`, or `approve-app … --fullscreen-f11`). Until then the
+   phone is told "Full screen is not turned on for ZStream. On the PC: DoMe tray > Approved apps > ZStream >
+   Full screen with F11. Or use Maximise." Leave it off where F11 means something else (Excel adds a chart
+   sheet). Re-approving an app keeps its choice.
 7. Secrets (`pc_key.bin`, `pc_credential.bin`) are DPAPI-protected (current user) under
    `%LOCALAPPDATA%\DoMe\secrets`. Logs: `%LOCALAPPDATA%\DoMe\logs\agent.log` (redacted JSON lines).
    Uninstall: `DoMe.exe uninstall-native-host`, untick Start at login, delete `%LOCALAPPDATA%\DoMe`.
@@ -278,6 +287,15 @@ tests on Linux cover the logic around each adapter with `fake_platform`.
 | Media (winsdk GSMTC) | Play Spotify; `media.get_sessions` lists it with `controls`; `media.set_paused` pauses; `media.next` on a session without `next` → `ACTION_UNAVAILABLE`. |
 | Lock | `windows.lock` locks the session; while locked `app.launch` → `PC_SESSION_LOCKED`, media allowed only with "allow media while locked". |
 | Apps (pywin32) | approve Notepad; launch/focus/minimize; `app.close` with unsaved text → `CLOSE_REFUSED` (dialog on PC), never force-killed; focus from a non-foreground process → `FOCUS_DENIED` where Windows refuses. |
+| Window actions | Approve Edge, Notepad and Excel. Edge: Full screen on, then off (F11 full screen and back); Full screen, Minimise from the phone, Full screen again → Edge comes back in full screen (not toggled out of it); then Restore → normal size, not full screen. Notepad and Excel: Full screen → `FULLSCREEN_UNSUPPORTED` with "Full screen is not turned on for Notepad. On the PC: DoMe tray > Approved apps > Notepad > Full screen with F11. Or use Maximise.", nothing pressed (Excel gains no chart sheet). After a YouTube search in Edge, the phone's Apps page lists the Edge window as "Microsoft Edge" and the keyboard panel shows "Edge" without the page title. |
+| Bring to front | Notepad open behind Edge, DoMe idle in the tray: Bring to front from the phone → Notepad comes to the front and takes the keyboard, with no taskbar button flashing instead. Leave the PC untouched for 1 minute (no mouse or keyboard input) and repeat: still in front, no flash. |
+| Maximise / Restore / Minimise | On Notepad: Maximise → maximised; Restore → normal size; Minimise → minimised; Restore → normal size again. Maximise, then Minimise (the window was maximised when minimised), then Restore → normal size, not maximised. Each result's `state` matches what the screen shows. |
+| F11 full screen and display scale | Edge Full screen on and off at 100 % and at 125 % display scale (Settings ▸ Display ▸ Scale), and with "Automatically hide the taskbar" on: the result says `fullscreen: true` only while Edge really covers the whole screen; a maximised Notepad under the auto-hidden taskbar reports `maximized`, `fullscreen: false`. |
+| Administrator app | Approve Task Manager (`C:\Windows\System32\Taskmgr.exe`), open it, then Maximise / Restore / Full screen from the phone → `APP_ELEVATED` ("That app runs as administrator…"); the window does not change and nothing is pressed. |
+| Other virtual desktop | Open a second Notepad window on another virtual desktop (Win+Tab ▸ New desktop), go back to the first desktop: the Apps page lists only the window on the current desktop, and Bring to front / Maximise act on it, never on the hidden one. |
+| Ctrl held | While Ctrl is held down (on the PC keyboard, or a Ctrl the phone's keyboard left held after a failed shortcut, shown in `input_ack.held_keys`), Full screen from the phone → `ACTION_UNAVAILABLE` ("A key … is held down" / "Release the keys held from the phone first."), and F11 is not pressed: Edge stays as it was. Release Ctrl and Full screen works. |
+| Old browser extension | Keep an extension build from before protocol 1.2 loaded in Edge with this agent: Search YouTube from the phone → `EXTENSION_UPDATE_REQUIRED` ("Update the DoMe browser extension on the PC…"), nothing is opened; play/pause still work. Reload the current extension and the search works. |
+| Full screen with F11 (per app) | Approve ZStream (`C:\zstream\zstream-app.exe`) with Add an app…: the dialog shows *Full screen with F11* unticked (it is pre-ticked, and cannot be unticked, only for Edge, Chrome and the other apps on the built-in list). Type "full screen zstream" → refused with "Full screen is not turned on for ZStream. On the PC: DoMe tray > Approved apps > ZStream > Full screen with F11. Or use Maximise.", nothing pressed. Tick the box in Approved apps… (the "Full screen" column shows F11) → "full screen zstream" makes ZStream full screen with one F11; "exit full screen zstream" leaves it. Untick → refused again. `DoMe.exe app-option zstream --fullscreen-f11 on` does the same while DoMe runs or not. |
 | Power | `power.sleep` with countdown 10 → tray/phone show the countdown; `power.cancel` cancels while the countdown runs; a cancel that arrives while the OS call is being issued is refused (`canceled: false`, `ACTION_UNAVAILABLE`) and the power command reports what Windows did; after an accepted restart/shutdown `power.cancel` calls `AbortSystemShutdownW` and reports `canceled: true` only when Windows aborted (with `dwTimeout=0` expect `false`; see KNOWN_ISSUES.md). restart/shutdown use `InitiateSystemShutdownExW(bForceAppsClosed=FALSE)`. Test on a disposable machine. |
 | Native host | `install-native-host`; Chrome `chrome://extensions` → DoMe extension connects; `youtube.next` works while another app has focus; two Chrome profiles show two `browser_instances`. |
 | IPC identity | A process running as another local user cannot connect to `\\.\pipe\DoMe.Agent.*` (DACL) and a same-user process from another session is closed silently with a `bridge_ipc_identity_mismatch` security event. |

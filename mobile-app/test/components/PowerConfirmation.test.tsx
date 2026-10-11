@@ -23,6 +23,7 @@ function powerRecord(action: "power.sleep" | "power.shutdown" | "app.close"): Co
     action,
     params: action === "app.close" ? {} : { countdown_seconds: 10 },
     target: action === "app.close" ? { app_id: "notepad" } : null,
+    protocolVersion: "1.0",
     createdAt: Date.now(),
     expiresAt: "2026-10-08T12:01:30.000Z",
     state: "awaiting_confirmation",

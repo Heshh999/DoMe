@@ -15,6 +15,7 @@ import plansJson from "../../../shared/protocol/plans.json";
 import versionJson from "../../../shared/protocol/version.json";
 import { ProtocolError } from "../../../shared/ts/src/errors.ts";
 import { loadsStrict } from "../../../shared/ts/src/strictJson.ts";
+import { parseVersion, protocolCompatible } from "../../../shared/ts/src/versions.ts";
 import * as generated from "./generated/validators.js";
 import type { Validator } from "./generated/validators.js";
 
@@ -44,6 +45,11 @@ export interface ActionSpec {
   alternateCapabilities: readonly Capability[];
   /** false = human-only: never offered to an AI tool catalogue or a saved routine (rules.ai_eligibility). */
   aiEligible: boolean;
+  /**
+   * Protocol version that introduced the action (actions.json `since`, absent = "1.0"). Commands are stamped with it so
+   * older PCs keep accepting older actions; verifiers refuse lower stamps (rules.command_version_stamping).
+   */
+  since: string;
 }
 
 /** True when a grant holding `capabilities` may run `spec`. */
@@ -95,7 +101,11 @@ for (const [name, raw] of Object.entries(actionsJson.actions)) {
     routineAllowed: Boolean(r.routine_allowed),
     alternateCapabilities: ((r.alternate_capabilities as string[] | undefined) ?? []) as Capability[],
     aiEligible: r.ai_eligible === undefined ? true : Boolean(r.ai_eligible),
+    since: r.since === undefined ? "1.0" : String(r.since),
   };
+  if (parseVersion(spec.since) === null || !protocolCompatible(spec.since, [PROTOCOL_VERSION])) {
+    throw new Error(`action ${name} has since ${JSON.stringify(spec.since)} outside protocol ${PROTOCOL_VERSION}`);
+  }
   if (spec.routineAllowed && !spec.aiEligible) throw new Error(`human-only action ${name} cannot be routine-allowed`);
   if (spec.risk === "disruptive" && spec.confirmation !== "challenge") throw new Error(`disruptive action ${name} must require a challenge`);
   validatorFor("params", name); // fail fast if the generated code is stale
@@ -205,16 +215,4 @@ export const schemas = {
   },
 };
 
-export function protocolCompatible(peerVersion: string, supported: readonly string[]): boolean {
-  if (typeof peerVersion !== "string") return false;
-  const m = /^([0-9]+)\.([0-9]+)$/.exec(peerVersion);
-  if (!m) return false;
-  const major = Number(m[1]);
-  const minor = Number(m[2]);
-  let best = -1;
-  for (const v of supported) {
-    const s = /^(\d+)\.(\d+)$/.exec(v);
-    if (s && Number(s[1]) === major) best = Math.max(best, Number(s[2]));
-  }
-  return best >= 0 && minor <= best;
-}
+export { protocolCompatible };

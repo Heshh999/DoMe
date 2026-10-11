@@ -70,3 +70,12 @@
     phone that kept live-typing without pausing for a `foreground_app` change for more than 2 s would
     type into the new window. The PWA pauses live typing on that change; a stricter contract signal
     (e.g. a target generation number echoed by the phone) would remove the heuristic.
+18. **Apps off the F11 list need the owner's opt-in** (DECISIONS.md #46, #49). An app not on the built-in
+    list is `FULLSCREEN_UNSUPPORTED` until *Full screen with F11* is ticked for it in the tray's Approved apps
+    window (or `dome-agent app-option <id> --fullscreen-f11 on`), even when its F11 does mean full screen; the
+    phone is told so in those words. A caption-less app (Spotify, Discord) maximised under an auto-hidden
+    taskbar reads as full screen: without the opt-in maximise/restore refuse it with `WINDOW_STATE_UNCHANGED`;
+    with it they press F11 once to "leave full screen", which in an app that was only maximised may instead
+    put it into its own full screen, reported as `WINDOW_STATE_UNCHANGED` (the owner opted in to F11 there).
+    The phone's own copy for `FULLSCREEN_UNSUPPORTED` may still say only "Try Maximise instead" where it does
+    not show the agent's message (mobile-app).

@@ -15,3 +15,4 @@ export const agentToExtension: Validator;
 export const youtubeTab: Validator;
 export const tabsResult: Validator;
 export const youtubeStateResult: Validator;
+export const youtubeSearchResult: Validator;

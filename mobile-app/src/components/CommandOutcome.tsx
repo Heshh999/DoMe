@@ -13,7 +13,8 @@ export function CommandOutcome({ record, pcName, labels, compact = false }: { re
   const stateText = record.terminal ? lifecycleLabel(record.terminal.state, record.terminal.origin) : record.noAnswer ? "No answer from the PC yet" : lifecycleLabel(record.state);
   const summary = resultSummary(record);
   const err = record.terminal?.error ?? null;
-  const steps = err ? recoverySteps(err.code) : [];
+  const errCtx = { action: record.action, origin: record.terminal?.origin, target: record.target };
+  const steps = err ? recoverySteps(err.code, errCtx) : [];
   return (
     <div className="space-y-2" data-testid="command-outcome">
       <div className="flex items-start justify-between gap-3">
@@ -32,7 +33,7 @@ export function CommandOutcome({ record, pcName, labels, compact = false }: { re
           {record.terminal?.warning ? <p className="text-sm text-warning">{record.terminal.warning}</p> : null}
           {err ? (
             <div className="text-sm">
-              <p className="text-text">{errorMessage(err)}</p>
+              <p className="text-text">{errorMessage(err, errCtx)}</p>
               {steps.length > 0 ? (
                 <div className="mt-1 text-text-muted">
                   <Steps steps={steps} />

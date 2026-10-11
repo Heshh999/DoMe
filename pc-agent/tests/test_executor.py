@@ -138,7 +138,7 @@ async def test_executing_ack_and_success(harness: AgentHarness, controller: Cont
     res = await cap.wait_result(vc.command_id)
     acks = [f for f in cap.frames if f["type"] == "ack" and f["command_id"] == vc.command_id]
     assert [a["state"] for a in acks] == ["executing"]
-    assert res["state"] == "succeeded" and res["result"]["protocol_version"] == "1.1"
+    assert res["state"] == "succeeded" and res["result"]["protocol_version"] == "1.2"
     row = harness.agent.store.journal_get(vc.command_id)
     assert row is not None and row.state == "succeeded" and row.sent
 
@@ -405,3 +405,114 @@ async def test_power_cancel_too_late_from_relay_cancel_frame_keeps_real_outcome(
     res = await harness.result(cid)
     assert res["state"] == "succeeded" and res["result"]["accepted"] is True
     assert harness.fake.count("power_sleep") == 1
+
+
+def _approved_note(harness: AgentHarness, tmp_path: Any) -> None:
+    exe = tmp_path / "apps" / "notepad++.exe"  # on the F11 list
+    exe.parent.mkdir()
+    exe.write_bytes(b"MZ")
+    harness.agent.apps._temp_dirs = ()  # noqa: SLF001
+    harness.agent.apps.approve("note", str(exe), "Notepad++")
+    harness.fake.processes[str(exe.resolve())] = [700]
+
+
+def _slow(call: Any, before: float = 0.0, after: float = 0.0) -> Any:
+    """The adapter call in a worker thread that Windows keeps waiting ``before`` (bringing the window to the
+    front) and ``after`` (the read-back) the call itself — the press, if any."""
+    import time
+
+    def run(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(before)
+        result = call(*args, **kwargs)
+        time.sleep(after)
+        return result
+
+    return run
+
+
+async def test_set_fullscreen_timeout_after_the_key_press_is_outcome_unknown(
+    harness: AgentHarness, controller: Controller, executor: Any, tmp_path: Any
+) -> None:
+    """F11 is a toggle: a lost answer after the press must never read as a clean, retryable failure.
+    app.maximize (idempotent, nothing toggled) with the same delay is a plain failure."""
+    ex, cap = executor
+    _approved_note(harness, tmp_path)
+    harness.fake.add_window(700, "9001", "Doc - Notepad")
+    apps = harness.agent.services.platform.apps
+    apps.set_fullscreen = _slow(apps.set_fullscreen, after=2.0)  # type: ignore[method-assign]
+    apps.maximize = _slow(apps.maximize, after=2.0)  # type: ignore[method-assign]
+    registry = load_registry()
+    specs = [registry.get("app.set_fullscreen"), registry.get("app.maximize")]
+    original = [spec.timeout_ms for spec in specs]
+    for spec in specs:
+        object.__setattr__(spec, "timeout_ms", 1500)  # F11 may still be pressed for the first 0.5 s
+    try:
+        vm = verified(harness, controller, "app.maximize", {}, {"app_id": "note"})
+        vf = verified(harness, controller, "app.set_fullscreen", {"enabled": True}, {"app_id": "note"})
+        await ex.enqueue(vm)
+        await ex.enqueue(vf)
+        rm = await cap.wait_result(vm.command_id)
+        rf = await cap.wait_result(vf.command_id)
+    finally:
+        for spec, timeout_ms in zip(specs, original, strict=True):
+            object.__setattr__(spec, "timeout_ms", timeout_ms)
+    assert rm["state"] == "failed" and rm["error"]["code"] == "ACTION_UNAVAILABLE"
+    assert rf["state"] == "outcome_unknown" and rf["error"]["code"] == "OUTCOME_UNKNOWN" and "warning" in rf
+    assert harness.fake.count("f11") == 1  # it did happen: "outcome unknown" was the honest answer
+    assert harness.fake.window_flags["9001"].fullscreen and harness.fake.window_flags["9001"].maximized
+
+
+async def test_a_worker_still_running_after_the_timeout_never_presses_f11(
+    harness: AgentHarness, controller: Controller, executor: Any, tmp_path: Any
+) -> None:
+    """asyncio cannot cancel the worker thread of a timed-out command. Reaching the press after the deadline,
+    it must not press F11: not for set_fullscreen, nor for maximise leaving full screen (reported "failed",
+    retryable)."""
+    ex, cap = executor
+    _approved_note(harness, tmp_path)
+    harness.fake.add_window(700, "9001", "Doc - Notepad")
+    apps = harness.agent.services.platform.apps
+    apps.set_fullscreen = _slow(apps.set_fullscreen, before=2.0)  # type: ignore[method-assign]
+    apps.maximize = _slow(apps.maximize, before=2.0)  # type: ignore[method-assign]
+    registry = load_registry()
+    specs = [registry.get("app.set_fullscreen"), registry.get("app.maximize")]
+    original = [spec.timeout_ms for spec in specs]
+    for spec in specs:
+        object.__setattr__(spec, "timeout_ms", 1500)
+    try:
+        vf = verified(harness, controller, "app.set_fullscreen", {"enabled": True}, {"app_id": "note"})
+        await ex.enqueue(vf)
+        rf = await cap.wait_result(vf.command_id)
+        await asyncio.sleep(1.0)  # the worker reaches the fake's press after the deadline
+        assert rf["state"] == "outcome_unknown"  # it may have been pressed, as far as the phone can know
+        assert harness.fake.count("set_fullscreen") == 1 and harness.fake.count("f11") == 0
+        harness.fake.add_window(700, "9001", "Doc - Notepad", fullscreen=True)
+        vm = verified(harness, controller, "app.maximize", {}, {"app_id": "note"})
+        await ex.enqueue(vm)
+        rm = await cap.wait_result(vm.command_id)
+        await asyncio.sleep(1.0)
+    finally:
+        for spec, timeout_ms in zip(specs, original, strict=True):
+            object.__setattr__(spec, "timeout_ms", timeout_ms)
+    assert rm["state"] == "failed" and rm["error"]["code"] == "ACTION_UNAVAILABLE" and rm["error"]["retryable"]
+    assert harness.fake.count("maximize") == 1 and harness.fake.count("f11") == 0
+    assert harness.fake.window_flags["9001"].fullscreen  # untouched: the retry will read it as it is
+
+
+async def test_set_fullscreen_timeout_before_the_press_is_a_plain_failure(
+    harness: AgentHarness, controller: Controller, executor: Any, tmp_path: Any
+) -> None:
+    """Still waiting for the app's first window when the time runs out: nothing was pressed."""
+    ex, cap = executor
+    _approved_note(harness, tmp_path)  # running, but no window yet
+    spec = load_registry().get("app.set_fullscreen")
+    original = spec.timeout_ms
+    object.__setattr__(spec, "timeout_ms", 300)
+    try:
+        vc = verified(harness, controller, "app.set_fullscreen", {"enabled": True}, {"app_id": "note"})
+        await ex.enqueue(vc)
+        res = await cap.wait_result(vc.command_id)
+    finally:
+        object.__setattr__(spec, "timeout_ms", original)
+    assert res["state"] == "failed" and res["error"]["code"] == "ACTION_UNAVAILABLE"
+    assert harness.fake.count("set_fullscreen") == 0 and harness.fake.count("f11") == 0

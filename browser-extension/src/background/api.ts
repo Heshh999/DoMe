@@ -3,7 +3,7 @@
  * provide a stub (test/chrome-stub.ts) and so the manifest's permission set stays visibly minimal:
  * runtime, storage (local, and session for the reconnect pace), alarms, scripting (only to run the
  * extension's own content.js in YouTube tabs that have none), and the tabs methods that need no
- * "tabs" permission for hosts covered by host_permissions.
+ * "tabs" permission for hosts covered by host_permissions (including update/create for a search).
  */
 export interface ChromeEvent<F extends (...args: never[]) => unknown> {
   addListener(callback: F): void;
@@ -51,6 +51,10 @@ export interface ExtensionApi {
   tabs: {
     query(info: { url?: string }): Promise<chrome.tabs.Tab[]>;
     get(tabId: number): Promise<chrome.tabs.Tab>;
+    /** Navigate a tab (search in a chosen tab). Needs no "tabs" permission. */
+    update(tabId: number, properties: { url: string }): Promise<chrome.tabs.Tab | undefined>;
+    /** Open a tab (search without a chosen tab). Needs no "tabs" permission. */
+    create(properties: { url: string; active: boolean }): Promise<chrome.tabs.Tab>;
     sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;
     onRemoved: ChromeEvent<(tabId: number) => void>;
     onUpdated: ChromeEvent<(tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void>;

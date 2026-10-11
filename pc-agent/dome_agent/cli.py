@@ -8,7 +8,12 @@
     pair-decline ID         decline a pending pairing request
     status                  show link / connection / grants / entitlement
     enable | disable        local "remote control" switch (disable wins over every remote command)
-    approve-app ID PATH     approve a local .exe for remote launch/focus/close
+    approve-app ID PATH     approve a local .exe for remote launch/focus/close (the tray's "Add an app…"
+                            does the same); --replace points an approved ID at a different .exe;
+                            --fullscreen-f11 turns on "Full screen with F11" for it
+    app-option ID --fullscreen-f11 on|off
+                            "Full screen with F11" for an approved app: DoMe may press F11 in it when the
+                            phone asks for full screen (the tray's Approved apps window does the same)
     remove-app ID           remove an approval
     revoke CONTROLLER_ID    revoke a paired phone locally
     grant CONTROLLER_ID [--pointer] [--keyboard] [--remove-pointer] [--remove-keyboard]
@@ -24,7 +29,8 @@
 
 ``run`` is single-instance per Windows user session: a second launch asks the running agent to show
 its window and exits. Commands that need the running agent use the local control channel;
-status/enable/disable/approve-app/revoke/grant fall back to the local store when the agent is not running.
+status/enable/disable/approve-app/app-option/revoke/grant fall back to the local store when the agent is not
+running.
 """
 
 from __future__ import annotations
@@ -496,23 +502,35 @@ def cmd_approve_app(args: argparse.Namespace) -> int:
     settings = _settings(args)
     from .control import ControlError
 
+    fullscreen_f11 = True if args.fullscreen_f11 else None  # absent: a re-approved app keeps its choice
     try:
-        row = _control(settings).call("approve_app", app_id=args.app_id, exe_path=args.exe_path, display_name=args.name)
+        row = _control(settings).call(
+            "approve_app",
+            app_id=args.app_id,
+            exe_path=args.exe_path,
+            display_name=args.name,
+            replace=args.replace,
+            fullscreen_f11=fullscreen_f11,
+        )
     except ControlError as exc:
         if exc.code != "AGENT_NOT_RUNNING":
             print(f"error: {exc.message}", file=sys.stderr)
             return 1
-        from .approved_apps import ApprovalError, ApprovedApps
+        from .approved_apps import ApprovalError, ApprovedApps, f11_built_in
         from .store import Store
 
         store = Store(settings.db_path)
         try:
-            r = ApprovedApps(store).approve(args.app_id, args.exe_path, args.name)
+            r = ApprovedApps(store).approve(
+                args.app_id, args.exe_path, args.name, replace=args.replace, fullscreen_f11=fullscreen_f11
+            )
             row = {
                 "app_id": r.app_id,
                 "display_name": r.display_name,
                 "exe_path": r.exe_path,
                 "exe_sha256": r.exe_sha256,
+                "fullscreen_f11": r.fullscreen_f11,
+                "f11_built_in": f11_built_in(r.exe_path),
             }
         except ApprovalError as exc2:
             print(f"error: {exc2}", file=sys.stderr)
@@ -520,6 +538,54 @@ def cmd_approve_app(args: argparse.Namespace) -> int:
         finally:
             store.close()
     print(f"Approved {row['app_id']} -> {row['exe_path']} (sha256 {row['exe_sha256'][:12]}…)")
+    print(_fullscreen_f11_line(row))
+    return 0
+
+
+def _fullscreen_f11_line(row: dict[str, Any]) -> str:
+    name = row["display_name"]
+    if row.get("f11_built_in"):
+        return f"Full screen with F11: always on for {name} (DoMe knows F11 is its full-screen key)."
+    if row.get("fullscreen_f11"):
+        return f"Full screen with F11: on for {name}. Your phone's Full screen presses F11 in it."
+    return (
+        f"Full screen with F11: off for {name}. Turn it on only if F11 makes {name} full screen: "
+        f"dome-agent app-option {row['app_id']} --fullscreen-f11 on"
+    )
+
+
+def cmd_app_option(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    from .control import ControlError
+
+    enabled = args.fullscreen_f11 == "on"
+    try:
+        row = _control(settings).call("app_option", app_id=args.app_id, fullscreen_f11=enabled)
+    except ControlError as exc:
+        if exc.code != "AGENT_NOT_RUNNING":
+            print(f"error: {exc.message}", file=sys.stderr)
+            return 1
+        from .approved_apps import ApprovalError, ApprovedApps, f11_built_in
+        from .store import Store
+
+        store = Store(settings.db_path)
+        try:
+            r = ApprovedApps(store).set_fullscreen_f11(args.app_id, enabled)
+        except ApprovalError as exc2:
+            print(f"error: {exc2}", file=sys.stderr)
+            return 1
+        finally:
+            store.close()
+        if r is None:
+            print("error: No approved app has that id.", file=sys.stderr)
+            return 1
+        row = {
+            "app_id": r.app_id,
+            "display_name": r.display_name,
+            "fullscreen_f11": r.fullscreen_f11,
+            "f11_built_in": f11_built_in(r.exe_path),
+        }
+    print(_fullscreen_f11_line(row))
     return 0
 
 
@@ -795,7 +861,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("app_id")
     p.add_argument("exe_path")
     p.add_argument("--name")
+    p.add_argument(
+        "--replace", action="store_true", help="point an app_id that is already approved at this different .exe"
+    )
+    p.add_argument(
+        "--fullscreen-f11",
+        action="store_true",
+        help="turn on 'Full screen with F11': the phone's Full screen presses F11 in this app (only if F11 means "
+        "full screen there; some apps use F11 for something else)",
+    )
     p.set_defaults(fn=cmd_approve_app)
+
+    p = sub.add_parser("app-option", help="change an approved app's options")
+    p.add_argument("app_id")
+    p.add_argument(
+        "--fullscreen-f11",
+        choices=("on", "off"),
+        required=True,
+        help="'Full screen with F11': whether the phone's Full screen may press F11 in this app",
+    )
+    p.set_defaults(fn=cmd_app_option)
 
     p = sub.add_parser("remove-app", help="remove an application approval")
     p.add_argument("app_id")

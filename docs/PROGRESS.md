@@ -2,6 +2,46 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-11 — Protocol 1.2: window controls, YouTube search, much richer Type, tray "Add an app..."
+
+Built from the owner's critique of Type ("full screen <app>", "make the volume 100%", "bring <app> to
+the front", "search ... on YouTube", "play the second video") and their request for a tray button to
+approve apps. Designed by five read-only investigators, built by agents per component, then five
+adversarial reviewers (compatibility, Windows, Type grammar, security/privacy, UX) and fixers.
+
+- **Contract 1.2** (additive): `app.maximize`, `app.restore`, `app.set_fullscreen{enabled}`,
+  `youtube.search{query}`, `youtube.open_result{index,video_id?}`; five new errors; per-action `since`
+  with version stamping, so a phone updated by the server keeps working with older PCs (new actions get
+  a clear "update the PC" error); bridge version negotiation; search text is never logged, journaled,
+  persisted or echoed (also not through browser window titles, a leak the security review found).
+- **PC**: reliable Bring to front (restore, SetForegroundWindow, empty mouse input, AttachThreadInput,
+  polled), Maximise/Restore, Full screen by one F11 press only after re-checking the approved window is in
+  front and no key is held, never a silent maximise. F11 is pressed only in apps that use it for full
+  screen (browsers, Explorer, VS Code, ...) or that the owner allowed per app (**Approved apps... > Full
+  screen with F11**, stored per app); otherwise the phone shows how to allow it and offers Maximise.
+  Elevated apps, hung windows, cloaked windows (other desktops) and multi-window apps are handled.
+- **Tray**: **Add an app...** (Windows file picker, suggested name from the program's description,
+  unique id, Store/launcher warnings, errors in plain words) and an **Approved apps...** window (list,
+  re-approve after an update, remove, Full screen with F11). Diagnostics shows why the browser bridge or
+  a Windows read is failing.
+- **Extension 0.2**: YouTube search in the chosen tab or a new tab, up to 10 primary results (ads and
+  Shorts skipped), open result N only when that video is reached; results pages publish no title; play()
+  refused by the autoplay policy reports `ACTIVATION_REQUIRED`.
+- **Phone**: Apps page Maximise/Restore/Full screen (and "Maximise instead"), app list refreshed when an
+  app is added on the PC or opened/closed; Remote "Search YouTube" card; Type understands far more
+  (number words, %, max/half, relative volume, seek, theater, search, "play X on YouTube", result picks,
+  fuzzy app names incl. aliases, open/switch/bring to front/minimise/maximise/full screen/restore/close),
+  runs up to three steps in one sentence shown as a plan first, pauses the other playing video when
+  opening a result, and is honest about what it cannot do ("click on that movie" in another app: DoMe
+  cannot see the screen, use the Touchpad; captions/speed not supported yet).
+- **Runs (Linux)**: shared/python 210 (ruff clean), shared/ts 116, cloud-api 126, pc-agent 604 + 3
+  skipped (ruff, format, mypy, mypy-windows clean), browser-extension 154, mobile-app 715 (typecheck,
+  lint, build clean; a load-dependent flake fixed and proven with slowed signatures), tests/ integration
+  30 (incl. a 1.1 agent with a 1.2 phone/relay), testkit 121 checks, actionlint clean. Windows CI runs
+  the pipe, native host, window control, tray and adapter tests on windows-latest.
+- **Not yet verified on the owner's devices**: everything in this entry. The owner's update needs step 1
+  (new server with the new phone app), step 2 (agent + extension rebuild), then sign in and pair again.
+
 ## 2026-10-11 — Second Windows/iPhone test round: volume, YouTube bridge, Windows adapters
 
 Owner's report: approved apps, touchpad and keyboard work; the Remote volume slider and Type volume

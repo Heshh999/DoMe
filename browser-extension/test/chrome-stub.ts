@@ -79,6 +79,16 @@ export class FakeChrome implements ExtensionApi {
   readonly injectionErrors = new Map<number, string>();
   /** Tabs whose executeScript never settles (a hung renderer). */
   readonly injectionHangs = new Set<number>();
+  /** Every tabs.update (`created: false`) and tabs.create (`created: true`) the worker made, in order. */
+  readonly navigations: Array<{ tabId: number; url: string; created: boolean; active?: boolean }> = [];
+  /**
+   * Called after tabs.update/tabs.create changed a tab's URL (the old content script is already gone):
+   * tests use it to start a scripted content script in the new page and send its `attached` message.
+   */
+  onNavigate: ((tabId: number, url: string) => void) | null = null;
+  /** tabs.create rejects with this error (e.g. the browser is closing). */
+  createError: Error | null = null;
+  private nextTabId = 100;
 
   readonly runtime = {
     id: "abcdefghijklmnopabcdefghijklmnop",
@@ -125,6 +135,24 @@ export class FakeChrome implements ExtensionApi {
     get: async (tabId: number): Promise<chrome.tabs.Tab> => {
       const tab = this.tabList.find((t) => t.id === tabId);
       if (!tab) throw new Error(`No tab with id: ${tabId}.`);
+      return { ...tab };
+    },
+    /** A browser navigation: the old page (and its content script) is gone, then onNavigate runs. */
+    update: async (tabId: number, properties: { url: string }): Promise<chrome.tabs.Tab | undefined> => {
+      const tab = this.tabList.find((t) => t.id === tabId);
+      if (!tab) throw new Error(`No tab with id: ${tabId}.`);
+      this.navigations.push({ tabId, url: properties.url, created: false });
+      this.reloadTab(tabId, properties.url);
+      this.onNavigate?.(tabId, properties.url);
+      return { ...tab };
+    },
+    create: async (properties: { url: string; active: boolean }): Promise<chrome.tabs.Tab> => {
+      if (this.createError) throw this.createError;
+      const id = this.nextTabId++;
+      const tab = this.addTab({ id, url: properties.url, active: properties.active });
+      this.navigations.push({ tabId: id, url: properties.url, created: true, active: properties.active });
+      this.tabs.onUpdated.dispatch(id, { status: "loading", url: properties.url }, { ...tab });
+      this.onNavigate?.(id, properties.url);
       return { ...tab };
     },
     sendMessage: async (tabId: number, message: unknown, _options?: { frameId?: number }): Promise<unknown> => {

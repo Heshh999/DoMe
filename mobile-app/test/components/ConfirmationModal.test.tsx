@@ -32,6 +32,7 @@ function record(text: string, bindingProblem: string | null): CommandRecord {
     action: "app.close",
     params: {},
     target: { app_id: "notepad" },
+    protocolVersion: "1.0",
     createdAt: Date.now(),
     expiresAt: "2026-10-08T12:01:30.000Z",
     state: "awaiting_confirmation",
