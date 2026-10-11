@@ -1163,7 +1163,8 @@ status endpoints reuse the existing per-request limits (none special).
 ### 4.1 Navigation
 
 - New route `/app/assistant` (`AssistantPage`).
-- The tab bar keeps six tabs. The fourth tab is "Type" (`/app/command`, as today) unless the phone
+- The tab bar has five tabs (Home, Remote, Touchpad, the fourth, More; Apps lives under More and on
+  Home, mobile-app DECISIONS 57). The fourth tab is "Type" (`/app/command`, as today) unless the phone
   setting **Show the Assistant tab** is on; then it is "Ask" (`/app/assistant`). Giving AI consent on
   this phone turns that setting on; the owner can turn it off.
 - More page: new entries "Assistant" (`/app/assistant`) and "Type a command" (`/app/command`), so both

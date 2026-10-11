@@ -37,7 +37,7 @@ function ChoiceChips({ choices, onPick, label }: { choices: Choice[]; onPick: (t
 
 function TouchpadLink() {
   return (
-    <Link to="/app/touchpad" className="tap mt-2 inline-flex items-center rounded-control bg-accent text-on-accent font-semibold px-4 text-sm">
+    <Link to="/app/touchpad" className="tap mt-2 inline-flex items-center rounded-control dome-primary font-semibold px-4 text-sm">
       Open Touchpad
     </Link>
   );

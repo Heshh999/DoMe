@@ -33,7 +33,7 @@ export function Sheet({ open, title, children, onClose, dismissible = true, labe
   const titleId = labelledBy ?? "sheet-title";
   return (
     <dialog ref={ref} aria-labelledby={titleId} aria-modal="true" className="m-0 w-full max-w-lg mx-auto sm:my-auto fixed inset-x-0 bottom-0 sm:inset-0 bg-transparent p-0 backdrop:bg-black/60 open:flex">
-      <div className="w-full rounded-t-[1.4rem] sm:rounded-card bg-bg-elevated border border-border text-text shadow-2xl p-5 pb-[calc(1.25rem+var(--safe-bottom))]">
+      <div className="w-full rounded-t-[1.75rem] sm:rounded-card bg-bg-raised border border-border text-text shadow-[var(--dome-shadow-raised)] p-5 pb-[calc(1.25rem+var(--safe-bottom))]">
         {title ? (
           <h2 id={titleId} className="text-lg font-bold mb-3">
             {title}

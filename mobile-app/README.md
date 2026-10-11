@@ -24,6 +24,14 @@ pnpm gen:validators          # regenerate src/protocol/generated/ after a protoc
 pnpm gen:icons               # install the brand icon renders (brand/icon.svg via brand/exports) into public/icons
 ```
 
+**Design preview (development only).** With `pnpm dev` running, open `http://localhost:5173/preview`
+(or `/preview/remote`, `/preview/assistant`, …): this tab then runs the real app — pages, stores,
+runtime, relay client, signing and the butler — against a fake account and a fake PC from
+`src/dev/preview.ts` ("Living Room PC" online, YouTube playing in Edge, volume 40, approved apps ZStream,
+Edge and Spotify, a short butler conversation). No backend is needed; buttons get believable answers.
+`/preview/off` leaves it. `main.tsx` loads that module only under `import.meta.env.DEV`, and
+`pnpm build`'s bundle check fails if it ever reaches `dist/`.
+
 Run cloud-api locally on port 8000 with `DOME_PUBLIC_ORIGIN=http://localhost:5173` (and
 `tools/dev-idp` as the OIDC issuer) so sign-in redirects back to the dev server. In production the
 built `dist/` is served by cloud-api from the same origin (`DOME_STATIC_DIR`); there is no CORS setup.
@@ -48,10 +56,13 @@ src/
                  assistant (phone prefs persisted; conversation, recent, last app in memory)
   app/           runtime wiring, AppShell (tabs, banners, confirmation modal, speech unlock), PublicLayout,
                  router, hooks, voice (the one recognizer/speaker/Assistant controller)
-  components/    ui primitives, Sheet, ConfirmationModal, CommandOutcome, VolumeSlider, PcSwitcher, PcStatus,
-                 OfflineScreen, TouchpadSurface, KeyboardPanel, GestureGuide, NowPlaying, FailureLinks,
-                 ProExplanation, TalkButton, Conversation, AssistantSettingsCard, AssistantConsentSheet,
-                 VoiceNoticeSheet
+  components/    ui primitives, icons (one 24-unit line set), brand (Wordmark, BrandMark, AppIcon drawn from
+                 brandPaths.ts = the brand/*.svg paths), ThemeSwitch, Sheet, ConfirmationModal, CommandOutcome,
+                 VolumeSlider, PcSwitcher, PcStatus, OfflineScreen, TouchpadSurface, KeyboardPanel, GestureGuide,
+                 NowPlaying, FailureLinks, ProExplanation, TalkButton, Conversation, AssistantSettingsCard,
+                 AssistantConsentSheet, VoiceNoticeSheet
+  dev/           preview.ts — the development-only design preview (never in a production bundle)
+  styles.css     the design system: colour roles for light and dark, surfaces, shadows, radii, type, motion
   pages/app/     Dashboard, Remote, Touchpad, Command, Assistant (Ask), Apps, Health, Routines (Pro preview),
                  Layouts (Pro preview), Devices, Pair, Settings, Billing, Link, More
   pages/public/  Landing, Pricing, FAQ, Download, Support (+ ticket form), ReleaseNotes, Privacy (DRAFT),
@@ -59,7 +70,7 @@ src/
   content/       release-notes.json (public release history + known issues)
 test/            vitest (jsdom, fake-indexeddb, fake sockets/timers); test/components for UI,
                  test/helpers/harness.ts (fake socket + Runtime factory shared by component tests)
-scripts/         gen-validators.ts, make-icons.mjs
+scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key material, no design preview in dist/)
 ```
 
 ## Behaviour summary
@@ -264,8 +275,10 @@ scripts/         gen-validators.ts, make-icons.mjs
   connectivity claim.
 - **Brand**: `pnpm gen:icons` installs the brand icon (`brand/icon.svg`) renders into `public/icons`
   (192/512 + maskable, apple-touch-icon, favicon SVG/PNG/ICO); manifest and `index.html` updated.
-- **PWA / theme / accessibility**: unchanged from 1.0 (`autoUpdate` worker precaching the shell only;
-  dark default, light via `prefers-color-scheme`; 44 px targets; safe areas; reduced motion).
+- **PWA / theme / accessibility**: `autoUpdate` worker precaching the shell only; 44 px targets; safe
+  areas; reduced motion. Theme ("Midnight Studio", DECISIONS 55): follows the device by default; the
+  Light / Auto / Dark switch (website header, menu and footer; More in the app) is remembered in
+  `localStorage` (`dome.theme`) and applied before the first paint by `public/theme-init.js`.
 
 ## Tests
 
@@ -341,7 +354,7 @@ Nothing below has been run on a device. Each row is **not yet verified**.
 | Background/resume | Pause YouTube from the remote, background the PWA for 2 minutes, resume: status shows "Online · refreshing" then "Online"; no queued command replays. |
 | Real relay path | With cloud-api + pc-agent running: Next changes the video in a background tab; result shows the transition. |
 | Confirmation on device | Sleep… → modal shows the registry line, the fixed loss-of-access / no-remote-wake copy and the PC's countdown detail; Approve → "Windows accepted the request". |
-| Lighthouse/PWA audit | Installability, contrast ≥ 4.5:1, touch target sizes on a real iPhone; 6-tab bar legible at 375 px. |
+| Lighthouse/PWA audit | Installability, contrast ≥ 4.5:1, touch target sizes on a real iPhone; 5-tab bar legible at 375 px; both themes. |
 
 ### Manual iPhone checklist — voice assistant (docs/design/assistant.md §8.6)
 

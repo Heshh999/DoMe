@@ -9,7 +9,8 @@ import { Link } from "react-router";
 
 import { useApprovedApps, useMyGrant, useSelectedPc } from "../../app/hooks.ts";
 import { getAssistant, getRecognizer, getSpeaker, loadAssistantStatus } from "../../app/voice.ts";
-import { Conversation, type ConversationHandlers } from "../../components/Conversation.tsx";
+import { ButlerAvatar, Conversation, type ConversationHandlers } from "../../components/Conversation.tsx";
+import { Icon } from "../../components/icons.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { TalkButton, type TalkState } from "../../components/TalkButton.tsx";
 import { Button, inputClass, Notice } from "../../components/ui.tsx";
@@ -213,19 +214,20 @@ export function AssistantPage() {
 
   return (
     <div className="space-y-4">
-      <header className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold tracking-tight truncate">{prefs.butlerName}</h1>
+      <header className="flex items-center justify-between gap-3 pt-2 pb-1">
+        <div className="flex min-w-0 items-center gap-3">
+          <ButlerAvatar size={44} />
+          <h1 className="truncate text-[2rem] font-bold leading-[1.1] tracking-[-0.03em]">{prefs.butlerName}</h1>
+        </div>
         <div className="flex items-center gap-2 shrink-0">
           {aiOn && allowance ? (
-            <Link to="/app/settings" className="tap inline-flex items-center rounded-full border border-border px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left: open Settings`}>
+            <Link to="/app/settings" className="tap inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left: open Settings`}>
+              <Icon name="sparkle" size={14} className="text-accent" />
               {allowance.exhausted || exhausted ? "Limit reached" : `${Math.max(0, allowance.limit - allowance.used)} left`}
             </Link>
           ) : null}
-          <button type="button" aria-pressed={prefs.muted} aria-label="Mute replies" title="Mute replies" onClick={() => setPrefs({ muted: !prefs.muted })} className="tap inline-flex h-11 w-11 items-center justify-center rounded-full border border-border bg-surface">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M4 9h4l5-4v14l-5-4H4z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-              {prefs.muted ? <path d="M17 9l4 6M21 9l-4 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /> : <path d="M17 8a5 5 0 0 1 0 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}
-            </svg>
+          <button type="button" aria-pressed={prefs.muted} aria-label="Mute replies" title="Mute replies" onClick={() => setPrefs({ muted: !prefs.muted })} className="tap dome-press inline-flex h-11 w-11 items-center justify-center rounded-full border border-border bg-surface text-text">
+            <Icon name={prefs.muted ? "mute" : "volume"} size={20} />
           </button>
         </div>
       </header>
@@ -237,9 +239,14 @@ export function AssistantPage() {
       ) : null}
 
       {items.length === 0 ? (
-        <div className="rounded-card border border-dashed border-border p-4 text-sm text-text-muted">
-          <p>Tap the microphone and say what you'd like, for example “pause YouTube”, “set the volume to 40” or “open Notepad”.</p>
-          <p className="mt-2">Hear nothing? Check the side switch isn't on Silent and the volume is up.</p>
+        <div className="flex flex-col items-center px-4 pt-8 pb-2 text-center">
+          <span className="relative">
+            <span aria-hidden="true" className="absolute -inset-6 rounded-full bg-[radial-gradient(closest-side,rgb(1_66_251/0.35),transparent)]" />
+            <ButlerAvatar size={72} />
+          </span>
+          <p className="mt-6 text-title font-semibold">How can I help?</p>
+          <p className="mt-2 text-sm text-text-muted">Tap the microphone and say what you'd like, for example “pause YouTube”, “set the volume to 40” or “open Notepad”.</p>
+          <p className="mt-3 text-xs text-text-faint">Hear nothing? Check the side switch isn't on Silent and the volume is up.</p>
         </div>
       ) : (
         <Conversation items={items} handlers={handlers} butlerName={prefs.butlerName} />
@@ -254,19 +261,19 @@ export function AssistantPage() {
         {notice ?? ""}
       </p>
 
-      <div className="flex flex-wrap items-center gap-x-2 text-xs text-text-faint">
-        <Link to="/app/settings" className="tap inline-flex items-center underline">
+      <div className="flex flex-col items-center text-center text-xs text-text-faint [&>span]:hidden">
+        <Link to="/app/settings" className="tap inline-flex items-center underline decoration-border-strong underline-offset-4">
           {usable ? "AI on · requests DoMe can't work out go to Anthropic" : "Voice without AI · only commands DoMe understands by itself"}
         </Link>
         <span aria-hidden="true">·</span>
-        <Link to="/app/command" className="tap inline-flex items-center underline">
+        <Link to="/app/command" className="tap inline-flex items-center underline decoration-border-strong underline-offset-4">
           Type a command without AI
         </Link>
       </div>
       {/* as tall as the dock and what is under it, so the newest card's buttons can scroll above the dock */}
       <div ref={endRef} data-testid="assistant-dock-spacer" className={dockHeight === null ? "h-56" : undefined} style={dockHeight === null ? undefined : { height: `calc(${dockHeight}px + ${inset > 0 ? `${inset}px` : TAB_BAR})` }} aria-hidden="true" />
 
-      <div ref={dockRef} className="fixed inset-x-0 z-10 border-t border-border bg-bg-elevated/95 backdrop-blur px-4 pt-3 pb-3" style={{ bottom: inset > 0 ? `${inset}px` : TAB_BAR }}>
+      <div ref={dockRef} className="dome-bar fixed inset-x-0 z-10 border-t border-border px-5 pt-3 pb-3" style={{ bottom: inset > 0 ? `${inset}px` : TAB_BAR }}>
         <div className="mx-auto max-w-lg space-y-2">
           {problem ? (
             <div className="text-sm text-text-muted" role="status">
@@ -291,17 +298,18 @@ export function AssistantPage() {
               </button>
             </p>
           ) : null}
-          <div className="flex items-end justify-between gap-3">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
             {dictateMode ? (
               // Dictate always shows the field: a Type instead / Hide keyboard toggle would do nothing here
-              <span className="w-[104px]" aria-hidden="true" />
+              <span aria-hidden="true" />
             ) : (
-              <Button size="md" variant="ghost" onClick={() => setTyping((t) => !t)} aria-expanded={typing}>
+              <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => setTyping((t) => !t)} aria-expanded={typing}>
+                <Icon name="keyboard" size={18} />
                 {typing ? "Hide keyboard" : "Type instead"}
               </Button>
             )}
             <TalkButton state={talkState} dictate={dictateMode} onTap={tap} onCancel={() => getAssistant().cancelTurn()} onStop={() => getAssistant().stop()} />
-            <span className="w-[104px]" aria-hidden="true" />
+            <span aria-hidden="true" />
           </div>
           {typing || dictateMode ? (
             <form
