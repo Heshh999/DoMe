@@ -39,8 +39,11 @@ adversarial reviewers (compatibility, Windows, Type grammar, security/privacy, U
   lint, build clean; a load-dependent flake fixed and proven with slowed signatures), tests/ integration
   30 (incl. a 1.1 agent with a 1.2 phone/relay), testkit 121 checks, actionlint clean. Windows CI runs
   the pipe, native host, window control, tray and adapter tests on windows-latest.
-- **Not yet verified on the owner's devices**: everything in this entry. The owner's update needs step 1
-  (new server with the new phone app), step 2 (agent + extension rebuild), then sign in and pair again.
+- **Owner's devices (Windows 11 + iPhone Safari, after step 1, step 2, sign-in and pairing)**: the owner
+  reports that everything on the test list works: the Remote volume slider, YouTube control in Edge and
+  Remote > Search YouTube, the new Type phrases, the Apps window buttons and Lock. Not yet reported:
+  sleep/restart/shut down. The owner then asked for a voice assistant that talks back and can act on what
+  is on the screen ("click on that movie"); see the next entry once decided.
 
 ## 2026-10-11 — Second Windows/iPhone test round: volume, YouTube bridge, Windows adapters
 
