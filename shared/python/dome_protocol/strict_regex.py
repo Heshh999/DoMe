@@ -46,7 +46,8 @@ def _strict_pattern(validator: Any, pattern: str, instance: Any, schema: Any):  
     if not isinstance(instance, str):
         return
     if not pattern_matches(pattern, instance):
-        yield ValidationError(f"{instance!r} does not match {pattern!r}")
+        # never echo the instance: it may be customer-typed text (rules.search_queries)
+        yield ValidationError(f"value does not match {pattern!r}")
 
 
 _BaseStrict = validators.extend(Draft202012Validator, validators={"pattern": _strict_pattern})

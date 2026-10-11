@@ -280,6 +280,26 @@
     "INPUT_TARGET_CHANGED": {
       "retryable": false,
       "user_message": "The window in front of the PC changed, so typing stopped. Check the PC and continue."
+    },
+    "WINDOW_STATE_UNCHANGED": {
+      "retryable": false,
+      "user_message": "Windows did not change that window. Some windows cannot be maximised or resized."
+    },
+    "FULLSCREEN_UNSUPPORTED": {
+      "retryable": false,
+      "user_message": "That app did not switch to full screen with F11. Not every app supports it; try Maximise instead."
+    },
+    "APP_ELEVATED": {
+      "retryable": false,
+      "user_message": "That app runs as administrator, so Windows does not let DoMe control its window."
+    },
+    "SEARCH_RESULT_UNAVAILABLE": {
+      "retryable": false,
+      "user_message": "That search result is no longer on the page. Search again."
+    },
+    "EXTENSION_UPDATE_REQUIRED": {
+      "retryable": false,
+      "user_message": "Update the DoMe browser extension on the PC to use this control."
     }
   }
 }

@@ -1,16 +1,18 @@
-# DoMe protocol 1.1
+# DoMe protocol 1.2
 
 The wire contract between the phone PWA (controller), cloud-api (relay), the Windows agent (PC)
 and the browser extension. The normative source is `shared/protocol/`; this document explains it
-and reproduces the shapes. Sections 1–16 describe the 1.0 base, which 1.1 keeps unchanged.
+and reproduces the shapes. Sections 1–16 describe the 1.0 base, which 1.1 and 1.2 keep unchanged.
 Section 17 describes what protocol 1.1 adds: manual touchpad and keyboard input, `grant_update`, and
-support tickets. When the two disagree, the JSON files win and this document must be
+support tickets. Section 18 describes what protocol 1.2 adds: maximise, restore and full screen for
+approved apps, YouTube search, per-action version stamping and browser-bridge version negotiation.
+When the two disagree, the JSON files win and this document must be
 corrected. Changing any schema requires a version bump (§1) and an update here.
 
 Evidence tags (spec §17) for everything in this document: the shapes, parsers, signing,
-derivations and rules are **unit-tested** in both `shared/python` (135 tests) and `shared/ts`
-(86 tests) against the shared fixtures (runs of 2026-10-09). The relay's application of the rules is
-**integration-tested** in `cloud-api/tests` (118 tests against PostgreSQL + `tools/dev-idp`). The
+derivations and rules are **unit-tested** in both `shared/python` (206 tests) and `shared/ts`
+(116 tests) against the shared fixtures (runs of 2026-10-10). The relay's application of the rules is
+**integration-tested** in `cloud-api/tests` (126 tests against PostgreSQL + `tools/dev-idp`). The
 PC's application is **unit-tested** with explicit fakes in `pc-agent/tests` (256 passed, 1 skipped).
 The whole path is **integration-tested** on Linux in `tests/` (the 1.0 suite: 20 passed on
 2026-10-08, including a small load smoke; the 1.1 input tests are recorded in `docs/ACCEPTANCE.md`).
@@ -21,7 +23,7 @@ Files:
 | File | Contents |
 | --- | --- |
 | `version.json` | `protocol_version`, compatibility rule, signing algorithms, limits, normative rules |
-| `actions.json` | Action registry (32 actions, 8 capabilities, 3 target schemas, availability conditions, verification strategies; `ai_eligible` per action since 1.1) |
+| `actions.json` | Action registry (37 actions, 8 capabilities, 4 target schemas, availability conditions, verification strategies; `ai_eligible` per action since 1.1; `since` per action since 1.2) |
 | `errors.json` | Stable error codes with default retryability and customer copy |
 | `plans.json` | Free/Pro limits, rate limits, downgrade policy, entitlement assertion parameters |
 | `schemas/envelope.schema.json` | Signed envelope |
@@ -37,9 +39,18 @@ Files:
 
 ## 1. Versioning and compatibility
 
-- `protocol_version` is `MAJOR.MINOR`, currently **`1.1`**; `actions.json` carries its own
-  `registry_version` (`1.1`). 1.1 is additive over 1.0 (§17), so 1.0 peers remain compatible and
-  never receive 1.1-only frames or `pc_state` fields.
+- `protocol_version` is `MAJOR.MINOR`, currently **`1.2`**; `actions.json` carries its own
+  `registry_version` (`1.2`). 1.1 is additive over 1.0 (§17), so 1.0 peers remain compatible and
+  never receive 1.1-only frames or `pc_state` fields. 1.2 is additive over 1.1 (§18) and changes
+  no frame, payload or existing result shape.
+- Signed payloads are stamped with the **lowest** version that defines them, not the sender's
+  newest (`rules.command_version_stamping`, §18.2): a command carries its action's `since`
+  (absent = 1.0), a confirmation the confirmed command's version, an input batch 1.1. Verifiers
+  also refuse a command stamped below its action's `since` (`PROTOCOL_INCOMPATIBLE`,
+  `detail{peer, required}`). So an updated phone keeps working with an older PC for every action
+  that PC knows, and an older PC answers a newer action with `PROTOCOL_INCOMPATIBLE`.
+- The browser bridge negotiates: `bridge_hello_ack.protocol_version` is the highest MINOR both
+  the agent and the extension speak (`rules.bridge_negotiation`, §18.3).
 - Rule (`version.json → compatibility_rule`): peers exchange `hello` frames listing the versions
   they support. A peer accepts a message only if its MAJOR equals a supported MAJOR **and** its
   MINOR is ≤ the highest supported MINOR for that MAJOR. Unknown fields are **rejected**, never
@@ -132,13 +143,13 @@ Schema `command.schema.json`. All members are required except `origin`; no other
 | Field | Meaning |
 | --- | --- |
 | `type` | `"command"` |
-| `protocol_version` | `"1.0"` |
+| `protocol_version` | The action's `since` (`"1.0"` for every action in §4.2; §18.2). Must be ≥ `since` and compatible with the verifier's own version |
 | `command_id` | UUID chosen by the controller; the replay key |
 | `account_id`, `controller_id` | Must equal the key record resolved from `kid` |
 | `target_pc_id` | Must equal the frame's `pc_id` at the relay and the PC's own identity |
 | `action` | Registry name `namespace.verb` |
 | `params` | Object validated by the PC against `actions.json[action].params` |
-| `target` | `null` or the action's target schema (`youtube_target`, `media_session_target`, `window_target`) |
+| `target` | `null` or the action's target schema (`youtube_target`, `youtube_browser_target` (1.2), `media_session_target`, `window_target`) |
 | `origin` | Optional `{kind: "routine", routine_id, step}` for Pro routine steps; the PC refuses steps whose action is not `routine_allowed` and requires a Pro entitlement |
 | `issued_at`, `expires_at` | RFC 3339 UTC with optional milliseconds; checked once at receipt with 5 s skew |
 | `nonce` | base64url of 16 random bytes |
@@ -199,16 +210,18 @@ Wrapped as `{"type": "command", "pc_id": "<target pc>", "envelope": {…}}` on `
 
 | Target | Fields | Used by |
 | --- | --- | --- |
-| `youtube_target` | `browser_instance_id` (8–64 chars), `tab_id` (int), `tab_token` (22 chars, **required**: binds the command to one content-script attachment so a reused Chrome tab id can never be re-targeted), `expected_video_id?` | every `youtube.*` action except `list_tabs` |
+| `youtube_target` | `browser_instance_id` (8–64 chars), `tab_id` (int), `tab_token` (22 chars, **required**: binds the command to one content-script attachment so a reused Chrome tab id can never be re-targeted), `expected_video_id?` | every `youtube.*` action except `list_tabs` and `search` |
+| `youtube_browser_target` (1.2) | `browser_instance_id` (required), `tab_id?` and `tab_token?` (only together, `dependentRequired`) | `youtube.search`: a new tab in that browser, or the given tab |
 | `media_session_target` | `session_id` (1–256 chars) | `media.set_paused/next/previous` |
-| `window_target` | `app_id` (`^[a-z0-9][a-z0-9_-]*$`), `window_id?` | `app.focus/minimize/close` |
+| `window_target` | `app_id` (`^[a-z0-9][a-z0-9_-]*$`), `window_id?` | `app.focus/minimize/close`, and since 1.2 `app.maximize/restore/set_fullscreen` |
 
 ### 4.2 Action registry
 
 Columns: capability the controller's grant must include; risk; confirmation; timeout; target;
 parameters (`*` required); coalesce group; idempotent (an identical duplicate may re-emit the
 previous result; non-idempotent actions are never auto-retried); routine-allowed; verification
-strategy; result shape.
+strategy; result shape. These are the 1.0 actions (`since` absent, stamped `"1.0"`); the 1.1
+input actions are in §17.1 and the 1.2 actions in §18.4.
 
 | Action | Cap. | Risk | Conf. | Timeout ms | Target | Params | Coalesce | Idem. | Routine | Verification | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -290,8 +303,10 @@ Disruptive actions (`confirmation: "challenge"`) are a two-message transaction; 
 an `app.close` challenge for `{"app_id":"notepad"}` with digest
 `iuOxO_EY5KRuUpf7LGa0k9MGRlPdakdXmov3AFB-W4k`.)
 
-Confirmation payload (`confirmation.schema.json`; all members required, no others). The example
-below is illustrative — it is consistent with the challenge above but is not a signed fixture:
+Confirmation payload (`confirmation.schema.json`; all members required, no others). Its
+`protocol_version` is the confirmed command's own stamp (§18.2), so `"1.0"` for every action that
+needs a challenge today. The example below is illustrative — it is consistent with the challenge
+above but is not a signed fixture:
 
 ```json
 {
@@ -468,7 +483,7 @@ Who emits what:
 
 | Code | Retry | Emitted by | When |
 | --- | --- | --- | --- |
-| `PROTOCOL_INCOMPATIBLE` | no | relay, agent, extension | `hello` version lists do not overlap |
+| `PROTOCOL_INCOMPATIBLE` | no | relay, agent, extension | `hello` version lists do not overlap; since 1.2 also a signed payload stamped below its action's `since` (`detail{peer, required}`) or above the verifier's version |
 | `MALFORMED_MESSAGE` | no | all | Schema/strict-parse failure, unknown field or frame type |
 | `PAYLOAD_TOO_LARGE` | no | all | Above the byte limits |
 | `SIGNATURE_INVALID` | no | relay, PC | Signature does not verify over the exact bytes |
@@ -526,6 +541,11 @@ Who emits what:
 | `PC_PLAN_DISABLED` / `CONTROLLER_PLAN_DISABLED` | no | relay, PC | Plan/account device state |
 | `ENTITLEMENT_PENDING` / `BILLING_PAST_DUE` | yes / no | reserved for Phase C | Not emitted in this build |
 | `INPUT_*` (ten codes, 1.1) | see §17.6 | relay, PC | Manual-input session and batch rejections |
+| `WINDOW_STATE_UNCHANGED`, `FULLSCREEN_UNSUPPORTED`, `APP_ELEVATED`, `SEARCH_RESULT_UNAVAILABLE`, `EXTENSION_UPDATE_REQUIRED` (1.2) | no | see §18.6 | Window actions, YouTube search, an extension that predates an op |
+
+Validation failures (`INVALID_PARAMETERS`, `MALFORMED_MESSAGE`) carry a message that names the
+path and the failed keyword (for example `query: failed maxLength`), never the offending value, so
+customer-typed text cannot travel back in a result frame or into a journal (since 1.2).
 
 REST-only HTTP conditions used in `error_body` but not listed in `errors.json` (contract gap,
 proposed addition): `UNAUTHENTICATED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404),
@@ -558,6 +578,8 @@ emitting, the phone before rendering.
 | `power_cancel_result` | `canceled` (false when nothing was pending or Windows did not abort), `action?`, `command_id?` |
 | `input_session_result` (1.1) | `input_session_id`, `lease_seconds`, `input_age_budget_ms`, `max_batch_events`, `pointer`, `keyboard`, `foreground_app?` |
 | `input_session_stop_result` (1.1) | `stopped`, `released_holds` |
+| `app_window_state_result` (1.2) | `app_id`, `window_id`, `state: normal \| minimized \| maximized`, `fullscreen`, `foreground` — on failure the best-known state |
+| `youtube_search_result` (1.2) | `tab` (`youtube_tab` of the results page: new `tab_token`, no `title`), `results[]` (≤ 10) of `youtube_search_item{index 1..10, video_id, title (untrusted), channel? (untrusted), duration_seconds?, is_live?}` |
 
 Example result frame for the `youtube.next` command above (illustrative, shape per schema):
 
@@ -615,9 +637,9 @@ length prefix, ≤ 64 KiB) and the agent (same JSON over the host's protected lo
 | Direction | Frame | Fields |
 | --- | --- | --- |
 | extension → agent | `bridge_hello` | `browser_instance_id` (8–64), `browser: chrome \| edge \| unknown`, `extension_version`, `protocol_versions[]`, `profile_label?` |
-| agent → extension | `bridge_hello_ack` | `protocol_version`, `agent_version` |
-| agent → extension | `bridge_request` | `request_id` (uuid), `op: list_tabs \| get_state \| set_paused \| next \| previous \| seek_relative \| seek_to \| set_muted \| set_volume \| set_theater \| request_fullscreen`, `args{tab_id?, tab_token?, expected_video_id?, paused?, seconds?, position_seconds?, muted?, value?, enabled?}`, `timeout_ms?` 100..60000 |
-| extension → agent | `bridge_response` | `request_id`, `ok`, `result?` (`tabs_result` for `list_tabs`, else `youtube_state_result`), `error?{code, message}` |
+| agent → extension | `bridge_hello_ack` | `protocol_version` (since 1.2 the negotiated version, §18.3), `agent_version` |
+| agent → extension | `bridge_request` | `request_id` (uuid), `op: list_tabs \| get_state \| set_paused \| next \| previous \| seek_relative \| seek_to \| set_muted \| set_volume \| set_theater \| request_fullscreen \| search (1.2) \| open_result (1.2)`, `args{tab_id?, tab_token?, expected_video_id?, paused?, seconds?, position_seconds?, muted?, value?, enabled?, query? (1.2), index? (1.2), video_id? (1.2)}`, `timeout_ms?` 100..60000 |
+| extension → agent | `bridge_response` | `request_id`, `ok`, `result?` (`tabs_result` for `list_tabs`, `youtube_search_result` for `search`, else `youtube_state_result`), `error?{code, message}` |
 | extension → agent | `bridge_event` | `event: tabs_changed \| player_state`, `at`, `tabs[]?` (full list, debounced 300 ms), `tab?` (≤ 2/s per tab) |
 | either | `bridge_error` | `error{code, message, detail?}`, `ref_request_id?` — `PROTOCOL_INCOMPATIBLE` on hello, or a request that could not be processed at all |
 
@@ -704,6 +726,14 @@ Recorded against 1.1 (manual input):
     grace heuristic (pc-agent `KNOWN_ISSUES.md` #17).
 15. There is no way for a controller to learn its grant changed except a REST re-read after the
     snapshot nudge (cloud-api `CONTRACT_ISSUES.md` #13).
+
+Recorded against 1.2:
+
+16. The relay's `hello_ack.protocol_version` reports the relay's own version, not a negotiated
+    one. Agents and phones do not read it today, so nothing depends on it.
+17. YouTube captions and playback speed are deferred: showing their state needs new `youtube_tab`
+    fields, which a 1.1 phone would reject (closed objects) unless the relay and the agent strip them
+    per peer version.
 
 ## 17. Protocol 1.1: manual touchpad and keyboard (spec §10A)
 
@@ -932,3 +962,217 @@ with a `reference` from a 2xx body that validates.
 - integration-tested: the whole path with the real agent process in `tests/test_e2e_input.py`
   (run record in `docs/ACCEPTANCE.md`).
 - not yet verified: Windows `SendInput`, the real phone keyboard and latency on the real relay path.
+
+## 18. Protocol 1.2: window actions, YouTube search, per-action versions
+
+Protocol 1.2 (registry 1.2) is an **additive MINOR** bump. It adds five actions, one target schema,
+three result definitions, two bridge ops, five error codes and four rules. It changes no frame, no
+signed-payload schema and no existing result definition. `app_window` and `youtube_tab` are exactly
+as in 1.1, so a 1.1 phone still validates everything a 1.2 agent sends for the old actions.
+Normative text: `version.json → rules.command_version_stamping`, `rules.bridge_negotiation`,
+`rules.window_actions`, `rules.search_queries`.
+
+### 18.1 What 1.2 adds
+
+| Addition | Contract location |
+| --- | --- |
+| `since` on actions: the protocol version that introduced the action (absent = 1.0; `input.*` = 1.1; the five new actions = 1.2) | `actions.json` |
+| Actions `app.maximize`, `app.restore`, `app.set_fullscreen{enabled}` | `actions.json`; result `app_window_state_result` |
+| Actions `youtube.search{query}`, `youtube.open_result{index, video_id?}` | `actions.json`; results `youtube_search_result` (with `youtube_search_item`), `youtube_state_result` |
+| Target schema `youtube_browser_target` | `actions.json → target_schemas` |
+| Verification strategies `fullscreen_observed`, `observe_search_results` | `actions.json` |
+| Bridge ops `search`, `open_result`; args `query`, `index`, `video_id`; `bridge_response.result` may be a `youtube_search_result` | `bridge.schema.json` |
+| Five error codes (§18.6) | `errors.json` |
+| Limits `youtube_search_query_max_chars` = 100, `youtube_search_results_max` = 10 | `version.json → limits` |
+| Capability copy: `apps` now lists maximise, restore and full screen; `media` mentions search. Existing grants cover the new actions | `actions.json → capabilities` |
+| Shared cases: `negotiation_cases` and the search-query pattern | `fixtures/strict-json-cases.json` |
+
+Library helpers: Python `ActionSpec.since`, `Registry.min_version`, `negotiate_version`,
+`INPUT_BATCH_PROTOCOL_VERSION` (`shared/python/dome_protocol`). TypeScript `ActionSpec.since`,
+`minVersion` (`commands.ts`), and `negotiateVersion`, `versionBelow`, `parseVersion`,
+`INPUT_BATCH_PROTOCOL_VERSION` (`versions.ts`, free of Ajv so the PWA's no-eval registry facade
+only has to add `since`). `buildCommandPayload` stamps `since`;
+`buildConfirmationPayload` requires `commandProtocolVersion`; both input-batch builders stamp
+`"1.1"`.
+
+### 18.2 Version stamping (`rules.command_version_stamping`)
+
+The PWA is served by cloud-api, so phones update as soon as the cloud deploys, while PCs update
+later. Agents accept a payload only if its MINOR is at most their own. If an updated phone stamped
+`"1.2"` on everything, every command, confirmation and touchpad batch would fail on a 1.1 PC. So
+each signed payload carries the lowest version that defines it:
+
+| Payload | `protocol_version` |
+| --- | --- |
+| `command` | the action's `since`: `"1.0"` for the §4.2 actions, `"1.1"` for `input.*`, `"1.2"` for §18.4 |
+| `confirmation` | the `protocol_version` of the command it confirms |
+| `input_batch_payload` | `"1.1"` (the version that introduced the stream) |
+| `hello_proof` | the controller's own version; only the relay checks it, and the relay deploys first |
+
+Verifiers (the relay through the shared library, then the agent) check two things. The stamp must
+be compatible with their own version (MINOR ≤ theirs), else `PROTOCOL_INCOMPATIBLE`
+`detail{peer, supported}`. It must also be at least the action's `since` (input batches: at least
+1.1), else `PROTOCOL_INCOMPATIBLE` `detail{peer, required}`. A 1.1 agent therefore answers
+`app.maximize` (stamped 1.2) with `PROTOCOL_INCOMPATIBLE`, which tells the customer to update the
+PC agent, and keeps executing every older action. A 1.1 phone, which stamps `"1.1"` on everything,
+still works with a 1.2 relay and agent.
+
+### 18.3 Browser-bridge negotiation (`rules.bridge_negotiation`)
+
+`bridge_hello.protocol_versions` lists every MINOR the extension speaks, and the agent announces
+every MINOR it speaks. `bridge_hello_ack.protocol_version` is the **negotiated** version. Take the
+highest MAJOR both lists name, then the lower of the two sides' highest MINORs for that MAJOR (a
+side that supports a MINOR also accepts every lower one). If no MAJOR is shared, the hello is
+refused with `PROTOCOL_INCOMPATIBLE`. The extension accepts the ack only if it is compatible with
+its own list. Examples (all in the shared `negotiation_cases`):
+
+| Extension lists | Agent supports | Ack |
+| --- | --- | --- |
+| `["1.0"]` | `1.0, 1.1, 1.2` | `1.0` |
+| `["1.0", "1.1", "1.2"]` | `1.0, 1.1` | `1.1` |
+| `["1.0", "1.1"]` | `1.0, 1.1, 1.2` | `1.1` |
+| `["2.0"]` | `1.0, 1.1, 1.2` | none: `PROTOCOL_INCOMPATIBLE` |
+
+The agent sends an op added in a later MINOR (`search`, `open_result`: 1.2) only to an extension
+whose negotiated version includes it. Otherwise it fails the command with
+`EXTENSION_UPDATE_REQUIRED` and writes nothing to the extension.
+
+### 18.4 New actions
+
+Columns as in §4.2. All five are `ai_eligible`, have no `coalesce` group and need no confirmation.
+
+| Action | Cap. | Risk | Conf. | Timeout ms | Target | Params | Idem. | Routine | Availability | Verification | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `app.maximize` | apps | low | none | 5000 | window | — | yes | yes | windows, session_unlocked | window_state_observed | `app_window_state_result` |
+| `app.restore` | apps | low | none | 5000 | window | — | yes | yes | windows, session_unlocked | window_state_observed | `app_window_state_result` |
+| `app.set_fullscreen` | apps | moderate | none | 6000 | window | `enabled*` bool | **no** | no | windows, session_unlocked | fullscreen_observed | `app_window_state_result` |
+| `youtube.search` | media | low | none | 15000 | youtube_browser | `query*` 1–100 chars | **no** | no | extension_connected, session_unlocked | observe_search_results | `youtube_search_result` |
+| `youtube.open_result` | media | low | none | 10000 | youtube | `index*` 1–10, `video_id?` | **no** | no | extension_connected, session_unlocked | observe_video_transition | `youtube_state_result` |
+
+Window actions (`rules.window_actions`):
+
+- They act only on visible, un-owned, uncloaked top-level windows of processes whose executable
+  path equals the approved entry. An explicit `window_id` must be one of the app's windows
+  (`TARGET_GONE`).
+- They never start the app: no running process is `APP_NOT_RUNNING`, and the phone offers "Open".
+- `app.restore` means normal placement: neither minimised nor maximised. Restore and maximise leave
+  full screen first.
+- `app.set_fullscreen` is absolute, not a toggle, and does nothing when the observed state already
+  matches. Otherwise it presses exactly one F11 into the approved window. It does this only after
+  Windows reports that window as foreground immediately before the press (`FOCUS_DENIED`, nothing
+  pressed) and no modifier key is held (`ACTION_UNAVAILABLE`, nothing pressed). The press is not
+  keyboard input in the sense of `rules.input_sessions` and needs only `apps`.
+- An app that does not enter full screen is `FULLSCREEN_UNSUPPORTED`. It is **never** maximised
+  instead; the phone may offer "Maximise instead" as a separate, visible command. Because F11 is a
+  toggle in the app, a timeout after the press is `OUTCOME_UNKNOWN` and is never retried
+  (`idempotent: false`).
+- A window of a process running as administrator is `APP_ELEVATED`. On every failure the result may
+  carry the best-known `app_window_state_result`.
+- `fullscreen_observed`: the window's DPI-aware rectangle covers its monitor and it has no caption
+  (or, when leaving, no longer does), read back within the timeout.
+
+YouTube search (`rules.search_queries`):
+
+- `youtube_browser_target{browser_instance_id, tab_id?, tab_token?}`: with a tab, the extension
+  navigates that tab (token-checked as for `youtube_target`); without one it opens a new tab in
+  that browser.
+- The query is 1–100 characters with no C0/C1 control characters and no leading space or control
+  (pattern `^[^\u0000- \u007F-\u009F][^\u0000-\u001F\u007F-\u009F]*$`). It becomes only the
+  `search_query` parameter of `https://www.youtube.com/results`, set through `URLSearchParams`.
+- It is customer-typed content. No component logs, journals or persists it; the relay keeps only
+  the command digest. Validation errors never echo it (§9). Results never echo it, and the
+  results-page tab carries no `title` (a results page's title contains the query).
+- `observe_search_results`: the extension observes the results page for exactly this query attach
+  in the tab, which gives it a **new** `tab_token`, and reads up to 10 video results. Ads and
+  Shorts shelves are not results. An unrecognised results layout is `ACTION_UNAVAILABLE`, never an
+  empty success; a real search with no results is an empty `results` array.
+- `youtube.open_result` targets the results tab with its new token. `index` is the 1-based position
+  in the last `youtube_search_result`. With `video_id`, the Nth result must still be that video
+  (`TARGET_CHANGED`); an index beyond the page is `SEARCH_RESULT_UNAVAILABLE`. Success requires the
+  tab to reach that video id.
+
+Captions and playback speed are deferred (§16 #17).
+
+### 18.5 Result shapes and bridge ops
+
+| Shape / op | Fields |
+| --- | --- |
+| `app_window_state_result` | `app_id`, `window_id`, `state: normal \| minimized \| maximized`, `fullscreen`, `foreground` |
+| `youtube_search_item` | `index` 1–10, `video_id`, `title` (≤ 200, untrusted), `channel?` (≤ 100, untrusted), `duration_seconds?` (integer ≥ 0), `is_live?` |
+| `youtube_search_result` | `tab` (`youtube_tab`), `results[]` ≤ 10 |
+| bridge op `search` | `args{query, tab_id?, tab_token?}` → `youtube_search_result` |
+| bridge op `open_result` | `args{tab_id, tab_token, index, video_id?}` → `youtube_state_result` |
+
+`read_results` (reading the result list of a page) is internal to the extension and is never a
+bridge op.
+
+### 18.6 Errors added in 1.2 (`errors.json`)
+
+All are `retryable: false`.
+
+| Code | Emitted by | Default message |
+| --- | --- | --- |
+| `WINDOW_STATE_UNCHANGED` | PC | Windows did not change that window. Some windows cannot be maximised or resized. |
+| `FULLSCREEN_UNSUPPORTED` | PC | That app did not switch to full screen with F11. Not every app supports it; try Maximise instead. |
+| `APP_ELEVATED` | PC | That app runs as administrator, so Windows does not let DoMe control its window. |
+| `SEARCH_RESULT_UNAVAILABLE` | extension, PC | That search result is no longer on the page. Search again. |
+| `EXTENSION_UPDATE_REQUIRED` | PC | Update the DoMe browser extension on the PC to use this control. |
+
+### 18.7 Compatibility and deploy order
+
+Deploy the cloud (relay + PWA) first, then the agent, then the extension.
+
+| Combination | Outcome |
+| --- | --- |
+| 1.2 relay with 1.1 agents and 1.1 phones | Everything works (both announce compatible versions; 1.1 phones stamp `"1.1"`) |
+| 1.2 phone with a 1.1 agent | Old actions work (stamped by `since`); new actions get `PROTOCOL_INCOMPATIBLE` from the agent ("update the PC agent") |
+| 1.2 agent with an old extension (negotiated 1.0 or 1.1) | Old ops work; `search` and `open_result` get `EXTENSION_UPDATE_REQUIRED` |
+| 1.2 extension with a 1.1 agent | The ack is 1.1, which the extension accepts; the agent never sends 1.2 ops |
+| Old relay with a 1.2 phone or agent | Refused on `registry_version`, which is why the cloud deploys first |
+
+### 18.8 Examples
+
+`app.maximize`, stamped with its `since`:
+
+```json
+{"type":"command","protocol_version":"1.2","command_id":"0b8f6f9e-5d1c-4c2a-9f3e-2a7d1c9b4e10","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"app.maximize","params":{},"target":{"app_id":"notepad"},"issued_at":"2026-10-10T12:00:00.000Z","expires_at":"2026-10-10T12:00:30.000Z","nonce":"BAQEBAQEBAQEBAQEBAQEBA"}
+```
+
+Its result: `{"app_id":"notepad","window_id":"h1a2b3c","state":"maximized","fullscreen":false,"foreground":true}`.
+
+`youtube.search` in a new tab of one browser:
+
+```json
+{"type":"command","protocol_version":"1.2","command_id":"1c9a7e3b-6f2d-4b8a-8e1f-3b8e2d0a5f21","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"youtube.search","params":{"query":"lofi hip hop"},"target":{"browser_instance_id":"bi_test0001"},"issued_at":"2026-10-10T12:01:00.000Z","expires_at":"2026-10-10T12:01:30.000Z","nonce":"BQUFBQUFBQUFBQUFBQUFBQ"}
+```
+
+The agent sends `{"type":"bridge_request","request_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","op":"search","args":{"query":"lofi hip hop"},"timeout_ms":15000}`
+and the result (no query, no tab title, a new `tab_token`):
+
+```json
+{"tab":{"browser_instance_id":"bi_test0001","tab_id":57,"tab_token":"cmVzdWx0cy10YWItMDAwMQ","script_attached":true,"context":"other","ad_showing":false,"is_live":false,"in_playlist":false,"active":true},
+ "results":[{"index":1,"video_id":"jfKfPfyJRdk","title":"lofi hip hop radio - beats to relax/study to","channel":"Lofi Girl","is_live":true},
+            {"index":2,"video_id":"5qap5aO4i9A","title":"lofi hip hop radio - beats to sleep/chill to","channel":"Lofi Girl","duration_seconds":3600}]}
+```
+
+Negotiation: a 1.2 extension says `"protocol_versions":["1.0","1.1","1.2"]` to a 1.1 agent and
+receives `{"type":"bridge_hello_ack","protocol_version":"1.1","agent_version":"0.1.0"}`.
+
+Each example above validates against the contract (`dome_protocol` command, params, target, result
+and bridge validation, and `negotiate_version`), checked on 2026-10-10 with a one-off script, not a
+test suite.
+
+### 18.9 Evidence
+
+- unit-tested: the contract, `since` loading, stamping, negotiation, the new params/targets/results,
+  the bridge ops and value-free validation messages in `shared/python` (206 passed) and `shared/ts`
+  (116 passed) on 2026-10-10.
+- integration-tested: the relay forwards a 1.2 action verbatim, refuses one stamped below its
+  `since` before forwarding, still forwards old actions stamped 1.0/1.1, still accepts a 1.1 agent
+  and a 1.1 phone, and keeps a search query out of its database, command history, security events
+  and logs (`cloud-api/tests/test_relay_routing.py`; cloud-api 126 passed on 2026-10-10, no relay
+  source change).
+- not yet implemented at the time of the contract change: the agent handlers and Windows window
+  control, the extension's search and result reading, and the phone's buttons, labels and stamping
+  (they follow the contract in later steps).
+- not yet verified: anything on a Windows PC, in Edge or Chrome, or on an iPhone.

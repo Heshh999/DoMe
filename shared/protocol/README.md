@@ -50,3 +50,35 @@ Library helpers: Python `build_input_batch_payload`, `verify_and_parse_input_bat
 `input_event_capabilities`, `ActionSpec.satisfied_by`; TypeScript `buildInputBatchPayload`,
 `signInputBatch`, `inputEventCapabilities`, `capabilitySatisfied`. Design brief:
 `docs/design/input-control.md`.
+
+## Protocol 1.2 — window actions, YouTube search, per-action versions
+
+Additive. 1.1 agents and phones stay compatible with a 1.2 relay, and an updated phone keeps
+working with a 1.1 PC for every action that PC knows. Deploy the cloud (relay + PWA) first, then
+the agent, then the extension. Explained in `docs/PROTOCOL.md` §18.
+
+| Addition | Where |
+| --- | --- |
+| Optional `since` on every action (absent = 1.0; `input.*` = 1.1; the new actions = 1.2) | `actions.json` |
+| Rule `command_version_stamping`: a command carries its action's `since`, a confirmation the confirmed command's version, an input batch 1.1; verifiers refuse a stamp below `since` with `PROTOCOL_INCOMPATIBLE` (`detail{peer, required}`) | `version.json → rules` |
+| Rule `bridge_negotiation`: `bridge_hello_ack.protocol_version` is the highest MINOR both sides speak; later-MINOR ops go only to an extension that negotiated them, else `EXTENSION_UPDATE_REQUIRED` | `version.json → rules`, `bridge.schema.json` |
+| Actions `app.maximize`, `app.restore`, `app.set_fullscreen{enabled}` (capability `apps`, `window_target`, never start the app, F11 never replaced by a maximise) | `actions.json`, `results.schema.json → app_window_state_result`, `rules.window_actions` |
+| Actions `youtube.search{query}` (target `youtube_browser_target`: a browser, optionally one tab) and `youtube.open_result{index, video_id?}` | `actions.json`, `results.schema.json → youtube_search_item / youtube_search_result`, `rules.search_queries` |
+| Target schema `youtube_browser_target` (`browser_instance_id`; `tab_id` and `tab_token` only together) | `actions.json → target_schemas` |
+| Verification strategies `fullscreen_observed`, `observe_search_results` | `actions.json` |
+| Bridge ops `search` (→ `youtube_search_result`) and `open_result`; args `query`, `index`, `video_id` | `bridge.schema.json` |
+| Errors `WINDOW_STATE_UNCHANGED`, `FULLSCREEN_UNSUPPORTED`, `APP_ELEVATED`, `SEARCH_RESULT_UNAVAILABLE`, `EXTENSION_UPDATE_REQUIRED` | `errors.json` |
+| Limits `youtube_search_query_max_chars` (100), `youtube_search_results_max` (10) | `version.json` |
+| `negotiation_cases` and the search-query pattern cases | `fixtures/strict-json-cases.json` |
+
+No existing definition changed: `app_window`, `youtube_tab` and every other 1.1 shape are as
+before, so a 1.1 phone still validates a 1.2 agent's `app.list` and YouTube results. Captions and
+playback speed are deferred because they would need new `youtube_tab` fields.
+
+Library helpers: Python `ActionSpec.since`, `Registry.min_version`, `negotiate_version`,
+`INPUT_BATCH_PROTOCOL_VERSION`; TypeScript `ActionSpec.since`, `minVersion`, and in
+`src/versions.ts` (no Ajv, so the PWA's no-eval registry facade does not mirror it)
+`negotiateVersion`, `versionBelow`, `parseVersion`, `INPUT_BATCH_PROTOCOL_VERSION`. The command
+builder (`buildCommandPayload`) stamps `since`; `buildConfirmationPayload` requires
+`commandProtocolVersion`. Validation error messages name the path and the failed keyword, never
+the offending value.

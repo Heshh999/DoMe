@@ -14,6 +14,7 @@ from jsonschema.exceptions import ValidationError
 
 from .errors import ProtocolError
 from .strict_regex import StrictValidator
+from .versions import parse_version, protocol_compatible
 
 CONTRACT_DIR_CANDIDATES = (
     Path(__file__).resolve().parent / "_contract",  # installed wheel
@@ -52,6 +53,9 @@ class ActionSpec:
     routine_allowed: bool
     alternate_capabilities: tuple[str, ...] = ()
     ai_eligible: bool = True
+    # Protocol version that introduced the action (actions.json `since`, absent = 1.0). Controllers stamp
+    # commands with it and verifiers refuse lower stamps (rules.command_version_stamping).
+    since: str = "1.0"
 
     @property
     def requires_confirmation(self) -> bool:
@@ -70,6 +74,7 @@ class ActionSpec:
 
 class Registry:
     def __init__(self, raw: dict[str, Any], errors: dict[str, Any], version: dict[str, Any], plans: dict[str, Any]):
+        self.protocol_version: str = version["protocol_version"]
         self.registry_version: str = raw["registry_version"]
         self.capabilities: dict[str, str] = dict(raw["capabilities"])
         self.availability_conditions: dict[str, str] = dict(raw["availability_conditions"])
@@ -107,7 +112,10 @@ class Registry:
                 routine_allowed=bool(spec["routine_allowed"]),
                 alternate_capabilities=tuple(spec.get("alternate_capabilities", ())),
                 ai_eligible=bool(spec.get("ai_eligible", True)),
+                since=spec.get("since", "1.0"),
             )
+            if parse_version(action.since) is None or not protocol_compatible(action.since, (self.protocol_version,)):
+                raise ValueError(f"action {name} has since {action.since!r} outside protocol {self.protocol_version}")
             if action.routine_allowed and not action.ai_eligible:
                 raise ValueError(f"human-only action {name} cannot be routine-allowed")
             if action.risk == "disruptive" and action.confirmation != "challenge":
@@ -118,7 +126,6 @@ class Registry:
             Draft202012Validator.check_schema(action.params_schema)
             self._param_validators[name] = StrictValidator(action.params_schema)
         self.errors: dict[str, dict[str, Any]] = errors["errors"]
-        self.protocol_version: str = version["protocol_version"]
         self.limits: dict[str, int] = dict(version["limits"])
         self.signing_algorithms: tuple[str, ...] = tuple(version["signing_algorithms"])
         self.plans: dict[str, Any] = plans
@@ -133,6 +140,10 @@ class Registry:
         if spec is None:
             raise ProtocolError("UNKNOWN_ACTION", f"unknown action {name!r}")
         return spec
+
+    def min_version(self, name: str) -> str:
+        """The lowest protocol_version a command for ``name`` may carry: the action's ``since``."""
+        return self.get(name).since
 
     def error_defaults(self, code: str) -> dict[str, Any]:
         return self.errors.get(code) or self.errors["INTERNAL"]
@@ -196,8 +207,17 @@ class Registry:
 
 
 def _short(exc: ValidationError) -> str:
+    """Where validation failed and which keyword failed, never the offending value.
+
+    jsonschema messages embed ``repr(instance)``; the message travels in result frames to the phone and into
+    journals and logs, so it must not echo customer-typed content such as a search query (rules.search_queries).
+    The missing names of a failed ``required`` come from the schema, not the payload."""
     path = "/".join(str(p) for p in exc.absolute_path)
-    return f"{path or '<root>'}: {exc.message}"[:300]
+    detail = ""
+    if exc.validator == "required" and isinstance(exc.instance, dict) and isinstance(exc.validator_value, list):
+        missing = [str(name) for name in exc.validator_value if name not in exc.instance]
+        detail = f" ({', '.join(missing)})" if missing else ""
+    return f"{path or '<root>'}: failed {exc.validator}{detail}"[:300]
 
 
 @lru_cache(maxsize=1)

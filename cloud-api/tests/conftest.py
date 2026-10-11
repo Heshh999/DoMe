@@ -56,9 +56,9 @@ REPO = Path(__file__).resolve().parents[2]
 DEV_IDP_BIN = REPO / "tools" / "dev-idp" / ".venv" / "bin" / "dome-dev-idp"
 TEST_DB_URL = os.environ.get("DOME_TEST_DATABASE_URL", "postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329")
 RECV_TIMEOUT = 5.0
-# Both simulators announce 1.0 and 1.1 by default (the registry is 1.1); tests that need a 1.0-only peer pass
-# ``protocol_versions=("1.0",)`` explicitly.
-DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1")
+# Both simulators announce every MINOR up to the registry's (1.2) by default; tests that need an older peer pass
+# ``protocol_versions=("1.0",)`` / ``("1.0", "1.1")`` (and ``registry_version``) explicitly.
+DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2")
 
 
 def new_input_session_id() -> str:
@@ -450,7 +450,11 @@ class AgentSim:
         return self.token
 
     async def connect(
-        self, *, protocol_versions: tuple[str, ...] = DEFAULT_PROTOCOL_VERSIONS, expect_snapshot: bool = True
+        self,
+        *,
+        protocol_versions: tuple[str, ...] = DEFAULT_PROTOCOL_VERSIONS,
+        registry_version: str | None = None,
+        expect_snapshot: bool = True,
     ) -> dict[str, Any]:
         self.ws = await connect(
             self.env.ws_base + "/ws/agent",
@@ -463,7 +467,7 @@ class AgentSim:
                 "component": "agent",
                 "component_version": "0.1.0-test",
                 "protocol_versions": list(protocol_versions),
-                "registry_version": REGISTRY.registry_version,
+                "registry_version": registry_version or REGISTRY.registry_version,
             }
         )
         ack = await self.recv()
@@ -733,6 +737,7 @@ class ControllerSim:
         kid: str | None = None,
         expect_ack: bool = True,
         protocol_versions: tuple[str, ...] = DEFAULT_PROTOCOL_VERSIONS,
+        registry_version: str | None = None,
     ) -> dict[str, Any]:
         """Open the socket and say hello. ``proof=True`` signs a fresh proof with this installation's key;
         a dict is sent verbatim (tests forge/replay); ``False`` sends a bare kid. ``kid`` overrides the
@@ -747,7 +752,7 @@ class ControllerSim:
             "kid": kid or self.kid,
             "component_version": "0.1.0-test",
             "protocol_versions": list(protocol_versions),
-            "registry_version": REGISTRY.registry_version,
+            "registry_version": registry_version or REGISTRY.registry_version,
         }
         if proof is True:
             hello["proof"] = self.make_proof(kid=kid)
@@ -789,13 +794,19 @@ class ControllerSim:
         issued_at: Any = None,
         key: Any = None,
         nonce: str | None = None,
+        protocol_version: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
+        """A signed command. Like the phone (rules.command_version_stamping) it is stamped with the action's ``since``
+        unless ``protocol_version`` overrides it (unknown actions get the registry's version)."""
         issued = issued_at or now_utc()
         from datetime import timedelta
 
+        if protocol_version is None:
+            known = action in REGISTRY.actions
+            protocol_version = REGISTRY.min_version(action) if known else REGISTRY.protocol_version
         payload = {
             "type": "command",
-            "protocol_version": REGISTRY.protocol_version,
+            "protocol_version": protocol_version,
             "command_id": command_id or str(uuid.uuid4()),
             "account_id": account_id or self.browser.account_id,
             "controller_id": controller_id or self.controller_id or str(uuid.uuid4()),

@@ -148,7 +148,9 @@ describe("confirmations", () => {
       controllerId: CONTROLLER,
       targetPcId: PC,
       decision: "approve",
+      commandProtocolVersion: "1.0",
     });
+    expect(payload.protocol_version).toBe("1.0");
     const env = await signConfirmation(kp.privateKey, kp.publicKey, payload);
     const vc = await verifyAndParseConfirmation(env, resolve);
     expect(vc.approved).toBe(true);

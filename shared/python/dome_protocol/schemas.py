@@ -13,7 +13,7 @@ from referencing import Resource
 from referencing.jsonschema import DRAFT202012
 
 from .errors import ProtocolError
-from .registry import contract_dir
+from .registry import _short, contract_dir
 from .strict_regex import StrictValidator
 
 SCHEMA_FILES = ("envelope", "command", "confirmation", "relay-frames", "bridge", "results", "entitlement", "rest")
@@ -52,8 +52,7 @@ class Schemas:
         try:
             self._validator(doc_name, pointer).validate(value)
         except ValidationError as exc:
-            path = "/".join(str(p) for p in exc.absolute_path)
-            raise ProtocolError(code, f"{path or '<root>'}: {exc.message}"[:300]) from None
+            raise ProtocolError(code, _short(exc)) from None
 
     # ----- payloads --------------------------------------------------------------------------
     def validate_envelope_shape(self, value: Any) -> None:

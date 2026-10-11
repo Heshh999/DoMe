@@ -7,6 +7,7 @@ from datetime import timedelta
 import pytest
 
 from dome_protocol import (
+    INPUT_BATCH_PROTOCOL_VERSION,
     KeyRecord,
     ProtocolError,
     build_input_batch_payload,
@@ -15,6 +16,7 @@ from dome_protocol import (
     input_event_capabilities,
     jwk_from_public_key,
     kid_from_jwk,
+    load_registry,
     load_schemas,
     now_utc,
     sign_payload,
@@ -95,3 +97,18 @@ def test_binding_window_and_tampering() -> None:
     with pytest.raises(ProtocolError) as exc:
         verify_and_parse_input_batch(raw, lambda k: record)
     assert exc.value.code == "SIGNATURE_INVALID"
+
+
+def test_batches_are_stamped_with_the_version_that_defined_them() -> None:
+    """rules.command_version_stamping: a 1.2 phone still reaches a 1.1 PC, and a 1.0 stamp is refused."""
+    key, kid, record = _controller()
+    payload = _batch([])
+    assert payload["protocol_version"] == INPUT_BATCH_PROTOCOL_VERSION == "1.1"
+    assert load_registry().get("input.session_start").since == INPUT_BATCH_PROTOCOL_VERSION
+    env = sign_payload(key, dumps_compact(payload))  # type: ignore[arg-type]
+    verify_and_parse_input_batch(env.to_dict(), lambda k: record if k == kid else None)
+    for stamp in ("1.0", "1.3", "2.1"):
+        env = sign_payload(key, dumps_compact({**payload, "protocol_version": stamp}))  # type: ignore[arg-type]
+        with pytest.raises(ProtocolError) as exc:
+            verify_and_parse_input_batch(env.to_dict(), lambda k: record if k == kid else None)
+        assert exc.value.code == "PROTOCOL_INCOMPATIBLE", stamp

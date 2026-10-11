@@ -9,10 +9,11 @@
 import { challengeDigest, commandDigest, randomNonce, randomUuid } from "./digest.ts";
 import { ProtocolError } from "./errors.ts";
 import type { EcPublicJwk } from "./keys.ts";
-import { LIMITS, PROTOCOL_VERSION, protocolCompatible, registry, schemas, type ActionSpec } from "./registry.ts";
+import { LIMITS, PROTOCOL_VERSION, registry, schemas, type ActionSpec } from "./registry.ts";
 import { signPayload, verifyEnvelope, type Envelope } from "./signing.ts";
 import { dumpsCompact, type JsonValue } from "./strictJson.ts";
 import { checkCommandWindow, formatRfc3339 } from "./time.ts";
+import { INPUT_BATCH_PROTOCOL_VERSION, parseVersion, protocolCompatible, versionBelow } from "./versions.ts";
 
 export interface KeyRecord {
   controllerId: string;
@@ -64,7 +65,16 @@ export interface BuildCommandInput {
   commandId?: string;
 }
 
-/** Build a command payload, validating params/target locally first so bad input never gets signed. */
+/** The lowest protocol_version a command for `action` may carry: the action's `since` (throws UNKNOWN_ACTION). */
+export function minVersion(action: string): string {
+  return registry.get(action).since;
+}
+
+/**
+ * Build a command payload, validating params/target locally first so bad input never gets signed. The payload is
+ * stamped with the action's `since`, not this library's newest version, so a PC whose agent predates this phone keeps
+ * accepting every action it knows (rules.command_version_stamping).
+ */
 export function buildCommandPayload(input: BuildCommandInput): CommandPayload {
   const spec = registry.get(input.action);
   const params = registry.validateParams(input.action, input.params ?? {}) as Record<string, JsonValue>;
@@ -79,7 +89,7 @@ export function buildCommandPayload(input: BuildCommandInput): CommandPayload {
   const now = input.now ?? new Date();
   return {
     type: "command",
-    protocol_version: PROTOCOL_VERSION,
+    protocol_version: spec.since,
     command_id: input.commandId ?? randomUuid(),
     account_id: input.accountId,
     controller_id: input.controllerId,
@@ -106,14 +116,19 @@ export interface BuildConfirmationInput {
   controllerId: string;
   targetPcId: string;
   decision: "approve" | "decline";
+  /** protocol_version of the command being confirmed: the confirmation carries the same stamp (rules.command_version_stamping). */
+  commandProtocolVersion: string;
   now?: Date;
 }
 
 export async function buildConfirmationPayload(input: BuildConfirmationInput): Promise<ConfirmationPayload> {
+  if (parseVersion(input.commandProtocolVersion) === null || !protocolCompatible(input.commandProtocolVersion, [PROTOCOL_VERSION])) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", "the confirmed command's protocol version is not supported");
+  }
   const now = input.now ?? new Date();
   return {
     type: "confirmation",
-    protocol_version: PROTOCOL_VERSION,
+    protocol_version: input.commandProtocolVersion,
     command_id: input.commandId,
     challenge_id: input.challengeId,
     challenge_digest: await challengeDigest(input.challengeText),
@@ -211,13 +226,13 @@ export function inputEventCapabilities(events: readonly InputEvent[]): Set<"poin
 /**
  * One batch of the manual-input stream (rules.input_sessions). The phone builds and signs it with the
  * controller key; the relay and the PC verify it. Lifetime = input_batch_lifetime_seconds (5 s); an empty
- * events array renews the session lease.
+ * events array renews the session lease. Stamped "1.1", the version that introduced the stream, so older PCs accept it.
  */
 export function buildInputBatchPayload(input: BuildInputBatchInput): InputBatchPayload {
   const now = input.now ?? new Date();
   return {
     type: "input_batch",
-    protocol_version: PROTOCOL_VERSION,
+    protocol_version: INPUT_BATCH_PROTOCOL_VERSION,
     account_id: input.accountId,
     controller_id: input.controllerId,
     target_pc_id: input.targetPcId,
@@ -284,6 +299,9 @@ export async function verifyAndParseCommand(raw: unknown, resolveKey: KeyResolve
     maxSkewSeconds: LIMITS.max_clock_skew_seconds,
   });
   const spec = registry.get(cmd.action);
+  if (versionBelow(cmd.protocol_version, spec.since)) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", `stamped protocol version is below ${spec.since}, which introduced it`, false, { peer: cmd.protocol_version, required: spec.since });
+  }
   const params = registry.validateParams(spec.name, cmd.params);
   const target = registry.validateTarget(spec.name, cmd.target);
   return { envelope, payload: cmd, key, spec, params, target, digest: await commandDigest(envelope.payload) };
