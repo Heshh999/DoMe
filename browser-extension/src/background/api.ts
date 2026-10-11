@@ -1,8 +1,9 @@
 /**
  * The exact subset of the chrome.* API the service worker uses, as an interface so tests can
  * provide a stub (test/chrome-stub.ts) and so the manifest's permission set stays visibly minimal:
- * runtime, storage, alarms, and the tabs methods that need no "tabs" permission for hosts covered by
- * host_permissions.
+ * runtime, storage (local, and session for the reconnect pace), alarms, scripting (only to run the
+ * extension's own content.js in YouTube tabs that have none), and the tabs methods that need no
+ * "tabs" permission for hosts covered by host_permissions.
  */
 export interface ChromeEvent<F extends (...args: never[]) => unknown> {
   addListener(callback: F): void;
@@ -16,6 +17,11 @@ export interface NativePort {
   onDisconnect: ChromeEvent<() => void>;
 }
 
+export interface StorageArea {
+  get(keys: string | string[]): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+}
+
 export interface ExtensionApi {
   runtime: {
     id: string;
@@ -27,15 +33,20 @@ export interface ExtensionApi {
     onInstalled: ChromeEvent<(details: { reason: string }) => void>;
   };
   storage: {
-    local: {
-      get(keys: string | string[]): Promise<Record<string, unknown>>;
-      set(items: Record<string, unknown>): Promise<void>;
-    };
+    local: StorageArea;
+    /**
+     * In memory while the extension is loaded: survives service-worker termination, and is cleared
+     * when the browser restarts and when the extension is disabled, reloaded or updated.
+     */
+    session: StorageArea;
   };
   alarms: {
     create(name: string, info: { delayInMinutes?: number; periodInMinutes?: number }): Promise<void> | void;
     clear(name: string): Promise<boolean> | void;
     onAlarm: ChromeEvent<(alarm: { name: string }) => void>;
+  };
+  scripting: {
+    executeScript(injection: { target: { tabId: number }; files: string[] }): Promise<unknown>;
   };
   tabs: {
     query(info: { url?: string }): Promise<chrome.tabs.Tab[]>;

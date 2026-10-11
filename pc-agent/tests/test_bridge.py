@@ -9,7 +9,7 @@ from dome_protocol import ProtocolError
 
 from dome_agent.bridge.framing import MAX_FRAME_BYTES, decode_frame, encode_frame, make_exact_reader, read_frame
 from dome_agent.bridge.manifest import allowed_origins, build_manifest
-from dome_agent.bridge.server import BridgeServer
+from dome_agent.bridge.server import BridgeServer, negotiate_protocol_version
 from dome_agent.settings import Settings
 from dome_agent.testing.fake_extension import FakeExtension, FakeTab
 
@@ -152,8 +152,12 @@ async def test_hello_tabs_and_request(settings: Settings, bridge: Any) -> None:
     server, _events, changes = bridge
     ext = await connect(settings)
     try:
+        # FakeExtension lists what the shipped extension lists ("1.0", "1.1"): the highest version both
+        # sides speak is acked (a 1.0-only extension is the explicit case in the next tests)
         assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == "1.1"
         assert server.connected and server.instances()[0].browser == "chrome"
+        assert server.instances()[0].protocol_version == "1.1"
+        assert server.unavailable_reason == ""
         tab = ext.add_tab(FakeTab(tab_id=4))
         ext.publish_tabs()
         for _ in range(100):
@@ -199,6 +203,67 @@ async def test_incompatible_extension_is_refused(settings: Settings, bridge: Any
     assert ext.errors and ext.errors[0]["error"]["code"] == "PROTOCOL_INCOMPATIBLE"
     assert ext.errors[0]["error"]["detail"]["supported"] == ["1.0", "1.1"]  # both MINORs the agent speaks
     assert not server.connected
+    ext.close()
+
+
+@pytest.mark.parametrize(
+    ("peer", "agent", "expected"),
+    [
+        (["1.0"], ("1.0", "1.1"), "1.0"),
+        (["1.0", "1.1"], ("1.0", "1.1"), "1.1"),
+        (["1.1", "1.0"], ("1.0", "1.1"), "1.1"),
+        (["1.0", "1.1", "1.2"], ("1.0", "1.1"), "1.1"),  # a newer extension talking to this agent
+        (["1.0"], ("1.0",), "1.0"),
+        (["2.0", "1.0"], ("1.0", "1.1"), "1.0"),
+        (["2.0", "2.1"], ("1.0", "1.1"), None),
+        (["1.2"], ("1.0", "1.1"), None),
+        (["x", "1"], ("1.0",), None),
+    ],
+)
+def test_negotiate_protocol_version(peer: list[str], agent: tuple[str, ...], expected: str | None) -> None:
+    assert negotiate_protocol_version(peer, agent) == expected
+
+
+@pytest.mark.parametrize(
+    ("versions", "acked"),
+    [
+        (("1.0",), "1.0"),  # an extension the owner has not reloaded since the 1.0 build: never acked "1.1"
+        (("1.0", "1.1"), "1.1"),
+        (("1.0", "1.1", "1.2"), "1.1"),
+    ],
+)
+async def test_hello_ack_is_the_highest_common_version(
+    settings: Settings, bridge: Any, versions: tuple[str, ...], acked: str
+) -> None:
+    server, _events, _changes = bridge
+    ext = await connect(settings, protocol_versions=versions)
+    try:
+        assert ext.hello_ack is not None and ext.hello_ack["protocol_version"] == acked
+        assert server.instances()[0].protocol_version == acked
+    finally:
+        ext.close()
+
+
+async def test_fake_extension_refuses_an_ack_it_does_not_speak(
+    settings: Settings, bridge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug this guards against: the agent acked its own newest version ("1.1") and the shipped 1.0
+    extension disconnected as incompatible. The fake extension must fail the same way, not accept it."""
+    from dome_agent.bridge import server as server_module
+
+    server, _events, _changes = bridge
+    monkeypatch.setattr(server_module, "negotiate_protocol_version", lambda peer, ours=("1.1",): "1.1")
+    ext = FakeExtension(settings.state_dir, protocol_versions=("1.0",))
+    with pytest.raises(ProtocolError) as ei:
+        await asyncio.to_thread(ext.connect, 5.0)
+    assert ei.value.code == "PROTOCOL_INCOMPATIBLE"
+    assert ext.hello_ack is None and ext.refused_ack is not None
+    assert await asyncio.to_thread(ext.wait_closed, 5)
+    for _ in range(100):
+        if not server.connected:
+            break
+        await asyncio.sleep(0.02)
+    assert not server.connected  # the refused connection is gone on the agent side too
     ext.close()
 
 

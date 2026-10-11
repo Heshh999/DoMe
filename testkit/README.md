@@ -62,8 +62,10 @@ not share Safari's storage, so a phone paired in Safari can count as a different
 1. Double-click **`2 Start DoMe on this PC.cmd`**.
 2. **First time only, the browser extension:** the script builds it (2-4 minutes) and opens the
    Extensions page of Chrome or Edge. Switch on **Developer mode**, click **Load unpacked** and
-   choose the folder the window shows (the path is already copied; paste it with Ctrl+V). Reload any
-   YouTube tabs that were already open, then press Enter in the window.
+   choose the folder the window shows (the path is already copied; paste it with Ctrl+V), then press
+   Enter in the window. YouTube tabs that were already open need no reload. When a newer download
+   changes the extension, the script builds it again by itself and asks you to reload it (see
+   "After downloading a new version").
 3. **First time only, linking:** a browser window opens. Sign in with the passphrase and **the same
    email you used on the iPhone**, check the PC name, leave **Enable remote control for this PC**
    ticked and click **Link this PC**.
@@ -116,6 +118,33 @@ Please write down what worked, what did not, and anything confusing. For a probl
   keep your test account, linked PC and paired phones (useful with a stable address; with temporary
   addresses the next start begins with empty test data anyway).
 - On the PC, right-click the DoMe tray icon and choose **Quit DoMe** (or close the step 2 window).
+
+## After downloading a new version
+
+When you get a newer copy of this repository as a ZIP:
+
+1. **Quit DoMe** on the PC: right-click the DoMe tray icon, **Quit DoMe** (or close the step 2
+   window).
+2. **Extract** the new ZIP over the old folder and let Windows replace the files. `testkit\.state`
+   (the extension's key, the current addresses) is kept.
+3. **Step 1 only when the server changed:** run `1 Start test server.cmd` again only when the new
+   version changes the DoMe server or the iPhone app (the folders `cloud-api`, `mobile-app`,
+   `shared`, `deploy` or `tools`). You do not have to work that out: step 2 checks, and warns that
+   the running test server is older than this folder when step 1 is needed (press Enter there to
+   go on without it). With temporary addresses, step 1 means new addresses: step 2 links this PC
+   again, and the iPhone opens the new address and pairs again. Otherwise skip step 1: the running
+   server, your test account and the pairing stay as they are.
+4. **Step 2:** run `2 Start DoMe on this PC.cmd`. It always runs the new PC program, and it builds
+   the browser extension again by itself when the extension changed. If that build fails (for
+   example without internet), the window says so and DoMe starts with the previous extension; the
+   next run of step 2 tries again.
+5. **Reload the extension if asked:** when the window says "The DoMe extension was updated", open
+   `edge://extensions` in Edge (`chrome://extensions` in Chrome), click the reload arrow on the
+   DoMe card (or close the browser completely and open it again) and press Enter in the window.
+   Open YouTube tabs need no reload. If the window was closed before you pressed Enter, the next
+   run of step 2 asks again.
+
+Changes to notes and tests alone never ask for step 1 or a new extension build.
 
 ## Every start is a new address
 
@@ -179,7 +208,10 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 | Sign-in says "wrong passphrase, again (many wrong tries recently)" | Same as above: the right passphrase always works. If you did not make those tries yourself, someone else has the address: run step 3, then step 1 for new addresses. |
 | "DoMe is already running on this PC" | Right-click the tray icon, **Quit DoMe**, run step 2 again. |
 | The link browser window did not open | Copy the address printed in the step 2 window into a browser on the PC. |
-| YouTube controls stay greyed out | Check that the extension is loaded and switched on, then reload the YouTube tab. To rebuild it: quit DoMe from the tray, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
+| The phone says the browser extension is not connected | The extension finds DoMe by itself, usually within 10 seconds of DoMe starting (at most 30 seconds when the browser has been open a while). To connect it at once: in Edge, open the DoMe extension (puzzle-piece icon next to the address bar, then DoMe) and press **Retry connection**. Still not connected after an update? Reload it: the reload arrow on the DoMe card at `edge://extensions`. |
+| "Building the browser extension failed" | Docker could not build the extension, most often because a download failed; the lines above the message say why. Check the internet connection and that Docker Desktop shows "Engine running", then run step 2 again (Docker keeps what it already downloaded). The first build has nothing to fall back on, so step 2 stops; after an update step 2 only warns, starts DoMe with the previous extension and tries again on its next run. |
+| "Could not replace the extension" | The new build could not be moved into `testkit\.state\extension`, usually because a browser or a virus scanner had a file open. Any previous extension is put back. Close Chrome and Edge, then run step 2 again. |
+| YouTube controls stay greyed out | Check that the extension is loaded and switched on; YouTube tabs that were already open pick it up by themselves, so reload a tab only if it still does not respond. Step 2 rebuilds the extension by itself when it changed; to rebuild it anyway: quit DoMe from the tray, open a Command Prompt in this folder and run `"2 Start DoMe on this PC.cmd" -RebuildExtension`, then click the reload arrow on the DoMe card on the Extensions page. |
 | Pairing says the device limit is reached | The free plan allows 2 phones per account (this happens with a stable address, where the account is kept). Tap **Manage devices**, revoke phones you no longer use, pair again. |
 | The iPhone and the PC do not see each other | Both must be signed in with the same email in the same test account. After a new start, run step 2 again and use the new address on the iPhone. |
 | Anything else | Server logs: in a Command Prompt run `docker logs dome-test-api-1` (sign-in page: `docker logs dome-test-dev-idp-1`). PC program log: `%LOCALAPPDATA%\DoMe\logs\agent.log`. Send these with your notes. |
@@ -202,7 +234,7 @@ across restarts and the phone stays paired. Delete the file to go back to quick 
 
 | Where | What |
 | --- | --- |
-| `testkit\.state\` | Session secret, current addresses and passphrase (`current.json`), the QR picture, the extension build and its key (`extension-key.pem`, keeps the extension ID fixed). Not committed to git. |
+| `testkit\.state\` | Session secret, current addresses and passphrase (`current.json`, also which sources the running server was built from), the QR picture, the extension build (`extension.new` and `extension.old` are temporary folders used while a new build replaces it), its key (`extension-key.pem`, keeps the extension ID fixed) and which sources it was built from (`extension-sources.txt`). Not committed to git. |
 | Docker | Containers and volumes named `dome-test...`. |
 | `%LOCALAPPDATA%\DoMe\` | The PC program's link, pairings, settings and logs. |
 | Windows registry (your user only) | `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and the Edge equivalent, so the extension can talk to the PC program. Removed by `dome-agent uninstall-native-host`. |

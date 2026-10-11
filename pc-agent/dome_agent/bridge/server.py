@@ -4,20 +4,23 @@ request/response exchanges with the extension through the native host.
 Every inbound frame is strict-parsed and schema-validated (``extension_to_agent``) before use;
 every outbound frame is validated (``agent_to_extension``) before it is written. Tab titles and
 video ids are untrusted display data and are never logged.
+
+``bridge_hello_ack.protocol_version`` is NEGOTIATED (:func:`negotiate_protocol_version`), never the
+agent's own newest version: the extension refuses an ack it does not speak and reconnects only slowly.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dome_protocol import ProtocolError, load_registry
-from dome_protocol.commands import protocol_compatible
+from dome_protocol import ProtocolError
 
 from .. import SUPPORTED_PROTOCOL_VERSIONS, __version__
 from ..logsetup import get_logger
@@ -27,6 +30,26 @@ from .framing import decode_frame, encode_frame, validate_outgoing
 log = get_logger(__name__)
 
 DEFAULT_REQUEST_TIMEOUT_MS = 8000
+_VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)")
+
+
+def negotiate_protocol_version(
+    peer_versions: Iterable[str], supported: Iterable[str] = SUPPORTED_PROTOCOL_VERSIONS
+) -> str | None:
+    """The version a ``bridge_hello_ack`` announces: the highest MINOR, within a MAJOR both sides speak,
+    that both lists contain (each side lists every MINOR it speaks), spelled as the extension spelled it.
+    None when the lists share no version: the hello is refused as PROTOCOL_INCOMPATIBLE.
+
+    A 1.0-only extension must get "1.0" from a 1.1 agent: it refuses any ack its own list does not reach
+    (``protocolCompatible`` in browser-extension/src/shared/version.ts)."""
+
+    def parse(version: str) -> tuple[int, int] | None:
+        m = _VERSION_RE.fullmatch(version) if isinstance(version, str) else None
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
+    ours = {v for v in map(parse, supported) if v is not None}
+    common = [(parsed, v) for v in peer_versions if (parsed := parse(v)) is not None and parsed in ours]
+    return max(common)[1] if common else None
 
 
 @dataclass(slots=True)
@@ -35,6 +58,7 @@ class BrowserInstance:
     browser: str
     extension_version: str
     profile_label: str
+    protocol_version: str  # negotiated in bridge_hello_ack; ops newer than it must not be sent
     conn: ipc.FrameConnection
     tabs: dict[int, dict[str, Any]] = field(default_factory=dict)
 
@@ -76,8 +100,24 @@ class BridgeServer:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._ipc = ipc.IpcServer(self._state_dir, self._accepted, self._identity_mismatch)
-        self._ipc.start()
-        log.info("bridge IPC listening", address=self._ipc.address)
+        if self._ipc.start():
+            log.info("bridge IPC listening", address=self._ipc.address)
+            return
+        # Windows: another process holds the pipe name. The IPC thread keeps retrying; until then no
+        # browser can connect, so say so loudly instead of logging "listening".
+        log.error(
+            "bridge IPC NOT listening: the browser extension cannot connect until this is resolved",
+            address=self._ipc.address,
+            reason=self._ipc.unavailable_reason,
+        )
+        self._on_security_event(
+            "bridge_ipc_unavailable", {"address": self._ipc.address, "reason": self._ipc.unavailable_reason}
+        )
+
+    @property
+    def unavailable_reason(self) -> str:
+        """Why no browser can connect right now (the IPC endpoint is not listening); "" when it is."""
+        return self._ipc.unavailable_reason if self._ipc else "the browser bridge is not started"
 
     async def stop(self) -> None:
         if self._ipc is not None:
@@ -141,7 +181,7 @@ class BridgeServer:
         if self._loop.is_closed():
             coro.close()
             return
-        asyncio.run_coroutine_threadsafe(coro, self._loop)
+        asyncio.run_coroutine_threadsafe(coro, self._loop).add_done_callback(_log_handler_failure)
 
     # ----- frame handling (event loop) ---------------------------------------------------------------
     async def _send(self, connection: _Connection, frame: dict[str, Any]) -> bool:
@@ -186,7 +226,8 @@ class BridgeServer:
 
     async def _hello(self, connection: _Connection, frame: dict[str, Any]) -> None:
         peer_versions = tuple(frame["protocol_versions"])
-        if not any(protocol_compatible(v, SUPPORTED_PROTOCOL_VERSIONS) for v in peer_versions):
+        negotiated = negotiate_protocol_version(peer_versions)
+        if negotiated is None:
             await self._send_error(
                 connection,
                 "PROTOCOL_INCOMPATIBLE",
@@ -206,22 +247,20 @@ class BridgeServer:
             browser=frame["browser"],
             extension_version=frame["extension_version"],
             profile_label=frame.get("profile_label", ""),
+            protocol_version=negotiated,
             conn=connection.conn,
             tabs=dict(previous.tabs) if previous is not None else {},
         )
         connection.instance = instance
         self._instances[instance_id] = instance
-        ack = {
-            "type": "bridge_hello_ack",
-            "protocol_version": load_registry().protocol_version,
-            "agent_version": __version__,
-        }
+        ack = {"type": "bridge_hello_ack", "protocol_version": negotiated, "agent_version": __version__}
         if await self._send(connection, ack):
             log.info(
                 "browser instance connected",
                 browser_instance_id=instance_id,
                 browser=instance.browser,
                 extension_version=instance.extension_version,
+                protocol_version=negotiated,
             )
             self._on_change()
 
@@ -344,3 +383,12 @@ class BridgeServer:
                     retryable=False,
                 ) from exc
             raise
+
+
+def _log_handler_failure(fut: Any) -> None:
+    """Frame handlers run as fire-and-forget futures on the loop: never lose their exceptions silently."""
+    if fut.cancelled():
+        return
+    exc = fut.exception()
+    if exc is not None:
+        log.error("bridge frame handler failed", error=repr(exc)[:300])

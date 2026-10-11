@@ -1,17 +1,7 @@
 /** Status-only popup: connection state, profile label, ids and troubleshooting hints. No playback controls. */
-import type { ConnectionStateName, PopupToBackground, StatusReport } from "../shared/messages.ts";
+import type { PopupToBackground, StatusReport } from "../shared/messages.ts";
 import { POPUP_KIND } from "../shared/messages.ts";
-
-const HINTS: Record<ConnectionStateName, { title: string; hint: string; cls: string }> = {
-  connected: { title: "Connected to the DoMe agent", hint: "", cls: "connected" },
-  connecting: { title: "Connecting...", hint: "", cls: "" },
-  disconnected: { title: "Not connected", hint: "The agent closed the connection. The extension retries automatically; use Retry to try now.", cls: "warn" },
-  agent_not_running: { title: "DoMe agent is not running", hint: "Start DoMe from the Start menu (look for the tray icon), then press Retry.", cls: "warn" },
-  host_missing: { title: "DoMe agent is not installed for this browser", hint: "Install the DoMe agent on this PC, or run its 'Register browser' step (dome-agent install-native-host), then press Retry.", cls: "error" },
-  host_forbidden: { title: "This extension is not registered with the agent", hint: "The agent only accepts registered extension ids. For a development build, set DOME_AGENT_DEV_EXTENSION_ID to the Extension id shown below and re-run dome-agent install-native-host.", cls: "error" },
-  incompatible: { title: "Update needed", hint: "The extension and the DoMe agent speak different protocol versions. Update whichever is older.", cls: "error" },
-  error: { title: "Connection error", hint: "Something went wrong talking to the agent. Press Retry; if it persists, restart the browser.", cls: "error" },
-};
+import { describeDetail, describeStatus } from "./status.ts";
 
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -28,9 +18,9 @@ function isStatus(v: unknown): v is StatusReport {
 }
 
 function render(status: StatusReport): void {
-  const info = HINTS[status.connection.state] ?? HINTS.error;
+  const info = describeStatus(status);
   byId("state-title").textContent = info.title;
-  byId("state-detail").textContent = status.connection.message ? status.connection.message : "";
+  byId("state-detail").textContent = describeDetail(status);
   byId("hint").textContent = info.hint;
   const dot = byId("indicator");
   dot.className = `dot ${info.cls}`.trim();
@@ -46,10 +36,10 @@ async function refresh(): Promise<void> {
   try {
     const status = await ask({ kind: POPUP_KIND, type: "status" });
     if (isStatus(status)) render(status);
-    else byId("state-title").textContent = "Status unavailable";
+    else byId("state-title").textContent = "Status unavailable - press Retry connection below";
   } catch {
-    byId("state-title").textContent = "Background worker not responding";
-    byId("hint").textContent = "Reload the extension from the browser's extensions page.";
+    byId("state-title").textContent = "The DoMe extension is not responding";
+    byId("hint").textContent = "Open the browser's Extensions page and press Reload on DoMe for YouTube.";
   }
 }
 

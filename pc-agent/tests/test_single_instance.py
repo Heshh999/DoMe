@@ -1,12 +1,13 @@
 """One agent per user session (spec §10): the instance lock, the second-launch behaviour, stale
 endpoints and `dome-agent repair` preserving identity/credential/grants/approved apps.
-Linux uses the flock lock file; the Windows named mutex is not exercised here."""
+Linux uses the flock lock file; the Windows CI job runs the same tests against the named mutex."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,10 @@ def test_second_launch_with_silent_instance_points_to_repair(
     assert "not responding" in out and f"pid {os.getpid()}" in out and "dome-agent repair" in out
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="only a Unix socket leaves an endpoint file behind; a named pipe dies with its process",
+)
 def test_stale_lock_and_endpoint_are_reported_and_repaired(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -87,6 +92,7 @@ def test_stale_lock_and_endpoint_are_reported_and_repaired(
     assert not inspect(settings.state_dir, control_timeout=0.3).control_endpoint_stale
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes; Windows state-dir ACLs are not tested here")
 def test_permission_problem_is_distinct(settings: Settings) -> None:
     if os.geteuid() == 0:
         pytest.skip("root can always write; the permission probe cannot fail here")

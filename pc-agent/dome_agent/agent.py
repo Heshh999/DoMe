@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import threading
 import time
 from collections import deque
 from collections.abc import Callable, Coroutine, Iterable
@@ -38,8 +39,10 @@ from typing import Any
 
 from dome_protocol import (
     ProtocolError,
+    format_rfc3339,
     load_registry,
     load_schemas,
+    now_utc,
     verify_and_parse_confirmation,
     verify_and_parse_input_batch,
 )
@@ -64,7 +67,7 @@ from .platform import PlatformSet, build_platform
 from .queue import Emitter, Executor
 from .relay_client import ConnectionState, RelayClient, StopReason, TokenManager
 from .settings import Settings
-from .state import StateAggregator
+from .state import ReadFailureLog, StateAggregator
 from .store import Store
 from .ui import AgentUI, NullUI, StatusView
 
@@ -74,6 +77,47 @@ MISMATCH_WINDOW_SECONDS = 60.0
 MISMATCH_LIMIT = 3
 CONFIRMATION_SWEEP_SECONDS = 5.0
 LINK_POLL_SECONDS = 3.0
+
+
+class _RecentReadFailures(ReadFailureLog):
+    """The state aggregator's read-failure log (same rate-limited agent.log lines), which also keeps each
+    source's latest failure until that source reads fine again. ``status()`` shows it, and with it the
+    tray Diagnostics and the diagnostics bundle, so the owner can see why the phone gets no volume, media
+    players or lock state without opening agent.log. Same fields as the log line: the protocol error code
+    and the adapter's own fixed message, or the exception class and numeric OS error; never exception text."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()  # failed()/ok() run on the event loop; status() also runs in the tray thread
+        self._recent: dict[str, dict[str, Any]] = {}
+
+    def failed(self, source: str, exc: BaseException) -> None:
+        super().failed(source, exc)
+        entry: dict[str, Any]
+        if isinstance(exc, ProtocolError):
+            entry = {"code": exc.code, "message": exc.message}
+        else:
+            entry = {"error": exc.__class__.__name__}
+            os_code = getattr(exc, "winerror", None) or getattr(exc, "hresult", None) or getattr(exc, "errno", None)
+            if isinstance(os_code, int):
+                entry["os_error"] = os_code
+        now = format_rfc3339(now_utc())
+        with self._lock:
+            previous = self._recent.get(source)
+            entry["failures"] = previous["failures"] + 1 if previous else 1
+            entry["since"] = previous["since"] if previous else now  # failing without a good read since then
+            entry["last_failed_at"] = now
+            self._recent[source] = entry
+
+    def ok(self, source: str) -> None:
+        super().ok(source)
+        with self._lock:
+            self._recent.pop(source, None)
+
+    def summary(self) -> dict[str, dict[str, Any]]:
+        """``{source: {code, message | error, os_error?, failures, since, last_failed_at}}``; {} when all read fine."""
+        with self._lock:
+            return {source: dict(entry) for source, entry in self._recent.items()}
 
 
 class Agent:
@@ -90,6 +134,8 @@ class Agent:
             settings.state_dir, on_change=self._on_bridge_change, on_security_event=self._security_event
         )
         self.state = StateAggregator(self.store, self.platform, self.bridge)
+        self.read_failures = _RecentReadFailures()
+        self.state._read_failures = self.read_failures  # same log lines, plus what status() reports
         self.power = PowerManager(self.store, self.platform, self.state)
         self.apps = ApprovedApps(self.store)
         self.input = InputSessionManager(
@@ -737,6 +783,12 @@ class Agent:
             "entitlement": self.entitlement.summary(),
             "extension_connected": self.bridge.connected,
             "browser_instances": [i.summary() for i in self.bridge.instances()],
+            # "" while listening; otherwise why no browser / no `dome-agent status` can reach this agent
+            # (for example the pipe name is held by a leftover process of an older version).
+            "bridge_unavailable_reason": self.bridge.unavailable_reason,
+            "control_unavailable_reason": self.control.unavailable_reason,
+            # volume / media / session reads failing right now, so the phone gets no such field
+            "read_failures": self.read_failures.summary(),
             "in_flight": self.executor.in_flight_ids(),
             "pending_confirmations": self.confirmations.pending_command_ids(),
             "pending_power": self.store.get_pending_power().__dict__ if self.store.get_pending_power() else None,

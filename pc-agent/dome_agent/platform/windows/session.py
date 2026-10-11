@@ -2,8 +2,12 @@
 
 Lock state is read from ``WTSQuerySessionInformationW(WTS_CURRENT_SESSION, WTSSessionInfoEx)`` →
 ``WTSINFOEX_LEVEL1_W.SessionFlags`` (``WTS_SESSIONSTATE_LOCK = 0`` / ``UNLOCK = 1`` on Windows 8 and
-later). If that query fails the ``OpenInputDesktop`` heuristic is used (the secure desktop cannot be
-opened by a user process while the session is locked).
+later). If that query fails, or reports any other value (``WTS_SESSIONSTATE_UNKNOWN``), the
+``OpenInputDesktop`` heuristic is used (the secure desktop cannot be opened by a user process while the
+session is locked).
+
+Every ctypes call declares ``argtypes``/``restype``: handles are 64-bit, and an undeclared argument or
+result is passed as a C ``int``.
 """
 
 from __future__ import annotations
@@ -54,9 +58,9 @@ class _WtsInfoEx(ctypes.Structure):
 class WindowsSession:
     def is_locked(self) -> bool:
         flags = self._session_flags()
-        if flags is not None:
+        if flags in (WTS_SESSIONSTATE_LOCK, WTS_SESSIONSTATE_UNLOCK):
             return flags == WTS_SESSIONSTATE_LOCK
-        return self._input_desktop_unavailable()
+        return self._input_desktop_unavailable()  # query failed, or WTS_SESSIONSTATE_UNKNOWN (-1)
 
     def _session_flags(self) -> int | None:
         try:
@@ -72,6 +76,7 @@ class WindowsSession:
             query.restype = wintypes.BOOL
             free = wtsapi32.WTSFreeMemory
             free.argtypes = [ctypes.c_void_p]
+            free.restype = None
             buffer = ctypes.c_void_p()
             size = wintypes.DWORD(0)
             ok = query(
@@ -96,7 +101,10 @@ class WindowsSession:
     def _input_desktop_unavailable(self) -> bool:
         try:
             user32 = ctypes.WinDLL("user32", use_last_error=True)
-            user32.OpenInputDesktop.restype = wintypes.HANDLE
+            user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            user32.OpenInputDesktop.restype = wintypes.HANDLE  # HDESK
+            user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+            user32.CloseDesktop.restype = wintypes.BOOL
             handle = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
             if not handle:
                 return True
@@ -107,6 +115,7 @@ class WindowsSession:
 
     def lock(self) -> None:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.LockWorkStation.argtypes = []
         user32.LockWorkStation.restype = wintypes.BOOL
         if not user32.LockWorkStation():
             err = ctypes.get_last_error()

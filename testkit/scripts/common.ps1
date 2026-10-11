@@ -332,6 +332,192 @@ function Write-Current($Object) {
     $Object | ConvertTo-Json | Set-Content -Path (Get-CurrentPath) -Encoding Ascii
 }
 
+# A newer download extracted over this folder keeps testkit\.state, so the kit remembers which sources
+# each build was made from: step 2 rebuilds the browser extension when its sources changed, and says
+# when the running test server is older than this folder. Paths are relative to the repository root.
+# Folders and files skipped at any depth (dependencies, build output, caches, tests, notes) never change
+# what is built, so a new download that only changed those asks for nothing.
+$script:ExtensionSources = @('browser-extension', 'shared/ts', 'shared/protocol',
+    'testkit/extension.Dockerfile', 'testkit/extension.Dockerfile.dockerignore')
+$script:ServerSources = @('cloud-api', 'mobile-app', 'shared/protocol', 'shared/python', 'shared/ts', 'deploy/Dockerfile',
+    'deploy/Dockerfile.dockerignore', 'deploy/entrypoint.sh', 'tools/dev-idp', 'testkit/docker-compose.yml')
+$script:FingerprintSkipDirs = @('node_modules', 'dist', 'dev-dist', '.vite', 'coverage', '.venv', '__pycache__', '.*_cache',
+    '.git', 'test', 'tests', 'fixtures')
+$script:FingerprintSkipFiles = @('*.md', '*.tsbuildinfo', '*.pyc', 'Thumbs.db', 'desktop.ini', '.DS_Store')
+
+function Test-NameLike([string]$Name, [string[]]$Patterns) {
+    foreach ($pattern in $Patterns) { if ($Name -like $pattern) { return $true } }
+    return $false
+}
+
+function Get-SourceFingerprint([string]$Root, [string[]]$Paths) {
+    # SHA-256 over the sorted lines "relative/path<TAB>SHA-256 of its bytes": the same files give the same
+    # value on every run, and an edited, added, removed or renamed file gives a new one. Checked by
+    # testkit/tests/kit.tests.ps1.
+    $Root = Convert-Path -LiteralPath $Root  # .NET resolves relative paths from its own current folder
+    $files = New-Object System.Collections.Generic.List[string]
+    $folders = New-Object System.Collections.Generic.Queue[string]
+    foreach ($path in $Paths) {
+        $full = Join-Path $Root $path
+        if (Test-Path -LiteralPath $full -PathType Leaf) { $files.Add($path) }
+        elseif (Test-Path -LiteralPath $full -PathType Container) { $folders.Enqueue($path) }
+    }
+    while ($folders.Count -gt 0) {
+        $folder = $folders.Dequeue()
+        $full = Join-Path $Root $folder
+        foreach ($sub in [IO.Directory]::GetDirectories($full)) {
+            $name = [IO.Path]::GetFileName($sub)
+            if (-not (Test-NameLike $name $script:FingerprintSkipDirs)) { $folders.Enqueue($folder + '/' + $name) }
+        }
+        foreach ($file in [IO.Directory]::GetFiles($full)) {
+            $name = [IO.Path]::GetFileName($file)
+            if (-not (Test-NameLike $name $script:FingerprintSkipFiles)) { $files.Add($folder + '/' + $name) }
+        }
+    }
+    $sorted = $files.ToArray()
+    [Array]::Sort($sorted, [StringComparer]::Ordinal)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $lines = foreach ($file in $sorted) {
+            $hash = $sha.ComputeHash([IO.File]::ReadAllBytes((Join-Path $Root $file)))
+            $file + "`t" + [BitConverter]::ToString($hash).Replace('-', '')
+        }
+        $all = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes((@($lines) -join "`n")))
+        return [BitConverter]::ToString($all).Replace('-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
+function Get-SavedFingerprint([string]$Name) {
+    $path = Join-Path $script:StateDir $Name
+    if (-not (Test-Path -LiteralPath $path)) { return '' }
+    return ([string](Get-Content -Raw -LiteralPath $path)).Trim()
+}
+
+function Save-Fingerprint([string]$Name, [string]$Value) {
+    Initialize-StateDir
+    Set-Content -LiteralPath (Join-Path $script:StateDir $Name) -Value $Value -NoNewline -Encoding Ascii
+}
+
+function Open-ExtensionsPage {
+    foreach ($browser in @(@('chrome', 'chrome://extensions'), @('msedge', 'edge://extensions'))) {
+        try {
+            Start-Process -FilePath $browser[0] -ArgumentList $browser[1] -ErrorAction Stop
+            return $browser[0]
+        } catch { }
+    }
+    return $null
+}
+
+function Install-ExtensionBuild([string]$BuildDir, [string]$ExtensionDir) {
+    # Puts a finished build in place of the previous one. The previous folder is only renamed until the new
+    # one is in, and is put back when anything fails (a browser or a virus scanner can hold a file open),
+    # so a failed swap never leaves this PC without an extension.
+    $oldDir = $ExtensionDir + '.old'
+    $renamed = $false
+    try {
+        # Left over when an earlier clean-up failed; Move-Item would put the folder inside it.
+        if (Test-Path -LiteralPath $oldDir) { Remove-Item -LiteralPath $oldDir -Recurse -Force }
+        if (Test-Path -LiteralPath $ExtensionDir) {
+            Move-Item -LiteralPath $ExtensionDir -Destination $oldDir
+            $renamed = $true
+        }
+        Move-Item -LiteralPath $BuildDir -Destination $ExtensionDir
+    } catch {
+        $problem = $_.Exception.Message
+        if ($renamed -and -not (Test-Path -LiteralPath $ExtensionDir)) {
+            try { Move-Item -LiteralPath $oldDir -Destination $ExtensionDir } catch { }
+        }
+        Stop-Kit ('Could not replace the extension in ' + $ExtensionDir + ' (' + $problem + '). Close Chrome and Edge, then run this again.')
+    }
+    if ($renamed) {
+        try { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
+function Update-ExtensionBuild([string]$ExtensionDir, [bool]$FirstBuild) {
+    # Builds the extension with Docker next to the previous build, then swaps it in. Returns $true when the
+    # new build is in place. A failed rebuild leaves the previous build working: it warns and returns $false
+    # (so the sources are not recorded and the next run tries again), and DoMe still starts. Only the first
+    # build, with nothing to fall back on, stops the kit.
+    $buildDir = $ExtensionDir + '.new'
+    try {
+        if (Test-Path -LiteralPath $buildDir) { Remove-Item -LiteralPath $buildDir -Recurse -Force }
+        # Out-Host: Docker's output is shown, not returned with this function's value.
+        Invoke-Native 'Building the browser extension' {
+            docker build --progress plain -f (Join-Path $script:KitDir 'extension.Dockerfile') --output ('type=local,dest=' + $buildDir) $script:RepoDir
+        } | Out-Host
+        Install-ExtensionBuild $buildDir $ExtensionDir
+        return $true
+    } catch {
+        if ($FirstBuild -or -not (Test-Path -LiteralPath (Join-Path $ExtensionDir 'manifest.json'))) { throw }
+        Write-Warn $_.Exception.Message
+        Write-Note 'DoMe starts with the previous build of the extension; the next run of this step tries again.'
+        Write-Note 'If it keeps failing, see "Building the browser extension failed" in testkit\README.md.'
+        return $false
+    }
+}
+
+function Initialize-BrowserExtension([switch]$Rebuild) {
+    # Step 2's browser extension: builds it when it is missing, when asked to, or when its sources changed;
+    # pins its ID, registers the browser bridge and asks the owner to load or reload it. Checked by
+    # testkit/tests/kit.tests.ps1 (with Docker, the PC program and the owner's answers replaced).
+    Write-Step 'Preparing the DoMe browser extension (YouTube control)'
+    $extensionDir = Join-Path $script:StateDir 'extension'
+    $keyPath = Join-Path $script:StateDir 'extension-key.pem'
+    $firstExtension = -not (Test-Path (Join-Path $extensionDir 'manifest.json'))
+    # A newer download extracted over this folder keeps the earlier build in testkit\.state: rebuild
+    # whenever the extension's sources differ from the ones of the build the owner last loaded.
+    $extensionSources = Get-SourceFingerprint $script:RepoDir $script:ExtensionSources
+    $sourcesChanged = ((Get-SavedFingerprint 'extension-sources.txt') -ne $extensionSources)
+    $rebuilt = $false
+    if ($firstExtension -or $Rebuild -or $sourcesChanged) {
+        if ($firstExtension) { Write-Note 'Building it with Docker (first time: about 2-4 minutes)' }
+        elseif ($sourcesChanged) { Write-Note 'The extension changed since its last build: building it again with Docker (about 1-3 minutes)' }
+        else { Write-Note 'Building it again with Docker (about 1-3 minutes)' }
+        $rebuilt = Update-ExtensionBuild $extensionDir $firstExtension
+    } else {
+        Write-Ok 'the extension is up to date'
+    }
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $extensionId = (& $script:AgentPython (Join-Path $PSScriptRoot 'kit_helper.py') extension $extensionDir $keyPath | Out-String).Trim() }
+    finally { $ErrorActionPreference = $previous }
+    if ($LASTEXITCODE -ne 0 -or $extensionId -notmatch '^[a-p]{32}$') { Stop-Kit 'Could not prepare the browser extension.' }
+    Write-Ok ('extension ID ' + $extensionId)
+
+    $env:DOME_AGENT_DEV_EXTENSION_ID = $extensionId
+    Invoke-Native 'Registering the browser bridge' { & $script:AgentExe install-native-host } | Out-Host
+    Write-Ok 'Chrome and Edge can now talk to DoMe on this PC'
+
+    if ($firstExtension) {
+        try { Set-Clipboard -Value $extensionDir } catch { }
+        Write-Host ''
+        Write-Host '  Load the extension in Chrome or Edge (one time):' -ForegroundColor White
+        Write-Host '    1. On the Extensions page that opens, switch on "Developer mode".'
+        Write-Host '    2. Click "Load unpacked" and choose this folder (already copied, paste with Ctrl+V):'
+        Write-Host ('         ' + $extensionDir) -ForegroundColor Green
+        Write-Host '    YouTube tabs that are already open need no reload: the extension starts in them by itself.'
+        $opened = Open-ExtensionsPage
+        if (-not $opened) { Write-Note 'Open chrome://extensions (or edge://extensions) yourself.' }
+        Read-Host '  Press Enter when the extension is loaded' | Out-Null
+    } elseif ($rebuilt) {
+        # The browser keeps running the version it loaded until it is told to load the folder again.
+        try { Set-Clipboard -Value $extensionDir } catch { }
+        Write-Host ''
+        Write-Host '  The DoMe extension was updated. Let the browser load the new version:' -ForegroundColor White
+        Write-Host '    1. In Edge, type edge://extensions in the address bar (in Chrome: chrome://extensions).'
+        Write-Host '    2. Click the reload arrow on the DoMe card. (Or close the browser completely and open it again.)'
+        Write-Host '    YouTube tabs that are already open need no reload: the new version starts in them by itself.'
+        Write-Host '    No DoMe card there? Switch on "Developer mode", click "Load unpacked" and choose this folder'
+        Write-Host '    (already copied, paste with Ctrl+V):'
+        Write-Host ('         ' + $extensionDir) -ForegroundColor Green
+        Read-Host '  Press Enter when the extension is reloaded' | Out-Null
+    }
+    # Recorded only once the owner has loaded or reloaded this build: a run that stops before that (a
+    # failure above, or the window closed at the prompt) builds it again next time and asks again.
+    if ($rebuilt) { Save-Fingerprint 'extension-sources.txt' $extensionSources }
+}
+
 function Show-Image([string]$Path) {
     if ($script:OnWindows) {
         try { Start-Process -FilePath $Path } catch { Write-Warn ('Could not open ' + $Path) }

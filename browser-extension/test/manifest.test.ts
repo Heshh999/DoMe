@@ -3,24 +3,28 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { CONTENT_SCRIPT_FILE } from "../src/background/tabs.ts";
+
 const manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, "../public/manifest.json"), "utf8")) as Record<string, unknown>;
 
 describe("manifest.json (spec §9/§15, design)", () => {
   it("has exactly the designed permissions and the narrow YouTube host permission", () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.name).toBe("DoMe for YouTube");
-    expect([...(manifest.permissions as string[])].sort()).toEqual(["alarms", "nativeMessaging", "storage"]);
+    // scripting: re-run the extension's own content.js in YouTube tabs open before install/reload
+    // (DECISIONS D26); the YouTube host permission below is what limits where it can run.
+    expect([...(manifest.permissions as string[])].sort()).toEqual(["alarms", "nativeMessaging", "scripting", "storage"]);
     expect(manifest.host_permissions).toEqual(["https://www.youtube.com/*"]);
     expect(manifest.optional_permissions).toBeUndefined();
     expect(manifest.optional_host_permissions).toBeUndefined();
-    for (const forbidden of ["tabs", "history", "cookies", "debugger", "scripting", "webRequest", "<all_urls>"]) {
+    for (const forbidden of ["tabs", "history", "cookies", "debugger", "webRequest", "<all_urls>"]) {
       expect(JSON.stringify(manifest)).not.toContain(`"${forbidden}"`);
     }
   });
 
   it("uses a module service worker, a top-frame-only YouTube content script and the status popup", () => {
     expect(manifest.background).toEqual({ service_worker: "background.js", type: "module" });
-    expect(manifest.content_scripts).toEqual([{ matches: ["https://www.youtube.com/*"], js: ["content.js"], run_at: "document_idle" }]);
+    expect(manifest.content_scripts).toEqual([{ matches: ["https://www.youtube.com/*"], js: [CONTENT_SCRIPT_FILE], run_at: "document_idle" }]);
     expect(manifest.action).toEqual({ default_title: "DoMe", default_popup: "popup.html" });
     expect(manifest.minimum_chrome_version).toBe("116");
   });

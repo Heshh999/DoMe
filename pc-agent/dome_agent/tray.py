@@ -338,7 +338,9 @@ class TrayUI:
                 return
             enabled = not startup_checked(None)
             try:
-                self.agent.platform.startup.set_start_at_login(enabled, startup_command())
+                # Turning it off only removes the Run entry, so it must work even when no command can be built.
+                command = startup_command() if enabled else ""
+                self.agent.platform.startup.set_start_at_login(enabled, command)
                 self.agent.store.set_bool("start_at_login", enabled)
             except Exception as exc:  # noqa: BLE001
                 self.notify("DoMe", f"Could not change start at login: {exc.__class__.__name__}")
@@ -467,10 +469,19 @@ def _status_text(agent: Any) -> str:
 
 
 def startup_command() -> str:
-    """Command written to the HKCU Run key: the frozen executable, or the module entry in a venv."""
+    """Command written to the HKCU Run key: the frozen executable, or the module entry in a venv run by
+    the venv's windowless ``pythonw.exe``. Never ``python.exe``: it is a console program, so Windows would
+    open a console window at sign-in, and closing it would stop DoMe."""
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}" run'
-    return f'"{sys.executable}" -m dome_agent.cli run'
+    interpreter = Path(sys.executable)
+    windowless = interpreter.with_name("pythonw.exe") if interpreter.name else None
+    if windowless is not None and windowless.is_file():
+        return f'"{windowless}" -m dome_agent.cli run'
+    if sys.platform == "win32":
+        log.error("start at login not registered: no pythonw.exe next to the Python interpreter")
+        raise RuntimeError("pythonw.exe was not found next to the Python interpreter")
+    return f'"{interpreter}" -m dome_agent.cli run'
 
 
 def host_executable_path() -> Path:

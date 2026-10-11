@@ -2,7 +2,7 @@
  * TEST DOUBLE: an in-memory implementation of the chrome.* subset in src/background/api.ts.
  * Only ever imported by tests; the shipped code receives the real `chrome` object.
  */
-import type { ChromeEvent, ExtensionApi, NativePort } from "../src/background/api.ts";
+import type { ChromeEvent, ExtensionApi, NativePort, StorageArea } from "../src/background/api.ts";
 
 export class FakeEvent<F extends (...args: never[]) => unknown> implements ChromeEvent<F> {
   readonly listeners = new Set<F>();
@@ -73,7 +73,12 @@ export class FakeChrome implements ExtensionApi {
   readonly alarmsCreated: Array<{ name: string; info: { delayInMinutes?: number; periodInMinutes?: number } }> = [];
   readonly tabList: chrome.tabs.Tab[] = [];
   readonly contentHandlers = new Map<number, ContentHandler>();
+  readonly injections: Array<{ tabId: number; files: string[] }> = [];
   connectNativeError: Error | null = null;
+  /** Tabs whose executeScript rejects (e.g. an error page), with the browser's message. */
+  readonly injectionErrors = new Map<number, string>();
+  /** Tabs whose executeScript never settles (a hung renderer). */
+  readonly injectionHangs = new Set<number>();
 
   readonly runtime = {
     id: "abcdefghijklmnopabcdefghijklmnop",
@@ -90,19 +95,7 @@ export class FakeChrome implements ExtensionApi {
     onInstalled: new FakeEvent<(details: { reason: string }) => void>(),
   };
 
-  readonly storage = {
-    local: {
-      get: async (keys: string | string[]): Promise<Record<string, unknown>> => {
-        const list = Array.isArray(keys) ? keys : [keys];
-        const out: Record<string, unknown> = {};
-        for (const k of list) if (this.store.has(k)) out[k] = structuredClone(this.store.get(k));
-        return out;
-      },
-      set: async (items: Record<string, unknown>): Promise<void> => {
-        for (const [k, v] of Object.entries(items)) this.store.set(k, structuredClone(v));
-      },
-    },
-  };
+  readonly storage = { local: storageArea(() => this.store), session: storageArea(() => this.sessionStore) };
 
   readonly alarms = {
     create: async (name: string, info: { delayInMinutes?: number; periodInMinutes?: number }): Promise<void> => {
@@ -110,6 +103,18 @@ export class FakeChrome implements ExtensionApi {
     },
     clear: async (_name: string): Promise<boolean> => true,
     onAlarm: new FakeEvent<(alarm: { name: string }) => void>(),
+  };
+
+  readonly scripting = {
+    executeScript: async (injection: { target: { tabId: number }; files: string[] }): Promise<unknown> => {
+      const tabId = injection.target.tabId;
+      if (!this.tabList.some((t) => t.id === tabId)) throw new Error(`No tab with id: ${tabId}`);
+      const failure = this.injectionErrors.get(tabId);
+      if (failure) throw new Error(failure);
+      if (this.injectionHangs.has(tabId)) return new Promise<never>(() => undefined);
+      this.injections.push({ tabId, files: [...injection.files] });
+      return [{ frameId: 0, result: undefined }];
+    },
   };
 
   readonly tabs = {
@@ -133,11 +138,18 @@ export class FakeChrome implements ExtensionApi {
     onReplaced: new FakeEvent<(addedTabId: number, removedTabId: number) => void>(),
   };
 
-  constructor(readonly store: Map<string, unknown> = new Map()) {}
+  /** `store` backs storage.local; `sessionStore` backs storage.session, which a browser restart clears. */
+  constructor(
+    readonly store: Map<string, unknown> = new Map(),
+    readonly sessionStore: Map<string, unknown> = new Map(),
+  ) {}
 
-  /** A second worker lifetime sharing the same storage (simulates service-worker termination + restart). */
+  /**
+   * A second worker lifetime sharing the same storage (simulates service-worker termination + restart).
+   * Content scripts keep running, as they do when only the worker restarts.
+   */
   restartWorker(): FakeChrome {
-    const next = new FakeChrome(this.store);
+    const next = new FakeChrome(this.store, this.sessionStore);
     next.tabList.push(...this.tabList.map((t) => ({ ...t })));
     for (const [id, h] of this.contentHandlers) next.contentHandlers.set(id, h);
     return next;
@@ -210,6 +222,20 @@ export class FakeChrome implements ExtensionApi {
     this.runtime.onMessage.dispatch(message, sender, (r) => responses.push(r));
     return Promise.resolve(responses);
   }
+}
+
+function storageArea(map: () => Map<string, unknown>): StorageArea {
+  return {
+    get: async (keys: string | string[]): Promise<Record<string, unknown>> => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      const out: Record<string, unknown> = {};
+      for (const k of list) if (map().has(k)) out[k] = structuredClone(map().get(k));
+      return out;
+    },
+    set: async (items: Record<string, unknown>): Promise<void> => {
+      for (const [k, v] of Object.entries(items)) map().set(k, structuredClone(v));
+    },
+  };
 }
 
 function matchPattern(pattern: string, url: string): boolean {

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -25,8 +26,51 @@ log = get_logger(__name__)
 
 DEBOUNCE_SECONDS = 0.5
 PERIODIC_SECONDS = 30.0
+READ_FAILURE_REPEAT_SECONDS = 3600.0
+_READ_FAILURE_KEYS_PER_SOURCE = 16  # distinct errors remembered per source until it reads fine again
 
 Emitter = Callable[[dict[str, Any]], Awaitable[bool]]
+
+
+class ReadFailureLog:
+    """Rate-limited log lines for platform reads that fail while a state frame is built.
+
+    A failed volume / media / session read only leaves its field out of the frame (the phone then shows
+    no volume position or no media players), so without a log line the owner cannot see why. The first
+    failure of each distinct error of a source is a WARNING, repeated at most every ``repeat_after``
+    seconds while it persists; the next successful read logs one INFO line and re-arms the source.
+
+    Logged: the protocol error code and the adapter's own message (fixed text plus an exception class or
+    HRESULT, the same text the phone may receive), or only the class name and numeric OS error code of an
+    unexpected exception. Never ``str()`` of an arbitrary exception, which can carry titles or paths."""
+
+    def __init__(self, repeat_after: float = READ_FAILURE_REPEAT_SECONDS) -> None:
+        self._repeat_after = repeat_after
+        self._logged: dict[str, dict[str, float]] = {}  # source -> error key -> monotonic time logged
+
+    def failed(self, source: str, exc: BaseException) -> None:
+        fields: dict[str, Any]
+        if isinstance(exc, ProtocolError):
+            fields = {"code": exc.code, "message": exc.message}
+        else:
+            fields = {"error": exc.__class__.__name__}
+            os_code = getattr(exc, "winerror", None) or getattr(exc, "hresult", None) or getattr(exc, "errno", None)
+            if isinstance(os_code, int):
+                fields["os_error"] = os_code
+        key = repr(sorted(fields.items()))
+        now = time.monotonic()
+        seen = self._logged.setdefault(source, {})
+        last = seen.get(key)
+        if last is not None and now - last < self._repeat_after:
+            return
+        if last is None and len(seen) >= _READ_FAILURE_KEYS_PER_SOURCE:
+            return
+        seen[key] = now
+        log.warning("state read failed; the field is left out of the state frame", source=source, **fields)
+
+    def ok(self, source: str) -> None:
+        if self._logged.pop(source, None):
+            log.info("state read works again", source=source)
 
 
 class StateAggregator:
@@ -48,6 +92,7 @@ class StateAggregator:
         self._debounce_task: asyncio.Task[None] | None = None
         self._periodic_task: asyncio.Task[None] | None = None
         self._last: dict[str, Any] | None = None
+        self._read_failures = ReadFailureLog()
         self.session_locked_override: bool | None = None  # tests / fake platform
         self.emitted = 0
         self.input: InputSessionManager | None = (
@@ -76,9 +121,12 @@ class StateAggregator:
         if self.session_locked_override is not None:
             return self.session_locked_override
         try:
-            return bool(await asyncio.to_thread(self._platform.session.is_locked))
-        except Exception:
+            locked = bool(await asyncio.to_thread(self._platform.session.is_locked))
+        except Exception as exc:
+            self._read_failures.failed("session", exc)
             return False
+        self._read_failures.ok("session")
+        return locked
 
     async def snapshot(self) -> dict[str, Any]:
         state: dict[str, Any] = {
@@ -91,18 +139,18 @@ class StateAggregator:
         if self._platform.supports_windows_actions:
             try:
                 vol = await asyncio.to_thread(self._platform.volume.get)
+            except Exception as exc:  # noqa: BLE001 - the field is left out; the reason goes to the log
+                self._read_failures.failed("volume", exc)
+            else:
+                self._read_failures.ok("volume")
                 state["volume"] = vol.as_result()
-            except ProtocolError:
-                pass
-            except Exception as exc:
-                log.debug("volume read failed", error=exc.__class__.__name__)
             try:
                 sessions = await asyncio.to_thread(self._platform.media.list_sessions)
+            except Exception as exc:  # noqa: BLE001
+                self._read_failures.failed("media", exc)
+            else:
+                self._read_failures.ok("media")
                 state["media_sessions"] = [s.as_result() for s in sessions[:16]]
-            except ProtocolError:
-                pass
-            except Exception as exc:
-                log.debug("media sessions read failed", error=exc.__class__.__name__)
         instances = self._bridge.instances()
         state["browser_instances"] = [i.summary() for i in instances[:8]]
         state["youtube_tabs"] = self._bridge.all_tabs()

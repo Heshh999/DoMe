@@ -219,6 +219,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9,<1" },
     { name = "structlog", specifier = ">=25.1,<27" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=6.1" },
+    { name = "types-pywin32", marker = "extra == 'dev'", specifier = ">=312.0.0.20261006" },
     { name = "websockets", specifier = ">=15.0,<18" },
     { name = "winsdk", marker = "sys_platform == 'win32'", specifier = ">=1.0.0b10" },
 ]

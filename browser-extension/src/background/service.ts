@@ -66,6 +66,7 @@ export function createBackground(api: ExtensionApi, options: BackgroundOptions =
     onStateChange: (state: ConnectionState) => {
       void storage.setConnectionState(state);
     },
+    retryWindow: { load: () => storage.fastRetryUntil(), save: (until) => storage.setFastRetryUntil(until) },
   });
 
   async function sendTabsChanged(): Promise<void> {
@@ -118,8 +119,17 @@ export function createBackground(api: ExtensionApi, options: BackgroundOptions =
   // ----- synchronous listener registration -----------------------------------------------------
   registry.installListeners();
   connection.installListeners();
-  api.runtime.onInstalled.addListener(() => void connection.connect());
-  api.runtime.onStartup.addListener(() => void connection.connect());
+  // Install, update and reload (onInstalled) and browser start (onStartup) are also when YouTube
+  // tabs can be open without a content script: Chrome injects manifest content scripts only into
+  // pages loaded afterwards. Their attach messages update the registry like any other. DoMe is often
+  // started after the browser, so both also restart the fast reconnect pace.
+  const onLaunch = (): void => {
+    connection.restartFastRetries();
+    void connection.connect();
+    void registry.injectContentScript().catch((err: unknown) => log.warn("content script injection failed", { error: err instanceof Error ? err.name : "unknown" }));
+  };
+  api.runtime.onInstalled.addListener(onLaunch);
+  api.runtime.onStartup.addListener(onLaunch);
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (sender.id !== api.runtime.id) return undefined;
     if (isContentToBackground(message)) {
@@ -150,8 +160,7 @@ export function createBackground(api: ExtensionApi, options: BackgroundOptions =
           if (connection.connected) await connection.sendHello();
           return status();
         }
-        if (!connection.connected) connection.disconnect();
-        await connection.connect();
+        await connection.reconnectNow();
         return status();
       })().then(sendResponse, () => sendResponse(null));
       return true;

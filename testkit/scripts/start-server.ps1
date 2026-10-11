@@ -46,6 +46,8 @@ $exitCode = Invoke-KitMain {
     $env:DOME_TEST_SIGNIN_URL = $signinUrl
 
     Write-Step 'Building and starting DoMe (first time: 5-15 minutes while Docker downloads and builds)'
+    # Recorded in current.json: step 2 says when this folder holds a newer server than the running one.
+    $serverSources = Get-SourceFingerprint $script:RepoDir $script:ServerSources
     Invoke-Compose 'Starting DoMe' @('up', '-d', '--build', 'postgres', 'dev-idp', 'api')
 
     Write-Step 'Waiting for DoMe to answer on this PC'
@@ -55,11 +57,12 @@ $exitCode = Invoke-KitMain {
     Write-Ok 'DoMe is running'
 
     Write-Current ([ordered]@{
-            app_url    = $appUrl
-            signin_url = $signinUrl
-            passphrase = $env:DOME_TEST_PASSPHRASE
-            mode       = $mode
-            started_at = (Get-Date).ToString('s')
+            app_url        = $appUrl
+            signin_url     = $signinUrl
+            passphrase     = $env:DOME_TEST_PASSPHRASE
+            mode           = $mode
+            started_at     = (Get-Date).ToString('s')
+            server_sources = $serverSources
         })
 
     Write-Step 'Checking the public address (new addresses can take up to a minute to work)'

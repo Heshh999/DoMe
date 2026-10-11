@@ -2,6 +2,43 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-11 — Second Windows/iPhone test round: volume, YouTube bridge, Windows adapters
+
+Owner's report: approved apps, touchpad and keyboard work; the Remote volume slider and Type volume
+phrases fail; YouTube control never works; Type is too limited (wants "full screen X", "bring X to the
+front", "volume 100%", "search YouTube for ...", "play the second video").
+
+- **Volume** (52dee5b): the locked pycaw returns an `AudioDevice` wrapper from `GetSpeakers()` with no
+  `Activate()`, so every volume read/set/mute raised AttributeError (shown as a Windows error). Uses
+  `EndpointVolume` now (falls back for older pycaw); COM pointers are released before `CoUninitialize`.
+  The Type phrase itself parsed fine.
+- **YouTube was blocked twice.** (1) The browser bridge's Windows named pipe was opened synchronous while
+  one thread read and another wrote, so the native host's first `bridge_hello` waited forever behind its
+  own pending read (Windows serialises I/O on a synchronous handle; Linux sockets do not, so every test
+  passed). Both pipe ends now use overlapped I/O (stdlib `_winapi`, as `multiprocessing` does), cancel
+  pending I/O before closing, retry a busy pipe, open at identification level and check the server's
+  user/session; the accept loop survives per-connection errors and never lets the pipe name lapse.
+  (2) The agent acked the extension's hello with its own version 1.1 while the extension only accepted
+  1.0, so it disconnected as incompatible. The ack is now negotiated (highest version both list), the
+  extension lists 1.0 and 1.1, the fake extension refuses an ack it would not accept, and a test reads
+  the shipped extension's version list.
+- Native host exits when the agent goes away (the browser then reconnects); the extension reconnects
+  fast for 5 minutes (1, 2, 4, 8 s) and every 30 s after, Retry always reconnects, and the content script
+  is injected into YouTube tabs that were already open (no reload needed). Plain popup titles.
+- **Windows adapters audited against the locked wheels**: power errors on a locked PC map to
+  `PC_SESSION_LOCKED`, media results are None-guarded, `session.py` ctypes signatures fixed and unknown
+  session flags no longer count as unlocked, Start at login registers `pythonw.exe`, adapter read failures
+  are logged (rate-limited) and shown by `dome-agent status`; CLI output never crashes on a cp1252 pipe.
+- **Test kit**: step 2 rebuilds the extension automatically when its sources changed (fingerprint in
+  `testkit/.state`) and asks to reload it in Edge; a failed rebuild keeps the previous build.
+- **CI**: new `pc-agent (Windows)` job on windows-latest runs the pipe, native-host, mutex and Windows
+  adapter tests on real Windows; CI now also runs on `claude/**` pushes.
+- Runs (Linux): pc-agent 374 passed, 2 skipped, ruff/format/mypy/mypy-windows clean; browser-extension
+  110 passed, typecheck/lint/build clean; tests/ integration 23 passed; testkit checks 0 failed;
+  actionlint clean. **Unverified until Windows CI and the owner's PC**: the overlapped pipe itself.
+- In progress: protocol 1.2 (window actions maximise/restore/full screen, YouTube search and "open
+  result N", per-action version stamping), a much richer Type grammar, and a tray "Add an app..." button.
+
 ## 2026-10-09 — First test-kit run on the owner's Windows PC
 
 - Step 1 on Windows 11 with Docker Desktop: uv found, agent prepared, test data cleared, both Cloudflare

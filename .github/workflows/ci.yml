@@ -1,5 +1,8 @@
 # DoMe continuous integration: every suite that runs without a Windows PC, an iPhone or a real
-# browser. Commands are the ones documented in each component's README / Makefile.
+# browser, plus the pc-agent tests that need real Windows primitives (named pipes, the native-host
+# launcher, the named mutex) and the Windows adapter tests on a windows-latest runner. Commands are
+# the ones documented in each component's README / Makefile. It runs on pushes to main and to
+# claude/** branches, on pull requests, and by hand (workflow_dispatch).
 #
 # STATUS: written against the real commands and validated locally with actionlint; it has NOT
 # yet run on GitHub Actions. No secrets are used or needed: the suites run against a PostgreSQL
@@ -12,8 +15,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -125,6 +129,55 @@ jobs:
       # ---- testkit: the Windows scripts parse, stay ASCII, and their helpers behave (pwsh on Linux) ----
       - name: testkit - script checks
         run: pwsh -NoProfile -File testkit/tests/kit.tests.ps1
+
+  pc-agent-windows:
+    # The Linux job runs these suites over Unix sockets, which are full duplex by nature; only a real
+    # Windows named pipe shows whether the browser bridge's reader and writer threads block each other
+    # (they did: the extension never connected). The Windows adapter tests replace the system calls
+    # (audio, media, power, lock state, the Run key) with stand-ins, so nothing here changes the
+    # runner's volume, locks it, puts it to sleep or shuts it down.
+    name: pc-agent (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync (installs pywin32, pycaw, comtypes, winsdk from the lock)
+        working-directory: pc-agent
+        run: uv sync --locked --extra dev
+
+      - name: pc-agent - mypy (Windows code paths against the pywin32 stubs)
+        working-directory: pc-agent
+        run: uv run mypy --config-file mypy-windows.ini
+
+      - name: pc-agent - pytest (overlapped named pipes, dome-native-host.exe, named mutex, Windows adapters)
+        working-directory: pc-agent
+        run: >-
+          uv run pytest -q -p no:cacheprovider
+          tests/test_ipc_duplex.py
+          tests/test_processes.py
+          tests/test_bridge.py
+          tests/test_control_cli_misc.py
+          tests/test_single_instance.py
+          tests/test_windows_volume.py
+          tests/test_windows_media.py
+          tests/test_windows_power.py
+          tests/test_windows_session.py
+          tests/test_windows_startup.py
+          tests/test_ipc_pipe_logic.py
+          tests/test_native_host.py
+          tests/test_status_reporting.py
+          tests/test_extension_protocol_parity.py
+          tests/test_windows_state_read_failures.py
 
   node:
     name: Node (shared/ts, mobile-app, browser-extension)

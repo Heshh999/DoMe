@@ -4,9 +4,10 @@ import { resolve } from "node:path";
 import { schemas } from "@dome/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { HELLO_ACK_TIMEOUT_MS, NATIVE_HOST_NAME, RECONNECT_ALARM } from "../src/background/connection.ts";
+import { FAST_RETRY_MAX_ATTEMPTS, FAST_RETRY_WINDOW_MS, HELLO_ACK_TIMEOUT_MS, NATIVE_HOST_NAME, RECONNECT_ALARM, SLOW_RETRY_SECONDS } from "../src/background/connection.ts";
 import type { BridgeEvent, BridgeHello, BridgeResponse } from "../src/background/frames.ts";
 import { computeBudget, MIN_BUDGET_MS } from "../src/background/requests.ts";
+import { CONTENT_SCRIPT_FILE } from "../src/background/tabs.ts";
 import { createBackground, type Background } from "../src/background/service.ts";
 import { KEY_INSTANCE_ID } from "../src/background/storage.ts";
 import { BG_KIND, CS_KIND, POPUP_KIND, type ContentReply, type PlayerSnapshot, type StatusReport } from "../src/shared/messages.ts";
@@ -24,7 +25,9 @@ interface FixtureTab {
 const FIXTURE = JSON.parse(readFileSync(resolve(import.meta.dirname, "../fixtures/tabs.json"), "utf8")) as { tabs: FixtureTab[] };
 const TOKENS: Record<number, string> = { 11: "AAAAAAAAAAAAAAAAAAAAAA", 12: "BBBBBBBBBBBBBBBBBBBBBB" };
 const REQ = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const ACK = { type: "bridge_hello_ack", protocol_version: "1.0", agent_version: "0.1.0" };
+const ACK = { type: "bridge_hello_ack", protocol_version: "1.1", agent_version: "0.1.0" };
+const NOT_RUNNING = { type: "bridge_error", error: { code: "AGENT_NOT_RUNNING", message: "The DoMe agent is not running on this PC." } };
+const AGENT_GONE = { type: "bridge_error", error: { code: "AGENT_DISCONNECTED", message: "The DoMe agent disconnected." } };
 
 function snapshotFor(tab: FixtureTab): PlayerSnapshot {
   const s: PlayerSnapshot = { context: "watch", ad_showing: false, is_live: false, in_playlist: tab.url.includes("list="), paused: tab.paused ?? false, muted: false, volume: 80, position_seconds: 10, duration_seconds: 200, theater: false, fullscreen: false, has_next: true, has_previous: false, title: tab.title.replace(" - YouTube", "") };
@@ -91,7 +94,7 @@ describe("startup and hello", () => {
     expect(port.name).toBe(NATIVE_HOST_NAME);
     const hello = port.framesOfType<BridgeHello>("bridge_hello")[0]!;
     expect(hello.browser).toBe("chrome");
-    expect(hello.protocol_versions).toEqual(["1.0"]);
+    expect(hello.protocol_versions).toEqual(["1.0", "1.1"]); // every MINOR, so 1.0 and 1.1 agents both accept it
     expect(hello.extension_version).toBe("0.1.0-test");
     expect(hello.browser_instance_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(chrome.store.get(KEY_INSTANCE_ID)).toBe(hello.browser_instance_id);
@@ -541,14 +544,184 @@ describe("reconnect and version negotiation", () => {
     expect(bg.connection.current().state).toBe("host_forbidden");
   });
 
-  it("AGENT_NOT_RUNNING from the host is surfaced and retried", async () => {
+  it("AGENT_NOT_RUNNING from the host is surfaced, the port is closed at once and retried", async () => {
     const chrome = new FakeChrome();
     const bg = await boot(chrome, { ack: false });
-    chrome.lastPort.receive({ type: "bridge_error", error: { code: "AGENT_NOT_RUNNING", message: "The DoMe agent is not running on this PC." } });
-    chrome.lastPort.fail("Native host has exited.");
+    const port = chrome.lastPort;
+    port.receive({ type: "bridge_error", error: { code: "AGENT_NOT_RUNNING", message: "The DoMe agent is not running on this PC." } });
+    expect(port.disconnected).toBe(true); // not left to the host's exit
+    expect(bg.connection.current().state).toBe("agent_not_running");
+    expect(bg.connection.current().message).toBe("The DoMe agent is not running on this PC.");
+    port.fail("Native host has exited."); // the stale port's onDisconnect changes nothing
     expect(bg.connection.current().state).toBe("agent_not_running");
     await vi.advanceTimersByTimeAsync(1000);
     expect(chrome.ports).toHaveLength(2);
+  });
+
+  it("AGENT_DISCONNECTED after the ack drops the port at once and reconnects after the backoff", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    const bg = await boot(chrome);
+    const first = chrome.lastPort;
+    expect(bg.connection.connected).toBe(true);
+    // The agent quit; the old host process may keep its end of the port open (it does not exit).
+    first.receive({ type: "bridge_error", error: { code: "AGENT_DISCONNECTED", message: "The DoMe agent disconnected." } });
+    expect(first.disconnected).toBe(true);
+    expect(bg.connection.connected).toBe(false);
+    expect(bg.connection.current().state).toBe("disconnected");
+    expect(chrome.alarmsCreated.at(-1)).toEqual({ name: RECONNECT_ALARM, info: { delayInMinutes: 0.5 } });
+    // A request still arriving on the dropped port is ignored, not answered.
+    first.receive({ type: "bridge_request", request_id: REQ, op: "list_tabs", args: {} });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(chrome.ports).toHaveLength(1);
+    expect(first.framesOfType("bridge_response")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1); // backoff restarted at 1 s because the last attempt was acked
+    expect(chrome.ports).toHaveLength(2);
+    const second = chrome.lastPort;
+    expect(second.framesOfType("bridge_hello")).toHaveLength(1);
+    second.receive(ACK);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(bg.connection.connected).toBe(true);
+    expect(bg.connection.current().state).toBe("connected");
+    // The new agent learns the tabs again.
+    expect(second.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed").length).toBeGreaterThanOrEqual(1);
+    validateAllSent(chrome);
+  });
+
+  it("caps the backoff at 8 s so an agent started later is found within ~10 s, and resets it after an ack", async () => {
+    const chrome = new FakeChrome();
+    const bg = await boot(chrome, { ack: false });
+    const notRunning = () => chrome.lastPort.receive({ type: "bridge_error", error: { code: "AGENT_NOT_RUNNING", message: "The DoMe agent is not running on this PC." } });
+    const delays: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      notRunning();
+      const before = chrome.ports.length;
+      let waited = 0;
+      while (chrome.ports.length === before) {
+        await vi.advanceTimersByTimeAsync(500);
+        waited += 500;
+        expect(waited).toBeLessThanOrEqual(10_000);
+      }
+      delays.push(waited);
+    }
+    expect(delays).toEqual([1000, 2000, 4000, 8000, 8000, 8000, 8000]);
+    expect(Math.max(...chrome.alarmsCreated.map((a) => a.info.delayInMinutes ?? 0))).toBe(0.5);
+    // The agent is up now: ack, then lose it again → the next retry is after 1 s, not 8 s.
+    chrome.lastPort.receive(ACK);
+    expect(bg.connection.connected).toBe(true);
+    chrome.lastPort.receive({ type: "bridge_error", error: { code: "AGENT_DISCONNECTED", message: "The DoMe agent disconnected." } });
+    const before = chrome.ports.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(chrome.ports).toHaveLength(before + 1);
+  });
+
+  /** Milliseconds until the next native port opens without an alarm (500 ms steps), or null if none opens within `limitMs`. */
+  async function nextAttemptAfter(chrome: FakeChrome, limitMs = 10_000): Promise<number | null> {
+    const before = chrome.ports.length;
+    let waited = 0;
+    while (chrome.ports.length === before && waited < limitMs) {
+      await vi.advanceTimersByTimeAsync(500);
+      waited += 500;
+    }
+    return chrome.ports.length === before ? null : waited;
+  }
+
+  /** Answer every attempt with AGENT_NOT_RUNNING until the timers stop retrying; returns the delays between attempts. */
+  async function failUntilSlow(chrome: FakeChrome): Promise<number[]> {
+    const delays: number[] = [];
+    for (;;) {
+      chrome.lastPort.receive(NOT_RUNNING);
+      const waited = await nextAttemptAfter(chrome);
+      if (waited === null) return delays;
+      delays.push(waited);
+      expect(delays.length).toBeLessThanOrEqual(FAST_RETRY_MAX_ATTEMPTS);
+    }
+  }
+
+  it("retries fast for about 5 minutes, then only through the 30 s alarm so the worker can sleep", async () => {
+    const chrome = new FakeChrome();
+    const bg = await boot(chrome, { ack: false });
+    const delays = await failUntilSlow(chrome);
+    expect(delays.slice(0, 4)).toEqual([1000, 2000, 4000, 8000]);
+    expect(new Set(delays.slice(3))).toEqual(new Set([8000]));
+    const fastPhase = delays.reduce((a, b) => a + b, 0);
+    expect(fastPhase).toBeGreaterThanOrEqual(FAST_RETRY_WINDOW_MS);
+    expect(fastPhase).toBeLessThan(FAST_RETRY_WINDOW_MS + 8000);
+    expect(chrome.ports).toHaveLength(delays.length + 1);
+    // Slow phase: no timer is left in the worker, only the alarm.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(chrome.alarmsCreated.at(-1)).toEqual({ name: RECONNECT_ALARM, info: { delayInMinutes: SLOW_RETRY_SECONDS / 60 } });
+    expect(bg.connection.current().state).toBe("agent_not_running");
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(chrome.ports).toHaveLength(delays.length + 1);
+    chrome.fireAlarm(RECONNECT_ALARM);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chrome.ports).toHaveLength(delays.length + 2);
+    chrome.lastPort.receive(NOT_RUNNING);
+    expect(await nextAttemptAfter(chrome, 60_000)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    // The agent starts: the next alarm finds it and the ack ends the slow phase.
+    chrome.fireAlarm(RECONNECT_ALARM);
+    await vi.advanceTimersByTimeAsync(0);
+    chrome.lastPort.receive(ACK);
+    expect(bg.connection.connected).toBe(true);
+  });
+
+  it("a worker woken by the alarm in the slow phase stays slow; a browser restart is fast again", async () => {
+    const chrome = new FakeChrome();
+    await boot(chrome, { ack: false });
+    await failUntilSlow(chrome);
+    // The idle worker was stopped; the alarm starts a new one, which tries once at start.
+    const woken = chrome.restartWorker();
+    await boot(woken, { ack: false });
+    expect(woken.ports).toHaveLength(1);
+    woken.lastPort.receive(NOT_RUNNING);
+    expect(await nextAttemptAfter(woken, 60_000)).toBeNull();
+    expect(woken.alarmsCreated.at(-1)!.info.delayInMinutes).toBe(SLOW_RETRY_SECONDS / 60);
+    expect(vi.getTimerCount()).toBe(0);
+    // A browser restart clears storage.session (and fires onStartup): fast retries again.
+    const restarted = new FakeChrome(chrome.store);
+    await boot(restarted, { ack: false });
+    restarted.lastPort.receive(NOT_RUNNING);
+    expect(await nextAttemptAfter(restarted)).toBe(1000);
+  });
+
+  it("browser start, Retry and an ack each bring back the fast retries", async () => {
+    const chrome = new FakeChrome();
+    await boot(chrome, { ack: false });
+    await failUntilSlow(chrome);
+    chrome.runtime.onStartup.dispatch();
+    await vi.advanceTimersByTimeAsync(0);
+    chrome.lastPort.receive(NOT_RUNNING);
+    expect(await nextAttemptAfter(chrome)).toBe(1000);
+
+    await failUntilSlow(chrome);
+    await chrome.messageFromPopup({ kind: POPUP_KIND, type: "reconnect" });
+    chrome.lastPort.receive(NOT_RUNNING);
+    expect(await nextAttemptAfter(chrome)).toBe(1000);
+
+    await failUntilSlow(chrome);
+    chrome.fireAlarm(RECONNECT_ALARM);
+    await vi.advanceTimersByTimeAsync(0);
+    chrome.lastPort.receive(ACK);
+    chrome.lastPort.receive(AGENT_GONE);
+    expect(await nextAttemptAfter(chrome)).toBe(1000);
+    chrome.lastPort.receive(NOT_RUNNING);
+    expect(await nextAttemptAfter(chrome)).toBe(2000);
+  });
+
+  it("PROTOCOL_INCOMPATIBLE from the agent closes the port and retries slowly, even when the host then reports AGENT_DISCONNECTED", async () => {
+    const chrome = new FakeChrome();
+    const bg = await boot(chrome, { ack: false });
+    const port = chrome.lastPort;
+    port.receive({ type: "bridge_error", error: { code: "PROTOCOL_INCOMPATIBLE", message: "The DoMe extension and agent speak incompatible protocol versions.", detail: { peer: ["1.0", "1.1"], supported: ["2.0"] } } });
+    expect(port.disconnected).toBe(true);
+    expect(bg.connection.current().state).toBe("incompatible");
+    expect(chrome.alarmsCreated.at(-1)!.info.delayInMinutes).toBe(5);
+    port.receive({ type: "bridge_error", error: { code: "AGENT_DISCONNECTED", message: "The DoMe agent disconnected." } });
+    expect(bg.connection.current().state).toBe("incompatible");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(chrome.ports).toHaveLength(1);
   });
 
   it("incompatible agent protocol: bridge_error PROTOCOL_INCOMPATIBLE with both version lists, port closed, slow retry", async () => {
@@ -558,7 +731,7 @@ describe("reconnect and version negotiation", () => {
     port.receive({ type: "bridge_hello_ack", protocol_version: "2.0", agent_version: "9.9.9" });
     const err = port.framesOfType<{ error: { code: string; detail: { peer: string[]; supported: string[] } } }>("bridge_error")[0]!;
     expect(err.error.code).toBe("PROTOCOL_INCOMPATIBLE");
-    expect(err.error.detail).toEqual({ peer: ["2.0"], supported: ["1.0"] });
+    expect(err.error.detail).toEqual({ peer: ["2.0"], supported: ["1.0", "1.1"] });
     expect(port.disconnected).toBe(true);
     expect(bg.connection.current().state).toBe("incompatible");
     expect(bg.connection.connected).toBe(false);
@@ -568,15 +741,23 @@ describe("reconnect and version negotiation", () => {
     validateAllSent(chrome);
   });
 
-  it("a newer compatible minor version from the agent is accepted", async () => {
+  it("an ack of 1.0 or 1.1 is accepted; 1.2 is refused until the extension speaks it", async () => {
+    for (const version of ["1.0", "1.1"]) {
+      const chrome = new FakeChrome();
+      const bg = await boot(chrome, { ack: false });
+      chrome.lastPort.receive({ type: "bridge_hello_ack", protocol_version: version, agent_version: "0.2.0" });
+      expect(bg.connection.connected, version).toBe(true);
+      expect(bg.connection.current()).toMatchObject({ state: "connected", protocol_version: version });
+      expect(chrome.lastPort.framesOfType("bridge_error")).toHaveLength(0);
+    }
     const chrome = new FakeChrome();
     const bg = await boot(chrome, { ack: false });
-    chrome.lastPort.receive({ type: "bridge_hello_ack", protocol_version: "1.0", agent_version: "0.2.0" });
-    expect(bg.connection.connected).toBe(true);
-    const chrome2 = new FakeChrome();
-    const bg2 = await boot(chrome2, { ack: false });
-    chrome2.lastPort.receive({ type: "bridge_hello_ack", protocol_version: "1.3", agent_version: "0.2.0" });
-    expect(bg2.connection.connected).toBe(false); // extension would need the update
+    chrome.lastPort.receive({ type: "bridge_hello_ack", protocol_version: "1.2", agent_version: "0.3.0" });
+    expect(bg.connection.connected).toBe(false);
+    expect(bg.connection.current().state).toBe("incompatible");
+    const err = chrome.lastPort.framesOfType<{ error: { code: string; detail: { peer: string[]; supported: string[] } } }>("bridge_error")[0]!;
+    expect(err.error).toMatchObject({ code: "PROTOCOL_INCOMPATIBLE", detail: { peer: ["1.2"], supported: ["1.0", "1.1"] } });
+    validateAllSent(chrome);
   });
 
   it("requests before the ack are refused, and connectNative throwing is retried", async () => {
@@ -596,6 +777,93 @@ describe("reconnect and version negotiation", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(broken.ports).toHaveLength(1);
     expect(broken.lastPort.framesOfType<BridgeHello>("bridge_hello")[0]!.browser).toBe("edge");
+  });
+});
+
+describe("content script injection into tabs open before install", () => {
+  it("on install, runs content.js once in every open YouTube tab, skipping discarded and non-YouTube tabs", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    chrome.addTab({ id: 14, url: "https://www.youtube.com/watch?v=abcdefghijk", title: "Sleeping - YouTube", discarded: true });
+    const bg = await boot(chrome);
+    // A worker start alone injects only where the probe found no content script (see the next block).
+    expect(chrome.injections.map((i) => i.tabId)).toEqual([13]);
+    chrome.injections.splice(0);
+    chrome.runtime.onInstalled.dispatch({ reason: "install" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chrome.injections.map((i) => i.tabId).sort()).toEqual([11, 12, 13]);
+    for (const i of chrome.injections) expect(i.files).toEqual([CONTENT_SCRIPT_FILE]);
+    expect(chrome.ports).toHaveLength(1); // connect() stays idempotent while the port is open
+    // The injected script in the tab that had none attaches like a freshly loaded page.
+    const tab13 = FIXTURE.tabs.find((t) => t.id === 13)!;
+    const token = "DDDDDDDDDDDDDDDDDDDDDD";
+    await chrome.messageFromContent(13, { kind: CS_KIND, type: "attached", token, state: snapshotFor(tab13) });
+    await vi.advanceTimersByTimeAsync(400);
+    const tabs = chrome.lastPort.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed").pop()!.tabs!;
+    expect(tabs.find((t) => t.tab_id === 13)).toMatchObject({ script_attached: true, tab_token: token });
+    expect(bg.registry.attachedCount()).toBe(3);
+    validateAllSent(chrome);
+  });
+
+  it("on browser start, injects the same way; a tab that refuses injection does not stop the others", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    chrome.injectionErrors.set(11, "Frame with ID 0 is showing error page");
+    await boot(chrome);
+    chrome.injections.splice(0);
+    chrome.runtime.onStartup.dispatch();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chrome.injections.map((i) => i.tabId).sort()).toEqual([12, 13]);
+    expect(chrome.ports).toHaveLength(1);
+  });
+
+  it("a worker start gives content.js to YouTube tabs that have none (extension disabled and enabled again, crashed renderer)", async () => {
+    const before = new FakeChrome();
+    setupTabs(before);
+    before.addTab({ id: 14, url: "https://www.youtube.com/watch?v=abcdefghijk", title: "Sleeping - YouTube", discarded: true });
+    await boot(before);
+    // Disabling the extension cuts off the content scripts in open tabs; enabling it starts a new
+    // worker with neither onInstalled nor onStartup. Tab 12 still has a live script (a renderer that
+    // was not affected), so it must not be touched.
+    const chrome = before.restartWorker();
+    chrome.contentHandlers.delete(11);
+    chrome.injectionErrors.set(13, "Frame with ID 0 is showing error page");
+    const bg = await boot(chrome);
+    expect(chrome.injections.map((i) => i.tabId)).toEqual([11]); // 13 refused, 14 discarded, 20 not YouTube
+    expect(chrome.injections[0]!.files).toEqual([CONTENT_SCRIPT_FILE]);
+    // The injected script attaches like a freshly loaded page and the agent learns about it.
+    const fresh = "EEEEEEEEEEEEEEEEEEEEEE";
+    await chrome.messageFromContent(11, { kind: CS_KIND, type: "attached", token: fresh, state: snapshotFor(FIXTURE.tabs[0]!) });
+    await vi.advanceTimersByTimeAsync(400);
+    const tabs = chrome.lastPort.framesOfType<BridgeEvent>("bridge_event").filter((e) => e.event === "tabs_changed").pop()!.tabs!;
+    expect(tabs.find((t) => t.tab_id === 11)).toMatchObject({ script_attached: true, tab_token: fresh });
+    expect(tabs.find((t) => t.tab_id === 12)).toMatchObject({ script_attached: true, tab_token: TOKENS[12] });
+    expect(bg.registry.attachedCount()).toBe(2);
+    validateAllSent(chrome);
+  });
+
+  it("an injection that never finishes does not hold up connecting to the agent", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    chrome.injectionHangs.add(13);
+    const bg = createBackground(chrome, { browser: "chrome" });
+    void bg.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chrome.ports).toHaveLength(1);
+    chrome.lastPort.receive(ACK);
+    expect(bg.connection.connected).toBe(true);
+    expect(chrome.injections).toHaveLength(0); // still pending in tab 13
+  });
+
+  it("install before the agent runs: injects and starts connecting", async () => {
+    const chrome = new FakeChrome();
+    setupTabs(chrome);
+    const bg = createBackground(chrome, { browser: "edge" });
+    chrome.runtime.onInstalled.dispatch({ reason: "install" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chrome.ports).toHaveLength(1);
+    expect(chrome.injections.map((i) => i.tabId).sort()).toEqual([11, 12, 13]);
+    expect(bg.connection.current().state).toBe("connecting");
   });
 });
 
@@ -626,6 +894,37 @@ describe("popup messages", () => {
     chrome.lastPort.fail("Native host has exited.");
     await chrome.messageFromPopup({ kind: POPUP_KIND, type: "reconnect" });
     expect(chrome.ports).toHaveLength(2);
+  });
+
+  it("Retry after the agent went away opens a new port at once, without waiting for the backoff", async () => {
+    const chrome = new FakeChrome();
+    const bg = await boot(chrome);
+    const first = chrome.lastPort;
+    first.receive({ type: "bridge_error", error: { code: "AGENT_DISCONNECTED", message: "The DoMe agent disconnected." } });
+    const status = (await chrome.messageFromPopup({ kind: POPUP_KIND, type: "reconnect" })) as StatusReport;
+    expect(chrome.ports).toHaveLength(2);
+    expect(status.connection.state).toBe("connecting");
+    expect(chrome.lastPort.framesOfType("bridge_hello")).toHaveLength(1);
+    // The pending backoff timer must not open a third port.
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(chrome.ports).toHaveLength(2);
+    chrome.lastPort.receive(ACK);
+    expect(bg.connection.connected).toBe(true);
+  });
+
+  it("Retry while a hello is still unanswered replaces the port; Retry while connected does nothing", async () => {
+    const chrome = new FakeChrome();
+    const bg = await boot(chrome, { ack: false });
+    const stuck = chrome.lastPort;
+    await chrome.messageFromPopup({ kind: POPUP_KIND, type: "reconnect" });
+    expect(stuck.disconnected).toBe(true);
+    expect(chrome.ports).toHaveLength(2);
+    chrome.lastPort.receive(ACK);
+    expect(bg.connection.connected).toBe(true);
+    const status = (await chrome.messageFromPopup({ kind: POPUP_KIND, type: "reconnect" })) as StatusReport;
+    expect(status.connection.state).toBe("connected");
+    expect(chrome.ports).toHaveLength(2);
+    expect(chrome.lastPort.disconnected).toBe(false);
   });
 
   it("ignores unknown messages", async () => {

@@ -6,16 +6,6 @@ param(
 )
 . "$PSScriptRoot\common.ps1"
 
-function Open-ExtensionsPage {
-    foreach ($browser in @(@('chrome', 'chrome://extensions'), @('msedge', 'edge://extensions'))) {
-        try {
-            Start-Process -FilePath $browser[0] -ArgumentList $browser[1] -ErrorAction Stop
-            return $browser[0]
-        } catch { }
-    }
-    return $null
-}
-
 $exitCode = Invoke-KitMain {
     Write-Banner 'DoMe on this PC - step 2 of 2'
     if (-not $script:OnWindows) { Stop-Kit 'This step runs on the Windows PC you want to control.' }
@@ -44,41 +34,19 @@ $exitCode = Invoke-KitMain {
         Stop-Kit 'DoMe is already running on this PC. Right-click the DoMe icon near the clock, choose "Quit DoMe", then run this again.'
     }
 
-    Write-Step 'Preparing the DoMe browser extension (YouTube control)'
-    $extensionDir = Join-Path $script:StateDir 'extension'
-    $keyPath = Join-Path $script:StateDir 'extension-key.pem'
-    $firstExtension = -not (Test-Path (Join-Path $extensionDir 'manifest.json'))
-    if ($firstExtension -or $RebuildExtension) {
-        Write-Note 'Building it with Docker (first time: about 2-4 minutes)'
-        if (Test-Path $extensionDir) { Remove-Item -Recurse -Force $extensionDir }
-        Invoke-Native 'Building the browser extension' {
-            docker build --progress plain -f (Join-Path $script:KitDir 'extension.Dockerfile') --output ('type=local,dest=' + $extensionDir) $script:RepoDir
-        }
+    # Step 1 records which sources it built the server from (current.json, server_sources). A newer
+    # download with a changed server or iPhone app needs step 1 again; one without needs only this step.
+    $serverBuiltFrom = ''
+    if ($current.PSObject.Properties['server_sources']) { $serverBuiltFrom = [string]$current.server_sources }
+    if ($serverBuiltFrom -ne (Get-SourceFingerprint $script:RepoDir $script:ServerSources)) {
+        if ($serverBuiltFrom) { Write-Warn 'This folder has a newer DoMe server or iPhone app than the test server that is running.' }
+        else { Write-Warn 'The running test server may be older than this folder (it was started by an older test kit).' }
+        Write-Note 'To test the new version, close this window, run "1 Start test server.cmd" again, then this step.'
+        Write-Note '(With temporary addresses that means new addresses: you link this PC and pair the iPhone again.)'
+        Read-Host '   Press Enter to go on with the running test server instead' | Out-Null
     }
-    $previous = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try { $extensionId = (& $script:AgentPython (Join-Path $PSScriptRoot 'kit_helper.py') extension $extensionDir $keyPath | Out-String).Trim() }
-    finally { $ErrorActionPreference = $previous }
-    if ($LASTEXITCODE -ne 0 -or $extensionId -notmatch '^[a-p]{32}$') { Stop-Kit 'Could not prepare the browser extension.' }
-    Write-Ok ('extension ID ' + $extensionId)
 
-    $env:DOME_AGENT_DEV_EXTENSION_ID = $extensionId
-    Invoke-Native 'Registering the browser bridge' { & $script:AgentExe install-native-host }
-    Write-Ok 'Chrome and Edge can now talk to DoMe on this PC'
-
-    if ($firstExtension -or $RebuildExtension) {
-        try { Set-Clipboard -Value $extensionDir } catch { }
-        Write-Host ''
-        Write-Host '  Load the extension in Chrome or Edge (one time):' -ForegroundColor White
-        Write-Host '    1. On the Extensions page that opens, switch on "Developer mode".'
-        Write-Host '    2. Click "Load unpacked" and choose this folder (already copied, paste with Ctrl+V):'
-        Write-Host ('         ' + $extensionDir) -ForegroundColor Green
-        Write-Host '    3. Reload any YouTube tabs that were already open.'
-        if ($RebuildExtension -and -not $firstExtension) { Write-Host '    (Already loaded? Click the reload arrow on the DoMe card instead.)' }
-        $opened = Open-ExtensionsPage
-        if (-not $opened) { Write-Note 'Open chrome://extensions (or edge://extensions) yourself.' }
-        Read-Host '  Press Enter when the extension is loaded' | Out-Null
-    }
+    Initialize-BrowserExtension -Rebuild:$RebuildExtension
 
     # A PC still linked to an earlier test account could never be paired from the phone (common.ps1,
     # Test-LinkedThrough): link again whenever the sign-in address changed or the data was deleted.
@@ -113,6 +81,9 @@ $exitCode = Invoke-KitMain {
     Write-Host '  To pair your iPhone: right-click the icon -> "Pair a phone...", then in the DoMe app on'
     Write-Host '  the iPhone: More -> Devices -> Pair with a PC. Scan the code IN THE APP (or type it),'
     Write-Host '  compare the 6-digit numbers and approve on this PC.'
+    Write-Host ''
+    Write-Host '  The browser extension finds DoMe by itself, usually within 10 seconds. To connect it at once,'
+    Write-Host '  in Edge open the DoMe extension (puzzle-piece icon, then DoMe) and press Retry connection.'
     Write-Host ''
     Write-Host '  Keep this window open while testing. Closing it (or Quit DoMe in the tray) stops DoMe.' -ForegroundColor Yellow
     Write-Host ''

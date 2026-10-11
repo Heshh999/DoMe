@@ -19,7 +19,7 @@ describe what the code does, not what anyone has watched happen on a device.
 | Phone, offline screen | "You're offline" when the phone itself has no network. Nothing is queued. |
 | PC, tray icon | Green = connected, amber = reconnecting, red = remote control disabled or superseded by another agent instance, grey = offline. Hover shows "DoMe — ‹status line›". Notifications: "DoMe cannot connect", "DoMe needs to be re-linked", "DoMe is running elsewhere". |
 | PC, console | `DoMe.exe status` (Windows) or `dome-agent status` (development) prints JSON: `identity.linked`, `connection` (`offline` / `connecting` / `connected` / `reconnecting` / `superseded` / `stopped`), `remote_enabled`, `extension_connected`, `entitlement`, `pending_revocations`, `pending_confirmations`, `pending_power`, `notes`, and `configuration_error` when the relay URL is unusable. Protocol 1.1 adds `input` (the manual-input session, its counters and held input), `pending_grant_updates` and an `INSTANCE:` line for single-instance problems (section 20). |
-| PC, extension popup | *Connected to the DoMe agent* with the `Browser id`; or *not installed* (`host_missing`), *not registered* (`host_forbidden`), *agent is not running*, *disconnected* (hello not acknowledged within 10 s), *Connecting…*. |
+| PC, extension popup | The title says whether it works: *Connected* (the **Agent** row shows e.g. *v0.1.0 (protocol 1.1)*, plus the `Browser id` and *YouTube tabs ready*); *Connecting...*; *Not connected - start DoMe on this PC* (agent not running, quit, or hello not acknowledged within 10 s); *Not connected - set up DoMe on this PC* (`host_missing`); *Not connected - DoMe does not know this extension* (`host_forbidden`); *Not connected - update needed* (`incompatible`); *Not connected - something went wrong*. The line below the title gives the next step, and *Details: …* the technical reason. |
 | Phone, Connection health | More → **Connection health** (`/app/health`): seven layers checked separately, one next action each, bounded retries (section 17). |
 | Phone, Touchpad pill | *Connecting…*, *Connected*, *Live · waiting for the PC*, *Live · Windows accepted N* (Windows acceptance, never an app effect), *Paused*, *Ended*, *Not connected*; "Held on the PC: …" while the PC reports held input (section 18). |
 | PC, tray menu | *Stop manual input* ends the live touchpad/keyboard session and releases its held input; *Paired phones ▸ ‹phone› ▸ Allow touchpad / Allow keyboard*. |
@@ -134,22 +134,31 @@ both appear as `EXTENSION_DISCONNECTED`. Treat the two sections of steps below a
 
 **Steps on the PC.**
 
-1. Open Chrome or Edge and click the DoMe toolbar icon. The popup tells you which link is broken:
-   - *not installed* (`host_missing`): the native-messaging host is not registered for this browser.
-     Run `DoMe.exe install-native-host` (per user, no elevation; section 4.3 of
-     `docs/WINDOWS_INSTALL.md`), then click **Retry** in the popup or restart the browser.
-   - *not registered* (`host_forbidden`): the extension's id is not in the host manifest's
-     `allowed_origins`. In a development build set `DOME_AGENT_DEV_EXTENSION_ID=<32-letter id from
-     chrome://extensions>` and run `install-native-host` again. In a release build the id must be in
+1. Open Chrome or Edge and click the DoMe toolbar icon. The popup's title tells you which link is
+   broken (*Details: …* below it carries the browser's or agent's own message):
+   - *Not connected - set up DoMe on this PC* (`host_missing`): the native-messaging host is not
+     registered for this browser. Run `DoMe.exe install-native-host` (per user, no elevation;
+     section 4.3 of `docs/WINDOWS_INSTALL.md`), then click **Retry connection** in the popup or
+     restart the browser.
+   - *Not connected - DoMe does not know this extension* (`host_forbidden`): the extension's id is
+     not in the host manifest's `allowed_origins`. In a development build set
+     `DOME_AGENT_DEV_EXTENSION_ID=<32-letter id from chrome://extensions>` and run
+     `install-native-host` again. In a release build the id must be in
      `PRODUCTION_EXTENSION_IDS` (empty until the store listing exists —
      `docs/WINDOWS_INSTALL.md` §9).
-   - *agent is not running*: the host started but found no agent IPC endpoint. Start DoMe (tray icon
-     visible) and wait; the extension retries with backoff 1 → 60 s on its own and a
-     `chrome.alarms` safety net survives worker termination (**unit-tested**:
-     `browser-extension/test/background.test.ts` "backs off 1→2→4 s…", "AGENT_NOT_RUNNING … retried").
-   - *disconnected* after *Connecting…*: the host or agent did not acknowledge `bridge_hello` within
+   - *Not connected - start DoMe on this PC* with *Details: The DoMe agent is not running on this
+     PC.* (`agent_not_running`): the host started but found no agent IPC endpoint. Start DoMe (tray
+     icon visible) and wait, or click **Retry connection** to connect at once. On its own the
+     extension retries after 1, 2, 4, 8, 8 … s for about 5 minutes after the browser starts, the
+     agent is lost or Retry is clicked, then every 30 s; a `chrome.alarms` safety net survives worker
+     termination (**unit-tested**: `browser-extension/test/background.test.ts` "retries fast for about
+     5 minutes, then only through the 30 s alarm…", "AGENT_NOT_RUNNING … retried").
+   - *Not connected - start DoMe on this PC* after *Connecting...*, with *Details: The DoMe agent did
+     not answer the extension's hello*: the host or agent did not acknowledge `bridge_hello` within
      10 s. The popup cannot tell which; `dome-native-host` logs do. The reconnect loop recovers either
      way (`browser-extension/KNOWN_ISSUES.md` K4).
+   - *Not connected - update needed* (`incompatible`): the extension and the agent share no protocol
+     version; update whichever is older. The extension retries every 5 minutes.
 2. `dome-agent status` → `extension_connected: true` confirms the agent side.
 3. Tabs opened before the extension was installed or enabled have no content script. The phone lists
    them as not controllable and a command fails with `TAB_NOT_CONTROLLABLE` ("Reload the YouTube tab

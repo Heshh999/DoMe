@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -147,6 +148,7 @@ def test_settings_rejects_unknown_platform(monkeypatch: pytest.MonkeyPatch) -> N
     assert load_settings().use_fake_platform
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes; Windows protects the secret files with DPAPI")
 def test_secret_files_are_0600(settings: Settings) -> None:
     from dome_agent.identity import Identity
 
@@ -216,3 +218,102 @@ def test_cli_unlink_keeps_the_key_and_new_key_replaces_it(
     assert not Identity(settings.state_dir).is_linked
     assert Identity(settings.state_dir).kid != first  # the next link registers a new key
     assert cli.main([*state, "unlink", "--new-key"]) == 0  # idempotent when nothing is linked
+
+
+def _scripted_control_connection(
+    monkeypatch: pytest.MonkeyPatch, *, write_error: BaseException | None = None, reply: bytes | BaseException = b""
+) -> list[str]:
+    """Make ControlClient talk to a scripted connection: ``write_error`` is raised by the request write,
+    ``reply`` is the byte stream the agent sends back (or an exception its first read raises)."""
+    from dome_agent.bridge import ipc
+
+    calls: list[str] = []
+    stream = bytearray(reply) if isinstance(reply, bytes) else bytearray()
+
+    def write(data: bytes) -> None:
+        calls.append("write")
+        if write_error is not None:
+            raise write_error
+
+    def read(n: int) -> bytes:
+        if isinstance(reply, BaseException):
+            raise reply
+        chunk = bytes(stream[:n])
+        del stream[:n]
+        return chunk
+
+    def close() -> None:
+        calls.append("close")
+
+    monkeypatch.setattr(
+        "dome_agent.control.ipc.connect", lambda *_a, **_k: ipc.FrameConnection(read=read, write=write, close=close)
+    )
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("write_error", "reply", "code"),
+    [
+        # the agent closed the instance under us (quitting): WriteFile fails with ERROR_NO_DATA -> EPIPE
+        (BrokenPipeError(32, "The pipe is being closed"), b"", "AGENT_DISCONNECTED"),
+        (None, ConnectionResetError(104, "reset by peer"), "AGENT_DISCONNECTED"),
+        (None, b"\x10\x00", "AGENT_DISCONNECTED"),  # cut off inside the length header
+        (None, b"\x10\x00\x00\x00{}", "AGENT_DISCONNECTED"),  # cut off inside the body
+        (None, b"\xff\xff\xff\x7f", "AGENT_DISCONNECTED"),  # length beyond the frame limit
+        (None, b"\x08\x00\x00\x00not json", "MALFORMED_MESSAGE"),
+        (None, b"\x02\x00\x00\x00[]", "MALFORMED_MESSAGE"),
+    ],
+)
+def test_control_client_reports_every_broken_exchange_as_control_error(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    write_error: BaseException | None,
+    reply: bytes | BaseException,
+    code: str,
+) -> None:
+    """Every caller (CLI commands, the second-launch check, is_running) catches only ControlError: an
+    OSError or ProtocolError escaping call() was a traceback instead of 'not running' / 'disconnected'."""
+    calls = _scripted_control_connection(monkeypatch, write_error=write_error, reply=reply)
+    ctl = ControlClient(settings.state_dir)
+    with pytest.raises(ControlError) as ei:
+        ctl.call("status")
+    assert ei.value.code == code
+    assert calls[-1] == "close"  # the connection is closed on every path
+    assert ctl.is_running() is False
+
+
+def test_control_client_refuses_an_oversized_request_before_connecting(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _scripted_control_connection(monkeypatch)
+    with pytest.raises(ControlError) as ei:
+        ControlClient(settings.state_dir).call("approve_app", app_id="x", exe_path="C:\\" + "a" * 70000)
+    assert ei.value.code == "PAYLOAD_TOO_LARGE"
+    assert calls == []
+
+
+def test_cli_output_survives_a_pipe_in_a_legacy_code_page(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """stdout piped on Windows (PowerShell capturing it) is cp1252: printing a phone's display name with an
+    arrow or an emoji raised UnicodeEncodeError, so `dome-agent status` crashed instead of printing."""
+    import io
+
+    from dome_agent.store import Store
+
+    from .helpers import Controller
+
+    phone = Controller("acct", "pc", display_name="Pixel \u2192 \U0001f4f1")
+    store = Store(settings.db_path)
+    try:
+        phone.grant_locally(store)
+    finally:
+        store.close()
+    raw = io.BytesIO()
+    piped = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="\n")
+    monkeypatch.setattr(sys, "stdout", piped)
+    assert cli.main(["--state-dir", str(settings.state_dir), "status"]) == 0
+    piped.flush()
+    text = raw.getvalue().decode("cp1252")
+    assert "not running" in text and "'Pixel ? ?'" in text  # unencodable characters print as '?'
+    assert piped.encoding == "cp1252"  # the code page itself is kept

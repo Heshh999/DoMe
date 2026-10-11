@@ -5,6 +5,11 @@ announces configurable YouTube tabs and answers ``bridge_request`` ops the way t
 would: it verifies ``tab_token``, applies the op to its in-memory tab, reports ``NO_NEXT_VIDEO`` /
 ``UNSUPPORTED_CONTEXT`` / ``ACTIVATION_REQUIRED`` where the real page would, and returns the
 post-action tab state. Every frame in both directions is schema-validated.
+
+Like the real extension (``browser-extension/src/background/connection.ts``) it refuses a
+``bridge_hello_ack`` whose ``protocol_version`` its own ``protocol_versions`` do not reach: it answers
+``bridge_error`` PROTOCOL_INCOMPATIBLE, disconnects, and :meth:`FakeExtension.connect` raises. By default it
+lists what the shipped extension lists (:data:`SHIPPED_PROTOCOL_VERSIONS`).
 """
 
 from __future__ import annotations
@@ -16,10 +21,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dome_protocol import format_rfc3339, now_utc
+from dome_protocol import ProtocolError, format_rfc3339, now_utc
+from dome_protocol.commands import protocol_compatible
 
 from ..bridge import ipc
 from ..bridge.framing import decode_frame, encode_frame, validate_outgoing
+
+# What browser-extension/src/shared/version.ts ``SUPPORTED_PROTOCOL_VERSIONS`` lists, so the agent is tested
+# against the versions the real extension sends; tests/test_extension_protocol_parity.py checks it stays so.
+SHIPPED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1")
 
 
 def new_tab_token() -> str:
@@ -82,7 +92,7 @@ class FakeExtension:
         *,
         browser_instance_id: str = "bi_fake0001",
         browser: str = "chrome",
-        protocol_versions: tuple[str, ...] = ("1.0",),
+        protocol_versions: tuple[str, ...] = SHIPPED_PROTOCOL_VERSIONS,
         op_delay: float = 0.0,
     ) -> None:
         self.state_dir = state_dir
@@ -94,6 +104,7 @@ class FakeExtension:
         self.requests: list[dict[str, Any]] = []
         self.received: list[dict[str, Any]] = []
         self.hello_ack: dict[str, Any] | None = None
+        self.refused_ack: dict[str, Any] | None = None  # an ack this extension's versions do not reach
         self.errors: list[dict[str, Any]] = []
         self._conn: ipc.FrameConnection | None = None
         self._thread: threading.Thread | None = None
@@ -116,6 +127,12 @@ class FakeExtension:
         self._thread.start()
         if not self._ready.wait(timeout):
             raise TimeoutError("no bridge_hello_ack from the agent")
+        if self.refused_ack is not None:
+            raise ProtocolError(
+                "PROTOCOL_INCOMPATIBLE",
+                f"the agent acked protocol {self.refused_ack['protocol_version']}, "
+                f"which this extension ({', '.join(self.protocol_versions)}) does not speak",
+            )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -175,6 +192,9 @@ class FakeExtension:
                 frame = decode_frame(raw, "agent_to_extension")
                 self.received.append(frame)
                 if frame["type"] == "bridge_hello_ack":
+                    if not protocol_compatible(frame["protocol_version"], self.protocol_versions):
+                        self._refuse_ack(frame)
+                        break
                     self.hello_ack = frame
                     self._ready.set()
                 elif frame["type"] == "bridge_request":
@@ -188,6 +208,25 @@ class FakeExtension:
             pass
         finally:
             self._closed.set()
+
+    def _refuse_ack(self, frame: dict[str, Any]) -> None:
+        """What connection.ts does with an ack it does not speak: report it and disconnect."""
+        self.refused_ack = frame
+        try:
+            self._write(
+                {
+                    "type": "bridge_error",
+                    "error": {
+                        "code": "PROTOCOL_INCOMPATIBLE",
+                        "message": "The DoMe extension and agent speak incompatible protocol versions.",
+                        "detail": {"peer": [frame["protocol_version"]], "supported": list(self.protocol_versions)},
+                    },
+                }
+            )
+        finally:
+            self._ready.set()
+            assert self._conn is not None
+            self._conn.close()
 
     def _fail(self, request_id: str, code: str, message: str) -> dict[str, Any]:
         return {

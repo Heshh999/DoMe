@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startContentScript, type ContentRuntime } from "../src/content/index.ts";
+import { INSTANCE_KEY, startContentScript, startContentScriptOnce, type ContentRuntime } from "../src/content/index.ts";
 import type { ContentReply, ContentToBackground } from "../src/shared/messages.ts";
 import { BG_KIND, CS_KIND } from "../src/shared/messages.ts";
 import { installFakeVideo, loadFixture, video, wireNavigation } from "./dom-helpers.ts";
@@ -96,6 +96,44 @@ describe("content script entry", () => {
     await vi.advanceTimersByTimeAsync(600);
     const last = rt.sent.filter((m) => m.type === "player_state").pop() as { state: { video_id: string } };
     expect(last.state.video_id).toBe("9bZkp7q19f0");
+  });
+
+  it("starts once per page: a second injection keeps the running instance and its token", async () => {
+    loadFixture("watch-playing", "/watch?v=dQw4w9WgXcQ");
+    installFakeVideo(video());
+    const rt = fakeRuntime();
+    const scope: Record<string, unknown> = {};
+    const first = startContentScriptOnce(scope, rt.runtime, document, window);
+    const second = startContentScriptOnce(scope, rt.runtime, document, window);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second).toBe(first);
+    expect(scope[INSTANCE_KEY]).toBe(first);
+    expect(rt.listeners).toHaveLength(1);
+    expect(rt.sent.filter((m) => m.type === "attached")).toEqual([expect.objectContaining({ token: first.token })]);
+    first.stop();
+  });
+
+  it("replaces an instance orphaned by an extension reload", async () => {
+    loadFixture("watch-playing", "/watch?v=dQw4w9WgXcQ");
+    installFakeVideo(video());
+    const old = fakeRuntime();
+    const scope: Record<string, unknown> = {};
+    const orphan = startContentScriptOnce(scope, old.runtime, document, window);
+    await vi.advanceTimersByTimeAsync(0);
+    (old.runtime as { id: string | undefined }).id = undefined; // what chrome.runtime.id reads after the reload
+    expect(orphan.alive()).toBe(false);
+    const fresh = fakeRuntime();
+    const replacement = startContentScriptOnce(scope, fresh.runtime, document, window);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(replacement).not.toBe(orphan);
+    expect(replacement.token).not.toBe(orphan.token);
+    expect(fresh.sent[0]).toMatchObject({ type: "attached", token: replacement.token });
+    // The orphan stopped listening to the player.
+    const oldCount = old.sent.length;
+    video().dispatchEvent(new Event("pause"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(old.sent.length).toBe(oldCount);
+    replacement.stop();
   });
 
   it("stops emitting once the worker is unreachable, and sends detached on pagehide", async () => {

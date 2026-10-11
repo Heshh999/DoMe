@@ -3,7 +3,7 @@
   "name": "DoMe for YouTube",
   "version": "0.1.0",
   "description": "Lets the DoMe agent on this PC control YouTube playback in this browser. Nothing leaves your PC except through the DoMe agent you installed.",
-  "permissions": ["nativeMessaging", "storage", "alarms"],
+  "permissions": ["nativeMessaging", "storage", "alarms", "scripting"],
   "host_permissions": ["https://www.youtube.com/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{ "matches": ["https://www.youtube.com/*"], "js": ["content.js"], "run_at": "document_idle" }],

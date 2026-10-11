@@ -4,11 +4,16 @@ Chrome starts one host process per ``chrome.runtime.connectNative`` and talks to
 4-byte-length-prefixed JSON. The host validates every frame against the bridge schema in both
 directions (``extension_to_agent`` from stdin, ``agent_to_extension`` from the agent) and forwards
 it verbatim over the protected IPC endpoint to the running tray agent. It holds no state, executes
-nothing, and exits when either side closes.
+nothing, and exits when either side closes. Nothing but protocol frames is ever written to stdout.
+
+When the agent side ends first (DoMe quit or restarted), the host sends ``AGENT_DISCONNECTED`` and
+exits at once: the main thread is blocked reading stdin, which only the browser can end, and the
+browser fires ``onDisconnect`` (so the extension reconnects) only when the host process exits.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -28,6 +33,7 @@ log = get_logger(__name__)
 
 ERR_AGENT_NOT_RUNNING = "AGENT_NOT_RUNNING"
 ERR_AGENT_DISCONNECTED = "AGENT_DISCONNECTED"
+_EXIT_STDOUT_TIMEOUT = 5.0  # how long the exit path waits for a frame another thread is writing to stdout
 
 
 def _binary_stdio() -> tuple[IO[bytes], IO[bytes]]:
@@ -47,6 +53,7 @@ class NativeHost:
         self._stdout_lock = threading.Lock()
         self._conn: ipc.FrameConnection | None = None
         self._done = threading.Event()
+        self._done_lock = threading.Lock()
 
     # ----- stdout ---------------------------------------------------------------------------------
     def _write_extension(self, frame: dict[str, Any]) -> None:
@@ -55,14 +62,18 @@ class NativeHost:
             self._stdout.write(data)
             self._stdout.flush()
 
-    def _write_error(self, code: str, message: str, ref_request_id: str | None = None, **detail: Any) -> None:
+    @staticmethod
+    def _error_frame(code: str, message: str, ref_request_id: str | None = None, **detail: Any) -> dict[str, Any]:
         frame: dict[str, Any] = {"type": "bridge_error", "error": {"code": code, "message": message[:512]}}
         if detail:
             frame["error"]["detail"] = detail
         if ref_request_id:
             frame["ref_request_id"] = ref_request_id
+        return frame
+
+    def _write_error(self, code: str, message: str, ref_request_id: str | None = None, **detail: Any) -> None:
         try:
-            self._write_extension(frame)
+            self._write_extension(self._error_frame(code, message, ref_request_id, **detail))
         except (OSError, ValueError, ProtocolError):
             pass
 
@@ -70,18 +81,46 @@ class NativeHost:
     def run(self) -> int:
         try:
             self._conn = ipc.connect(self._state_dir)
-        except (OSError, ConnectionRefusedError) as exc:
+        except OSError as exc:  # ConnectionRefusedError included
             log.warning("agent IPC endpoint unavailable", error=exc.__class__.__name__)
             self._write_error(ERR_AGENT_NOT_RUNNING, "The DoMe agent is not running on this PC.")
             return 1
         agent_thread = threading.Thread(target=self._pump_agent_to_extension, name="agent->ext", daemon=True)
         agent_thread.start()
         self._pump_extension_to_agent()
-        self._done.set()
+        self._finish()  # the extension closed the port: a clean exit, no error frame
         if self._conn is not None:
             self._conn.close()
         agent_thread.join(timeout=1.0)
         return 0
+
+    def _finish(self) -> bool:
+        """Mark the session over; True only for the first caller (exactly one side decides how it ends)."""
+        with self._done_lock:
+            if self._done.is_set():
+                return False
+            self._done.set()
+            return True
+
+    def _agent_gone(self) -> None:
+        """The agent side ended: tell the extension once, then end the process (see the module docstring).
+
+        The stdout lock is taken and NEVER released: ``os._exit`` ends every thread wherever it is, so no
+        other thread may start a frame after ours, and one already being written finishes first (the
+        browser would report a cut-off frame as a native-host error, not a clean disconnect). If a writer
+        stays stuck for ``_EXIT_STDOUT_TIMEOUT`` (the browser stopped reading), exit without the frame."""
+        if not self._finish():
+            return
+        if self._stdout_lock.acquire(timeout=_EXIT_STDOUT_TIMEOUT):
+            with contextlib.suppress(OSError, ValueError, ProtocolError):
+                self._stdout.write(
+                    encode_frame(self._error_frame(ERR_AGENT_DISCONNECTED, "The DoMe agent disconnected."))
+                )
+                self._stdout.flush()
+        else:
+            log.warning("stdout stayed busy; native host exiting without AGENT_DISCONNECTED")
+        log.info("agent disconnected; native host exiting")
+        _exit_process(0)
 
     def _pump_extension_to_agent(self) -> None:
         assert self._conn is not None
@@ -108,9 +147,8 @@ class NativeHost:
             try:
                 self._conn.write_frame(encode_frame(frame))
             except (OSError, ProtocolError):
-                self._write_error(ERR_AGENT_DISCONNECTED, "The DoMe agent disconnected.")
+                self._agent_gone()
                 break
-        self._done.set()
 
     def _pump_agent_to_extension(self) -> None:
         assert self._conn is not None
@@ -130,14 +168,14 @@ class NativeHost:
             try:
                 self._write_extension(frame)
             except (OSError, ValueError):
-                break
-        if not self._done.is_set():
-            self._write_error(ERR_AGENT_DISCONNECTED, "The DoMe agent disconnected.")
-        self._done.set()
-        try:
-            self._stdin.close()
-        except OSError:
-            pass
+                break  # stdout is gone: the browser closed the port, the main thread sees EOF too
+        self._agent_gone()  # no-op when the extension side ended first
+
+
+def _exit_process(code: int) -> None:
+    """Flush the logs and end the process now, whatever the other threads are blocked in."""
+    logging.shutdown()
+    os._exit(code)
 
 
 def main(argv: list[str] | None = None) -> int:

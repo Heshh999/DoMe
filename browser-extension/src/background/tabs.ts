@@ -34,6 +34,9 @@ export class TabTimeoutError extends Error {
   }
 }
 
+/** The content script's file in dist/, as listed under content_scripts in manifest.json. */
+export const CONTENT_SCRIPT_FILE = "content.js";
+
 const NO_RECEIVER_RE = /Receiving end does not exist|Could not establish connection|No tab with id|message port closed/i;
 
 export interface TabRegistryDeps {
@@ -126,14 +129,18 @@ export class TabRegistry {
   }
 
   async probe(tabId: number): Promise<Attachment | null> {
+    return (await this.probeOutcome(tabId)).attachment;
+  }
+
+  /** As probe(); `noScript` is true when the tab has no content script at all (NoReceiverError). */
+  private async probeOutcome(tabId: number): Promise<{ attachment: Attachment | null; noScript: boolean }> {
     try {
       const reply = await this.sendToTab(tabId, { kind: BG_KIND, type: "probe" }, this.probeTimeoutMs);
-      if (reply.ok) return this.record(tabId, reply.token, reply.state);
-      return null;
+      return { attachment: reply.ok ? this.record(tabId, reply.token, reply.state) : null, noScript: false };
     } catch (err) {
       if (err instanceof NoReceiverError || err instanceof TabTimeoutError) {
         this.attachments.delete(tabId);
-        return null;
+        return { attachment: null, noScript: err instanceof NoReceiverError };
       }
       throw err;
     }
@@ -158,18 +165,57 @@ export class TabRegistry {
    * Probe every YouTube tab (worker start) so the cache reflects reality before anything is reported.
    * Announces a change when done so a tabs_changed built from a partially rebuilt cache (the agent
    * acknowledged hello while probes were still outstanding) is corrected.
+   *
+   * A non-discarded tab with no content script at all gets content.js, without waiting for it: tabs
+   * open while the extension was disabled and enabled again, or whose renderer crashed, get neither
+   * the manifest injection nor onInstalled/onStartup, and would otherwise stay "reload needed". Tabs
+   * whose script answers, or is merely slow, are left alone; the script starts once per page anyway.
    */
   async rebuild(): Promise<void> {
     const tabs = await this.youtubeTabs();
     const live = new Set<number>();
+    const noScript: number[] = [];
     await Promise.all(
       tabs.map(async (t) => {
         live.add(t.id!);
-        await this.probe(t.id!).catch(() => null);
+        const outcome = await this.probeOutcome(t.id!).catch(() => null);
+        if (outcome?.noScript && !t.discarded) noScript.push(t.id!);
       }),
     );
     for (const id of [...this.attachments.keys()]) if (!live.has(id)) this.attachments.delete(id);
     this.deps.onChanged();
+    // Not awaited: executeScript into a hung tab must not hold up connecting to the agent.
+    if (noScript.length > 0) void this.injectInto(noScript, "YouTube tabs without one");
+  }
+
+  /**
+   * Run content.js in every open YouTube tab (install/update/reload and browser start). Chrome injects
+   * manifest content scripts only into pages loaded after the extension, so tabs that were already
+   * open would stay "reload needed". The content script starts once per page, so a tab that already
+   * has it (or gets it from the manifest at the same time) is unaffected. Discarded tabs are skipped:
+   * they get the manifest injection when they load again. Returns the number of tabs injected.
+   */
+  async injectContentScript(): Promise<number> {
+    const tabs = (await this.youtubeTabs()).filter((t) => !t.discarded);
+    return this.injectInto(tabs.map((t) => t.id!), "open YouTube tabs");
+  }
+
+  /** Run content.js in each tab; one failing tab does not stop the others. Returns the number injected. */
+  private async injectInto(tabIds: number[], which: string): Promise<number> {
+    let injected = 0;
+    await Promise.all(
+      tabIds.map(async (tabId) => {
+        try {
+          await this.deps.api.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT_FILE] });
+          injected += 1;
+        } catch (err) {
+          // Error pages, tabs closed meanwhile; the message can carry the URL, so only the name is logged.
+          log.info("content script not injected", { tab_id: tabId, error: err instanceof Error ? err.name : "unknown" });
+        }
+      }),
+    );
+    log.info(`content script injected into ${which}`, { injected, tabs: tabIds.length });
+    return injected;
   }
 
   /** Compose the contract's youtube_tab for one browser tab from tab metadata plus the attachment. */

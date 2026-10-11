@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import signal
 import sys
@@ -309,7 +310,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
         print(started["code"])
         print(f"pairing_id={started['pairing_id']}")
     else:
-        print("On your phone, open DoMe → Pair a PC and scan this code or type it in:\n")
+        print("On your phone, open DoMe > Pair a PC and scan this code or type it in:\n")
         print(qr_ascii(started["qr_url"]))
         print(f"    {started['code']}\n")
     print(f"Pairing id {started['pairing_id']}, expires at {started['expires_at']}.")
@@ -435,6 +436,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"  connection: {status.get('connection')}  snapshot: {status.get('snapshot_received')}  extension: {status.get('extension_connected')}"
         )
         print(f"  entitlement: {status.get('entitlement', {}).get('effective_plan')}")
+        if status.get("bridge_unavailable_reason"):
+            print(f"  BROWSER BRIDGE NOT LISTENING: {status['bridge_unavailable_reason']}")
+        for source, failure in sorted((status.get("read_failures") or {}).items()):
+            code = failure.get("code") or failure.get("error")
+            detail = failure.get("message") or (f"OS error {failure['os_error']}" if "os_error" in failure else "")
+            print(f"  {source} read failing since {failure.get('since')}: {code}" + (f": {detail}" if detail else ""))
         if status.get("relink_required"):
             print(f"  RE-LINK REQUIRED ({status.get('relink_reason')}): run `dome-agent link`")
         if status.get("configuration_error"):
@@ -512,7 +519,7 @@ def cmd_approve_app(args: argparse.Namespace) -> int:
             return 1
         finally:
             store.close()
-    print(f"Approved {row['app_id']} → {row['exe_path']} (sha256 {row['exe_sha256'][:12]}…)")
+    print(f"Approved {row['app_id']} -> {row['exe_path']} (sha256 {row['exe_sha256'][:12]}…)")
     return 0
 
 
@@ -825,7 +832,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _tolerant_stdio() -> None:
+    """Never crash on a character the output encoding lacks. A console gets every character, but stdout
+    piped on Windows (PowerShell capturing it, the test kit) is the ANSI code page, e.g. cp1252, and
+    printing a phone's display name, an arrow or the QR blocks there raised UnicodeEncodeError. Such
+    characters now print as '?'. pythonw.exe has no stdout/stderr at all (None): nothing to do."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):  # a stream that cannot change its error handler
+                reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerant_stdio()
     args = build_parser().parse_args(argv)
     fn: Callable[[argparse.Namespace], int] = args.fn
     try:

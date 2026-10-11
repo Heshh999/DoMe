@@ -57,11 +57,26 @@ class ControlServer:
     def address(self) -> str:
         return self._ipc.address if self._ipc else ""
 
+    @property
+    def unavailable_reason(self) -> str:
+        """Why `dome-agent status` / a second launch cannot reach this agent right now; "" when listening."""
+        return self._ipc.unavailable_reason if self._ipc else "the control channel is not started"
+
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._ipc = ipc.IpcServer(self._state_dir, self._accepted, self._mismatch, kind="control")
-        self._ipc.start()
-        log.info("control channel listening", address=self._ipc.address)
+        if self._ipc.start():
+            log.info("control channel listening", address=self._ipc.address)
+            return
+        # Windows: another process holds the pipe name; the IPC thread keeps retrying until it is free.
+        log.error(
+            "control channel NOT listening: `dome-agent status` and a second launch cannot reach this agent",
+            address=self._ipc.address,
+            reason=self._ipc.unavailable_reason,
+        )
+        self._on_security_event(
+            "control_ipc_unavailable", {"address": self._ipc.address, "reason": self._ipc.unavailable_reason}
+        )
 
     async def stop(self) -> None:
         if self._ipc is not None:
@@ -131,20 +146,31 @@ class ControlClient:
         self._timeout = timeout
 
     def call(self, op: str, **args: Any) -> Any:
+        """Run one control op. Every failure is a :class:`ControlError` (callers catch only that): an agent
+        that quits while we talk to it closes the pipe under us, which surfaces as OSError/ProtocolError."""
+        try:
+            request = encode_frame({"op": op, "args": args})
+        except ProtocolError as exc:
+            raise ControlError(exc.code, exc.message) from exc
         try:
             conn = ipc.connect(self._state_dir, timeout=self._timeout, kind="control")
-        except (OSError, ConnectionRefusedError) as exc:
+        except OSError as exc:  # ConnectionRefusedError included
             raise ControlError(
                 "AGENT_NOT_RUNNING", "The DoMe agent is not running (start it with `dome-agent run`)."
             ) from exc
         try:
-            conn.write_frame(encode_frame({"op": op, "args": args}))
+            conn.write_frame(request)
             raw = conn.read_frame()
+        except (OSError, ProtocolError) as exc:
+            raise ControlError("AGENT_DISCONNECTED", "The agent closed the control connection.") from exc
         finally:
             conn.close()
         if raw is None:
             raise ControlError("AGENT_DISCONNECTED", "The agent closed the control connection.")
-        response = loads_strict(raw, max_bytes=MAX_FRAME_BYTES, require_object=True)
+        try:
+            response = loads_strict(raw, max_bytes=MAX_FRAME_BYTES, require_object=True)
+        except ProtocolError as exc:
+            raise ControlError("MALFORMED_MESSAGE", "bad control response") from exc
         if not isinstance(response, dict):
             raise ControlError("MALFORMED_MESSAGE", "bad control response")
         if response.get("ok") is True:
