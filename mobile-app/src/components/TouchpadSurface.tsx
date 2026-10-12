@@ -7,6 +7,7 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { GestureMachine } from "../lib/gestures.ts";
+import { Icon } from "./icons.tsx";
 
 export interface TouchpadSurfaceProps {
   machine: GestureMachine;
@@ -98,18 +99,31 @@ export function TouchpadSurface({ machine, onOutput, disabled, dragActive, label
       }}
       onContextMenu={(e) => e.preventDefault()}
       style={{ touchAction: "none" }}
-      className={`relative select-none rounded-card border-2 ${dragActive ? "border-warning bg-warning/10" : disabled ? "border-border bg-bg-sunken/60" : "border-border-strong bg-bg-sunken"} ${compact ? "h-[34dvh] min-h-[180px]" : "h-[52dvh] min-h-[260px]"} w-full transition-colors`}
+      className={`dome-touchpad relative w-full select-none rounded-card border-2 transition-colors ${dragActive ? "border-warning bg-warning/10" : disabled ? "border-border opacity-70" : "border-border-strong"} ${compact ? "h-[34dvh] min-h-[180px]" : "h-[52dvh] min-h-[260px]"}`}
     >
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center px-6">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
         {dragActive ? (
           <>
-            <span className="text-warning font-bold text-lg">DRAG MODE — holding the left button</span>
-            <span className="text-sm text-text-muted mt-1">Move to drag. Tap End Drag to release.</span>
+            <span className="dome-well dome-well-warning mb-3 h-11 w-11 rounded-full">
+              <Icon name="move" size={22} />
+            </span>
+            <span className="text-lg font-bold text-warning">DRAG MODE — holding the left button</span>
+            <span className="mt-1 text-sm text-text-muted">Move to drag. Tap End Drag to release.</span>
           </>
         ) : disabled ? (
-          <span className="text-sm text-text-faint">Touchpad inactive</span>
+          <>
+            <span className="dome-well dome-well-muted mb-3 h-11 w-11 rounded-full">
+              <Icon name="cursor" size={20} />
+            </span>
+            <span className="text-sm text-text-faint">Touchpad inactive</span>
+          </>
         ) : (
-          <span className="text-sm text-text-faint">Slide to move · tap to click · two fingers to scroll or right-click</span>
+          <>
+            <span className="dome-well mb-3 h-11 w-11 rounded-full">
+              <Icon name="cursor" size={20} />
+            </span>
+            <span className="text-sm text-text-faint">Slide to move · tap to click · two fingers to scroll or right-click</span>
+          </>
         )}
       </div>
     </div>

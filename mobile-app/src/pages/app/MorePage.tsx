@@ -50,16 +50,16 @@ export function MorePage() {
         <span className="font-semibold">Appearance</span>
         <ThemeSwitch />
       </div>
-      <p className="text-center text-xs text-text-faint">
-        <Link to="/privacy" className="underline underline-offset-4">
+      <p className="flex items-center justify-center gap-1 text-center text-xs text-text-faint">
+        <Link to="/privacy" className="tap inline-flex items-center rounded-full px-3 font-medium hover:text-text">
           Privacy
-        </Link>{" "}
-        ·{" "}
-        <Link to="/terms" className="underline underline-offset-4">
+        </Link>
+        <span aria-hidden="true">·</span>
+        <Link to="/terms" className="tap inline-flex items-center rounded-full px-3 font-medium hover:text-text">
           Terms
-        </Link>{" "}
-        ·{" "}
-        <Link to="/support" className="underline underline-offset-4">
+        </Link>
+        <span aria-hidden="true">·</span>
+        <Link to="/support" className="tap inline-flex items-center rounded-full px-3 font-medium hover:text-text">
           Support
         </Link>
       </p>

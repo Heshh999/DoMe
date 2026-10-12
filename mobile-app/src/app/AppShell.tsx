@@ -8,6 +8,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router";
 
 import { loginUrl } from "../lib/api.ts";
 import { errorMessage } from "../lib/labels.ts";
+import { Wordmark } from "../components/brand.tsx";
 import { ConfirmationModal } from "../components/ConfirmationModal.tsx";
 import { OfflineScreen } from "../components/OfflineScreen.tsx";
 import { useOnline } from "./useOnline.ts";
@@ -92,28 +93,41 @@ export function RequireSession({ children }: { children: React.ReactNode }) {
   if (status === "signed_in") return <>{children}</>;
   if (status === "signing_out") {
     return (
-      <main className="min-h-dvh flex items-center justify-center bg-bg text-text">
+      <Splash>
         <Spinner label="Signing out" />
-      </main>
+        <p className="mt-4 text-sm text-text-muted">Signing out…</p>
+      </Splash>
     );
   }
   if (status === "error") {
     return (
-      <main className="min-h-dvh flex items-center justify-center px-6 bg-bg text-text">
-        <div className="max-w-sm w-full space-y-4">
+      <Splash>
+        <div className="w-full max-w-sm space-y-4 text-left">
           <Notice tone="danger" title="DoMe could not load your account">
             <p>{errorMessage(error)}</p>
           </Notice>
-          <Button full onClick={() => void load()}>
+          <Button full variant="primary" size="lg" onClick={() => void load()}>
             Try again
           </Button>
         </div>
-      </main>
+      </Splash>
     );
   }
   return (
-    <main className="min-h-dvh flex items-center justify-center bg-bg text-text">
+    <Splash>
       <Spinner label={status === "signed_out" ? "Taking you to sign in" : "Loading your account"} />
+      <p className="mt-4 text-sm text-text-muted">{status === "signed_out" ? "Taking you to sign in…" : "Loading your account…"}</p>
+    </Splash>
+  );
+}
+
+/** The screens before the app can show anything of yours: the wordmark on the brand backdrop, then what is happening. */
+function Splash({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="relative isolate flex min-h-dvh flex-col items-center justify-center px-6 pt-[var(--safe-top)] pb-[var(--safe-bottom)] text-center text-text">
+      <div className="dome-backdrop" aria-hidden="true" />
+      <Wordmark compact title="DoMe" className="mb-10 h-8 w-auto" />
+      {children}
     </main>
   );
 }

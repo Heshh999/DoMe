@@ -14,17 +14,18 @@ import { errorMessage } from "../lib/labels.ts";
 import { isDeniedVoice, MAX_RATE, MIN_RATE, type VoiceLike } from "../lib/speech.ts";
 import { useAssistantStore } from "../store/assistant.ts";
 import { AssistantConsentSheet, CONSENT_VERSION } from "./AssistantConsentSheet.tsx";
-import { Button, Card, inputClass, Notice, Toggle } from "./ui.tsx";
+import { Icon } from "./icons.tsx";
+import { Button, Card, IconWell, inputClass, Notice, Toggle } from "./ui.tsx";
 
 export const TEST_VOICE_LINE = "Good evening. How may I help?";
 
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-2">
+    <div className="flex items-center justify-between gap-4 py-3">
       <div className="min-w-0">
-        <p className="font-medium">{label}</p>
-        {hint ? <p className="text-xs text-text-muted">{hint}</p> : null}
+        <p className="font-semibold leading-snug">{label}</p>
+        {hint ? <p className="mt-0.5 text-xs text-text-muted">{hint}</p> : null}
       </div>
       {children}
     </div>
@@ -107,13 +108,23 @@ export function AssistantSettingsCard() {
 
   return (
     <Card>
-      <h2 className="font-semibold">Assistant</h2>
-      <p className="text-sm text-text-muted mt-1">Talk to DoMe from the Ask page. Commands DoMe understands by itself always work, without any AI service.</p>
+      <div className="flex items-start gap-3.5">
+        <IconWell icon="ask" size={40} />
+        <div className="min-w-0 flex-1 pt-0.5">
+          <h2 className="font-semibold leading-snug">Assistant</h2>
+          <p className="mt-1 text-sm text-text-muted">Talk to DoMe from the Ask page. Commands DoMe understands by itself always work, without any AI service.</p>
+        </div>
+      </div>
 
       <div className="mt-3 space-y-2" aria-live="polite">
         {statusError ? <p className="text-sm text-text-muted">The AI assistant's status could not be read right now. Voice without AI still works.</p> : null}
         {why ? <Notice tone="info">{why}</Notice> : null}
-        {status && consented ? <p className="text-sm">AI assistant is on for your account.</p> : null}
+        {status && consented ? (
+          <p className="flex items-center gap-1.5 text-sm font-medium text-success">
+            <Icon name="checkCircle" size={16} />
+            AI assistant is on for your account.
+          </p>
+        ) : null}
         {outdated ? <Notice tone="warning">The terms changed; read and turn on again.</Notice> : null}
         {allowance && status && status.unavailable_reason !== "not_configured" && status.unavailable_reason !== "not_in_plan" ? <p className="text-sm text-text-muted">{allowanceLine(allowance)}</p> : null}
         {error ? <Notice tone="danger">{error}</Notice> : null}
@@ -125,7 +136,7 @@ export function AssistantSettingsCard() {
         </Button>
       ) : null}
 
-      <div className="mt-3 divide-y divide-border">
+      <div className="mt-4 divide-y divide-border border-y border-border">
         <Row label="Show the Assistant tab" hint="The tab bar shows Ask instead of Type. Both stay under More.">
           <Toggle label="Show the Assistant tab" checked={prefs.showAssistant} onChange={(v) => setPrefs({ showAssistant: v })} />
         </Row>
@@ -148,16 +159,16 @@ export function AssistantSettingsCard() {
         </Row>
       </div>
 
-      <div className="mt-3 space-y-3">
+      <div className="mt-4 space-y-4">
         <div className="space-y-1.5">
-          <label htmlFor={`${id}-name`} className="block text-sm font-medium">
+          <label htmlFor={`${id}-name`} className="block text-sm font-semibold">
             Assistant's name
           </label>
           <input id={`${id}-name`} className={inputClass} value={name} maxLength={20} autoComplete="off" onChange={(e) => setName(e.currentTarget.value)} onBlur={(e) => saveName(e.currentTarget.value)} aria-invalid={nameInvalid} />
           <p className="text-xs text-text-muted">{nameInvalid ? "Letters, spaces, full stops, apostrophes and hyphens only, up to 20 characters." : "What the assistant calls itself. Default: DoMe."}</p>
         </div>
         <div className="space-y-1.5">
-          <label htmlFor={`${id}-address`} className="block text-sm font-medium">
+          <label htmlFor={`${id}-address`} className="block text-sm font-semibold">
             How it addresses you
           </label>
           <select
@@ -204,7 +215,7 @@ export function AssistantSettingsCard() {
           </p>
         </div>
         <div className="space-y-1.5">
-          <label htmlFor={`${id}-voice`} className="block text-sm font-medium">
+          <label htmlFor={`${id}-voice`} className="block text-sm font-semibold">
             Voice
           </label>
           <select id={`${id}-voice`} className={inputClass} value={prefs.voiceURI ?? ""} onFocus={() => setVoices(getSpeaker().voices())} onChange={(e) => setPrefs({ voiceURI: e.currentTarget.value || null })}>
@@ -227,21 +238,25 @@ export function AssistantSettingsCard() {
           <p className="text-xs text-text-muted">For a better voice, download Daniel (Enhanced): iPhone Settings → Accessibility → Spoken Content → Voices → English.</p>
         </div>
         <div className="space-y-1.5">
-          <label htmlFor={`${id}-rate`} className="block text-sm font-medium">
-            Speaking rate
+          <label htmlFor={`${id}-rate`} className="flex justify-between text-sm font-semibold">
+            <span>Speaking rate</span>
+            <span className="font-medium tabular-nums text-text-muted">{prefs.rate.toFixed(2)}×</span>
           </label>
-          <input id={`${id}-rate`} type="range" className="slider" min={MIN_RATE} max={MAX_RATE} step={0.05} value={prefs.rate} onChange={(e) => setPrefs({ rate: Number(e.currentTarget.value) })} />
+          <input id={`${id}-rate`} type="range" className="slider" style={{ "--fill": `${((prefs.rate - MIN_RATE) / (MAX_RATE - MIN_RATE)) * 100}%` } as React.CSSProperties} min={MIN_RATE} max={MAX_RATE} step={0.05} value={prefs.rate} onChange={(e) => setPrefs({ rate: Number(e.currentTarget.value) })} />
         </div>
-        <Button onClick={() => getSpeaker().speak(TEST_VOICE_LINE, { gesture: true })}>Test voice</Button>
+        <Button onClick={() => getSpeaker().speak(TEST_VOICE_LINE, { gesture: true })}>
+          <Icon name="volume" size={18} />
+          Test voice
+        </Button>
         <p className="text-xs text-text-faint">Hear nothing? Check the side switch isn't on Silent and the volume is up.</p>
       </div>
 
       {consented ? (
-        <div className="mt-4">
-          <Button variant="danger" busy={busy === "withdraw"} onClick={() => void withdraw()}>
+        <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
+          <p className="text-xs text-text-muted">Turns it off for your account on every phone.</p>
+          <Button variant="danger-ghost" size="sm" className="-mr-2 shrink-0" busy={busy === "withdraw"} onClick={() => void withdraw()}>
             Turn off the AI assistant
           </Button>
-          <p className="text-xs text-text-muted mt-1">Turns it off for your account on every phone.</p>
         </div>
       ) : null}
 

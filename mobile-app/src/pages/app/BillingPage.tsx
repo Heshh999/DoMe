@@ -4,7 +4,7 @@
  */
 import { PLANS } from "@dome/protocol";
 
-import { Card, Notice, Pill, Steps, type Tone } from "../../components/ui.tsx";
+import { Card, IconWell, KeyValue, Notice, PageHeader, Pill, Steps, type Tone } from "../../components/ui.tsx";
 import { money } from "../../lib/format.ts";
 import { recoverySteps } from "../../lib/labels.ts";
 import { useSessionStore } from "../../store/session.ts";
@@ -27,16 +27,17 @@ export function BillingPage() {
   const pricing = PLANS.pricing_defaults;
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold tracking-tight">Billing</h1>
+      <PageHeader title="Billing" />
       <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs text-text-faint uppercase tracking-wider">Current plan</p>
-            <p className="text-xl font-bold">{plan.display_name}</p>
+        <div className="flex items-center gap-3.5">
+          <IconWell icon="card" size={44} radius={14} />
+          <div className="min-w-0 flex-1">
+            <p className="text-caption font-semibold uppercase tracking-[0.12em] text-text-faint">Current plan</p>
+            <p className="text-[1.375rem] font-bold leading-tight tracking-[-0.02em]">{plan.display_name}</p>
           </div>
           <Pill tone={copy.tone}>{copy.label}</Pill>
         </div>
-        <p className="text-sm text-text-muted mt-2">{copy.text}</p>
+        <p className="mt-3 text-sm text-text-muted">{copy.text}</p>
         {state === "past_due" ? (
           <div className="mt-2 text-sm text-text-muted">
             <Steps steps={recoverySteps("BILLING_PAST_DUE")} />
@@ -44,24 +45,23 @@ export function BillingPage() {
         ) : null}
       </Card>
       <Card>
-        <h2 className="font-semibold mb-2">Your limits</h2>
-        <dl className="grid grid-cols-2 gap-y-2 text-sm">
-          <dt className="text-text-muted">Enabled PCs</dt>
-          <dd className="font-medium text-right">{session.limits.max_enabled_pcs}</dd>
-          <dt className="text-text-muted">Paired phones</dt>
-          <dd className="font-medium text-right">{session.limits.max_controllers}</dd>
-          <dt className="text-text-muted">Routines</dt>
-          <dd className="font-medium text-right">{session.limits.routines ? "Included" : "Not included"}</dd>
-          <dt className="text-text-muted">Custom layouts</dt>
-          <dd className="font-medium text-right">{session.limits.custom_layouts ? "Included" : "Not included"}</dd>
-        </dl>
+        <h2 className="font-semibold">Your limits</h2>
+        <KeyValue
+          className="mt-1"
+          rows={[
+            { label: "Enabled PCs", value: String(session.limits.max_enabled_pcs) },
+            { label: "Paired phones", value: String(session.limits.max_controllers) },
+            { label: "Routines", value: session.limits.routines ? "Included" : "Not included" },
+            { label: "Custom layouts", value: session.limits.custom_layouts ? "Included" : "Not included" },
+          ]}
+        />
       </Card>
       <Notice tone="info" title="Upgrading is not available yet">
         <p>
           DoMe Pro is planned at {money(pricing.monthly_cents, pricing.currency)} per month or {money(pricing.annual_cents, pricing.currency)} per year (planned pricing, not final). Checkout, invoices and the payment portal arrive with the paid launch; nothing can be charged from this app today.
         </p>
       </Notice>
-      <p className="text-xs text-text-faint">Security controls — revoking phones, unlinking PCs, emergency stop on the PC — are included on every plan and are never paywalled.</p>
+      <p className="px-1 text-xs text-text-faint">Security controls — revoking phones, unlinking PCs, emergency stop on the PC — are included on every plan and are never paywalled.</p>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /** Custom remotes (layouts): a Pro preview reached only by a deliberate selection from More. Nothing is saved. */
-import { Card, Pill } from "../../components/ui.tsx";
+import { Card, IconWell, PageHeader, Pill, SectionLabel } from "../../components/ui.tsx";
 import { ProExplanation } from "../../components/ProExplanation.tsx";
 
 const EXAMPLES = [
@@ -11,21 +11,24 @@ const EXAMPLES = [
 export function LayoutsPage() {
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Custom remotes</h1>
-        <Pill tone="info">Preview</Pill>
-      </div>
+      <PageHeader title="Custom remotes" action={<Pill tone="info">Preview</Pill>} />
       <ProExplanation benefit="Saving your own remote layouts">
         <p>Arrange the controls you use most into named remotes such as Media, Desk or Presentation. Every control still goes through the same validated action registry and the same confirmations; a layout can never add a capability the PC did not grant.</p>
       </ProExplanation>
-      <ul className="space-y-3" aria-label="Example layouts (preview)">
-        {EXAMPLES.map((l) => (
-          <Card key={l.name} as="li" className="opacity-80" aria-disabled="true">
-            <p className="font-semibold">{l.name}</p>
-            <p className="text-sm text-text-muted mt-1">{l.controls.join(" · ")}</p>
-          </Card>
-        ))}
-      </ul>
+      <section className="pt-1">
+        <SectionLabel>Example layouts</SectionLabel>
+        <ul className="space-y-3" aria-label="Example layouts (preview)">
+          {EXAMPLES.map((l) => (
+            <Card key={l.name} as="li" className="flex items-center gap-3.5 p-4 opacity-80" aria-disabled="true">
+              <IconWell icon="layout" tone="muted" size={40} />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold">{l.name}</p>
+                <p className="mt-0.5 text-sm text-text-muted">{l.controls.join(" · ")}</p>
+              </div>
+            </Card>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

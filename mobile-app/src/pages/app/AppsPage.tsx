@@ -13,7 +13,7 @@ import { refreshApprovedApps, useApprovedApps, useLabels, useSelectedPc, useSend
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
-import { Button, Card, EmptyState, Notice, Pill, Steps } from "../../components/ui.tsx";
+import { Button, Card, EmptyState, HeaderPill, IconWell, Notice, PageHeader, Pill, Steps } from "../../components/ui.tsx";
 import type { CommandRecord } from "../../lib/commands.ts";
 import { errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { relativeTime } from "../../lib/format.ts";
@@ -75,23 +75,25 @@ export function AppsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Apps</h1>
-        <Button size="md" variant="ghost" disabled={!canControl} onClick={() => void send("app.list", {}, null, "system")}>
-          Refresh
-        </Button>
-      </div>
+      <PageHeader
+        title="Apps"
+        action={
+          <HeaderPill icon="refresh" disabled={!canControl} onClick={() => void send("app.list", {}, null, "system")}>
+            Refresh
+          </HeaderPill>
+        }
+      />
       <PcSwitcher pc={pc} live={live} />
       {locked ? <Notice tone="info">The PC is locked. App controls resume when it is unlocked.</Notice> : null}
       {!fresh && apps.length === 0 ? <Notice tone="info">The list of approved apps comes from the PC and is available while it is online.</Notice> : null}
-      {listing && !listing.terminal && cachedApps === null ? <p className="text-sm text-text-muted">Asking the PC for its approved apps…</p> : null}
+      {listing && !listing.terminal && cachedApps === null ? <p className="px-1 text-sm text-text-muted">Asking the PC for its approved apps…</p> : null}
       {listing?.terminal && listing.terminal.state !== "succeeded" ? (
         <Notice tone="warning" title="Could not load the app list">
           <p>{errorMessage(listing.terminal.error)}</p>
         </Notice>
       ) : null}
       {cachedApps !== null && apps.length === 0 ? (
-        <EmptyState title="No approved apps yet">
+        <EmptyState icon="apps" title="No approved apps yet">
           <p>Apps are approved on the PC itself, never from the phone: on the PC, open the DoMe tray menu, choose Add an app…, and pick the program you want to open from here.</p>
           <p>It shows up on this page by itself when you come back to it.</p>
         </EmptyState>
@@ -103,62 +105,67 @@ export function AppsPage() {
           const windowless = app.running && app.windows.length === 0;
           const windowBlocked = appsBlocked || !app.running || windowless;
           return (
-            <Card key={app.app_id} as="li">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-semibold truncate">{app.display_name}</p>
+            <Card key={app.app_id} as="li" className="p-4">
+              <div className="flex items-center gap-3.5">
+                <IconWell icon="apps" tone={windowless ? "muted" : app.running ? "accent" : "muted"} size={44} radius={14} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[17px] font-semibold leading-snug tracking-[-0.01em]">{app.display_name}</p>
                   <p className="text-xs text-text-muted">{windowless ? "Running in the background · no open window" : app.running ? `Running · ${app.windows.length} window${app.windows.length === 1 ? "" : "s"}` : "Not running"}</p>
                 </div>
                 <Pill tone={windowless ? "neutral" : app.running ? "success" : "neutral"}>{windowless ? "Background" : app.running ? "Running" : "Closed"}</Pill>
               </div>
-              {windowless ? <p className="mt-2 text-sm text-text-muted">It has no window to control right now (for example it is only in the system tray). Tap Open to show it; the window buttons work once it has one.</p> : null}
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              {windowless ? <p className="mt-3 text-sm text-text-muted">It has no window to control right now (for example it is only in the system tray). Tap Open to show it; the window buttons work once it has one.</p> : null}
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 <Button disabled={appsBlocked} onClick={() => void send("app.launch", { app_id: app.app_id }, null, "button")}>
                   {app.running && !windowless ? "Open again" : "Open"}
                 </Button>
                 <Button disabled={windowBlocked} onClick={() => void send("app.focus", {}, { app_id: app.app_id }, "button")}>
                   Bring to front
                 </Button>
-                <Button disabled={windowBlocked} onClick={() => void send("app.minimize", {}, { app_id: app.app_id }, "button")}>
+                <Button size="sm" disabled={windowBlocked} onClick={() => void send("app.minimize", {}, { app_id: app.app_id }, "button")}>
                   Minimise
                 </Button>
-                <Button disabled={windowBlocked} onClick={() => void send("app.maximize", {}, { app_id: app.app_id }, "button")}>
+                <Button size="sm" disabled={windowBlocked} onClick={() => void send("app.maximize", {}, { app_id: app.app_id }, "button")}>
                   Maximise
                 </Button>
-                <Button disabled={windowBlocked} title="Show the window at normal size" onClick={() => void send("app.restore", {}, { app_id: app.app_id }, "button")}>
+                <Button size="sm" disabled={windowBlocked} title="Show the window at normal size" onClick={() => void send("app.restore", {}, { app_id: app.app_id }, "button")}>
                   Restore
                 </Button>
-                <Button disabled={windowBlocked} aria-pressed={fullscreen} title="Presses F11 in the app on the PC" onClick={() => void send("app.set_fullscreen", { enabled: !fullscreen }, { app_id: app.app_id }, "button")}>
+                <Button size="sm" disabled={windowBlocked} aria-pressed={fullscreen} title="Presses F11 in the app on the PC" onClick={() => void send("app.set_fullscreen", { enabled: !fullscreen }, { app_id: app.app_id }, "button")}>
                   {fullscreen ? "Leave full screen" : "Full screen"}
                 </Button>
-                <Button variant="danger" className="col-span-2" disabled={windowBlocked} onClick={() => void send("app.close", {}, { app_id: app.app_id }, "button")}>
+              </div>
+              {/* Closing is the one destructive action here: a quiet text action, and the PC asks you to confirm on this phone. */}
+              <div className="mt-2 flex items-center justify-between gap-3 border-t border-border pt-2">
+                <p className="text-xs text-text-faint">Close asks you to confirm first.</p>
+                <Button size="sm" variant="danger-ghost" className="-mr-2" disabled={windowBlocked} onClick={() => void send("app.close", {}, { app_id: app.app_id }, "button")}>
                   Close…
                 </Button>
               </div>
               {app.windows.length > 1 ? (
-                <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer text-text-muted">Windows</summary>
+                <details className="mt-1 text-sm">
+                  <summary className="flex min-h-[44px] cursor-pointer items-center font-medium text-text-muted">Windows</summary>
                   <ul className="mt-2 space-y-2">
                     {app.windows.map((w) => {
                       const target = { app_id: app.app_id, window_id: w.window_id };
                       const windowFullscreen = states.byWindow[`${app.app_id}:${w.window_id}`]?.fullscreen === true;
                       return (
-                        <li key={w.window_id} className="space-y-1">
-                          <span className="block truncate">{w.title || "Untitled window"}</span>
-                          <span className="flex flex-wrap gap-1">
-                            <Button size="md" disabled={appsBlocked} onClick={() => void send("app.focus", {}, target, "button")}>
+                        <li key={w.window_id} className="rounded-control border border-border bg-surface px-3 py-2.5">
+                          <span className="block truncate font-medium">{w.title || "Untitled window"}</span>
+                          <span className="mt-2 flex flex-wrap gap-1.5">
+                            <Button size="sm" disabled={appsBlocked} onClick={() => void send("app.focus", {}, target, "button")}>
                               Front
                             </Button>
-                            <Button size="md" disabled={appsBlocked} title="Maximise this window" onClick={() => void send("app.maximize", {}, target, "button")}>
+                            <Button size="sm" disabled={appsBlocked} title="Maximise this window" onClick={() => void send("app.maximize", {}, target, "button")}>
                               Max
                             </Button>
-                            <Button size="md" disabled={appsBlocked} title="Show this window at normal size" onClick={() => void send("app.restore", {}, target, "button")}>
+                            <Button size="sm" disabled={appsBlocked} title="Show this window at normal size" onClick={() => void send("app.restore", {}, target, "button")}>
                               Restore
                             </Button>
-                            <Button size="md" disabled={appsBlocked} aria-pressed={windowFullscreen} title="Presses F11 in this window on the PC" onClick={() => void send("app.set_fullscreen", { enabled: !windowFullscreen }, target, "button")}>
+                            <Button size="sm" disabled={appsBlocked} aria-pressed={windowFullscreen} title="Presses F11 in this window on the PC" onClick={() => void send("app.set_fullscreen", { enabled: !windowFullscreen }, target, "button")}>
                               {windowFullscreen ? "Leave full" : "Full"}
                             </Button>
-                            <Button size="md" variant="danger" disabled={appsBlocked} onClick={() => void send("app.close", {}, target, "button")}>
+                            <Button size="sm" variant="danger-ghost" disabled={appsBlocked} onClick={() => void send("app.close", {}, target, "button")}>
                               Close…
                             </Button>
                           </span>
@@ -172,7 +179,7 @@ export function AppsPage() {
           );
         })}
       </ul>
-      {at !== null ? <p className="text-xs text-text-faint">List from the PC {relativeTime(new Date(at).toISOString())}. Close asks you to confirm and never force-quits; unsaved work stays open on the PC. Full screen presses F11 in the app.</p> : null}
+      {at !== null ? <p className="px-1 text-xs text-text-faint">List from the PC {relativeTime(new Date(at).toISOString())}. Close asks you to confirm and never force-quits; unsaved work stays open on the PC. Full screen presses F11 in the app.</p> : null}
       {sendError ? (
         <Notice tone="danger" title="Not sent">
           <p>{errorMessage(sendError)}</p>
@@ -184,7 +191,7 @@ export function AppsPage() {
         </Notice>
       ) : null}
       {record && record.action !== "app.list" ? (
-        <Card>
+        <Card className="p-4">
           <CommandOutcome record={record} pcName={pcName} labels={labels} />
           {fullscreenUnsupported ? (
             // A separate, visible command: DoMe never maximises in place of full screen by itself.

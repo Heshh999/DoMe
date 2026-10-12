@@ -11,7 +11,7 @@ import { refreshApprovedApps, useApprovedApps, useLabels, useMyGrant, useSelecte
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
-import { Button, Card, inputClass, Notice, Steps } from "../../components/ui.tsx";
+import { Button, Card, Chip, inputClass, Notice, PageHeader, SectionLabel, Steps } from "../../components/ui.tsx";
 import { intentContext, previewStep, type LiveView, type PlanRun } from "../../lib/commandPlan.ts";
 import { appCommandText, exampleAppPhrase, MAX_COMMAND_CHARS, parseCommand, type Choice, type PlanStep } from "../../lib/intents.ts";
 import { ordinalWord } from "../../lib/intentWords.ts";
@@ -26,9 +26,7 @@ function ChoiceChips({ choices, onPick, label }: { choices: Choice[]; onPick: (t
     <ul className="mt-2 flex flex-wrap gap-2" aria-label={label}>
       {choices.map((c) => (
         <li key={`${c.label}|${c.text}`}>
-          <button type="button" onClick={() => onPick(c.text)} className="tap rounded-full border border-border bg-surface px-3 py-2 text-sm text-text hover:bg-surface-hover">
-            {c.label}
-          </button>
+          <Chip onClick={() => onPick(c.text)}>{c.label}</Chip>
         </li>
       ))}
     </ul>
@@ -37,7 +35,7 @@ function ChoiceChips({ choices, onPick, label }: { choices: Choice[]; onPick: (t
 
 function TouchpadLink() {
   return (
-    <Link to="/app/touchpad" className="tap mt-2 inline-flex items-center rounded-control dome-primary font-semibold px-4 text-sm">
+    <Link to="/app/touchpad" className="tap dome-primary dome-press mt-2 inline-flex min-h-[44px] items-center rounded-control px-4 text-sm font-semibold">
       Open Touchpad
     </Link>
   );
@@ -149,7 +147,7 @@ export function CommandPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold tracking-tight">Type a command</h1>
+      <PageHeader title="Type a command" subtitle="Plain words, no AI. DoMe shows exactly what it will send before it goes." />
       <PcSwitcher pc={pc} live={live} />
       <Card>
         <form
@@ -164,7 +162,7 @@ export function CommandPage() {
           </label>
           <input id="command-text" ref={inputRef} className={inputClass} value={text} onChange={(e) => setText(e.currentTarget.value)} placeholder="e.g. make the volume 100%" autoComplete="off" autoCorrect="on" enterKeyHint="send" maxLength={MAX_COMMAND_CHARS} aria-describedby="command-preview" />
           <p className="text-xs text-text-faint">Tip: tap the microphone on your keyboard to dictate. Join up to three steps with “and” or “then”. Typed commands work without any AI service.</p>
-          <div id="command-preview" aria-live="polite" className="min-h-[2.5rem] text-sm">
+          <div id="command-preview" aria-live="polite" className="min-h-[2.5rem] rounded-control border border-border bg-surface px-3.5 py-3 text-sm">
             {text.trim() === "" ? (
               <span className="text-text-muted">Try one of the examples below.</span>
             ) : parsed.kind === "plan" ? (
@@ -278,25 +276,25 @@ export function CommandPage() {
           ) : null}
         </Card>
       ) : null}
-      <Card>
-        <h2 className="font-semibold mb-2">Examples</h2>
-        <div className="space-y-3">
-          {examples.map((group) => (
-            <div key={group.title}>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-text-faint mb-1">{group.title}</h3>
-              <ul className="flex flex-wrap gap-2">
-                {group.items.map((ex) => (
-                  <li key={ex}>
-                    <button type="button" onClick={() => pick(ex)} className="tap rounded-full border border-border bg-surface px-3 py-2 text-sm hover:bg-surface-hover">
-                      {ex}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </Card>
+      <section className="pt-1">
+        <SectionLabel>Examples</SectionLabel>
+        <Card>
+          <div className="space-y-4">
+            {examples.map((group) => (
+              <div key={group.title}>
+                <h3 className="mb-2 text-xs font-semibold text-text-muted">{group.title}</h3>
+                <ul className="flex flex-wrap gap-2">
+                  {group.items.map((ex) => (
+                    <li key={ex}>
+                      <Chip onClick={() => pick(ex)}>{ex}</Chip>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </section>
     </div>
   );
 }

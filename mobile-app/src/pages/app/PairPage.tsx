@@ -5,12 +5,13 @@
  * storage or logs.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 
 import { ProtocolError, type Capability, type rest } from "@dome/protocol";
 
 import { getRuntime } from "../../app/runtime.ts";
-import { Button, Card, Field, inputClass, Notice, Pill, Spinner, Steps } from "../../components/ui.tsx";
+import { Icon } from "../../components/icons.tsx";
+import { Button, Card, CheckRow, Field, IconWell, inputClass, Notice, PageHeader, Pill, Segmented, Spinner, Steps } from "../../components/ui.tsx";
 import { api, ApiError } from "../../lib/api.ts";
 import { getControllerIdentity, KeyStorageError, setStoredControllerId } from "../../lib/controllerKey.ts";
 import { secondsUntil } from "../../lib/format.ts";
@@ -23,6 +24,19 @@ import { useDevicesStore } from "../../store/devices.ts";
 type Step = { kind: "enter"; mode: "scan" | "type" } | { kind: "details"; code: string } | { kind: "claiming"; code: string } | { kind: "waiting"; status: rest.PairingStatusResponse; verification: string } | { kind: "done"; status: rest.PairingStatusResponse } | { kind: "failed"; code: string; message: string };
 
 const POLL_MS = 2000;
+
+/** The four corner marks of the scanning frame (drawn, no glyph). */
+function ScanFrame() {
+  const corner = "absolute h-7 w-7 border-accent";
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-[13%]">
+      <span className={`${corner} left-0 top-0 rounded-tl-xl border-l-[3px] border-t-[3px]`} />
+      <span className={`${corner} right-0 top-0 rounded-tr-xl border-r-[3px] border-t-[3px]`} />
+      <span className={`${corner} bottom-0 left-0 rounded-bl-xl border-b-[3px] border-l-[3px]`} />
+      <span className={`${corner} bottom-0 right-0 rounded-br-xl border-b-[3px] border-r-[3px]`} />
+    </div>
+  );
+}
 
 export function PairPage() {
   const navigate = useNavigate();
@@ -150,12 +164,7 @@ export function PairPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Link to="/app/devices" className="tap inline-flex items-center text-accent font-semibold text-sm px-1" aria-label="Back to devices">
-          ‹ Devices
-        </Link>
-      </div>
-      <h1 className="text-2xl font-bold tracking-tight">Pair this phone with a PC</h1>
+      <PageHeader title="Pair this phone with a PC" back={{ to: "/app/devices", label: "Devices", ariaLabel: "Back to devices" }} />
 
       {step.kind === "enter" ? (
         <>
@@ -169,21 +178,25 @@ export function PairPage() {
               On the PC, open the DoMe tray menu and choose <strong>Pair a phone</strong>. It shows a QR code and a 20-character code that work for 5 minutes.
             </p>
           </Notice>
-          <div role="tablist" aria-label="How to enter the code" className="grid grid-cols-2 gap-1 rounded-control bg-bg-sunken p-1">
-            <button role="tab" type="button" aria-selected={step.mode === "scan"} disabled={detectQrSupport() === "unsupported"} onClick={() => setStep({ kind: "enter", mode: "scan" })} className={`rounded-[0.7rem] py-2.5 text-sm font-semibold disabled:opacity-40 ${step.mode === "scan" ? "bg-bg-elevated shadow" : "text-text-muted"}`}>
-              Scan QR code
-            </button>
-            <button role="tab" type="button" aria-selected={step.mode === "type"} onClick={() => setStep({ kind: "enter", mode: "type" })} className={`rounded-[0.7rem] py-2.5 text-sm font-semibold ${step.mode === "type" ? "bg-bg-elevated shadow" : "text-text-muted"}`}>
-              Type the code
-            </button>
-          </div>
+          <Segmented<"scan" | "type">
+            label="How to enter the code"
+            value={step.mode}
+            onChange={(mode) => setStep({ kind: "enter", mode })}
+            options={[
+              { value: "scan", label: "Scan QR code", icon: "qr", disabled: detectQrSupport() === "unsupported" },
+              { value: "type", label: "Type the code", icon: "keyboard" },
+            ]}
+          />
           {step.mode === "scan" ? (
-            <Card className="p-2">
-              <div className="relative aspect-square overflow-hidden rounded-[0.8rem] bg-black">
+            <Card className="p-2.5">
+              <div className="relative aspect-square overflow-hidden rounded-[1rem] bg-navy">
                 <video ref={videoRef} className="h-full w-full object-cover" playsInline muted aria-label="Camera preview for scanning the pairing QR code" />
-                <div aria-hidden="true" className="pointer-events-none absolute inset-[12%] rounded-xl border-2 border-accent/80" />
+                <ScanFrame />
               </div>
-              <p className="text-xs text-text-muted mt-2 px-1">Point the camera at the QR code on the PC’s screen. The camera is only used on this page.</p>
+              <p className="flex items-start gap-2 px-1.5 pb-1 pt-3 text-xs text-text-muted">
+                <Icon name="camera" size={16} className="mt-px shrink-0 text-text-faint" />
+                Point the camera at the QR code on the PC’s screen. The camera is only used on this page.
+              </p>
             </Card>
           ) : (
             <Card>
@@ -218,42 +231,44 @@ export function PairPage() {
 
       {step.kind === "details" ? (
         <Card>
-          <h2 className="font-semibold">Almost there</h2>
-          <p className="text-sm text-text-muted mt-1">Code accepted. Name this phone and choose what it may do on the PC. You approve the pairing on the PC itself.</p>
+          <div className="flex items-center gap-3.5">
+            <IconWell icon="check" tone="success" size={44} radius={14} />
+            <div className="min-w-0">
+              <h2 className="text-[17px] font-semibold leading-snug">Almost there</h2>
+              <p className="text-xs text-text-muted">Code accepted.</p>
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-text-muted">Name this phone and choose what it may do on the PC. You approve the pairing on the PC itself.</p>
           <div className="mt-4 space-y-4">
             <Field id="phone-name" label="Name for this phone" hint="Shown on the PC and in your device list.">
               <input id="phone-name" className={inputClass} value={name} onChange={(e) => setName(e.currentTarget.value)} maxLength={64} />
             </Field>
             <fieldset>
-              <legend className="text-sm font-medium mb-2">Permissions to request</legend>
+              <legend className="mb-2 text-sm font-semibold">Permissions to request</legend>
               <ul className="space-y-2">
                 {ALL_CAPABILITIES.map((cap) => (
                   <li key={cap}>
-                    <label className="flex items-center gap-3 text-sm">
-                      <input
-                        type="checkbox"
-                        className="h-5 w-5"
-                        checked={caps.has(cap)}
-                        disabled={cap === "status"}
-                        onChange={(e) =>
-                          setCaps((prev) => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(cap);
-                            else next.delete(cap);
-                            next.add("status");
-                            return next;
-                          })
-                        }
-                      />
-                      {capabilityLabel(cap)}
-                    </label>
+                    <CheckRow
+                      label={capabilityLabel(cap)}
+                      checked={caps.has(cap)}
+                      disabled={cap === "status"}
+                      onChange={(checked) =>
+                        setCaps((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(cap);
+                          else next.delete(cap);
+                          next.add("status");
+                          return next;
+                        })
+                      }
+                    />
                   </li>
                 ))}
               </ul>
-              <p className="text-xs text-text-muted mt-2">Touchpad and keyboard are requested by default; the PC owner decides on the PC what this phone actually gets. {INPUT_SCOPE_EXPLANATION}</p>
+              <p className="mt-2 text-xs text-text-muted">Touchpad and keyboard are requested by default; the PC owner decides on the PC what this phone actually gets. {INPUT_SCOPE_EXPLANATION}</p>
             </fieldset>
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="mt-5 grid grid-cols-2 gap-3">
             <Button size="lg" onClick={reset}>
               Back
             </Button>
@@ -265,28 +280,28 @@ export function PairPage() {
       ) : null}
 
       {step.kind === "claiming" ? (
-        <Card className="text-center py-8">
+        <Card className="py-9 text-center">
           <Spinner label="Sending the pairing request" />
-          <p className="text-sm text-text-muted mt-3">Sending the request to DoMe…</p>
+          <p className="mt-3 text-sm text-text-muted">Sending the request to DoMe…</p>
         </Card>
       ) : null}
 
       {step.kind === "waiting" ? (
         <Card className="text-center">
-          <p className="text-xs uppercase tracking-wider text-text-faint">Verification code</p>
-          <p className="font-mono text-5xl font-bold tracking-[0.2em] my-3" aria-label={`Verification code ${step.verification.split("").join(" ")}`} data-testid="verification-code">
+          <p className="dome-eyebrow">Verification code</p>
+          <p className="my-4 font-mono text-[2.75rem] font-bold leading-none tracking-[0.22em] tabular-nums" aria-label={`Verification code ${step.verification.split("").join(" ")}`} data-testid="verification-code">
             {step.verification}
           </p>
           <p className="text-sm">
             <strong>{step.status.pc_name}</strong> shows a code too. Approve on the PC only if it matches this one.
           </p>
-          <div className="mt-3 flex items-center justify-center gap-2">
+          <div className="mt-4 flex items-center justify-center gap-2">
             <Pill tone={step.status.pc_online === false ? "warning" : "info"} pulse>
               {step.status.pc_online === false ? "PC is offline — it will ask when it reconnects" : "Waiting for approval on the PC"}
             </Pill>
           </div>
-          <p className="text-xs text-text-faint mt-3">Expires in {secondsUntil(step.status.expires_at)} s. Nothing is paired until you approve on the PC.</p>
-          <Button className="mt-4" variant="ghost" onClick={reset}>
+          <p className="mt-3 text-xs text-text-faint">Expires in {secondsUntil(step.status.expires_at)} s. Nothing is paired until you approve on the PC.</p>
+          <Button className="mt-4" variant="quiet" onClick={reset}>
             Cancel
           </Button>
         </Card>
@@ -294,10 +309,13 @@ export function PairPage() {
 
       {step.kind === "done" ? (
         <Card>
-          <Pill tone="success">Paired</Pill>
-          <h2 className="text-lg font-semibold mt-2">This phone can now control {step.status.pc_name}</h2>
-          {step.status.granted_capabilities ? <p className="text-sm text-text-muted mt-1">Allowed: {step.status.granted_capabilities.map(capabilityLabel).join(", ")}.</p> : null}
-          <p className="text-sm text-text-muted mt-2">Try Play/Pause from the remote. If YouTube control is what you want, make sure the DoMe browser extension is installed in Chrome or Edge on the PC.</p>
+          <div className="flex items-center gap-3.5">
+            <IconWell icon="checkCircle" tone="success" size={44} radius={14} />
+            <Pill tone="success">Paired</Pill>
+          </div>
+          <h2 className="mt-3 text-lg font-semibold">This phone can now control {step.status.pc_name}</h2>
+          {step.status.granted_capabilities ? <p className="mt-1 text-sm text-text-muted">Allowed: {step.status.granted_capabilities.map(capabilityLabel).join(", ")}.</p> : null}
+          <p className="mt-2 text-sm text-text-muted">Try Play/Pause from the remote. If YouTube control is what you want, make sure the DoMe browser extension is installed in Chrome or Edge on the PC.</p>
           <Button className="mt-4" variant="primary" size="lg" full onClick={() => void navigate("/app")}>
             Go to Home
           </Button>

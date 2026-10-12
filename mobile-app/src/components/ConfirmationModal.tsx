@@ -16,6 +16,7 @@ import { describeChallenge } from "../lib/confirmations.ts";
 import { secondsUntil } from "../lib/format.ts";
 import type { LabelContext } from "../lib/labels.ts";
 import { isPowerAction, POWER_CONFIRMATION_COPY } from "../lib/power.ts";
+import { Icon } from "./icons.tsx";
 import { Button, Notice } from "./ui.tsx";
 import { Sheet } from "./Sheet.tsx";
 
@@ -67,16 +68,19 @@ export function ConfirmationModal({ record, pcName, labels, connected = true, on
 
   return (
     <Sheet open dismissible={false} labelledBy="confirm-title">
-      <p className="text-xs font-semibold uppercase tracking-wider text-warning mb-1">Confirm on this phone</p>
-      <h2 id="confirm-title" className="text-xl font-bold leading-snug" data-testid="confirm-primary">
+      <p className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-warning/12 py-1 pl-2 pr-2.5 text-xs font-semibold uppercase tracking-[0.1em] text-warning">
+        <Icon name="warning" size={14} />
+        Confirm on this phone
+      </p>
+      <h2 id="confirm-title" className="text-[1.375rem] font-bold leading-snug tracking-[-0.02em]" data-testid="confirm-primary">
         {desc.primary}
       </h2>
       <p className="mt-1 text-text-muted">
         on <span className="font-semibold text-text">{desc.pcName}</span>
       </p>
       {desc.detail ? (
-        <p className="mt-3 rounded-control bg-bg-sunken border border-border px-3 py-2 text-sm text-text-muted break-words" data-testid="confirm-detail">
-          <span className="block text-[11px] uppercase tracking-wider text-text-faint mb-0.5">Reported by the PC</span>
+        <p className="mt-3 break-words rounded-control border border-border bg-bg-sunken px-3.5 py-2.5 text-sm text-text-muted" data-testid="confirm-detail">
+          <span className="mb-0.5 block text-[11px] font-semibold uppercase tracking-[0.1em] text-text-faint">Reported by the PC</span>
           {desc.detail}
         </p>
       ) : null}

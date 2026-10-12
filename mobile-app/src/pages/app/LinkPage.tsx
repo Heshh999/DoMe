@@ -10,7 +10,8 @@ import type { rest } from "@dome/protocol";
 import { api, ApiError } from "../../lib/api.ts";
 import { secondsUntil } from "../../lib/format.ts";
 import { errorMessage } from "../../lib/labels.ts";
-import { Button, Card, Field, inputClass, Notice, Spinner } from "../../components/ui.tsx";
+import { Wordmark } from "../../components/brand.tsx";
+import { Button, Card, CheckRow, Field, IconWell, inputClass, KeyValue, Notice, Spinner } from "../../components/ui.tsx";
 
 const USER_CODE = /^[0-9A-HJKMNP-TV-Z]{4}-?[0-9A-HJKMNP-TV-Z]{4}$/i;
 
@@ -79,19 +80,27 @@ export function LinkPage() {
   };
 
   return (
-    <main className="min-h-dvh bg-bg text-text">
-      <div className="max-w-lg mx-auto px-4 pt-[calc(var(--safe-top)+1.5rem)] pb-[calc(2rem+var(--safe-bottom))] space-y-4">
-        <h1 className="text-2xl font-bold tracking-tight">Link a PC to your account</h1>
+    <main className="relative isolate min-h-dvh text-text">
+      <div className="dome-backdrop" aria-hidden="true" />
+      <div className="mx-auto max-w-lg space-y-4 px-5 pt-[calc(var(--safe-top)+1.25rem)] pb-[calc(2rem+var(--safe-bottom))]">
+        <Wordmark compact title="DoMe" className="h-[22px] w-auto" />
+        <header className="pt-2 pb-1">
+          <p className="dome-eyebrow mb-1.5">Link a PC</p>
+          <h1 className="text-[2rem] leading-[1.1] font-bold tracking-[-0.03em]">Link a PC to your account</h1>
+        </header>
         {done === "denied" ? (
           <Notice tone="info" title="Request denied">
             <p>The PC was not linked. You can close this page.</p>
           </Notice>
         ) : done ? (
           <Card>
-            <h2 className="text-lg font-semibold">PC linked</h2>
-            <p className="text-sm text-text-muted mt-1">{done.enabled ? "Remote control is enabled. The PC will connect to DoMe in a moment." : "The PC is linked but not enabled: your plan’s limit of enabled PCs is reached. Choose which PC stays enabled under Devices."}</p>
-            <p className="text-sm text-text-muted mt-2">Next: on the PC choose “Pair a phone” and scan the code with this phone under Devices.</p>
-            <Link to="/app/devices/pair" className="tap mt-4 inline-flex items-center justify-center rounded-control dome-primary font-semibold px-5 w-full">
+            <div className="flex items-center gap-3.5">
+              <IconWell icon="checkCircle" tone="success" size={44} radius={14} />
+              <h2 className="text-lg font-semibold">PC linked</h2>
+            </div>
+            <p className="mt-3 text-sm text-text-muted">{done.enabled ? "Remote control is enabled. The PC will connect to DoMe in a moment." : "The PC is linked but not enabled: your plan’s limit of enabled PCs is reached. Choose which PC stays enabled under Devices."}</p>
+            <p className="mt-2 text-sm text-text-muted">Next: on the PC choose “Pair a phone” and scan the code with this phone under Devices.</p>
+            <Link to="/app/devices/pair" className="tap dome-primary dome-press mt-4 inline-flex min-h-[52px] w-full items-center justify-center rounded-control px-5 font-semibold">
               Pair this phone
             </Link>
           </Card>
@@ -99,10 +108,14 @@ export function LinkPage() {
           <>
             <Card>
               <Field id="user-code" label="Code shown on the PC" hint="Two groups of four characters, for example ABCD-EFGH.">
-                <input id="user-code" className={`${inputClass} font-mono tracking-widest uppercase`} value={codeInput} onChange={(e) => setCodeInput(e.currentTarget.value)} autoCapitalize="characters" autoComplete="one-time-code" spellCheck={false} />
+                <input id="user-code" className={`${inputClass} font-mono uppercase tracking-widest`} value={codeInput} onChange={(e) => setCodeInput(e.currentTarget.value)} autoCapitalize="characters" autoComplete="one-time-code" spellCheck={false} />
               </Field>
             </Card>
-            {loading ? <Spinner label="Looking up the code" /> : null}
+            {loading ? (
+              <p className="flex items-center gap-2 px-1 text-sm text-text-muted">
+                <Spinner label="Looking up the code" small /> Looking up the code…
+              </p>
+            ) : null}
             {error ?? lookupError ? (
               <Notice tone="danger">
                 <p>{errorMessage(error ?? lookupError)}</p>
@@ -110,29 +123,29 @@ export function LinkPage() {
             ) : null}
             {preview ? (
               <Card>
-                <h2 className="font-semibold">A Windows PC is asking to join your account</h2>
-                <dl className="mt-2 text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-                  <dt className="text-text-muted">DoMe agent</dt>
-                  <dd>version {preview.agent_version}</dd>
-                  <dt className="text-text-muted">Platform</dt>
-                  <dd>{preview.platform === "windows" ? "Windows" : "Development build"}</dd>
-                  <dt className="text-text-muted">Code expires</dt>
-                  <dd>in {secondsUntil(preview.expires_at)} s</dd>
-                </dl>
+                <div className="flex items-center gap-3.5">
+                  <IconWell icon="pc" size={44} radius={14} />
+                  <h2 className="font-semibold leading-snug">A Windows PC is asking to join your account</h2>
+                </div>
+                <KeyValue
+                  className="mt-3"
+                  rows={[
+                    { label: "DoMe agent", value: `version ${preview.agent_version}` },
+                    { label: "Platform", value: preview.platform === "windows" ? "Windows" : "Development build" },
+                    { label: "Code expires", value: `in ${secondsUntil(preview.expires_at)} s` },
+                  ]}
+                />
                 <div className="mt-4 space-y-3">
                   <Field id="pc-name" label="Name this PC">
                     <input id="pc-name" className={inputClass} value={name} onChange={(e) => setName(e.currentTarget.value)} maxLength={64} placeholder="e.g. Living room PC" />
                   </Field>
-                  <label className="flex items-start gap-3 text-sm">
-                    <input type="checkbox" className="mt-1 h-5 w-5" checked={enable} onChange={(e) => setEnable(e.currentTarget.checked)} />
-                    <span>
-                      Enable remote control for this PC. <span className="text-text-muted">Required to link; you can turn it off any time on the PC or under Devices.</span>
-                    </span>
-                  </label>
+                  <CheckRow label="Enable remote control for this PC." hint="Required to link; you can turn it off any time on the PC or under Devices." checked={enable} onChange={setEnable} />
                 </div>
-                <Notice tone="info">
-                  <p>Only approve if you started this on your own PC just now. Linking does not pair any phone yet — that happens separately on the PC with a verification code.</p>
-                </Notice>
+                <div className="mt-4">
+                  <Notice tone="info">
+                    <p>Only approve if you started this on your own PC just now. Linking does not pair any phone yet — that happens separately on the PC with a verification code.</p>
+                  </Notice>
+                </div>
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <Button size="lg" onClick={() => void deny()} disabled={busy}>
                     Deny

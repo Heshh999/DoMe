@@ -11,10 +11,11 @@ import { Link } from "react-router";
 import { useInputSession, useMyGrant, useSelectedPc } from "../../app/hooks.ts";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { GestureGuide } from "../../components/GestureGuide.tsx";
+import { Icon } from "../../components/icons.tsx";
 import { KeyboardPanel } from "../../components/KeyboardPanel.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { TouchpadSurface } from "../../components/TouchpadSurface.tsx";
-import { Button, Notice, Pill, Steps } from "../../components/ui.tsx";
+import { Button, IconWell, Notice, PageHeader, Pill, Steps, type WellTone } from "../../components/ui.tsx";
 import { GestureMachine, type GestureOutput } from "../../lib/gestures.ts";
 import type { InputEvent } from "../../lib/input.ts";
 import { foregroundLabel, sessionStatus } from "../../lib/inputStatus.ts";
@@ -142,32 +143,40 @@ export function TouchpadPage() {
   const status = sessionStatus(session, now);
   const problem = session.problem;
   const showProblem = problem !== null;
+  const statusWell: WellTone = status.tone === "success" ? "success" : status.tone === "info" ? "accent" : status.tone === "warning" ? "warning" : status.tone === "danger" ? "danger" : "muted";
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold tracking-tight">Touchpad</h1>
-        <Button size="md" variant="danger" onClick={stopInput} disabled={session.phase === "idle"} aria-label="Stop Input">
-          Stop Input
-        </Button>
-      </div>
+      <PageHeader
+        title="Touchpad"
+        action={
+          // Stop Input is a safety control: always visible, quiet in red, never the screen's primary.
+          <button type="button" onClick={stopInput} disabled={session.phase === "idle"} aria-label="Stop Input" className="tap dome-press inline-flex h-11 items-center gap-1.5 rounded-full border border-danger/30 bg-danger/8 pl-3 pr-3.5 text-sm font-semibold text-danger hover:bg-danger/12 disabled:cursor-not-allowed disabled:opacity-40">
+            <Icon name="stop" size={16} />
+            Stop Input
+          </button>
+        }
+      />
       <PcSwitcher pc={pc} live={live} />
 
-      <div className="flex items-center justify-between gap-2 text-sm">
-        <div className="min-w-0">
+      <div className="dome-card flex items-center gap-3 px-4 py-3">
+        <IconWell icon="cursor" tone={statusWell} size={40} />
+        <div className="min-w-0 flex-1 text-sm">
           <p className="truncate">
             <span className="text-text-muted">In front on {pcName ?? "the PC"}: </span>
-            <span className="font-medium" title={session.foregroundApp?.window_title}>
+            <span className="font-semibold" title={session.foregroundApp?.window_title}>
               {foregroundLabel(session.foregroundApp)}
             </span>
           </p>
-          {session.heldButtons.length > 0 || session.heldKeys.length > 0 ? <p className="text-xs text-warning">Held on the PC: {[...session.heldButtons.map((b) => `${b} button`), ...session.heldKeys].join(", ")}</p> : null}
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Link to="/app/health" className="tap -my-1.5 inline-flex shrink-0 items-center" aria-label={`Connection health: ${status.label}`}>
+              <Pill tone={status.tone} pulse={status.pulse}>
+                {status.label}
+              </Pill>
+            </Link>
+            {session.heldButtons.length > 0 || session.heldKeys.length > 0 ? <p className="text-xs text-warning">Held on the PC: {[...session.heldButtons.map((b) => `${b} button`), ...session.heldKeys].join(", ")}</p> : null}
+          </div>
         </div>
-        <Link to="/app/health" className="shrink-0">
-          <Pill tone={status.tone} pulse={status.pulse}>
-            {status.label}
-          </Pill>
-        </Link>
       </div>
 
       {grantLacksInput ? (
@@ -190,7 +199,7 @@ export function TouchpadPage() {
           <Steps steps={recoverySteps(problem.code)} />
           {session.endReason === "takeover" ? <p>Another phone took over this PC’s touchpad.</p> : null}
           {session.holdsReleased > 0 ? <p>The PC released {session.holdsReleased} held button(s)/key(s).</p> : null}
-          <div className="flex flex-wrap gap-2 mt-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             {session.owned ? (
               <Button size="md" variant="primary" onClick={() => startAgain(true)} disabled={!relayUp}>
                 Take over
@@ -212,11 +221,11 @@ export function TouchpadPage() {
         </Notice>
       ) : null}
       {session.phase === "idle" && relayUp && !grantLacksInput ? (
-        <Button variant="primary" onClick={() => startAgain(false)} full>
+        <Button variant="primary" size="lg" onClick={() => startAgain(false)} full>
           Start touchpad on {pcName ?? "the PC"}
         </Button>
       ) : null}
-      {session.phase === "starting" ? <p className="text-xs text-text-muted">Asking {pcName ?? "the PC"} for a touchpad session — this times out after a few seconds if the PC does not answer.</p> : null}
+      {session.phase === "starting" ? <p className="px-1 text-xs text-text-muted">Asking {pcName ?? "the PC"} for a touchpad session — this times out after a few seconds if the PC does not answer.</p> : null}
 
       <TouchpadSurface machine={machine} onOutput={drain} disabled={!pointerOk} dragActive={dragMode || leftHeld} label={`Touchpad for ${pcName ?? "the PC"}`} compact={keyboardOpen} />
 
@@ -242,32 +251,35 @@ export function TouchpadPage() {
       </div>
       <div className="grid grid-cols-3 gap-2">
         <Button size="md" variant={keyboardOpen ? "primary" : "secondary"} onClick={() => setKeyboardOpen((v) => !v)} aria-expanded={keyboardOpen} disabled={!sessionLive && !keyboardOpen}>
+          <Icon name="keyboard" size={18} />
           Keyboard
         </Button>
         <Button size="md" onClick={() => setGuideOpen(true)}>
+          <Icon name="help" size={18} />
           Gestures
         </Button>
-        <Button size="md" onClick={() => setPrefsOpen((v) => !v)} aria-expanded={prefsOpen}>
+        <Button size="md" onClick={() => setPrefsOpen((v) => !v)} aria-expanded={prefsOpen} aria-pressed={prefsOpen}>
+          <Icon name="settings" size={18} />
           Settings
         </Button>
       </div>
 
       {prefsOpen ? (
-        <section className="rounded-card bg-bg-elevated border border-border p-3 space-y-3" aria-label="Touchpad settings">
+        <section className="dome-card space-y-4 p-4" aria-label="Touchpad settings">
           <div>
-            <label htmlFor="sensitivity" className="text-sm font-medium flex justify-between">
+            <label htmlFor="sensitivity" className="flex justify-between text-sm font-semibold">
               <span>Sensitivity</span>
-              <span className="text-text-muted">{prefs.sensitivity.toFixed(1)}×</span>
+              <span className="font-medium tabular-nums text-text-muted">{prefs.sensitivity.toFixed(1)}×</span>
             </label>
-            <input id="sensitivity" type="range" className="slider w-full" min={0.5} max={3} step={0.1} value={prefs.sensitivity} onChange={(e) => setPrefs({ sensitivity: Number(e.currentTarget.value) })} />
+            <input id="sensitivity" type="range" className="slider w-full" style={{ "--fill": `${((prefs.sensitivity - 0.5) / 2.5) * 100}%` } as React.CSSProperties} min={0.5} max={3} step={0.1} value={prefs.sensitivity} onChange={(e) => setPrefs({ sensitivity: Number(e.currentTarget.value) })} />
           </div>
           <fieldset>
-            <legend className="text-sm font-medium mb-1">Scroll direction</legend>
+            <legend className="mb-2 text-sm font-semibold">Scroll direction</legend>
             <div className="grid grid-cols-2 gap-2">
               {(["natural", "standard"] as const).map((d) => (
-                <label key={d} className={`flex items-center gap-2 rounded-control border px-3 py-2 text-sm ${prefs.scrollDirection === d ? "border-accent bg-accent/10" : "border-border"}`}>
-                  <input type="radio" name="scroll-direction" value={d} checked={prefs.scrollDirection === d} onChange={() => setPrefs({ scrollDirection: d })} />
-                  {d === "natural" ? "Natural (content follows fingers)" : "Standard (wheel-like)"}
+                <label key={d} className={`flex min-h-[48px] cursor-pointer items-center gap-2.5 rounded-control border px-3 py-2 text-sm transition-colors ${prefs.scrollDirection === d ? "border-accent/60 bg-accent/8" : "border-border bg-surface"}`}>
+                  <input type="radio" name="scroll-direction" value={d} className="dome-check" checked={prefs.scrollDirection === d} onChange={() => setPrefs({ scrollDirection: d })} />
+                  <span className="leading-snug">{d === "natural" ? "Natural (content follows fingers)" : "Standard (wheel-like)"}</span>
                 </label>
               ))}
             </div>

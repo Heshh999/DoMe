@@ -32,10 +32,12 @@ export function Sheet({ open, title, children, onClose, dismissible = true, labe
   if (!open) return null;
   const titleId = labelledBy ?? "sheet-title";
   return (
-    <dialog ref={ref} aria-labelledby={titleId} aria-modal="true" className="m-0 w-full max-w-lg mx-auto sm:my-auto fixed inset-x-0 bottom-0 sm:inset-0 bg-transparent p-0 backdrop:bg-black/60 open:flex">
-      <div className="w-full rounded-t-[1.75rem] sm:rounded-card bg-bg-raised border border-border text-text shadow-[var(--dome-shadow-raised)] p-5 pb-[calc(1.25rem+var(--safe-bottom))]">
+    // phones: the box sits at the bottom of the screen (margin-top auto inside the UA's top/bottom 0 inset); larger screens centre it
+    <dialog ref={ref} aria-labelledby={titleId} aria-modal="true" className="fixed inset-x-0 bottom-0 mx-auto mb-0 mt-auto w-full max-w-lg bg-transparent p-0 backdrop:bg-black/60 open:flex sm:inset-0 sm:my-auto">
+      <div className="animate-rise w-full rounded-t-[1.75rem] border border-border bg-bg-raised px-5 pt-3 pb-[calc(1.25rem+var(--safe-bottom))] text-text shadow-[var(--dome-shadow-raised)] sm:rounded-card sm:pt-5">
+        <div aria-hidden="true" className="dome-grabber mx-auto mb-4 sm:hidden" />
         {title ? (
-          <h2 id={titleId} className="text-lg font-bold mb-3">
+          <h2 id={titleId} className="mb-3 text-[1.25rem] font-bold tracking-[-0.02em]">
             {title}
           </h2>
         ) : null}

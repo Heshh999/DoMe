@@ -24,7 +24,8 @@ import type { AckOutcome, InputEvent as ProtoEvent, InputSessionState } from "..
 import { foregroundLabel } from "../lib/inputStatus.ts";
 import { recoverySteps } from "../lib/labels.ts";
 import { CERTAINTY_LOST_EXPLANATION, LiveTyping, PAUSE_EXPLANATION, splitText, TEXT_EVENT_MAX, type CertaintyLoss, type TypingCommit } from "../lib/typing.ts";
-import { Button, Notice, Steps } from "./ui.tsx";
+import { Icon, type IconName } from "./icons.tsx";
+import { Button, Notice, Segmented, Steps } from "./ui.tsx";
 
 export interface KeyboardPanelProps {
   session: InputSessionState;
@@ -37,17 +38,20 @@ export interface KeyboardPanelProps {
 type Mode = "live" | "compose";
 type SendState = { kind: "idle" } | { kind: "sending" } | { kind: "sent"; chars: number } | { kind: "review"; outcome: Exclude<AckOutcome, "accepted"> };
 
-const KEYS: Array<{ key: Extract<ProtoEvent, { type: "key" }>["key"]; label: string; aria: string }> = [
+/** The key row: text caps, or a drawn icon (never a glyph) for Backspace and the arrows. */
+const KEYS: Array<{ key: Extract<ProtoEvent, { type: "key" }>["key"]; label: string; aria: string; icon?: IconName }> = [
   { key: "enter", label: "Enter", aria: "Enter" },
   { key: "tab", label: "Tab", aria: "Tab" },
   { key: "escape", label: "Esc", aria: "Escape" },
-  { key: "backspace", label: "⌫", aria: "Backspace" },
+  { key: "backspace", label: "Backspace", aria: "Backspace", icon: "backspace" },
   { key: "delete", label: "Del", aria: "Delete" },
-  { key: "arrow_left", label: "←", aria: "Arrow left" },
-  { key: "arrow_up", label: "↑", aria: "Arrow up" },
-  { key: "arrow_down", label: "↓", aria: "Arrow down" },
-  { key: "arrow_right", label: "→", aria: "Arrow right" },
+  { key: "arrow_left", label: "Arrow left", aria: "Arrow left", icon: "arrowLeft" },
+  { key: "arrow_up", label: "Arrow up", aria: "Arrow up", icon: "arrowUp" },
+  { key: "arrow_down", label: "Arrow down", aria: "Arrow down", icon: "arrowDown" },
+  { key: "arrow_right", label: "Arrow right", aria: "Arrow right", icon: "arrow" },
 ];
+
+const KEY_CLASS = "dome-press min-h-[44px] rounded-control border border-border bg-surface text-sm font-semibold text-text active:bg-surface-hover disabled:opacity-40";
 
 export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: KeyboardPanelProps) {
   const [mode, setMode] = useState<Mode>("live");
@@ -204,17 +208,22 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
   };
 
   return (
-    <section aria-label="Keyboard" className="rounded-card bg-bg-elevated border border-border p-3 space-y-3" data-testid="keyboard-panel">
+    <section aria-label="Keyboard" className="dome-card space-y-3 p-4" data-testid="keyboard-panel">
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="font-semibold">Keyboard</p>
-          <p className="text-xs text-text-muted truncate" title={foreground?.window_title}>
-            Typing into: {foregroundLabel(foreground)}
-            {foreground?.elevated ? " · administrator window: Windows will refuse input" : ""}
-          </p>
-          <p className="text-[11px] text-text-faint">Click the field on the PC first. DoMe cannot see which field has focus inside a window.</p>
+        <div className="flex min-w-0 items-start gap-3">
+          <span aria-hidden="true" className="dome-well h-9 w-9">
+            <Icon name="keyboard" size={19} />
+          </span>
+          <div className="min-w-0">
+            <p className="font-semibold">Keyboard</p>
+            <p className="truncate text-xs text-text-muted" title={foreground?.window_title}>
+              Typing into: {foregroundLabel(foreground)}
+              {foreground?.elevated ? " · administrator window: Windows will refuse input" : ""}
+            </p>
+            <p className="text-[11px] text-text-faint">Click the field on the PC first. DoMe cannot see which field has focus inside a window.</p>
+          </div>
         </div>
-        <Button size="md" variant="ghost" onClick={onClose} aria-label="Close keyboard">
+        <Button size="sm" variant="quiet" className="-mr-2 -mt-1" onClick={onClose} aria-label="Close keyboard">
           Close
         </Button>
       </div>
@@ -225,14 +234,18 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
         </Notice>
       ) : null}
 
-      <div role="tablist" aria-label="Typing mode" className="grid grid-cols-2 gap-1 rounded-control bg-bg-sunken p-1">
-        <button role="tab" type="button" aria-selected={mode === "live"} onClick={() => (setMode("live"), setPaused(null))} className={`rounded-[0.7rem] py-2 text-sm font-semibold ${mode === "live" ? "bg-bg-elevated text-text shadow" : "text-text-muted"}`}>
-          Type live
-        </button>
-        <button role="tab" type="button" aria-selected={mode === "compose"} onClick={() => setMode("compose")} className={`rounded-[0.7rem] py-2 text-sm font-semibold ${mode === "compose" ? "bg-bg-elevated text-text shadow" : "text-text-muted"}`}>
-          Compose and Send
-        </button>
-      </div>
+      <Segmented<Mode>
+        label="Typing mode"
+        value={mode}
+        onChange={(m) => {
+          setMode(m);
+          if (m === "live") setPaused(null);
+        }}
+        options={[
+          { value: "live", label: "Type live" },
+          { value: "compose", label: "Compose and Send" },
+        ]}
+      />
 
       {paused && mode === "compose" ? (
         <Notice tone="warning" title="Live typing paused">
@@ -247,10 +260,10 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
           <label htmlFor="live-typing" className="sr-only">
             Type here; each character is sent to the PC as you type
           </label>
-          <textarea id="live-typing" ref={liveRef} rows={2} disabled={!live} autoCapitalize="off" autoCorrect="on" spellCheck={false} placeholder={live ? "Type here — sent as you type" : "Keyboard inactive"} className="w-full rounded-control bg-bg-sunken border border-border px-3 py-2.5 text-base text-text placeholder:text-text-faint focus:border-border-strong min-h-[56px]" data-testid="live-textarea" />
-          <div className="flex items-center justify-between text-[11px] text-text-faint">
+          <textarea id="live-typing" ref={liveRef} rows={2} disabled={!live} autoCapitalize="off" autoCorrect="on" spellCheck={false} placeholder={live ? "Type here — sent as you type" : "Keyboard inactive"} className="min-h-[56px] w-full rounded-control border border-border bg-bg-sunken px-3.5 py-2.5 text-base text-text transition-colors placeholder:text-text-faint focus:border-accent/60" data-testid="live-textarea" />
+          <div className="flex items-center justify-between gap-3 text-[11px] text-text-faint">
             <span>{echo ? `${echo.length} characters sent in this run` : "Shows what this phone sent, not the PC’s field."}</span>
-            <button type="button" onClick={clearEcho} className="underline">
+            <button type="button" onClick={clearEcho} className="tap shrink-0 font-semibold text-accent">
               Clear here only
             </button>
           </div>
@@ -260,7 +273,7 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
           <label htmlFor="composer" className="sr-only">
             Compose text to send
           </label>
-          <textarea id="composer" value={composer} onChange={(e) => setComposer(e.currentTarget.value.slice(0, TEXT_EVENT_MAX * 4))} rows={3} disabled={!live || sendState.kind === "sending"} placeholder="Write here, then Send. Enter is a separate key." className="w-full rounded-control bg-bg-sunken border border-border px-3 py-2.5 text-base text-text placeholder:text-text-faint focus:border-border-strong min-h-[72px]" data-testid="composer" />
+          <textarea id="composer" value={composer} onChange={(e) => setComposer(e.currentTarget.value.slice(0, TEXT_EVENT_MAX * 4))} rows={3} disabled={!live || sendState.kind === "sending"} placeholder="Write here, then Send. Enter is a separate key." className="min-h-[72px] w-full rounded-control border border-border bg-bg-sunken px-3.5 py-2.5 text-base text-text transition-colors placeholder:text-text-faint focus:border-accent/60" data-testid="composer" />
           {sendState.kind === "review" ? (
             <Notice tone="warning" title="DoMe cannot tell whether this text reached the PC">
               <p>{sendState.outcome === "timeout" ? "The PC did not confirm it in time." : sendState.outcome === "dropped" ? "The PC reported dropped input around the time it was sent." : "The touchpad session ended before the PC confirmed it."} Look at the PC: if the text is there, discard it here; if not, send it again. Nothing is resent on its own.</p>
@@ -293,11 +306,11 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
 
       <div className="grid grid-cols-5 gap-1.5" role="group" aria-label="Keys">
         {KEYS.map((k) => (
-          <button key={k.key} type="button" aria-label={k.aria} disabled={!live} onClick={() => enqueue({ type: "key", key: k.key })} className="min-h-[44px] rounded-control bg-surface border border-border text-sm font-semibold disabled:opacity-40 active:bg-surface-hover">
-            {k.label}
+          <button key={k.key} type="button" aria-label={k.aria} title={k.label} disabled={!live} onClick={() => enqueue({ type: "key", key: k.key })} className={`${KEY_CLASS} inline-flex items-center justify-center`}>
+            {k.icon ? <Icon name={k.icon} size={20} /> : k.label}
           </button>
         ))}
-        <button type="button" aria-label="Space" disabled={!live} onClick={() => enqueue({ type: "key", key: "space" })} className="min-h-[44px] rounded-control bg-surface border border-border text-sm font-semibold disabled:opacity-40 active:bg-surface-hover">
+        <button type="button" aria-label="Space" disabled={!live} onClick={() => enqueue({ type: "key", key: "space" })} className={KEY_CLASS}>
           Space
         </button>
       </div>
@@ -311,13 +324,13 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
             ["ctrl_z", "Undo", "Ctrl+Z"],
           ] as const
         ).map(([name, label, combo]) => (
-          <button key={name} type="button" disabled={!live} onClick={() => enqueue({ type: "shortcut", name })} className="min-h-[44px] rounded-control bg-surface border border-border px-3 text-sm disabled:opacity-40 active:bg-surface-hover">
-            {label} <span className="text-text-faint">{combo}</span>
+          <button key={name} type="button" disabled={!live} onClick={() => enqueue({ type: "shortcut", name })} className={`${KEY_CLASS} px-3 font-medium`}>
+            {label} <span className="font-normal text-text-faint">{combo}</span>
           </button>
         ))}
         {browser ? (
-          <button type="button" disabled={!live} onClick={() => enqueue({ type: "shortcut", name: "ctrl_l" })} className="min-h-[44px] rounded-control bg-surface border border-border px-3 text-sm disabled:opacity-40 active:bg-surface-hover" aria-label="Address bar (Ctrl+L, browser address-bar shortcut)">
-            Address bar <span className="text-text-faint">Ctrl+L</span>
+          <button type="button" disabled={!live} onClick={() => enqueue({ type: "shortcut", name: "ctrl_l" })} className={`${KEY_CLASS} px-3 font-medium`} aria-label="Address bar (Ctrl+L, browser address-bar shortcut)">
+            Address bar <span className="font-normal text-text-faint">Ctrl+L</span>
           </button>
         ) : null}
       </div>

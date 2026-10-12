@@ -12,7 +12,8 @@ import { getControllerIdentity, KeyStorageError } from "../../lib/controllerKey.
 import { absoluteTime, relativeTime } from "../../lib/format.ts";
 import { capabilityLabel, errorMessage, INPUT_SCOPE_EXPLANATION, isInputCapability } from "../../lib/labels.ts";
 import { connectionOf } from "../../lib/connection.ts";
-import { Button, Card, EmptyState, inputClass, Notice, Pill } from "../../components/ui.tsx";
+import { Icon } from "../../components/icons.tsx";
+import { Button, Card, EmptyState, HeaderPill, IconWell, inputClass, KeyValue, Notice, PageHeader, Pill, SectionLabel } from "../../components/ui.tsx";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useLivePcs } from "../../app/hooks.ts";
 import { useSessionStore } from "../../store/session.ts";
@@ -34,14 +35,15 @@ function RenameInline({ value, onSave, label }: { value: string; onSave: (v: str
   const [busy, setBusy] = useState(false);
   if (!editing) {
     return (
-      <Button size="md" variant="ghost" onClick={() => (setText(value), setEditing(true))} aria-label={`Rename ${label}`}>
+      <Button size="sm" variant="quiet" onClick={() => (setText(value), setEditing(true))} aria-label={`Rename ${label}`}>
+        <Icon name="pen" size={16} />
         Rename
       </Button>
     );
   }
   return (
     <form
-      className="flex gap-2 w-full"
+      className="flex w-full gap-2"
       onSubmit={async (e) => {
         e.preventDefault();
         if (!text.trim()) return;
@@ -65,22 +67,23 @@ function RenameInline({ value, onSave, label }: { value: string; onSave: (v: str
   );
 }
 
-function ConfirmButton({ label, confirmLabel, onConfirm, variant = "danger" }: { label: string; confirmLabel: string; onConfirm: () => Promise<void>; variant?: "danger" | "secondary" }) {
+/** A destructive action that stays quiet until tapped; then Keep / the real thing, in red. */
+function ConfirmButton({ label, confirmLabel, onConfirm, variant = "danger-ghost" }: { label: string; confirmLabel: string; onConfirm: () => Promise<void>; variant?: "danger-ghost" | "secondary" }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   if (!armed)
     return (
-      <Button size="md" variant={variant} onClick={() => setArmed(true)}>
+      <Button size="sm" variant={variant} onClick={() => setArmed(true)}>
         {label}
       </Button>
     );
   return (
     <span className="inline-flex gap-2">
-      <Button size="md" variant="ghost" onClick={() => setArmed(false)}>
+      <Button size="sm" variant="ghost" onClick={() => setArmed(false)}>
         Keep
       </Button>
       <Button
-        size="md"
+        size="sm"
         variant="danger"
         busy={busy}
         onClick={async () => {
@@ -124,13 +127,15 @@ export function DevicesPage() {
   const enabledCount = pcs.filter((p) => p.enabled).length;
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Devices</h1>
-        <Button size="md" variant="ghost" onClick={() => void refresh()} busy={loading}>
-          Refresh
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Devices"
+        action={
+          <HeaderPill icon="refresh" onClick={() => void refresh()} busy={loading}>
+            Refresh
+          </HeaderPill>
+        }
+      />
       {error ? (
         <Notice tone="danger">
           <p>{errorMessage(error)}</p>
@@ -148,42 +153,42 @@ export function DevicesPage() {
       ) : null}
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-lg">This phone</h2>
-          <Link to="/app/devices/pair" className="tap inline-flex items-center rounded-control dome-primary font-semibold px-4 text-sm">
-            Pair with a PC
-          </Link>
-        </div>
+        <SectionLabel
+          action={
+            <Link to="/app/devices/pair" className="tap dome-primary dome-press inline-flex h-11 items-center gap-1.5 rounded-full pl-3.5 pr-4 text-sm font-semibold">
+              <Icon name="qr" size={18} />
+              Pair with a PC
+            </Link>
+          }
+        >
+          This phone
+        </SectionLabel>
         {thisController ? (
-          <Card>
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <p className="font-semibold">{thisController.display_name}</p>
-                <p className="text-xs text-text-muted">Paired {absoluteTime(thisController.created_at)}</p>
-              </div>
-              <Pill tone="success">This phone</Pill>
+          <Card className="flex items-center gap-3.5 p-4">
+            <IconWell icon="phone" tone="success" size={44} radius={14} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[17px] font-semibold leading-snug tracking-[-0.01em]">{thisController.display_name}</p>
+              <p className="text-xs text-text-muted">Paired {absoluteTime(thisController.created_at)}</p>
             </div>
+            <Pill tone="success">This phone</Pill>
           </Card>
         ) : kid ? (
-          <EmptyState title="Not paired yet">
+          <EmptyState icon="phone" title="Not paired yet">
             <p>This installation is not known to your PCs. On the PC open the DoMe tray menu, choose Pair a phone, then scan the code here.</p>
           </EmptyState>
         ) : null}
       </section>
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-lg">PCs</h2>
-          {limits ? (
-            <span className="text-xs text-text-muted">
-              {enabledCount} of {limits.max_enabled_pcs} enabled
-            </span>
-          ) : null}
-        </div>
+        <SectionLabel action={limits ? <span className="text-xs font-medium text-text-muted">{`${enabledCount} of ${limits.max_enabled_pcs} enabled`}</span> : undefined}>PCs</SectionLabel>
         {loaded && pcs.length === 0 ? (
-          <EmptyState title="No PC linked">
+          <EmptyState icon="pc" title="No PC linked">
             <p>
-              Install DoMe on your Windows PC (<Link to="/download" className="text-accent font-semibold">Download</Link>), sign in there, and approve the link on this phone.
+              Install DoMe on your Windows PC (
+              <Link to="/download" className="font-semibold text-accent">
+                Download
+              </Link>
+              ), sign in there, and approve the link on this phone.
             </p>
           </EmptyState>
         ) : null}
@@ -193,40 +198,39 @@ export function DevicesPage() {
           const grants = grantsByPc[pc.id] ?? [];
           const mine = grants.find((g) => g.controller_id === thisController?.id);
           return (
-            <Card key={pc.id} as="article" aria-label={pc.name}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="font-semibold text-lg truncate">{pc.name}</p>
-                  <p className="text-xs text-text-muted">
-                    {c.detail} {pc.agent_version ? `· DoMe agent ${pc.agent_version}` : ""}
-                  </p>
+            <Card key={pc.id} as="article" aria-label={pc.name} className="p-4">
+              <div className="flex items-center gap-3.5">
+                <IconWell icon="pc" tone={c.tone === "success" ? "accent" : "muted"} size={44} radius={14} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[17px] font-semibold leading-snug tracking-[-0.01em]">{pc.name}</p>
+                  <p className="truncate text-xs text-text-muted">{c.detail}</p>
                 </div>
                 <Pill tone={c.tone} pulse={c.pulse}>
                   {c.label}
                 </Pill>
               </div>
-              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                <dt className="text-text-muted">Last seen</dt>
-                <dd>{relativeTime(live?.lastSeen ?? pc.last_seen)}</dd>
-                <dt className="text-text-muted">Remote control on PC</dt>
-                <dd>{live?.state ? (live.state.remote_enabled ? "On" : "Off (tray icon on the PC)") : pc.remote_enabled_reported === undefined ? "Unknown" : pc.remote_enabled_reported ? "On (last report)" : "Off (last report)"}</dd>
-                <dt className="text-text-muted">This phone may</dt>
-                <dd>{mine ? mine.capabilities.map(capabilityLabel).join(", ") : grants.length === 0 && !grantsByPc[pc.id] ? "…" : "Nothing — not paired with this PC"}</dd>
-                <dt className="text-text-muted">Touchpad / keyboard</dt>
-                <dd data-testid={`input-perm-${pc.id}`}>{mine ? (mine.capabilities.some(isInputCapability) ? `Allowed: ${mine.capabilities.filter(isInputCapability).map((c) => (c === "pointer" ? "touchpad" : "keyboard")).join(" and ")}` : "Not allowed — the PC owner grants it on the PC (tray → Paired phones)") : "—"}</dd>
-              </dl>
+              <KeyValue
+                className="mt-3"
+                rows={[
+                  { label: "Last seen", value: relativeTime(live?.lastSeen ?? pc.last_seen) },
+                  ...(pc.agent_version ? [{ label: "DoMe agent", value: pc.agent_version }] : []),
+                  { label: "Remote control on PC", value: live?.state ? (live.state.remote_enabled ? "On" : "Off (tray icon on the PC)") : pc.remote_enabled_reported === undefined ? "Unknown" : pc.remote_enabled_reported ? "On (last report)" : "Off (last report)" },
+                  { label: "This phone may", value: mine ? mine.capabilities.map(capabilityLabel).join(", ") : grants.length === 0 && !grantsByPc[pc.id] ? "…" : "Nothing — not paired with this PC" },
+                  { label: "Touchpad / keyboard", value: mine ? (mine.capabilities.some(isInputCapability) ? `Allowed: ${mine.capabilities.filter(isInputCapability).map((c) => (c === "pointer" ? "touchpad" : "keyboard")).join(" and ")}` : "Not allowed — the PC owner grants it on the PC (tray → Paired phones)") : "—", testId: `input-perm-${pc.id}` },
+                ]}
+              />
               {grants.some((g) => g.capabilities.some(isInputCapability)) ? <p className="mt-2 text-xs text-text-muted">{INPUT_SCOPE_EXPLANATION}</p> : null}
               {grants.length > 0 ? (
                 <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer text-text-muted">
+                  <summary className="flex min-h-[44px] cursor-pointer items-center font-medium text-text-muted">
                     {grants.length} paired phone{grants.length === 1 ? "" : "s"}
                   </summary>
                   <ul className="mt-2 space-y-2">
                     {grants.map((g) => {
                       const ctrl = controllers.find((k) => k.id === g.controller_id);
                       return (
-                        <li key={g.id} className="flex items-start justify-between gap-2">
-                          <span>
+                        <li key={g.id} className="flex items-start justify-between gap-2 rounded-control border border-border bg-surface px-3 py-2.5">
+                          <span className="min-w-0">
                             <span className="font-medium">{ctrl?.display_name ?? "Phone"}</span>
                             {ctrl?.id === thisController?.id ? <span className="text-accent"> (this phone)</span> : null}
                             <span className="block text-xs text-text-muted">{g.capabilities.map(capabilityLabel).join(", ")}</span>
@@ -239,41 +243,37 @@ export function DevicesPage() {
                   </ul>
                 </details>
               ) : null}
-              <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
                 {selectedPcId !== pc.id ? (
-                  <Button size="md" onClick={() => void select(pc.id)}>
+                  <Button size="sm" onClick={() => void select(pc.id)}>
                     Control this PC
                   </Button>
                 ) : (
                   <Pill tone="info">Selected</Pill>
                 )}
                 <RenameInline value={pc.name} label={pc.name} onSave={(name) => run(() => api.patchPc(pc.id, { name }))} />
-                <Button size="md" onClick={() => run(() => api.patchPc(pc.id, { enabled: !pc.enabled }))}>
+                <Button size="sm" variant="quiet" onClick={() => run(() => api.patchPc(pc.id, { enabled: !pc.enabled }))}>
                   {pc.enabled ? "Disable" : "Enable"}
                 </Button>
-                <ConfirmButton label="Unlink…" confirmLabel="Unlink PC" onConfirm={() => run(() => api.unlinkPc(pc.id))} />
+                <span className="ml-auto">
+                  <ConfirmButton label="Unlink…" confirmLabel="Unlink PC" onConfirm={() => run(() => api.unlinkPc(pc.id))} />
+                </span>
               </div>
-              {!pc.enabled ? <p className="text-xs text-text-muted mt-2">Disabled PCs cannot be controlled but keep their pairings and settings.</p> : null}
+              {!pc.enabled ? <p className="mt-2 text-xs text-text-muted">Disabled PCs cannot be controlled but keep their pairings and settings.</p> : null}
             </Card>
           );
         })}
       </section>
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-lg">Paired phones</h2>
-          {limits ? (
-            <span className="text-xs text-text-muted">
-              {controllers.filter((c) => c.status !== "revoked").length} of {limits.max_controllers}
-            </span>
-          ) : null}
-        </div>
-        {loaded && controllers.length === 0 ? <p className="text-sm text-text-muted">No phone is paired on this account yet.</p> : null}
+        <SectionLabel action={limits ? <span className="text-xs font-medium text-text-muted">{`${controllers.filter((c) => c.status !== "revoked").length} of ${limits.max_controllers}`}</span> : undefined}>Paired phones</SectionLabel>
+        {loaded && controllers.length === 0 ? <p className="px-1 text-sm text-text-muted">No phone is paired on this account yet.</p> : null}
         {controllers.map((c: rest.Controller) => (
-          <Card key={c.id} as="article" aria-label={c.display_name}>
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="font-semibold truncate">{c.display_name}</p>
+          <Card key={c.id} as="article" aria-label={c.display_name} className="p-4">
+            <div className="flex items-center gap-3.5">
+              <IconWell icon="phone" tone={c.status === "active" ? (c.id === thisController?.id ? "success" : "accent") : "muted"} size={44} radius={14} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold leading-snug">{c.display_name}</p>
                 <p className="text-xs text-text-muted">
                   Added {absoluteTime(c.created_at)} · last seen {relativeTime(c.last_seen)}
                 </p>
@@ -281,14 +281,16 @@ export function DevicesPage() {
               <Pill tone={c.status === "active" ? (c.id === thisController?.id ? "success" : "neutral") : c.status === "plan_disabled" ? "warning" : "danger"}>{c.id === thisController?.id ? "This phone" : c.status === "active" ? "Active" : c.status === "plan_disabled" ? "Disabled by plan" : "Revoked"}</Pill>
             </div>
             {c.status !== "revoked" ? (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
                 <RenameInline value={c.display_name} label={c.display_name} onSave={(display_name) => run(() => api.renameController(c.id, { display_name }))} />
-                <ConfirmButton label={c.id === thisController?.id ? "Revoke this phone…" : "Revoke…"} confirmLabel="Revoke" onConfirm={() => run(() => api.revokeController(c.id))} />
+                <span className="ml-auto">
+                  <ConfirmButton label={c.id === thisController?.id ? "Revoke this phone…" : "Revoke…"} confirmLabel="Revoke" onConfirm={() => run(() => api.revokeController(c.id))} />
+                </span>
               </div>
             ) : null}
           </Card>
         ))}
-        <p className="text-xs text-text-faint">Revoking takes effect immediately: open connections are closed and the PC refuses further commands from that phone. A revoked phone can only be re-paired on the PC.</p>
+        <p className="px-1 text-xs text-text-faint">Revoking takes effect immediately: open connections are closed and the PC refuses further commands from that phone. A revoked phone can only be re-paired on the PC.</p>
       </section>
     </div>
   );
