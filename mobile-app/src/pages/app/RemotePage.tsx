@@ -13,7 +13,7 @@ import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { Icon } from "../../components/icons.tsx";
 import { Artwork, PlayButton } from "../../components/NowPlaying.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
-import { Button, Card, IconButton, Notice, PageHeader, Steps } from "../../components/ui.tsx";
+import { Button, Card, IconButton, Notice, PageHeader, Segmented, Steps } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
 import { YoutubeSearch } from "../../components/YoutubeSearch.tsx";
 import { mmss } from "../../lib/format.ts";
@@ -57,14 +57,15 @@ export function RemotePage() {
       <PageHeader title="Remote" />
       <PcSwitcher pc={pc} live={live} />
 
-      <div role="tablist" aria-label="What to control" className="grid grid-cols-2 gap-1 rounded-full border border-border bg-bg-sunken p-1">
-        {(["youtube", "media"] as Source[]).map((s) => (
-          <button key={s} role="tab" type="button" aria-selected={source === s} onClick={() => setSource(s)} className={`dome-press inline-flex items-center justify-center gap-2 rounded-full py-2.5 text-sm font-semibold ${source === s ? "bg-white text-navy shadow-[0_1px_3px_rgb(0_20_65/0.18)] dark:bg-white/15 dark:text-text" : "text-text-muted hover:text-text"}`}>
-            <Icon name={s === "youtube" ? "youtube" : "music"} size={18} />
-            {s === "youtube" ? "YouTube" : "Windows media"}
-          </button>
-        ))}
-      </div>
+      <Segmented<Source>
+        label="What to control"
+        value={source}
+        onChange={setSource}
+        options={[
+          { value: "youtube", label: "YouTube", icon: "youtube" },
+          { value: "media", label: "Windows media", icon: "music" },
+        ]}
+      />
 
       {source === "youtube" ? (
         <>
@@ -167,7 +168,7 @@ export function RemotePage() {
               {tab?.has_previous === false ? <p className="text-xs text-text-muted">No previous video in this player, so Previous is unavailable.</p> : null}
               {tab?.has_next === false ? <p className="text-xs text-text-muted">This player reports no next video, so Next is unavailable.</p> : null}
               {tab?.ad_showing ? <p className="text-xs text-text-muted">An ad is playing: seeking and skipping apply to the ad context and may be refused. DoMe does not skip ads.</p> : null}
-              <p className="text-xs text-text-faint">Browsers usually block fullscreen started from another device; DoMe reports honestly when that happens. Theater mode works without that restriction.</p>
+              <p className="text-xs text-text-faint">Most browsers block remote fullscreen; Theater mode always works.</p>
             </div>
           </Card>
 

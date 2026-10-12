@@ -10,7 +10,7 @@ import { Link } from "react-router";
 import { useApprovedApps, useMyGrant, useSelectedPc } from "../../app/hooks.ts";
 import { getAssistant, getRecognizer, getSpeaker, loadAssistantStatus } from "../../app/voice.ts";
 import { ButlerAvatar, Conversation, type ConversationHandlers } from "../../components/Conversation.tsx";
-import { Icon } from "../../components/icons.tsx";
+import { Icon, type IconName } from "../../components/icons.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { TalkButton, type TalkState } from "../../components/TalkButton.tsx";
 import { Button, inputClass, Notice } from "../../components/ui.tsx";
@@ -31,6 +31,18 @@ const PROBLEM_TEXT: Record<RecognitionProblem["kind"], string> = {
   no_speech: "I didn't hear anything.",
   not_ready: "The microphone didn't start. Tap to try again.",
 };
+
+/** A round 48 px secondary control in the dock (Type, Mute), vertically centred on the 72 px talk button beside it. */
+function DockButton({ icon, label, ariaLabel, active, onClick, ...rest }: { icon: IconName; label: string; ariaLabel: string; active: boolean; onClick(): void } & Record<`aria-${string}`, boolean | undefined>) {
+  return (
+    <button type="button" aria-label={ariaLabel} title={ariaLabel} onClick={onClick} {...rest} className="tap flex flex-col items-center gap-[18px] justify-self-center pt-3 text-xs font-semibold text-text-muted hover:text-text">
+      <span aria-hidden="true" className={`dome-press flex h-12 w-12 items-center justify-center rounded-full border transition-colors ${active ? "border-accent/60 bg-accent/12 text-accent" : "border-border bg-surface text-text"}`}>
+        <Icon name={icon} size={22} />
+      </span>
+      {label}
+    </button>
+  );
+}
 
 /** The element's rendered height, followed with a ResizeObserver (null until measured, or where there is none). */
 function useHeight(ref: RefObject<HTMLElement | null>): number | null {
@@ -216,20 +228,18 @@ export function AssistantPage() {
     <div className="space-y-4">
       <header className="flex items-center justify-between gap-3 pt-2 pb-1">
         <div className="flex min-w-0 items-center gap-3">
-          <ButlerAvatar size={44} />
-          <h1 className="truncate text-[2rem] font-bold leading-[1.1] tracking-[-0.03em]">{prefs.butlerName}</h1>
+          <ButlerAvatar size={40} />
+          <div className="min-w-0">
+            <p className="dome-eyebrow text-[0.6875rem] leading-none">Ask</p>
+            <h1 className="mt-1 truncate text-[1.375rem] font-semibold leading-tight tracking-[-0.02em]">{prefs.butlerName}</h1>
+          </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {aiOn && allowance ? (
-            <Link to="/app/settings" className="tap inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left: open Settings`}>
-              <Icon name="sparkle" size={14} className="text-accent" />
-              {allowance.exhausted || exhausted ? "Limit reached" : `${Math.max(0, allowance.limit - allowance.used)} left`}
-            </Link>
-          ) : null}
-          <button type="button" aria-pressed={prefs.muted} aria-label="Mute replies" title="Mute replies" onClick={() => setPrefs({ muted: !prefs.muted })} className="tap dome-press inline-flex h-11 w-11 items-center justify-center rounded-full border border-border bg-surface text-text">
-            <Icon name={prefs.muted ? "mute" : "volume"} size={20} />
-          </button>
-        </div>
+        {aiOn && allowance ? (
+          <Link to="/app/settings" className="tap inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left: open Settings`}>
+            <Icon name="sparkle" size={14} className="text-accent" />
+            {allowance.exhausted || exhausted ? "Limit reached" : `${Math.max(0, allowance.limit - allowance.used)} left`}
+          </Link>
+        ) : null}
       </header>
       <PcSwitcher pc={pc} live={live} />
       {banner ? (
@@ -280,7 +290,7 @@ export function AssistantPage() {
               <p>{PROBLEM_TEXT[problem.kind]}</p>
               {problem.kind === "denied" ? (
                 <details className="mt-1">
-                  <summary className="cursor-pointer font-semibold text-accent">How to allow it</summary>
+                  <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-accent">How to allow it</summary>
                   <ol className="mt-1 list-decimal pl-5 space-y-1">
                     <li>Open the iPhone's Settings → Privacy &amp; Security → Microphone, and allow Safari (or DoMe, for the Home Screen app).</li>
                     <li>Settings → Privacy &amp; Security → Speech Recognition: allow it the same way.</li>
@@ -298,18 +308,16 @@ export function AssistantPage() {
               </button>
             </p>
           ) : null}
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          {/* three equal columns: Type on the left, the talk button in the middle, Mute on the right */}
+          <div className="grid grid-cols-3 items-start">
             {dictateMode ? (
               // Dictate always shows the field: a Type instead / Hide keyboard toggle would do nothing here
               <span aria-hidden="true" />
             ) : (
-              <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => setTyping((t) => !t)} aria-expanded={typing}>
-                <Icon name="keyboard" size={18} />
-                {typing ? "Hide keyboard" : "Type instead"}
-              </Button>
+              <DockButton icon="keyboard" label={typing ? "Hide" : "Type"} ariaLabel={typing ? "Hide keyboard" : "Type instead"} active={typing} aria-expanded={typing} onClick={() => setTyping((t) => !t)} />
             )}
             <TalkButton state={talkState} dictate={dictateMode} onTap={tap} onCancel={() => getAssistant().cancelTurn()} onStop={() => getAssistant().stop()} />
-            <span aria-hidden="true" />
+            <DockButton icon={prefs.muted ? "mute" : "volume"} label="Mute" ariaLabel="Mute replies" active={prefs.muted} aria-pressed={prefs.muted} onClick={() => setPrefs({ muted: !prefs.muted })} />
           </div>
           {typing || dictateMode ? (
             <form

@@ -11,7 +11,7 @@ import { Wordmark } from "../../components/brand.tsx";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { NowPlaying } from "../../components/NowPlaying.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
-import { Button, Notice, Pill, SectionLabel } from "../../components/ui.tsx";
+import { Button, HeaderPill, Notice, Pill, SectionLabel } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
 import { useLabels, useLastCommandFor, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { errorMessage, recoverySteps } from "../../lib/labels.ts";
@@ -53,9 +53,9 @@ export function DashboardPage() {
       <header className="flex items-center justify-between pb-1">
         <h1 className="sr-only">Home</h1>
         <Wordmark compact title="DoMe" className="h-[22px] w-auto" />
-        <Link to="/app/devices" aria-label="Devices" title="Devices" className="tap dome-press -mr-1.5 inline-flex h-11 w-11 items-center justify-center rounded-full text-text-muted hover:bg-surface hover:text-text">
-          <Icon name="devices" size={22} />
-        </Link>
+        <HeaderPill to="/app/devices" icon="devices">
+          Devices
+        </HeaderPill>
       </header>
       <PcSwitcher pc={pc} live={live} hero />
 

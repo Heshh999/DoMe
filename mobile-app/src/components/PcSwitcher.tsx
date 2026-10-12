@@ -1,6 +1,7 @@
 /**
  * Selected-PC header shown on every control surface: name, truthful status and a switcher when the
  * account has several PCs. `hero` is the large card at the top of Home; the default is one compact row.
+ * The PC icon sits in a tinted well (solid DoMe Blue is kept for the one primary control of a screen).
  */
 import { useId } from "react";
 import { Link } from "react-router";
@@ -12,7 +13,7 @@ import { useLivePcs } from "../app/hooks.ts";
 import type { LivePc } from "../store/live.ts";
 import { connectionOf } from "../lib/connection.ts";
 import { Icon } from "./icons.tsx";
-import { Pill } from "./ui.tsx";
+import { IconWell, Pill } from "./ui.tsx";
 
 export function PcSwitcher({ pc, live, hero = false }: { pc: rest.Pc | undefined; live: LivePc; hero?: boolean }) {
   const pcs = useDevicesStore((s) => s.pcs);
@@ -22,12 +23,19 @@ export function PcSwitcher({ pc, live, hero = false }: { pc: rest.Pc | undefined
   const id = useId();
   if (loaded && pcs.length === 0) {
     return (
-      <div className="rounded-card border border-dashed border-border-strong p-5 text-sm text-text-muted">
-        No PC is linked to your account yet.{" "}
-        <Link to="/download" className="text-accent font-semibold">
-          Install DoMe on your Windows PC
-        </Link>{" "}
-        and link it, then pair this phone under <Link to="/app/devices" className="text-accent font-semibold">Devices</Link>.
+      <div className="flex items-start gap-3.5 rounded-card border border-dashed border-border-strong p-4 text-sm text-text-muted">
+        <IconWell icon="pc" tone="muted" size={40} />
+        <p className="min-w-0 pt-1.5">
+          No PC is linked to your account yet.{" "}
+          <Link to="/download" className="font-semibold text-accent">
+            Install DoMe on your Windows PC
+          </Link>{" "}
+          and link it, then pair this phone under{" "}
+          <Link to="/app/devices" className="font-semibold text-accent">
+            Devices
+          </Link>
+          .
+        </p>
       </div>
     );
   }
@@ -60,11 +68,7 @@ export function PcSwitcher({ pc, live, hero = false }: { pc: rest.Pc | undefined
       </Pill>
     </Link>
   );
-  const tile = (
-    <span aria-hidden="true" className={`relative flex shrink-0 items-center justify-center rounded-2xl ${hero ? "h-[60px] w-[60px]" : "h-10 w-10"} ${online ? "bg-[linear-gradient(145deg,#2a62ff,#0034c4)] text-white shadow-[0_10px_24px_-10px_rgb(1_66_251/0.7)]" : "bg-surface text-text-muted"}`}>
-      <Icon name="pc" size={hero ? 28 : 20} />
-    </span>
-  );
+  const tile = <IconWell icon="pc" tone={online ? "accent" : "muted"} size={hero ? 56 : 40} radius={hero ? 18 : 12} />;
   if (hero) {
     return (
       <div className="dome-card flex items-center gap-4 p-5">
