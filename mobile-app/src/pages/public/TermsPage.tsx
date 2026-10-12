@@ -1,11 +1,12 @@
-/** Terms of service — DRAFT for founder review. */
+/** Terms of service — DRAFT for founder review. Styled with .dome-prose; the text changes only in a legal round. */
 import { DraftBanner } from "./DraftBanner.tsx";
 
 export function TermsPage() {
   return (
-    <article className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Terms of service</h1>
+    <article className="dome-prose">
+      <header className="dome-page-intro animate-rise">
+        <p className="dome-eyebrow">Legal</p>
+        <h1 className="mt-3 text-h1 font-bold">Terms of service</h1>
         <DraftBanner />
       </header>
       {[
@@ -18,8 +19,8 @@ export function TermsPage() {
         ["Changes and termination", "We may update these terms with notice in the app or by email. You may stop using DoMe and delete your account at any time."],
         ["Open items for founder review", "Governing law and venue; business identity; refund and dispute policy; consumer-protection wording for launch regions; relationship to the privacy notice."],
       ].map(([h, p]) => (
-        <section key={h} className="space-y-1 text-sm text-text-muted">
-          <h2 className="text-lg font-semibold text-text">{h}</h2>
+        <section key={h}>
+          <h2>{h}</h2>
           <p>{p}</p>
         </section>
       ))}

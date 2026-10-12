@@ -1,45 +1,85 @@
+/**
+ * Frequently asked questions (src/content/faq.tsx), grouped by topic: each group is a card of disclosure
+ * rows, with a sticky jump list on wide screens. The page draws its own container (it is a "wide" page).
+ */
 import { Link } from "react-router";
 
-const FAQ: Array<{ q: string; a: React.ReactNode }> = [
-  { q: "Do I need to open ports, set up a VPN or install anything on my router?", a: "No. The PC makes one outgoing, authenticated connection to the DoMe service, and your phone talks to the same service. Nothing on your PC listens on the internet." },
-  { q: "Does it work when I am away from home?", a: "Yes, over mobile data or any Wi-Fi, as long as both your phone and your PC have internet. There is no local-only mode yet: if the DoMe service is unreachable, controls pause rather than pretending to work." },
-  { q: "Can DoMe control YouTube when the browser is in the background?", a: "Yes. The DoMe browser extension in Chrome or Edge on the PC controls the player in the chosen tab directly, so another window can have focus. The extension only asks for access to YouTube pages." },
-  { q: "Why does Next sometimes say “no next video”?", a: "DoMe only reports success when the player really moved to a different video. Ads, live streams, Shorts and some playlists behave differently; DoMe tells you instead of guessing." },
-  { q: "Why can’t fullscreen be turned on from my phone?", a: "Browsers only allow fullscreen from a click on the PC itself. DoMe reports this honestly rather than faking it. Theater mode is offered as a separate, working control." },
-  { q: "Is this end-to-end encrypted?", a: "Not yet. Connections are encrypted in transit (TLS) and every command is signed by your phone so only phones you approved on the PC are accepted — but the DoMe service can see the commands and PC state it routes. Stronger payload encryption is a possible later improvement; we will not claim it before it exists." },
-  { q: "What happens if my PC is asleep or off?", a: "The PC shows as offline and commands are not stored for later — nothing will run hours later by surprise. Waking a PC remotely (Wake-on-LAN) is not offered yet." },
-  { q: "Can someone with my password control my PC?", a: "Not without pairing: a new phone must be approved on the PC itself with a matching verification code. Account recovery never silently approves a phone. If you lose a phone, revoke it from Devices or from the PC." },
-  { q: "What if I clear my browser data or reinstall?", a: "Each browser or home-screen installation has its own key. Clearing site data removes the key, and that installation must pair again on the PC. There is deliberately no shortcut." },
-  { q: "Does DoMe use AI?", a: "Typed commands are understood on your phone with fixed rules — no AI service and nothing to subscribe to. Optional cloud AI interpretation may come later as a separate, clearly disclosed feature." },
-  {
-    q: "What does the Windows app see or change?",
-    a: (
-      <>
-        It runs as you (no administrator rights), shows a tray icon, and performs only the actions in the registry: media, volume, approved apps, lock, and confirmed power actions. It never bypasses the Windows lock screen or UAC. See <Link to="/privacy" className="text-accent font-semibold">Privacy</Link>.
-      </>
-    ),
-  },
-];
+import { Icon } from "../../components/icons.tsx";
+import { FAQ_GROUPS, type FaqGroup } from "../../content/faq.tsx";
+import { PublicIcon } from "./publicIcons.tsx";
+
+function GroupIcon({ name }: { name: FaqGroup["icon"] }) {
+  if (name === "shield" || name === "ask") return <Icon name={name} size={20} />;
+  return <PublicIcon name={name} size={20} />;
+}
+
+const LINK = "font-semibold text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-current";
 
 export function FaqPage() {
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Frequently asked questions</h1>
+    <div className="mx-auto max-w-5xl px-5 py-12 lg:px-8 lg:py-16">
+      <header className="dome-page-intro animate-rise">
+        <p className="dome-eyebrow">FAQ</p>
+        <h1 className="mt-3 text-h1 font-bold">Questions, answered plainly.</h1>
+        <p className="mt-4 max-w-2xl text-lg text-text-muted">What DoMe does, what it never does, and what is still on the way.</p>
       </header>
-      <dl className="divide-y divide-border rounded-card border border-border">
-        {FAQ.map((f) => (
-          <details key={f.q} className="group p-4">
-            <summary className="cursor-pointer font-semibold list-none flex justify-between gap-3">
-              <dt>{f.q}</dt>
-              <span aria-hidden="true" className="text-text-faint group-open:rotate-45 transition-transform">
-                +
-              </span>
-            </summary>
-            <dd className="text-sm text-text-muted mt-2">{f.a}</dd>
-          </details>
-        ))}
-      </dl>
+
+      <div className="grid gap-10 lg:grid-cols-[14rem_1fr] lg:gap-14">
+        <nav aria-label="Topics" className="dome-jump hidden lg:block">
+          <ul className="sticky top-24 space-y-0.5">
+            {FAQ_GROUPS.map((g) => (
+              <li key={g.id}>
+                <a href={`#${g.id}`}>
+                  <span className="dome-well dome-well-xs mr-3">
+                    <GroupIcon name={g.icon} />
+                  </span>
+                  {g.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        <div className="space-y-12">
+          {FAQ_GROUPS.map((g) => (
+            <section key={g.id} id={g.id} aria-labelledby={`faq-${g.id}`}>
+              <div className="flex items-center gap-3">
+                <span className="dome-well">
+                  <GroupIcon name={g.icon} />
+                </span>
+                <h2 id={`faq-${g.id}`} className="text-title font-semibold">
+                  {g.title}
+                </h2>
+                {g.status ? <span className="dome-chip dome-chip-quiet">{g.status}</span> : null}
+              </div>
+              <div className="dome-card dome-hairlines mt-4 px-5 sm:px-6">
+                {g.entries.map((e) => (
+                  <details key={e.q} className="dome-disclosure">
+                    <summary>
+                      <span className="text-[15px] sm:text-base">{e.q}</span>
+                      <span aria-hidden="true" className="dome-disclosure-chevron">
+                        <Icon name="chevron" size={16} strokeWidth={2} />
+                      </span>
+                    </summary>
+                    <div className="space-y-3 pb-5 text-[15px] leading-relaxed text-text-muted">{typeof e.a === "string" ? <p>{e.a}</p> : e.a}</div>
+                  </details>
+                ))}
+              </div>
+            </section>
+          ))}
+          <p className="text-[15px] text-text-muted">
+            Something else? See{" "}
+            <Link to="/support" className={LINK}>
+              Support
+            </Link>{" "}
+            or the{" "}
+            <Link to="/release-notes" className={LINK}>
+              release notes and known issues
+            </Link>
+            .
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
