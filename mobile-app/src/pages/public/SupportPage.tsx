@@ -159,7 +159,7 @@ export function SupportPage() {
           <div className="space-y-2 text-sm text-text-muted">
             <p>Sign in so the request is tied to your account; we never need your password or any pairing code.</p>
             {status === "loading" || status === "unknown" ? <p>Checking your sign-in…</p> : null}
-            <a href={loginUrl(`/support${params.toString() ? `?${params.toString()}` : ""}`)} className="tap inline-flex items-center rounded-control bg-accent text-on-accent font-semibold px-5 text-sm">
+            <a href={loginUrl(`/support${params.toString() ? `?${params.toString()}` : ""}`)} className="tap inline-flex items-center rounded-control dome-primary font-semibold px-5 text-sm">
               Sign in to continue
             </a>
           </div>

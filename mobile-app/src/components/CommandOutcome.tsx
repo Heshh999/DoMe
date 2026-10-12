@@ -8,7 +8,8 @@ import { outcomeTone, resultSummary } from "../lib/outcome.ts";
 import { FailureLinks } from "./FailureLinks.tsx";
 import { Pill, Steps } from "./ui.tsx";
 
-export function CommandOutcome({ record, pcName, labels, compact = false }: { record: CommandRecord; pcName: string | null; labels?: LabelContext; compact?: boolean }) {
+/** `showPc={false}` where the PC is already named around it (the Assistant's plan card says "On Living Room PC"). */
+export function CommandOutcome({ record, pcName, labels, compact = false, showPc = true }: { record: CommandRecord; pcName: string | null; labels?: LabelContext; compact?: boolean; showPc?: boolean }) {
   const tone = outcomeTone(record);
   const stateText = record.terminal ? lifecycleLabel(record.terminal.state, record.terminal.origin) : record.noAnswer ? "No answer from the PC yet" : lifecycleLabel(record.state);
   const summary = resultSummary(record);
@@ -20,7 +21,7 @@ export function CommandOutcome({ record, pcName, labels, compact = false }: { re
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-semibold leading-snug">{describeAction(record.action, record.params, record.target, labels)}</p>
-          <p className="text-xs text-text-muted">on {pcName ?? "your PC"}</p>
+          {showPc ? <p className="text-xs text-text-muted">on {pcName ?? "your PC"}</p> : null}
         </div>
         <Pill tone={tone} pulse={!record.terminal && !record.noAnswer}>
           {stateText}

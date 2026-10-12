@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from "react";
 
+import { Icon } from "./icons.tsx";
 import { Button, Spinner } from "./ui.tsx";
 
 export type TalkState = "idle" | "starting" | "listening" | "connecting" | "checking" | "thinking" | "working" | "speaking";
@@ -38,26 +39,28 @@ export function TalkButton({ state, dictate, onTap, onCancel, onStop }: { state:
   const waiting = state === "connecting" || state === "checking";
   const label = dictate && (state === "idle" || state === "speaking") ? "Dictate" : LABEL[state];
   return (
-    <div className="flex flex-col items-center gap-1">
-      <button
-        type="button"
-        data-talk-button=""
-        aria-pressed={listening}
-        aria-label={label}
-        disabled={busy || waiting}
-        onClick={onTap}
-        className={`relative flex h-[72px] w-[72px] items-center justify-center rounded-full text-on-accent shadow-lg select-none [-webkit-touch-callout:none] [touch-action:manipulation] disabled:opacity-70 ${listening ? "bg-danger ring-4 ring-danger/40 motion-safe:animate-pulse" : "bg-accent"}`}
-      >
-        {busy || waiting || state === "starting" ? (
-          <Spinner label={label} />
-        ) : (
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            {dictate ? <path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /> : <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}
-          </svg>
-        )}
-        {listening ? <span aria-hidden="true" className="absolute right-1 top-1 h-3 w-3 rounded-full bg-white" /> : null}
-      </button>
-      <p className="text-sm font-semibold" aria-hidden="true">
+    <div className="flex flex-col items-center gap-1.5">
+      <span className="relative flex h-[72px] w-[72px] items-center justify-center">
+        {listening ? (
+          <>
+            <span aria-hidden="true" className="dome-ring absolute inset-0 rounded-full border-2 border-coral" />
+            <span aria-hidden="true" className="dome-ring absolute inset-0 rounded-full border-2 border-coral [animation-delay:0.9s]" />
+          </>
+        ) : null}
+        <button
+          type="button"
+          data-talk-button=""
+          aria-pressed={listening}
+          aria-label={label}
+          disabled={busy || waiting}
+          onClick={onTap}
+          className={`dome-primary dome-press relative flex h-[72px] w-[72px] items-center justify-center rounded-full select-none [-webkit-touch-callout:none] [touch-action:manipulation] disabled:opacity-70 ${listening ? "ring-2 ring-coral ring-offset-2 ring-offset-[var(--dome-color-bg)]" : ""}`}
+        >
+          {busy || waiting || state === "starting" ? <Spinner label={label} /> : <Icon name={dictate ? "keyboard" : "mic"} size={30} strokeWidth={1.9} />}
+          {listening ? <span aria-hidden="true" className="absolute right-1.5 top-1.5 h-3 w-3 rounded-full border-2 border-white bg-coral" /> : null}
+        </button>
+      </span>
+      <p className="text-sm font-semibold text-text" aria-hidden="true">
         {label}
       </p>
       {state === "thinking" ? (

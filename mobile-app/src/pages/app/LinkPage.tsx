@@ -91,7 +91,7 @@ export function LinkPage() {
             <h2 className="text-lg font-semibold">PC linked</h2>
             <p className="text-sm text-text-muted mt-1">{done.enabled ? "Remote control is enabled. The PC will connect to DoMe in a moment." : "The PC is linked but not enabled: your plan’s limit of enabled PCs is reached. Choose which PC stays enabled under Devices."}</p>
             <p className="text-sm text-text-muted mt-2">Next: on the PC choose “Pair a phone” and scan the code with this phone under Devices.</p>
-            <Link to="/app/devices/pair" className="tap mt-4 inline-flex items-center justify-center rounded-control bg-accent text-on-accent font-semibold px-5 w-full">
+            <Link to="/app/devices/pair" className="tap mt-4 inline-flex items-center justify-center rounded-control dome-primary font-semibold px-5 w-full">
               Pair this phone
             </Link>
           </Card>

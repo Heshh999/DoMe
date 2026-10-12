@@ -32,7 +32,7 @@ function ActionButton({ layer }: { layer: HealthLayer }) {
   if (a.kind === "none") return null;
   if (a.to) {
     return (
-      <Link to={a.to} className="tap inline-flex items-center rounded-control bg-accent text-on-accent text-sm font-semibold px-4 mt-2">
+      <Link to={a.to} className="tap inline-flex items-center rounded-control dome-primary text-sm font-semibold px-4 mt-2">
         {a.label}
       </Link>
     );

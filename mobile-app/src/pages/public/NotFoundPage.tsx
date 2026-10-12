@@ -9,7 +9,7 @@ export function NotFoundPage() {
         <Link to="/" className="tap inline-flex items-center rounded-control border border-border px-5 font-semibold">
           Website
         </Link>
-        <Link to="/app" className="tap inline-flex items-center rounded-control bg-accent text-on-accent px-5 font-semibold">
+        <Link to="/app" className="tap inline-flex items-center rounded-control dome-primary px-5 font-semibold">
           Open app
         </Link>
       </div>

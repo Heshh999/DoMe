@@ -1,56 +1,65 @@
 import { Link } from "react-router";
 
-import { Card } from "../../components/ui.tsx";
+import { Icon, type IconName } from "../../components/icons.tsx";
+import { ThemeSwitch } from "../../components/ThemeSwitch.tsx";
+import { PageHeader } from "../../components/ui.tsx";
 import { useSessionStore } from "../../store/session.ts";
 
-const ITEMS = [
-  { to: "/app/assistant", title: "Assistant", text: "Talk to DoMe; it answers aloud and works your PC" },
-  { to: "/app/command", title: "Type a command", text: "Typed commands, without any AI service" },
-  { to: "/app/devices", title: "Devices", text: "PCs, paired phones, permissions, pairing" },
-  { to: "/app/health", title: "Connection health", text: "What works, what does not, and the next step" },
-  { to: "/app/routines", title: "Routines", text: "One-tap sequences (DoMe Pro preview)" },
-  { to: "/app/layouts", title: "Custom remotes", text: "Your own layouts (DoMe Pro preview)" },
-  { to: "/app/billing", title: "Billing", text: "Your plan and limits" },
-  { to: "/app/settings", title: "Settings & help", text: "Connection check, install on iPhone, diagnostics, sign out" },
+const GROUPS: Array<Array<{ to: string; title: string; text: string; icon: IconName }>> = [
+  [
+    { to: "/app/apps", title: "Apps", text: "Open and switch approved apps", icon: "apps" },
+    { to: "/app/assistant", title: "Assistant", text: "Talk, and DoMe works your PC", icon: "ask" },
+    { to: "/app/command", title: "Type a command", text: "Commands without any AI", icon: "keyboard" },
+  ],
+  [
+    { to: "/app/devices", title: "Devices", text: "PCs, phones and permissions", icon: "devices" },
+    { to: "/app/health", title: "Connection health", text: "What works, and what to do next", icon: "pulse" },
+  ],
+  [
+    { to: "/app/routines", title: "Routines", text: "One-tap sequences · Pro preview", icon: "sparkle" },
+    { to: "/app/layouts", title: "Custom remotes", text: "Your own layouts · Pro preview", icon: "remote" },
+    { to: "/app/billing", title: "Billing", text: "Your plan and limits", icon: "card" },
+    { to: "/app/settings", title: "Settings & help", text: "Install, diagnostics, sign out", icon: "settings" },
+  ],
 ];
 
 export function MorePage() {
   const session = useSessionStore((s) => s.session);
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold tracking-tight">More</h1>
-      {session ? (
-        <p className="text-sm text-text-muted">
-          Signed in as <span className="text-text">{session.account.display_name || session.account.email}</span>
-        </p>
-      ) : null}
-      <ul className="space-y-2">
-        {ITEMS.map((i) => (
-          <li key={i.to}>
-            <Link to={i.to} className="block">
-              <Card className="flex items-center justify-between hover:bg-surface-hover">
-                <span>
+    <div className="space-y-5">
+      <PageHeader title="More" subtitle={session ? <>Signed in as <span className="text-text">{session.account.display_name || session.account.email}</span></> : undefined} />
+      {GROUPS.map((group, g) => (
+        <ul key={g} className="dome-card divide-y divide-border overflow-hidden p-0">
+          {group.map((i) => (
+            <li key={i.to}>
+              <Link to={i.to} className="flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:bg-surface">
+                <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
+                  <Icon name={i.icon} size={19} />
+                </span>
+                <span className="min-w-0 flex-1">
                   <span className="block font-semibold">{i.title}</span>
-                  <span className="block text-sm text-text-muted">{i.text}</span>
+                  <span className="block truncate text-[13px] text-text-muted">{i.text}</span>
                 </span>
-                <span aria-hidden="true" className="text-text-faint">
-                  ›
-                </span>
-              </Card>
-            </Link>
-          </li>
-        ))}
-      </ul>
-      <p className="text-xs text-text-faint">
-        <Link to="/privacy" className="underline">
+                <Icon name="chevron" size={18} className="text-text-faint" />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ))}
+      <div className="dome-card flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <span className="font-semibold">Appearance</span>
+        <ThemeSwitch />
+      </div>
+      <p className="text-center text-xs text-text-faint">
+        <Link to="/privacy" className="underline underline-offset-4">
           Privacy
         </Link>{" "}
         ·{" "}
-        <Link to="/terms" className="underline">
+        <Link to="/terms" className="underline underline-offset-4">
           Terms
         </Link>{" "}
         ·{" "}
-        <Link to="/support" className="underline">
+        <Link to="/support" className="underline underline-offset-4">
           Support
         </Link>
       </p>

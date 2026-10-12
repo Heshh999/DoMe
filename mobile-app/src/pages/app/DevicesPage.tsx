@@ -150,7 +150,7 @@ export function DevicesPage() {
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-lg">This phone</h2>
-          <Link to="/app/devices/pair" className="tap inline-flex items-center rounded-control bg-accent text-on-accent font-semibold px-4 text-sm">
+          <Link to="/app/devices/pair" className="tap inline-flex items-center rounded-control dome-primary font-semibold px-4 text-sm">
             Pair with a PC
           </Link>
         </div>

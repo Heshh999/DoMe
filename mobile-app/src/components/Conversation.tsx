@@ -16,7 +16,9 @@ import { STATUS_LABEL } from "../lib/planRun.ts";
 import { powerVerb } from "../lib/power.ts";
 import type { ChatChip, ChatItem } from "../store/assistant.ts";
 import { useLiveStore } from "../store/live.ts";
+import { BrandMark } from "./brand.tsx";
 import { CommandOutcome } from "./CommandOutcome.tsx";
+import { Icon } from "./icons.tsx";
 import { Button } from "./ui.tsx";
 
 export interface ConversationHandlers {
@@ -40,7 +42,7 @@ function Chips({ chips, onChip, label }: { chips: ChatChip[]; onChip: (c: ChatCh
     <ul className="mt-2 flex flex-wrap gap-2" aria-label={label}>
       {chips.map((c) => (
         <li key={`${c.kind}|${c.label}|${c.text}`}>
-          <button type="button" onClick={() => onChip(c)} className="tap rounded-full border border-border bg-surface px-3 py-2 text-sm text-text hover:bg-surface-hover">
+          <button type="button" onClick={() => onChip(c)} className="tap dome-press rounded-full border border-border bg-surface px-3.5 py-2 text-sm font-medium text-text hover:bg-surface-hover">
             {c.label}
           </button>
         </li>
@@ -51,7 +53,7 @@ function Chips({ chips, onChip, label }: { chips: ChatChip[]; onChip: (c: ChatCh
 
 function TouchpadButton() {
   return (
-    <Link to="/app/touchpad" className="tap mt-2 inline-flex items-center rounded-control bg-accent text-on-accent font-semibold px-4 text-sm">
+    <Link to="/app/touchpad" className="tap mt-2 inline-flex items-center rounded-control dome-primary font-semibold px-4 text-sm">
       Open Touchpad
     </Link>
   );
@@ -100,9 +102,12 @@ function PlanCard({ item, handlers }: { item: Extract<ChatItem, { kind: "plan" }
   const commands = useLiveStore((s) => s.commands);
   const records = (item.run?.steps ?? []).map((s) => (s.commandId ? (commands.find((c) => c.commandId === s.commandId) ?? null) : null));
   return (
-    <div className="rounded-card border border-border bg-bg-elevated p-3" data-plan-status={item.status}>
-      <p className="text-sm font-semibold">On {item.pcName ?? "your PC"}:</p>
-      <ol className={`mt-1 space-y-2 ${item.steps.length > 1 ? "list-decimal pl-5" : ""}`} aria-label="Steps">
+    <div className="dome-card p-4" data-plan-status={item.status}>
+      <p className="flex items-center gap-1.5 text-caption font-semibold uppercase tracking-[0.1em] text-text-faint">
+        <Icon name="pc" size={14} />
+        On {item.pcName ?? "your PC"}:
+      </p>
+      <ol className={`mt-2 space-y-2 ${item.steps.length > 1 ? "list-decimal pl-5 marker:text-text-faint" : ""}`} aria-label="Steps">
         {item.steps.map((step, i) => {
           const run = item.run?.steps[i];
           const record = records[i] ?? null;
@@ -110,7 +115,7 @@ function PlanCard({ item, handlers }: { item: Extract<ChatItem, { kind: "plan" }
           return (
             <li key={i} data-step-status={run?.status ?? "waiting"}>
               {record && run && run.status !== "waiting" ? (
-                <CommandOutcome record={record} pcName={item.pcName} labels={labels} compact={item.steps.length > 1 && item.run?.failedAt !== i} />
+                <CommandOutcome record={record} pcName={item.pcName} labels={labels} showPc={false} compact={item.steps.length > 1 && item.run?.failedAt !== i} />
               ) : (
                 <p className="text-sm">
                   <strong>{describeAction(step.action, step.params as Record<string, JsonValue>, step.target, labels)}</strong>
@@ -155,14 +160,23 @@ function PlanCard({ item, handlers }: { item: Extract<ChatItem, { kind: "plan" }
   );
 }
 
+/** The butler's small round avatar: the DoMe mark on a Navy-to-Blue disc. */
+export function ButlerAvatar({ size = 30 }: { size?: number }) {
+  return (
+    <span aria-hidden="true" style={{ width: size, height: size }} className="flex shrink-0 items-center justify-center rounded-full bg-[linear-gradient(145deg,#2a62ff,#001441)] text-white shadow-[0_6px_16px_-6px_rgb(1_66_251/0.7)]">
+      <BrandMark className="w-[66%]" />
+    </span>
+  );
+}
+
 export function Conversation({ items, handlers, butlerName }: { items: ChatItem[]; handlers: ConversationHandlers; butlerName: string }) {
   return (
     <ol className="space-y-3" aria-label="Conversation">
       {items.map((item) => {
         if (item.kind === "owner") {
           return (
-            <li key={item.id} className="flex justify-end">
-              <p className="max-w-[85%] rounded-card rounded-br-md bg-accent px-3.5 py-2.5 text-on-accent whitespace-pre-wrap break-words">
+            <li key={item.id} className="animate-rise flex justify-end">
+              <p className="dome-primary max-w-[82%] rounded-[1.25rem] rounded-br-md px-4 py-2.5 text-[15px] whitespace-pre-wrap break-words">
                 <span className="sr-only">You said: </span>
                 {item.text}
               </p>
@@ -171,8 +185,9 @@ export function Conversation({ items, handlers, butlerName }: { items: ChatItem[
         }
         if (item.kind === "butler") {
           return (
-            <li key={item.id} className="flex justify-start">
-              <div className={`max-w-[85%] rounded-card rounded-bl-md border px-3.5 py-2.5 ${item.tone === "warning" ? "border-warning/40 bg-surface" : "border-border bg-surface"}`}>
+            <li key={item.id} className="animate-rise flex items-end justify-start gap-2">
+              <ButlerAvatar />
+              <div className={`max-w-[82%] rounded-[1.25rem] rounded-bl-md border px-4 py-2.5 text-[15px] ${item.tone === "warning" ? "border-warning/40 bg-warning/8" : "border-border bg-bg-elevated shadow-[var(--dome-shadow-card)]"}`}>
                 <p className="whitespace-pre-wrap break-words">
                   <span className="sr-only">{butlerName}: </span>
                   {item.text}
@@ -190,7 +205,7 @@ export function Conversation({ items, handlers, butlerName }: { items: ChatItem[
           );
         }
         return (
-          <li key={item.id} className="max-w-[92%]">
+          <li key={item.id} className="animate-rise ml-[38px] max-w-[88%]">
             <PlanCard item={item} handlers={handlers} />
           </li>
         );

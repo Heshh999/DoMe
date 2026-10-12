@@ -433,3 +433,44 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     couldn't cancel it: …"). The button goes once the cancel succeeded, once a PC state that named this
     countdown no longer does, or once the countdown's time passed; after a failure it stays to try
     again.
+
+55. **Design system "Midnight Studio" (website and app, light and dark).** One set of colour roles in
+    `src/styles.css` (`--dome-*`, mapped to Tailwind names by `@theme inline`): light is the base (airy
+    #f6f8fc page, white cards with a soft Navy-tinted shadow, Navy #001441 type); dark is the brand's Navy
+    with translucent "glass" cards and a soft DoMe Blue glow at the top of every screen (`.dome-backdrop`).
+    `accent` is the text/selection colour (DoMe Blue on light, #86abff on Navy) and `primary` the action
+    fill (DoMe Blue with a white label in both themes, 6.6:1; `.dome-primary` adds a top light and a blue
+    glow): no single colour can be both a fill under white text and a link on Navy at AA. Coral is only the
+    cursor's tiny highlights (the active tab's dot, the recording ring, a status dot). Contrast was checked
+    on the composited values: body ≥ 13:1, secondary ≥ 7:1, tertiary ≥ 4.6:1 in both themes.
+    Type: the system stack (SF Pro on Apple devices) with display tracking on headings; no font is bundled
+    (it would add weight for no gain on the iPhone, and BRAND.md §3 needs none). Motion is a short ease-out
+    rise/press, all of it switched off by `prefers-reduced-motion`.
+
+56. **Theme choice without a flash and without inline script.** Nothing stored = follow the device. The
+    Light / Auto / Dark switch stores `dome.theme` and sets `<html data-theme>`; CSS repeats the dark
+    palette for `@media (prefers-color-scheme: dark) :root:not([data-theme=light])` and
+    `:root[data-theme=dark]` (a test keeps the two blocks identical). The CSP (`script-src 'self'`) forbids
+    an inline head script, so `public/theme-init.js` is a tiny external classic script loaded from `<head>`
+    before the stylesheet and the app: it is render-blocking, so the first paint already has the chosen
+    palette (checked in a browser on the production build: device light + saved dark paints Navy). It
+    also sets `<meta name="theme-color">`. `.dome-dark` gives one region the dark palette in either theme
+    (the Navy panels and the phone picture on the website).
+
+57. **Five tabs.** Home, Remote, Touchpad, Type (or Ask when the Assistant tab is on), More. Apps moved
+    from the tab bar to More and to a row on Home; nothing else changed place. Home is the PC (large status
+    card), what is playing (with play/pause), the Windows volume and four quick actions; every control
+    keeps its accessible name, its disabled rules and its honest-result copy.
+
+58. **The logo is drawn inline from the brand's own paths.** `src/components/brandPaths.ts` holds the
+    path data of brand/wordmark.svg, mark.svg and icon.svg (the deploy image builds without brand/);
+    `test/brand.test.ts` fails when they drift. Letters and ring take the theme's logo ink (Navy / White,
+    exactly the two lockup files), the tip stays Sky and the cursor Coral.
+
+59. **Design preview (development only).** `/preview…` on the dev server runs the real app against a fake
+    account and PC (`src/dev/preview.ts`): REST through `configureApi({ fetchImpl })`, the relay through
+    `Runtime({ relay: { socketFactory } })`, a quiet speaker and a pretend microphone, and a conversation
+    typed through the real Assistant controller, so screenshots and reviews are honest renders of the real
+    components. `main.tsx` imports it only under `import.meta.env.DEV` (dropped by `vite build`); its
+    marker (`dome-design-preview`) makes `scripts/check-bundle.ts` fail the build if it ever ships, and a
+    test forbids any static import of `src/dev/`.

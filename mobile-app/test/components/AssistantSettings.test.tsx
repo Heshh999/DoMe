@@ -267,7 +267,8 @@ describe("navigation", () => {
     );
     expect(nav().getByRole("link", { name: /Ask/ })).toHaveAttribute("href", "/app/assistant");
     expect(nav().queryByRole("link", { name: /Type/ })).toBeNull();
-    expect(nav().getAllByRole("link")).toHaveLength(6);
+    // five tabs at most on a phone: Apps lives under More (and on Home)
+    expect(nav().getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Remote", "Touchpad", "Ask", "More"]);
   });
 
   it("taps that are not the talk button unlock speech, again on later taps until it has really started", async () => {

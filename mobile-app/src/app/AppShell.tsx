@@ -11,6 +11,7 @@ import { errorMessage } from "../lib/labels.ts";
 import { ConfirmationModal } from "../components/ConfirmationModal.tsx";
 import { OfflineScreen } from "../components/OfflineScreen.tsx";
 import { useOnline } from "./useOnline.ts";
+import { Icon, type IconName } from "../components/icons.tsx";
 import { Button, Notice, Spinner } from "../components/ui.tsx";
 import { useDevicesStore } from "../store/devices.ts";
 import { pendingConfirmation, useLiveStore } from "../store/live.ts";
@@ -21,19 +22,22 @@ import { navigation, signInRedirect } from "./navigation.ts";
 import { getRuntime } from "./runtime.ts";
 import { getSpeaker } from "./voice.ts";
 
-type Tab = { to: string; label: string; icon: string; end?: boolean };
-const TYPE_TAB: Tab = { to: "/app/command", label: "Type", icon: "⌨" };
-const ASK_TAB: Tab = { to: "/app/assistant", label: "Ask", icon: "◉" };
+type Tab = { to: string; label: string; icon: IconName; end?: boolean };
+const TYPE_TAB: Tab = { to: "/app/command", label: "Type", icon: "keyboard" };
+const ASK_TAB: Tab = { to: "/app/assistant", label: "Ask", icon: "ask" };
 
-/** Six tabs; the fourth is Type, or Ask when this phone shows the Assistant tab (both stay under More). */
+/**
+ * Five tabs, the most a phone tab bar carries comfortably: Home, Remote, Touchpad, then Type — or Ask
+ * when this phone shows the Assistant tab — and More (Apps, Devices, Settings and the rest live there;
+ * Type and Ask stay under More too).
+ */
 function tabs(showAssistant: boolean): Tab[] {
   return [
-    { to: "/app", label: "Home", icon: "⌂", end: true },
-    { to: "/app/remote", label: "Remote", icon: "▶" },
-    { to: "/app/touchpad", label: "Touchpad", icon: "▭" },
+    { to: "/app", label: "Home", icon: "home", end: true },
+    { to: "/app/remote", label: "Remote", icon: "remote" },
+    { to: "/app/touchpad", label: "Touchpad", icon: "touchpad" },
     showAssistant ? ASK_TAB : TYPE_TAB,
-    { to: "/app/apps", label: "Apps", icon: "▦" },
-    { to: "/app/more", label: "More", icon: "⋯" },
+    { to: "/app/more", label: "More", icon: "more" },
   ];
 }
 
@@ -203,22 +207,26 @@ export function AppShell() {
     <RequireSession>
       <AppRuntime />
       <SpeechUnlock />
-      <div className="min-h-dvh bg-bg text-text flex flex-col">
-        <div className="flex-1 w-full max-w-lg mx-auto px-4 pt-[calc(var(--safe-top)+0.75rem)] pb-[calc(84px+var(--safe-bottom))]">
+      <div className="relative isolate min-h-dvh text-text flex flex-col">
+        <div className="dome-backdrop" aria-hidden="true" />
+        <div className="flex-1 w-full max-w-lg mx-auto px-5 pt-[calc(var(--safe-top)+0.75rem)] pb-[calc(92px+var(--safe-bottom))]">
           <div className="mb-3 empty:hidden">
             <RelayBanner />
           </div>
           <Outlet />
         </div>
-        <nav aria-label="Main" className="fixed bottom-0 inset-x-0 border-t border-border bg-bg-elevated/95 backdrop-blur supports-[backdrop-filter]:bg-bg-elevated/80 pb-[var(--safe-bottom)]">
-          <ul className="max-w-lg mx-auto grid grid-cols-6">
+        <nav aria-label="Main" className="dome-bar fixed bottom-0 inset-x-0 z-20 border-t border-border pb-[var(--safe-bottom)]">
+          <ul className="max-w-lg mx-auto grid grid-cols-5 px-1">
             {tabs(showAssistant).map((t) => (
               <li key={t.to}>
-                <NavLink to={t.to} end={t.end ?? false} className={({ isActive }) => `tap flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] text-[11px] font-semibold ${isActive ? "text-accent" : "text-text-muted"}`}>
-                  <span aria-hidden="true" className="text-xl leading-none">
-                    {t.icon}
-                  </span>
-                  {t.label}
+                <NavLink to={t.to} end={t.end ?? false} className={({ isActive }) => `tap dome-press relative flex h-14 flex-col items-center justify-center gap-[3px] text-[11px] font-semibold tracking-[-0.01em] ${isActive ? "text-text" : "text-text-faint hover:text-text-muted"}`}>
+                  {({ isActive }) => (
+                    <>
+                      <Icon name={t.icon} size={24} strokeWidth={isActive ? 2 : 1.75} className={isActive ? "text-accent" : ""} />
+                      {t.label}
+                      <span aria-hidden="true" className={`absolute bottom-[3px] h-1 w-1 rounded-full transition-opacity duration-200 ${isActive ? "bg-coral opacity-100" : "opacity-0"}`} />
+                    </>
+                  )}
                 </NavLink>
               </li>
             ))}
