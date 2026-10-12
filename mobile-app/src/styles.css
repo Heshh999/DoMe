@@ -69,7 +69,10 @@
   --dome-shadow-card: 0 1px 2px rgb(0 20 65 / 0.05), 0 12px 32px -14px rgb(0 20 65 / 0.16);
   --dome-shadow-raised: 0 2px 6px rgb(0 20 65 / 0.06), 0 28px 60px -20px rgb(0 20 65 / 0.28);
   --dome-shadow-primary: 0 1px 0 rgb(255 255 255 / 0.18) inset, 0 10px 24px -10px rgb(1 66 251 / 0.55);
-  --dome-bar-fill: rgb(255 255 255 / 0.82);
+  --dome-bar-fill: rgb(255 255 255 / 0.98);
+  --dome-segment-on: #ffffff;
+  --dome-segment-shadow: 0 1px 3px rgb(0 20 65 / 0.18);
+  --dome-well: rgb(1 66 251 / 0.12);
   --dome-glow-1: rgb(1 66 251 / 0.1);
   --dome-glow-2: rgb(66 129 250 / 0.08);
   --dome-hero-orbit: rgb(0 20 65 / 0.08);
@@ -129,7 +132,10 @@
     --dome-shadow-card: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 18px 40px -22px rgb(0 0 0 / 0.65);
     --dome-shadow-raised: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 32px 70px -24px rgb(0 0 0 / 0.75);
     --dome-shadow-primary: 0 1px 0 rgb(255 255 255 / 0.22) inset, 0 12px 32px -10px rgb(42 98 255 / 0.75);
-    --dome-bar-fill: rgb(0 14 50 / 0.72);
+    --dome-bar-fill: rgb(0 14 50 / 0.98);
+    --dome-segment-on: rgb(255 255 255 / 0.16);
+    --dome-segment-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset;
+    --dome-well: rgb(134 171 255 / 0.16);
     --dome-glow-1: rgb(1 66 251 / 0.42);
     --dome-glow-2: rgb(66 129 250 / 0.16);
     --dome-hero-orbit: rgb(255 255 255 / 0.09);
@@ -171,7 +177,10 @@
   --dome-shadow-card: 0 1px 0 rgb(255 255 255 / 0.06) inset, 0 18px 40px -22px rgb(0 0 0 / 0.65);
   --dome-shadow-raised: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 32px 70px -24px rgb(0 0 0 / 0.75);
   --dome-shadow-primary: 0 1px 0 rgb(255 255 255 / 0.22) inset, 0 12px 32px -10px rgb(42 98 255 / 0.75);
-  --dome-bar-fill: rgb(0 14 50 / 0.72);
+  --dome-bar-fill: rgb(0 14 50 / 0.98);
+  --dome-segment-on: rgb(255 255 255 / 0.16);
+  --dome-segment-shadow: 0 1px 0 rgb(255 255 255 / 0.08) inset;
+  --dome-well: rgb(134 171 255 / 0.16);
   --dome-glow-1: rgb(1 66 251 / 0.42);
   --dome-glow-2: rgb(66 129 250 / 0.16);
   --dome-hero-orbit: rgb(255 255 255 / 0.09);
@@ -336,11 +345,98 @@ body {
     background: linear-gradient(180deg, color-mix(in oklab, var(--dome-color-primary-strong) 80%, white), var(--dome-color-primary-strong) 55%);
   }
 
-  /* Translucent bars (website header, tab bar, assistant dock). */
+  /* Translucent bars (website header, tab bar, assistant dock): opaque enough that page text never
+     reads through the labels; where there is no backdrop blur, a solid raised fill instead. */
   .dome-bar {
     background: var(--dome-bar-fill);
     -webkit-backdrop-filter: saturate(1.6) blur(20px);
     backdrop-filter: saturate(1.6) blur(20px);
+  }
+  @supports not (backdrop-filter: blur(1px)) {
+    .dome-bar {
+      background: var(--dome-color-bg-raised);
+    }
+  }
+
+  /* Icon well: a quietly tinted rounded square behind a line icon. Solid DoMe Blue is reserved for the one
+     primary control of a screen; everything else that needs an icon sits in a well. */
+  .dome-well {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.75rem;
+    background: var(--dome-well);
+    color: var(--dome-color-accent);
+  }
+  .dome-well-muted {
+    background: var(--dome-color-surface);
+    color: var(--dome-color-text-muted);
+  }
+  .dome-well-success {
+    background: color-mix(in oklab, var(--dome-color-success) 14%, transparent);
+    color: var(--dome-color-success);
+  }
+  .dome-well-warning {
+    background: color-mix(in oklab, var(--dome-color-warning) 14%, transparent);
+    color: var(--dome-color-warning);
+  }
+  .dome-well-danger {
+    background: color-mix(in oklab, var(--dome-color-danger) 12%, transparent);
+    color: var(--dome-color-danger);
+  }
+
+  /* Segmented control (role=tablist): a sunken track, the chosen segment lifted. */
+  .dome-segment {
+    display: grid;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border-radius: 999px;
+    border: 1px solid var(--dome-color-border);
+    background: var(--dome-color-bg-sunken);
+  }
+  .dome-segment > [role="tab"] {
+    min-height: 44px;
+    border-radius: 999px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--dome-color-text-muted);
+  }
+  .dome-segment > [role="tab"][aria-selected="true"] {
+    background: var(--dome-segment-on);
+    color: var(--dome-color-text);
+    box-shadow: var(--dome-segment-shadow);
+  }
+
+  /* Rows inside a card, separated by hairlines. */
+  .dome-list > * + * {
+    border-top: 1px solid var(--dome-color-border);
+  }
+
+  /* Native checkbox in the brand colour, large enough for a thumb. */
+  .dome-check {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    accent-color: var(--dome-color-primary);
+  }
+
+  /* The touchpad surface: a faint dot grid says "this area is the trackpad". */
+  .dome-touchpad {
+    background-color: var(--dome-color-bg-sunken);
+    background-image: radial-gradient(circle, var(--dome-color-border-strong) 1px, transparent 1.3px);
+    background-size: 18px 18px;
+    background-position: center;
+  }
+
+  /* The handle at the top of a bottom sheet. */
+  .dome-grabber {
+    width: 36px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--dome-color-border-strong);
   }
 
   /* Eyebrow above headlines: small, spaced capitals. */
@@ -365,10 +461,18 @@ body {
   }
 }
 
+/* The focus ring follows each element's own corners (no forced radius); fields get a tighter ring. */
 :focus-visible {
   outline: 3px solid var(--dome-color-focus);
   outline-offset: 2px;
-  border-radius: 6px;
+}
+@layer base {
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline-width: 2px;
+    outline-offset: 0;
+  }
 }
 
 @keyframes dome-rise {

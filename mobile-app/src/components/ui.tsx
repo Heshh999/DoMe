@@ -4,8 +4,12 @@
  * design tokens in styles.css, so each primitive works in both themes.
  */
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { Link } from "react-router";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+import { Icon, type IconName } from "./icons.tsx";
+
+/** `quiet`: a text-only secondary action; `danger-ghost`: a destructive action that stays quiet until its confirmation. */
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "quiet" | "danger-ghost";
 type Size = "sm" | "md" | "lg" | "xl";
 
 const VARIANT: Record<Variant, string> = {
@@ -13,6 +17,8 @@ const VARIANT: Record<Variant, string> = {
   secondary: "bg-surface text-text border border-border hover:bg-surface-hover",
   ghost: "bg-transparent text-text hover:bg-surface",
   danger: "bg-danger-fill text-white hover:brightness-110 shadow-[0_10px_24px_-12px_rgb(194_42_54/0.6)]",
+  quiet: "bg-transparent text-text-muted hover:bg-surface hover:text-text",
+  "danger-ghost": "bg-transparent text-danger hover:bg-danger/10",
 };
 const SIZE: Record<Size, string> = {
   sm: "gap-1.5 px-3 py-2.5 text-[14px] whitespace-nowrap",
@@ -90,16 +96,168 @@ export function Pill({ tone = "neutral", children, pulse = false, className = ""
   );
 }
 
-/** A page's large title (iOS-style), with an optional line under it and an action on the right. */
-export function PageHeader({ title, subtitle, action }: { title: string; subtitle?: ReactNode; action?: ReactNode }) {
+/**
+ * A page's large title (iOS-style), with an optional line under it and an action on the right. `back` puts a
+ * labelled back link above the title (sub-pages such as pairing); `eyebrow` a small caption above it.
+ */
+export function PageHeader({ title, subtitle, action, back, eyebrow }: { title: string; subtitle?: ReactNode; action?: ReactNode; back?: { to: string; label: string; ariaLabel?: string }; eyebrow?: ReactNode }) {
   return (
-    <header className="flex items-end justify-between gap-3 pt-2 mb-5">
-      <div className="min-w-0">
-        <h1 className="text-[2rem] leading-[1.1] font-bold tracking-[-0.03em]">{title}</h1>
-        {subtitle ? <p className="text-text-muted text-sm mt-1.5">{subtitle}</p> : null}
+    <header className={`mb-5 ${back ? "pt-0" : "pt-2"}`}>
+      {back ? <BackLink to={back.to} label={back.label} ariaLabel={back.ariaLabel} /> : null}
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          {eyebrow ? <p className="dome-eyebrow mb-1.5">{eyebrow}</p> : null}
+          <h1 className="text-[2rem] leading-[1.1] font-bold tracking-[-0.03em]">{title}</h1>
+          {subtitle ? <p className="text-text-muted text-sm mt-1.5">{subtitle}</p> : null}
+        </div>
+        {action ? <div className="shrink-0 pb-0.5">{action}</div> : null}
       </div>
-      {action ? <div className="shrink-0">{action}</div> : null}
     </header>
+  );
+}
+
+/** A back link without the "‹" glyph: a chevron icon and the destination's name. */
+export function BackLink({ to, label, ariaLabel }: { to: string; label: string; ariaLabel?: string | undefined }) {
+  return (
+    <Link to={to} aria-label={ariaLabel} className="tap -ml-2 mb-1 inline-flex items-center gap-0.5 rounded-full pl-1.5 pr-3 text-sm font-semibold text-accent hover:bg-surface">
+      <Icon name="chevron" size={18} className="rotate-180" />
+      {label}
+    </Link>
+  );
+}
+
+/** A small action in a header (Refresh, Devices…): a labelled 44 px pill, never an unlabelled icon. */
+export function HeaderPill({ icon, children, to, onClick, busy = false, disabled = false, ...rest }: { icon: IconName; children: ReactNode; to?: string; onClick?: () => void; busy?: boolean; disabled?: boolean } & Record<string, unknown>) {
+  const className = "tap dome-press inline-flex h-11 items-center gap-1.5 rounded-full border border-border bg-surface pl-3 pr-3.5 text-sm font-semibold text-text hover:bg-surface-hover disabled:opacity-40 disabled:cursor-not-allowed";
+  if (to) {
+    return (
+      <Link to={to} className={className} {...rest}>
+        <Icon name={icon} size={18} className="text-accent" />
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} disabled={disabled || busy} aria-busy={busy || undefined} className={className} {...rest}>
+      {busy ? <Spinner small /> : <Icon name={icon} size={18} className="text-accent" />}
+      {children}
+    </button>
+  );
+}
+
+export type WellTone = "accent" | "muted" | "success" | "warning" | "danger";
+const WELL: Record<WellTone, string> = { accent: "", muted: "dome-well-muted", success: "dome-well-success", warning: "dome-well-warning", danger: "dome-well-danger" };
+
+/** A tinted icon well (decorative). `size` in px; the icon is about half of it. */
+export function IconWell({ icon, tone = "accent", size = 40, className = "", radius }: { icon: IconName; tone?: WellTone; size?: number; className?: string; radius?: number }) {
+  return (
+    <span aria-hidden="true" style={{ width: size, height: size, ...(radius !== undefined ? { borderRadius: radius } : {}) }} className={`dome-well ${WELL[tone]} ${className}`}>
+      <Icon name={icon} size={Math.round(size * 0.52)} />
+    </span>
+  );
+}
+
+/** A segmented control (`role="tablist"`): the options are tabs, the chosen one is `aria-selected`. */
+export function Segmented<T extends string>({ label, value, options, onChange, className = "" }: { label: string; value: T; options: Array<{ value: T; label: string; icon?: IconName; disabled?: boolean }>; onChange: (value: T) => void; className?: string }) {
+  return (
+    <div role="tablist" aria-label={label} className={`dome-segment ${className}`}>
+      {options.map((o) => (
+        <button key={o.value} role="tab" type="button" aria-selected={value === o.value} disabled={o.disabled} onClick={() => onChange(o.value)} className="dome-press inline-flex items-center justify-center gap-1.5 px-2 disabled:opacity-40 disabled:cursor-not-allowed">
+          {o.icon ? <Icon name={o.icon} size={17} /> : null}
+          <span className="truncate">{o.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A card made of hairline-separated rows (`ListRow`). */
+export function ListCard({ children, className = "", as: Tag = "ul", ...rest }: { children: ReactNode; className?: string; as?: "ul" | "ol" | "div" | "dl" } & Record<string, unknown>) {
+  return (
+    <Tag className={`dome-card dome-list overflow-hidden p-0 ${className}`} {...rest}>
+      {children}
+    </Tag>
+  );
+}
+
+/** One row with an optional icon well, a title, a line under it and something on the right; a link when `to` is set. */
+export function ListRow({ icon, tone = "accent", title, text, right, to, onClick, as: Tag = "li", className = "" }: { icon?: IconName; tone?: WellTone; title: ReactNode; text?: ReactNode; right?: ReactNode; to?: string; onClick?: () => void; as?: "li" | "div"; className?: string }) {
+  const body = (
+    <>
+      {icon ? <IconWell icon={icon} tone={tone} size={36} /> : null}
+      <span className="min-w-0 flex-1">
+        <span className="block font-semibold leading-snug">{title}</span>
+        {text ? <span className="mt-0.5 block text-[13px] leading-snug text-text-muted">{text}</span> : null}
+      </span>
+      {right !== undefined ? <span className="shrink-0">{right}</span> : to ? <Icon name="chevron" size={18} className="shrink-0 text-text-faint" /> : null}
+    </>
+  );
+  const inner = "flex min-h-[56px] w-full items-center gap-3.5 px-4 py-3 text-left";
+  return (
+    <Tag className={className}>
+      {to ? (
+        <Link to={to} className={`${inner} transition-colors hover:bg-surface`}>
+          {body}
+        </Link>
+      ) : onClick ? (
+        <button type="button" onClick={onClick} className={`${inner} dome-press hover:bg-surface`}>
+          {body}
+        </button>
+      ) : (
+        <div className={inner}>{body}</div>
+      )}
+    </Tag>
+  );
+}
+
+/**
+ * Label / value pairs (Devices, Link): the label muted on the left, the value on the right. A long value
+ * (`stack`, or any string over 40 characters) goes under its label instead, left-aligned and easy to read.
+ */
+export function KeyValue({ rows, className = "" }: { rows: Array<{ label: string; value: ReactNode; testId?: string; stack?: boolean }>; className?: string }) {
+  return (
+    <dl className={`divide-y divide-border text-sm ${className}`}>
+      {rows.map((r) => {
+        const stacked = r.stack ?? (typeof r.value === "string" && r.value.length > 40);
+        return stacked ? (
+          <div key={r.label} className="py-2.5">
+            <dt className="text-xs font-medium text-text-muted">{r.label}</dt>
+            <dd className="mt-0.5 font-medium leading-snug" data-testid={r.testId}>
+              {r.value}
+            </dd>
+          </div>
+        ) : (
+          <div key={r.label} className="flex items-start justify-between gap-4 py-2.5">
+            <dt className="shrink-0 text-text-muted">{r.label}</dt>
+            <dd className="min-w-0 text-right font-medium" data-testid={r.testId}>
+              {r.value}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+/** A tappable example or suggestion (typed commands, the butler's choices). */
+export function Chip({ children, onClick, pressed, disabled = false, className = "" }: { children: ReactNode; onClick: () => void; pressed?: boolean; disabled?: boolean; className?: string }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} aria-pressed={pressed} className={`tap dome-press rounded-full border px-3.5 py-2 text-sm font-medium text-text disabled:opacity-40 ${pressed ? "border-accent bg-accent/10" : "border-border bg-surface hover:bg-surface-hover"} ${className}`}>
+      {children}
+    </button>
+  );
+}
+
+/** A native checkbox in a tappable row: the whole row is the label. */
+export function CheckRow({ id, label, hint, checked, disabled = false, onChange }: { id?: string; label: ReactNode; hint?: ReactNode; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className={`flex min-h-[48px] items-center gap-3 rounded-control border px-3.5 py-2.5 text-sm transition-colors ${checked ? "border-accent/50 bg-accent/8" : "border-border bg-surface"} ${disabled ? "opacity-70" : "cursor-pointer"}`}>
+      <input id={id} type="checkbox" className="dome-check" checked={checked} disabled={disabled} onChange={(e) => onChange(e.currentTarget.checked)} />
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-text">{label}</span>
+        {hint ? <span className="block text-xs text-text-muted">{hint}</span> : null}
+      </span>
+    </label>
   );
 }
 
@@ -113,9 +271,10 @@ export function SectionLabel({ children, action }: { children: ReactNode; action
   );
 }
 
-export function EmptyState({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
+export function EmptyState({ title, children, action, icon }: { title: string; children?: ReactNode; action?: ReactNode; icon?: IconName }) {
   return (
     <Card className="text-center py-9">
+      {icon ? <IconWell icon={icon} tone="muted" size={52} radius={16} className="mb-4" /> : null}
       <h2 className="text-lg font-semibold">{title}</h2>
       {children ? <div className="text-text-muted text-sm mt-2 space-y-2">{children}</div> : null}
       {action ? <div className="mt-5 flex justify-center">{action}</div> : null}
