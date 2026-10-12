@@ -3,14 +3,31 @@
  * only inside `if (import.meta.env.DEV)`, which `vite build` replaces with `false` and drops, and
  * `scripts/check-bundle.ts` fails `pnpm build` if the marker below ever shows up in `dist/`.
  *
- * Open `/preview` (or `/preview/remote`, `/preview/assistant`, …) on the dev server: this tab then runs
- * the REAL app — real pages, stores, runtime, relay client, command signing and the butler — against a
- * fake account and a fake PC living in this module, instead of cloud-api:
+ * Routes (dev server only; each one lands on the real page with a fake signed-in state):
+ *   /preview                  Home ("Living Room PC" online, YouTube playing in Edge, volume 55 → 40)
+ *   /preview/remote           Remote (YouTube tab with a live scrubber, Spotify paused, search works)
+ *   /preview/assistant        Ask (a short butler conversation types itself in once the PC is ready)
+ *   /preview/apps             Apps (ZStream and Edge running, Spotify closed; every button answers)
+ *   /preview/devices          Devices (this phone, the PC with its grant, one paired phone)
+ *   /preview/devices/pair     Pair (type ABCDE-FGHJK-MNPQR-STVWX → details → "waiting for approval")
+ *   /preview/settings         Settings & help (AI on, 6 of 300 used; the consent sheet opens)
+ *   /preview/health           Connection health (every layer answers; Retry and the walkthrough work)
+ *   /preview/billing          Billing (the Free plan from the fake session)
+ *   /preview/command          Type a command (parses locally; plans run against the fake PC)
+ *   /preview/touchpad         Touchpad (a live input session: the keyboard panel opens, acks come back)
+ *   /preview/routines, /preview/layouts, /preview/more
+ *   /preview/link?user_code=ABCD-EFGH   Link a PC (the agent-link preview answers; approve is not in the preview)
+ * Flags (on any route): `?offline=1` shows the offline screen; `?confirm=1` has the PC ask this phone
+ * to confirm closing Edge, which opens the global confirmation modal.
+ *
+ * This tab then runs the REAL app — real pages, stores, runtime, relay client, command signing and the butler —
+ * against a fake account and a fake PC living in this module, instead of cloud-api:
  *   - REST answers (`configureApi({ fetchImpl })`): a signed-in account, one PC "Living Room PC", this
- *     phone's grant, the assistant's status (AI on, 294 requests left);
+ *     phone's grant, the assistant's status (AI on, 294 requests left), pairing and agent-link stubs;
  *   - the relay socket (`Runtime({ relay: { socketFactory } })`): hello → hello_ack, subscribe → online +
  *     the PC's state (YouTube playing in Edge, Spotify paused, Windows volume 55 → 40 after the
- *     conversation), and believable answers to the everyday commands, so buttons work;
+ *     conversation), believable answers to the everyday commands, confirmation challenges for Close and
+ *     power actions, and input acks for the touchpad, so buttons work;
  *   - the butler: a quiet speaker and a pretend microphone (tap, tap again: it "hears" "pause YouTube"),
  *     and a short conversation typed in through the real Assistant controller once the PC is ready.
  * Nothing here talks to a network. `/preview/off` leaves preview mode (it lasts for this tab only).
@@ -30,14 +47,50 @@ import { isFresh, useLiveStore, type AppEntry, type PcState, type YoutubeTab } f
 /** sessionStorage key and bundle marker (scripts/check-bundle.ts PREVIEW_MARKER). */
 export const PREVIEW_FLAG = "dome-design-preview";
 
+/** Every preview route (the path under /preview and the app route it opens); the test checks each one exists. */
+export const PREVIEW_ROUTES: ReadonlyArray<{ preview: string; app: string; note: string }> = [
+  { preview: "/preview", app: "/app", note: "Home" },
+  { preview: "/preview/remote", app: "/app/remote", note: "Remote" },
+  { preview: "/preview/assistant", app: "/app/assistant", note: "Ask" },
+  { preview: "/preview/apps", app: "/app/apps", note: "Apps" },
+  { preview: "/preview/devices", app: "/app/devices", note: "Devices" },
+  { preview: "/preview/devices/pair", app: "/app/devices/pair", note: "Pair this phone" },
+  { preview: "/preview/settings", app: "/app/settings", note: "Settings & help" },
+  { preview: "/preview/health", app: "/app/health", note: "Connection health" },
+  { preview: "/preview/billing", app: "/app/billing", note: "Billing" },
+  { preview: "/preview/command", app: "/app/command", note: "Type a command" },
+  { preview: "/preview/touchpad", app: "/app/touchpad", note: "Touchpad" },
+  { preview: "/preview/routines", app: "/app/routines", note: "Routines (Pro preview)" },
+  { preview: "/preview/layouts", app: "/app/layouts", note: "Custom remotes (Pro preview)" },
+  { preview: "/preview/more", app: "/app/more", note: "More" },
+  { preview: "/preview/link", app: "/link", note: "Link a PC (outside the tab bar)" },
+];
+
+/** Query flags understood on any preview route. */
+export const PREVIEW_FLAGS: ReadonlyArray<{ flag: string; note: string }> = [
+  { flag: "offline=1", note: "the offline screen (navigator.onLine reads false)" },
+  { flag: "confirm=1", note: "the PC asks this phone to confirm closing Edge: the global confirmation modal" },
+];
+
+/** The app route a preview path opens (`/preview/link` is the only one outside `/app`). */
+export function previewTarget(pathname: string): string {
+  const rest = pathname.slice("/preview".length);
+  return rest === "/link" ? "/link" : `/app${rest}`;
+}
+
 const ACCOUNT = "6f1c2a9e-3b4d-4e5f-8a6b-7c8d9e0f1a2b";
 const CONTROLLER = "2b3c4d5e-6f70-4a81-92a3-b4c5d6e7f809";
+const OTHER_CONTROLLER = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
 const PC = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
 const GRANT = "4d5e6f70-8192-4a3b-9c4d-5e6f7a8b9c0d";
+const OTHER_GRANT = "1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b";
+const PAIRING = "0f1e2d3c-4b5a-4968-8776-655443322110";
 const EDGE = "bi_preview_edge";
 const CREATED = "2026-09-02T18:30:00.000Z";
+const PC_NAME = "Living Room PC";
 
 const now = () => new Date().toISOString();
+const inSeconds = (s: number) => new Date(Date.now() + s * 1000).toISOString();
 
 const SESSION: rest.SessionResponse = {
   account: { id: ACCOUNT, email: "alex@example.com", display_name: "Alex", created_at: CREATED },
@@ -47,11 +100,15 @@ const SESSION: rest.SessionResponse = {
   protocol_version: "1.2",
 };
 
-const pcRow = (): rest.Pc => ({ id: PC, name: "Living Room PC", enabled: true, connection: "online", last_seen: now(), created_at: CREATED, platform: "windows", agent_version: "0.1.0" });
+let pcName = PC_NAME;
+let pcEnabled = true;
+const pcRow = (): rest.Pc => ({ id: PC, name: pcName, enabled: pcEnabled, connection: "online", last_seen: now(), created_at: CREATED, platform: "windows", agent_version: "0.1.0" });
 
 const CONTROLLER_ROW: rest.Controller = { id: CONTROLLER, kid: "previewPhoneKid".padEnd(43, "0"), display_name: "Alex’s iPhone", status: "active", created_at: CREATED, last_seen: now() };
+const OTHER_CONTROLLER_ROW: rest.Controller = { id: OTHER_CONTROLLER, kid: "previewOtherKid".padEnd(43, "0"), display_name: "Sam’s iPhone", status: "active", created_at: "2026-09-20T09:10:00.000Z", last_seen: "2026-10-11T19:42:00.000Z" };
 
 const GRANT_ROW: rest.Grant = { id: GRANT, controller_id: CONTROLLER, pc_id: PC, capabilities: ["status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard"], created_at: CREATED };
+const OTHER_GRANT_ROW: rest.Grant = { id: OTHER_GRANT, controller_id: OTHER_CONTROLLER, pc_id: PC, capabilities: ["status", "media", "volume"], created_at: "2026-09-20T09:12:00.000Z" };
 
 function assistantStatus(): rest.AssistantStatusResponse {
   const start = new Date();
@@ -70,6 +127,10 @@ function assistantStatus(): rest.AssistantStatusResponse {
   };
 }
 
+function pairingStatus(): rest.PairingStatusResponse {
+  return { pairing_id: PAIRING, state: "claimed", pc_id: PC, pc_name: pcName, pc_online: true, expires_at: inSeconds(290) };
+}
+
 function json(status: number, body: unknown): Response {
   return new Response(body === null ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -77,14 +138,37 @@ function json(status: number, body: unknown): Response {
 const previewFetch: FetchLike = async (input, init) => {
   const path = new URL(input, window.location.origin).pathname;
   const method = (init.method ?? "GET").toUpperCase();
+  const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
   if (method === "GET" && path === "/v1/session") return json(200, SESSION);
   if (method === "GET" && path === "/v1/pcs") return json(200, { pcs: [pcRow()] });
+  if (method === "PATCH" && path === `/v1/pcs/${PC}`) {
+    if (typeof body.name === "string") pcName = body.name;
+    if (typeof body.enabled === "boolean") pcEnabled = body.enabled;
+    return json(200, pcRow());
+  }
+  if (method === "DELETE" && path === `/v1/pcs/${PC}`) return json(204, null);
   // this phone's row carries this browser's real key id, so Devices and Settings recognise "this phone"
-  if (method === "GET" && path === "/v1/controllers") return json(200, { controllers: [{ ...CONTROLLER_ROW, kid: (await getControllerIdentity()).kid }] });
-  if (method === "GET" && path === `/v1/pcs/${PC}/grants`) return json(200, { grants: [GRANT_ROW] });
+  if (method === "GET" && path === "/v1/controllers") return json(200, { controllers: [{ ...CONTROLLER_ROW, kid: (await getControllerIdentity()).kid }, OTHER_CONTROLLER_ROW] });
+  if (method === "PATCH" && path.startsWith("/v1/controllers/")) {
+    const row = path.endsWith(OTHER_CONTROLLER) ? OTHER_CONTROLLER_ROW : CONTROLLER_ROW;
+    if (typeof body.display_name === "string") row.display_name = body.display_name;
+    return json(200, { ...row, kid: row === CONTROLLER_ROW ? (await getControllerIdentity()).kid : row.kid });
+  }
+  if (method === "DELETE" && (path.startsWith("/v1/controllers/") || path.startsWith("/v1/grants/"))) return json(204, null);
+  if (method === "GET" && path === `/v1/pcs/${PC}/grants`) return json(200, { grants: [GRANT_ROW, OTHER_GRANT_ROW] });
   if (method === "GET" && path === "/v1/assistant") return json(200, assistantStatus());
+  if (method === "POST" && path === "/v1/assistant/consent") return json(200, assistantStatus());
+  if (method === "DELETE" && path === "/v1/assistant/consent") return json(204, null);
   if (method === "GET" && path === "/v1/commands") return json(200, { commands: [] });
   if (method === "POST" && path === "/v1/auth/logout") return json(204, null);
+  // pairing: the claim is accepted and the PC "keeps asking", so the waiting screen (verification code) stays up
+  if (method === "POST" && path === "/v1/pairing/claim") return json(200, pairingStatus());
+  if (method === "GET" && path === `/v1/pairing/${PAIRING}`) return json(200, pairingStatus());
+  // agent link: the preview answers; approving a PC is not part of the design preview
+  if (method === "GET" && path.startsWith("/v1/agent-link/")) {
+    const code = decodeURIComponent(path.slice("/v1/agent-link/".length));
+    return json(200, { user_code: code, agent_version: "0.1.0", platform: "windows", kid: "previewAgentKid".padEnd(43, "0"), pc_name_hint: "Study PC", expires_at: inSeconds(540) } satisfies rest.AgentLinkPreviewResponse);
+  }
   return json(503, { error: { code: "AI_UNAVAILABLE", message: "This part of DoMe is not in the design preview.", retryable: false } });
 };
 
@@ -96,17 +180,33 @@ const VIDEOS = [
   { id: "DWcJFNfaw9c", title: "Deep focus: ambient music for work", duration: 3600 },
 ];
 
+const SEARCH_RESULTS = [
+  { index: 1, video_id: "jfKfPfyJRdk", title: "lofi hip hop radio — beats to relax/study to", channel: "Lofi Girl", is_live: true },
+  { index: 2, video_id: "5qap5aO4i9A", title: "Midnight jazz for slow evenings", channel: "Jazz Lounge", duration_seconds: 2710 },
+  { index: 3, video_id: "DWcJFNfaw9c", title: "Deep focus: ambient music for work", channel: "Calm Sound", duration_seconds: 3600 },
+];
+
+const EDGE_TITLE = "Lo-fi beats to relax and study to - YouTube — Microsoft Edge";
+
+/** The 22-character base64url session id the contract expects. */
+const INPUT_SESSION = "cHJldmlldy1pbnB1dC1zZQ";
+
+type Reply = (f: Record<string, unknown>, delay?: number) => void;
+
 class PreviewPc {
   private video = 0;
   private sockets = new Set<PreviewSocket>();
+  /** Commands waiting for this phone's answer to a confirmation challenge. */
+  private pendingConfirmations = new Map<string, { action: string; target: Record<string, unknown> | null; reply: Reply }>();
   tab: YoutubeTab = { browser_instance_id: EDGE, tab_id: 7, tab_token: "cHJldmlldy10YWItdG9rZW", script_attached: true, title: VIDEOS[0]!.title, video_id: VIDEOS[0]!.id, paused: false, muted: false, volume: 72, position_seconds: 724, duration_seconds: VIDEOS[0]!.duration, context: "watch", ad_showing: false, is_live: false, in_playlist: true, theater: false, fullscreen: false, has_next: true, has_previous: true, active: true };
   volume = { value: 55, muted: false };
   spotify = { session_id: "spotify", app_label: "Spotify", title: "Weightless", artist: "Marconi Union", status: "paused" as "paused" | "playing", controls: ["play", "next", "previous"] as Array<"play" | "pause" | "next" | "previous"> };
   apps: AppEntry[] = [
     { app_id: "zstream-app", display_name: "ZStream", running: true, windows: [{ window_id: "z1", title: "ZStream" }] },
-    { app_id: "msedge", display_name: "Edge", running: true, windows: [{ window_id: "e1", title: "Lo-fi beats to relax and study to - YouTube — Microsoft Edge", foreground: true }] },
+    { app_id: "msedge", display_name: "Edge", running: true, windows: [{ window_id: "e1", title: EDGE_TITLE, foreground: true }] },
     { app_id: "spotify", display_name: "Spotify", running: false, windows: [] },
   ];
+  inputAccepted = 0;
 
   constructor() {
     // the video plays on: move the position along so the remote's scrubber is alive
@@ -125,15 +225,33 @@ class PreviewPc {
   }
 
   state(): PcState {
-    return { remote_enabled: true, session_locked: false, extension_connected: true, platform: "windows", volume: { ...this.volume }, browser_instances: [{ browser_instance_id: EDGE, browser: "edge" }], youtube_tabs: [{ ...this.tab }], media_sessions: [{ ...this.spotify, controls: [...this.spotify.controls] }], pending_power_action: null };
+    // foreground_app rides on every state frame (the runtime takes the touchpad's "in front" from it)
+    return { remote_enabled: true, session_locked: false, extension_connected: true, platform: "windows", volume: { ...this.volume }, browser_instances: [{ browser_instance_id: EDGE, browser: "edge" }], youtube_tabs: [{ ...this.tab }], media_sessions: [{ ...this.spotify, controls: [...this.spotify.controls] }], pending_power_action: null, foreground_app: this.foregroundApp() } as PcState;
   }
 
   pushState() {
     for (const s of this.sockets) s.deliver({ type: "state", pc_id: PC, at: now(), state: this.state() as unknown as JsonValue });
   }
 
+  private foregroundApp() {
+    const edge = this.apps.find((a) => a.app_id === "msedge");
+    return edge?.running && edge.windows.length > 0 ? { process_name: "msedge.exe", window_title: EDGE_TITLE, browser: "edge", elevated: false } : { process_name: "explorer.exe", window_title: "Desktop", elevated: false };
+  }
+
+  /** Actions the PC refuses to run until this phone confirms (ADR-0001 D7). */
+  private needsConfirmation(action: string): boolean {
+    return action === "app.close" || action === "power.sleep" || action === "power.restart" || action === "power.shutdown";
+  }
+
+  private challenge(cmd: { command_id: string; action: string; params?: Record<string, unknown>; target?: Record<string, unknown> | null }): string {
+    const app = this.apps.find((a) => a.app_id === cmd.target?.app_id);
+    const label = cmd.action === "app.close" ? `Close ${app?.display_name ?? "app"}` : `${cmd.action.replace("power.", "").replace(/^\w/, (c) => c.toUpperCase())} the PC`;
+    const detail = cmd.action === "app.close" ? (app?.windows[0]?.title ?? app?.display_name ?? "") : "Unsaved work in open apps may be lost.";
+    return JSON.stringify({ challenge_id: crypto.randomUUID(), command_id: cmd.command_id, controller_id: CONTROLLER, pc_id: PC, action: cmd.action, params: cmd.params ?? {}, target: cmd.target ?? null, target_state_digest: "A".repeat(43), issued_at: now(), expires_at: inSeconds(60), display: { pc_name: pcName, action_label: label, detail } });
+  }
+
   /** One controller frame in, the relay's (and the PC's) answers out. */
-  handle(frame: Record<string, unknown>, reply: (f: Record<string, unknown>, delay?: number) => void) {
+  handle(frame: Record<string, unknown>, reply: Reply) {
     switch (frame.type) {
       case "hello": {
         const versions = (frame.protocol_versions as string[] | undefined) ?? ["1.2"];
@@ -151,10 +269,40 @@ class PreviewPc {
         const env = frame.envelope as { payload: string };
         const cmd = JSON.parse(env.payload) as { command_id: string; action: string; params?: Record<string, unknown>; target?: Record<string, unknown> | null };
         reply({ type: "ack", command_id: cmd.command_id, state: "executing", at: now() }, 40);
-        const outcome = this.run(cmd.action, cmd.params ?? {});
+        if (this.needsConfirmation(cmd.action)) {
+          // the PC answers with a challenge; the result follows this phone's Approve / Decline
+          this.pendingConfirmations.set(cmd.command_id, { action: cmd.action, target: cmd.target ?? null, reply });
+          reply({ type: "confirmation_required", command_id: cmd.command_id, challenge_text: this.challenge(cmd) }, 260);
+          return;
+        }
+        const outcome = this.run(cmd.action, cmd.params ?? {}, cmd.target ?? null);
         const base = { type: "result", command_id: cmd.command_id, origin: "agent", at: now(), duration_ms: 160 };
         reply("error" in outcome ? { ...base, state: "failed", error: { code: outcome.error, message: outcome.message, retryable: false } } : { ...base, state: "succeeded", result: outcome.result }, 220);
         setTimeout(() => this.pushState(), 320);
+        return;
+      }
+      case "confirmation": {
+        const env = frame.envelope as { payload: string };
+        const c = JSON.parse(env.payload) as { command_id: string; decision: "approve" | "decline" };
+        const pending = this.pendingConfirmations.get(c.command_id);
+        if (!pending) return;
+        this.pendingConfirmations.delete(c.command_id);
+        const base = { type: "result", command_id: c.command_id, origin: "agent", at: now(), duration_ms: 420 };
+        if (c.decision === "approve") {
+          const outcome = this.run(pending.action, {}, pending.target);
+          reply("error" in outcome ? { ...base, state: "failed", error: { code: outcome.error, message: outcome.message, retryable: false } } : { ...base, state: "succeeded", result: outcome.result }, 300);
+          setTimeout(() => this.pushState(), 400);
+        } else {
+          reply({ ...base, state: "canceled", error: { code: "CONFIRMATION_DECLINED", message: "You declined on this phone; nothing was done.", retryable: false } }, 200);
+        }
+        return;
+      }
+      case "input_batch": {
+        // Windows accepted every event: an ack with the batch's sequence number and the running total
+        const env = frame.envelope as { payload: string };
+        const batch = JSON.parse(env.payload) as { seq: number; events?: unknown[] };
+        this.inputAccepted += batch.events?.length ?? 0;
+        reply({ type: "input_ack", pc_id: PC, input_session_id: INPUT_SESSION, last_seq: batch.seq, accepted_events: this.inputAccepted, dropped_events: 0, held_buttons: [], held_keys: [], at: now() }, 90);
         return;
       }
       default:
@@ -162,9 +310,20 @@ class PreviewPc {
     }
   }
 
-  private run(action: string, p: Record<string, unknown>): { result: Record<string, unknown> } | { error: string; message: string } {
+  private windowState(target: Record<string, unknown> | null, state: "normal" | "minimized" | "maximized", fullscreen = false): { result: Record<string, unknown> } | { error: string; message: string } {
+    const app = this.apps.find((a) => a.app_id === target?.app_id);
+    if (!app) return { error: "APP_NOT_APPROVED", message: "That app is not approved on the PC." };
+    const win = app.windows.find((w) => w.window_id === target?.window_id) ?? app.windows[0];
+    if (!win) return { error: "APP_NOT_RUNNING", message: "That app has no window right now." };
+    for (const a of this.apps) for (const w of a.windows) w.foreground = a === app && w === win && state !== "minimized";
+    return { result: { app_id: app.app_id, window_id: win.window_id, state, fullscreen, foreground: state !== "minimized" } };
+  }
+
+  private run(action: string, p: Record<string, unknown>, target: Record<string, unknown> | null): { result: Record<string, unknown> } | { error: string; message: string } {
     const tab = () => ({ result: { tab: { ...this.tab } } });
     switch (action) {
+      case "system.ping":
+        return { result: {} };
       case "app.list":
         return { result: { apps: this.apps } };
       case "youtube.set_paused":
@@ -195,6 +354,13 @@ class PreviewPc {
       }
       case "youtube.request_fullscreen":
         return { error: "ACTIVATION_REQUIRED", message: "The browser only allows full screen after a click on the PC." };
+      case "youtube.search":
+        return { result: { tab: { ...this.tab, context: "other", title: `${String(p.query ?? "")} - YouTube`, tab_id: 8, video_id: null, paused: null, has_next: false, has_previous: false }, results: SEARCH_RESULTS, truncated: false } };
+      case "youtube.open_result": {
+        const r = SEARCH_RESULTS.find((x) => x.video_id === p.video_id) ?? SEARCH_RESULTS[0]!;
+        this.tab = { ...this.tab, title: r.title, video_id: r.video_id, position_seconds: 0, paused: false, is_live: r.is_live === true, duration_seconds: r.duration_seconds ?? 0 };
+        return tab();
+      }
       case "windows.set_volume":
         this.volume.value = Number(p.value ?? 0);
         return { result: { ...this.volume } };
@@ -203,6 +369,12 @@ class PreviewPc {
         return { result: { ...this.volume } };
       case "windows.lock":
         return { result: { accepted: true } };
+      case "power.sleep":
+      case "power.restart":
+      case "power.shutdown":
+        return { result: { accepted: true, countdown_seconds: 30, fires_at: inSeconds(30) } };
+      case "power.cancel":
+        return { result: { cancelled: true } };
       case "media.set_paused":
         this.spotify.status = p.paused === true ? "paused" : "playing";
         this.spotify.controls = [this.spotify.status === "playing" ? "pause" : "play", "next", "previous"];
@@ -218,6 +390,28 @@ class PreviewPc {
         if (app.windows.length === 0) app.windows = [{ window_id: `${app.app_id.replace(/[^A-Za-z0-9_-]/g, "")}1`, title: app.display_name, foreground: true }];
         return { result: { app_id: app.app_id, launched, running: true } };
       }
+      case "app.close": {
+        const app = this.apps.find((a) => a.app_id === target?.app_id);
+        if (!app) return { error: "APP_NOT_APPROVED", message: "That app is not approved on the PC." };
+        app.running = false;
+        app.windows = [];
+        return { result: { app_id: app.app_id, closed: true } };
+      }
+      case "app.focus":
+        return this.windowState(target, "normal");
+      case "app.minimize":
+        return this.windowState(target, "minimized");
+      case "app.maximize":
+        return this.windowState(target, "maximized");
+      case "app.restore":
+        return this.windowState(target, "normal");
+      case "app.set_fullscreen":
+        return this.windowState(target, "normal", p.enabled === true);
+      case "input.session_start":
+        this.inputAccepted = 0;
+        return { result: { input_session_id: INPUT_SESSION, lease_seconds: 3, input_age_budget_ms: 1500, max_batch_events: 64, pointer: true, keyboard: true, foreground_app: this.foregroundApp() } };
+      case "input.session_stop":
+        return { result: { stopped: true, released_holds: 0 } };
       default:
         return { error: "ACTION_UNAVAILABLE", message: "That action is not part of the design preview." };
     }
@@ -306,20 +500,32 @@ function pretendMicrophone(): Recognizer {
   };
 }
 
-/** Types a short conversation through the real Assistant controller once the PC is online and fresh. */
-async function converse(): Promise<void> {
+/** Waits until the PC is selected, fresh and has listed its apps (false when that never happens). */
+async function whenReady(): Promise<boolean> {
   const ready = () => {
     const id = useDevicesStore.getState().selectedPcId;
     const live = id ? useLiveStore.getState().pcs[id] : undefined;
     return id === PC && isFresh(live) && useLiveStore.getState().appsByPc[PC] !== undefined;
   };
   for (let i = 0; i < 200 && !ready(); i++) await new Promise((r) => setTimeout(r, 50));
-  if (!ready()) return;
+  return ready();
+}
+
+/** Types a short conversation through the real Assistant controller once the PC is online and fresh. */
+async function converse(): Promise<void> {
+  if (!(await whenReady())) return;
   const butler = getAssistant();
   for (const words of ["Set the volume to 40", "Open Spotify"]) {
     await butler.handleText(words, "typed", { endedAt: Date.now() });
     for (let i = 0; i < 60 && useAssistantStore.getState().phase !== "idle"; i++) await new Promise((r) => setTimeout(r, 50));
   }
+}
+
+/** `?confirm=1`: this phone asks the PC to close Edge, and the PC answers with a confirmation challenge. */
+async function askToConfirm(runtime: Runtime): Promise<void> {
+  if (!(await whenReady())) return;
+  await new Promise((r) => setTimeout(r, 600));
+  await runtime.send({ pcId: PC, action: "app.close", target: { app_id: "msedge" }, source: "button" }).catch(() => undefined);
 }
 
 /** Enter (`/preview…`) or leave (`/preview/off`) preview mode, or start it when this tab is in it. Resolves when the app may render. */
@@ -332,10 +538,16 @@ export async function startPreviewIfAsked(): Promise<void> {
   }
   if (pathname === "/preview" || pathname.startsWith("/preview/")) {
     sessionStorage.setItem(PREVIEW_FLAG, "1");
-    window.location.replace(`/app${pathname.slice("/preview".length)}${window.location.search}`);
+    window.location.replace(`${previewTarget(pathname)}${window.location.search}`);
     return new Promise(() => undefined);
   }
   if (sessionStorage.getItem(PREVIEW_FLAG) !== "1") return;
+
+  const flags = new URLSearchParams(window.location.search);
+  if (flags.get("offline") === "1") {
+    // the shell reads navigator.onLine once on mount: the offline screen, nothing else
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
+  }
 
   const pc = new PreviewPc();
   const runtime = new Runtime({ relay: { socketFactory: () => new PreviewSocket(pc) } });
@@ -349,7 +561,8 @@ export async function startPreviewIfAsked(): Promise<void> {
     if (!s.pcs[PC]?.state) return;
     unsubscribe();
     void runtime.send({ pcId: PC, action: "app.list", source: "system" }).catch(() => undefined);
-    void converse();
+    if (flags.get("confirm") === "1") void askToConfirm(runtime);
+    else void converse();
   });
   console.info("DoMe design preview: a fake account, PC and butler (development only). Leave with /preview/off.");
 }
