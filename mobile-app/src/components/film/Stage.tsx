@@ -16,10 +16,10 @@ import { CONCEPT_NOTE, lerp, PLAN_FACTS, sceneAt, seg, type StatusTone } from ".
 
 /* ── the room ────────────────────────────────────────────────────────────────────────────────────────── */
 
-const Room = memo(function Room({ L }: { L: StageLayout }) {
+const Room = memo(function Room({ L, lamp: lit, screen }: { L: StageLayout; lamp: number; screen: number }) {
   const wide = L.name === "wide";
   const floorY = wide ? 660 : 600;
-  const win = wide ? { x: 1170, y: 60, w: 400, h: 430 } : { x: 150, y: 650, w: 600, h: 520 };
+  const win = { x: 1170, y: 60, w: 400, h: 430 };
   const lamp = wide ? { x: 72, y: 268 } : { x: 60, y: 60 };
   const plant = wide ? { x: 1085, y: 600 } : { x: 790, y: 600 };
   return (
@@ -58,7 +58,8 @@ const Room = memo(function Room({ L }: { L: StageLayout }) {
         </linearGradient>
       </defs>
       <rect width={L.w} height={L.h} fill="url(#fl-wall)" />
-      {/* the window at dusk */}
+      {/* the window at dusk (wide only: the vertical frame has no wall beside the monitor) */}
+      {wide ? (
       <g>
         <rect x={win.x - 14} y={win.y - 14} width={win.w + 28} height={win.h + 28} rx="10" fill="#0a1442" />
         <rect x={win.x} y={win.y} width={win.w} height={win.h} fill="url(#fl-sky)" />
@@ -76,15 +77,16 @@ const Room = memo(function Room({ L }: { L: StageLayout }) {
         <rect x={win.x} y={win.y + win.h / 2 - 4} width={win.w} height="8" fill="#0a1442" />
         <rect x={win.x - 14} y={win.y - 14} width={win.w + 28} height={win.h + 28} rx="10" fill="none" stroke="#2a3670" strokeWidth="2" />
       </g>
+      ) : null}
       <rect x="0" y={floorY} width={L.w} height={L.h - floorY} fill="url(#fl-floor)" />
       <rect x="0" y={floorY - 1} width={L.w} height="2" fill="#1c2756" />
-      {/* lamp */}
-      <circle cx={lamp.x} cy={lamp.y} r={wide ? 300 : 260} fill="url(#fl-lamp)" />
+      {/* the reading lamp: its pool of light comes on first */}
+      <circle cx={lamp.x} cy={lamp.y} r={wide ? 300 : 260} fill="url(#fl-lamp)" style={{ opacity: lit }} />
       {wide ? (
         <g>
           <rect x={lamp.x - 3} y={lamp.y + 30} width="6" height={floorY - lamp.y - 30} fill="#1c2756" />
           <path d={`M${lamp.x - 44} ${lamp.y + 34} L${lamp.x - 28} ${lamp.y - 30} L${lamp.x + 28} ${lamp.y - 30} L${lamp.x + 44} ${lamp.y + 34} Z`} fill="#3a3f78" />
-          <ellipse cx={lamp.x} cy={lamp.y + 34} rx="44" ry="7" fill="#ffd9a0" opacity="0.8" />
+          <ellipse cx={lamp.x} cy={lamp.y + 34} rx="44" ry="7" fill="#ffd9a0" style={{ opacity: 0.25 + 0.6 * lit }} />
           <ellipse cx={lamp.x} cy={floorY + 2} rx="30" ry="6" fill="#1c2756" />
         </g>
       ) : null}
@@ -94,8 +96,8 @@ const Room = memo(function Room({ L }: { L: StageLayout }) {
         <rect key={f} x={L.pc.x - 40 + f * (L.pc.w + 80)} y={floorY - 56} width="1.5" height="52" fill="#2a3670" />
       ))}
       <ellipse cx={L.pc.x + L.pc.w / 2} cy={floorY + 40} rx={L.pc.w * 0.5} ry="18" fill="#000" opacity="0.35" />
-      {/* the glow the screen throws on the wall */}
-      <ellipse cx={L.pc.x + L.pc.w / 2} cy={L.pc.y + L.pc.h / 2} rx={L.pc.w * 0.8} ry={L.pc.h * 0.95} fill="url(#fl-screenglow)" />
+      {/* the glow the screen throws on the wall, once the PC is awake */}
+      <ellipse cx={L.pc.x + L.pc.w / 2} cy={L.pc.y + L.pc.h / 2} rx={L.pc.w * 0.8} ry={L.pc.h * 0.95} fill="url(#fl-screenglow)" style={{ opacity: screen }} />
       {/* plant */}
       <g transform={`translate(${plant.x} ${plant.y})`}>
         <path d="M-26 0 L26 0 L20 56 L-20 56 Z" fill="#1c2756" />
@@ -115,8 +117,14 @@ const Room = memo(function Room({ L }: { L: StageLayout }) {
         </g>
       ) : (
         <g>
-          <rect x="60" y="980" width="780" height="300" rx="40" fill="url(#fl-sofa)" />
-          <rect x="90" y="1120" width="720" height="110" rx="30" fill="#162052" />
+          {/* the sofa, seen from the front: back, two cushions, seat, arms; a rug under it */}
+          <ellipse cx="450" cy="1215" rx="430" ry="40" fill="#0d1744" />
+          <rect x="70" y="930" width="760" height="170" rx="36" fill="url(#fl-sofa)" />
+          <rect x="100" y="958" width="340" height="118" rx="26" fill="#1f2a62" />
+          <rect x="460" y="958" width="340" height="118" rx="26" fill="#1f2a62" />
+          <rect x="46" y="1086" width="808" height="92" rx="30" fill="#162052" />
+          <rect x="24" y="1010" width="58" height="168" rx="22" fill="#1b2560" />
+          <rect x="818" y="1010" width="58" height="168" rx="22" fill="#1b2560" />
         </g>
       )}
     </svg>
@@ -289,7 +297,7 @@ export const Stage = memo(function Stage({ t, layout: L }: StageProps) {
   return (
     <div className="film-canvas dome-dark" style={{ width: L.w, height: L.h, fontSize: 16 }} data-film-time={Math.round(t)}>
       <div className="absolute inset-0" style={{ opacity: s.room }}>
-        <Room L={L} />
+        <Room L={L} lamp={s.lamp} screen={pc.on} />
       </div>
       <div className="absolute inset-0" style={{ opacity: s.devices, transform: `scale(${lerp(0.96, 1, s.devices)})`, transformOrigin: "50% 60%" }}>
         <Monitor L={L} t={t} />

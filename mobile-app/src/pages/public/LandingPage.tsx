@@ -151,7 +151,7 @@ function PhonePicture() {
           </div>
         </div>
       </div>
-      <div className="absolute -left-44 bottom-28 hidden items-center gap-2.5 rounded-2xl border border-white/10 bg-[rgb(11_33_86/0.82)] px-3.5 py-2.5 text-[13px] shadow-[0_20px_40px_-16px_rgb(0_0_0/0.6)] backdrop-blur-md lg:flex">
+      <div className="absolute -left-48 bottom-28 hidden items-center gap-2.5 rounded-2xl border border-white/10 bg-[rgb(11_33_86/0.82)] px-3.5 py-2.5 text-[13px] shadow-[0_20px_40px_-16px_rgb(0_0_0/0.6)] backdrop-blur-md lg:flex">
         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-success/20 text-success">
           <Icon name="check" size={14} strokeWidth={2.5} />
         </span>

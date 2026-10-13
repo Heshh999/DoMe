@@ -198,6 +198,34 @@
   border-color: transparent;
 }
 
+/* the "Play the film" button while the film has not started */
+.film-start {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 5.5rem;
+  height: 5.5rem;
+  margin: -2.75rem 0 0 -2.75rem;
+  padding-left: 0.3rem;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.94);
+  color: #001441;
+  box-shadow:
+    0 0 0 0.75rem rgb(255 255 255 / 0.14),
+    0 24px 60px -20px rgb(0 0 0 / 0.8);
+}
+.film-start:hover {
+  background: #ffffff;
+}
+.film-start:focus-visible {
+  outline: 3px solid #86abff;
+  outline-offset: 4px;
+}
+
 /* the "Watch again" overlay at the end */
 .film-replay {
   position: absolute;

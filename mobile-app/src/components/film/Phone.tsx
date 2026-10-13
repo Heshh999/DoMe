@@ -10,8 +10,8 @@ import { BrandMark, Wordmark } from "../brand.tsx";
 import { Icon, type IconName } from "../icons.tsx";
 import { FilmIcon } from "./filmIcons.tsx";
 import { PHONE_SCREEN } from "./layout.ts";
-import { EPISODES, PcScreen } from "./Pc.tsx";
-import { MIRROR, TOUCH, type HandView, type PcView, type PhonePage, type PhoneView } from "./script.ts";
+import { PcScreen } from "./Pc.tsx";
+import { EPISODES, MIRROR, TOUCH, type HandView, type PcView, type PhonePage, type PhoneView } from "./script.ts";
 import { lerp } from "./timeline.ts";
 
 type Box = { x: number; y: number; w?: number; h?: number };

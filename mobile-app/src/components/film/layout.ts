@@ -60,7 +60,7 @@ export const VERTICAL: StageLayout = {
   h: 1600,
   pc: { x: 70, y: 90, w: 760, h: 427.5 },
   ...phoneBody(298, 596, 304, 10),
-  caption: { x: 60, y: 1250, w: 780, h: 330, size: 44, align: "center" },
+  caption: { x: 60, y: 1262, w: 780, h: 318, size: 44, align: "center" },
   cards: [
     { x: 70, y: 110, w: 760, h: 330 },
     { x: 70, y: 470, w: 760, h: 330 },

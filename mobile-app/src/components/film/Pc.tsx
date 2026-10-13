@@ -10,13 +10,8 @@ import { BrandMark } from "../brand.tsx";
 import { Icon } from "../icons.tsx";
 import { FilmIcon } from "./filmIcons.tsx";
 import { PC_SCREEN } from "./layout.ts";
-import type { PcView } from "./script.ts";
+import { EPISODES, type PcView } from "./script.ts";
 import { lerp } from "./timeline.ts";
-
-export const EPISODES = {
-  3: { title: "Night Drive — Episode 3: Harbour Lights", short: "Episode 3", length: "31:40" },
-  4: { title: "Night Drive — Episode 4: First Light", short: "Episode 4", length: "29:12" },
-} as const;
 
 /** Playback time as m:ss. */
 function clock(position: number, totalSeconds: number): string {

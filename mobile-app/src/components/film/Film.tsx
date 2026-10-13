@@ -233,6 +233,11 @@ function Animated({ layout, initialTime, autoplay, exportMode }: { layout: FilmL
     <div data-testid="film">
       <div ref={frameRef} className="film-frame" data-layout={layout} data-testid="film-frame" role="group" aria-label="DoMe demo film" tabIndex={exportMode ? -1 : 0} onKeyDown={exportMode ? undefined : onKey} onClick={exportMode ? undefined : (e) => (e.target === e.currentTarget || (e.target as HTMLElement).closest(".film-canvas")) && onToggle()}>
         <Stage t={t} layout={L} />
+        {!exportMode && !playing && t === 0 ? (
+          <button type="button" className="film-start dome-press" aria-label="Play the film" data-testid="film-start" onClick={(e) => (e.stopPropagation(), onToggle())}>
+            <Icon name="play" size={34} strokeWidth={2} />
+          </button>
+        ) : null}
         {ended && !exportMode ? (
           <button type="button" className="film-replay film-button dome-primary is-primary dome-press" onClick={(e) => (e.stopPropagation(), replay())}>
             <Icon name="play" size={16} />

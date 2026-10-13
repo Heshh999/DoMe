@@ -4,7 +4,7 @@
  * makes stills, the storyboard and the frame-by-frame export exact.
  *
  * Beats (see timeline.ts for the scenes):
- *  1 Across the room   0–8 s     room, PC and phone appear; a tap on Pause reaches the PC; the phone reports "Done".
+ *  1 Across the room   0–8 s     the lamp comes on, the PC wakes, the phone rises; a tap on Pause reaches the PC.
  *  2 Just ask          8–22 s    Ask → "Put on the next episode and make it full screen" → plan shown first → Run.
  *  3 Screen view       22–40 s   the PC's screen inside the phone: tap, two-finger scroll, swipe away (mini-player),
  *                                open a TV app with a D-pad, PC audio on the phone with mute.
@@ -15,6 +15,12 @@
 import { clamp, EASE_IN_OUT, lerp, press, seg, stopIndex, typedWords, window as win } from "./timeline.ts";
 
 /* ── what the PC shows ──────────────────────────────────────────────────────────────────────────────── */
+
+/** The (fictional) series playing on the PC. */
+export const EPISODES = {
+  3: { title: "Night Drive — Episode 3: Harbour Lights", short: "Episode 3", length: "31:40" },
+  4: { title: "Night Drive — Episode 4: First Light", short: "Episode 4", length: "29:12" },
+} as const;
 
 export type PcApp = "browser" | "tv";
 
@@ -57,7 +63,7 @@ export function pcAt(t: number): PcView {
   const nextEpisode = t >= 15_800;
   const inTv = t >= 32_200 && t < 40_000;
   return {
-    on: seg(t, 600, 1_400),
+    on: seg(t, 900, 1_100),
     app: inTv ? "tv" : "browser",
     fullscreen: t >= 40_000 ? 0 : seg(t, 16_600, 700) * (1 - seg(t, 39_800, 300)),
     episode: nextEpisode ? 4 : 3,
@@ -284,8 +290,10 @@ export function linkAt(t: number): LinkView {
 /* ── stage-level overlays: the dusk room, the plan cards and the end card ──────────────────────────────── */
 
 export interface StageView {
-  /** The room fading in (scene 1). */
+  /** The room is on stage from the first frame (an export must never start blank); this only dims it for the veil. */
   room: number;
+  /** The reading lamp switching on (0..1), the first thing that happens. */
+  lamp: number;
   /** The dimming veil behind the plan cards and the end card (0..1). */
   veil: number;
   /** Scene 5: card entrances (one per plan), the Pro glow and the footnote. */
@@ -305,7 +313,8 @@ export function stageAt(t: number): StageView {
   const inPlans = t >= 50_000 && t < 60_000;
   const fadeCards = 1 - seg(t, 59_700, 300);
   return {
-    room: seg(t, 0, 1_400),
+    room: 1,
+    lamp: seg(t, 250, 800),
     veil: t < 50_000 ? 0 : t < 60_000 ? seg(t, 50_000, 800) * 0.92 : lerp(0.92, 1, seg(t, 60_000, 700)),
     cards: inPlans ? [seg(t, 50_400, 800) * fadeCards, seg(t, 50_750, 800) * fadeCards, seg(t, 51_100, 800) * fadeCards] : [0, 0, 0],
     proGlow: inPlans ? seg(t, 51_800, 900) * fadeCards : 0,
