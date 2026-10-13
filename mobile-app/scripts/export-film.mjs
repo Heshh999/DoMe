@@ -11,7 +11,8 @@
  * Every frame of the film is a pure function of the clock, so the default mode steps the clock frame by frame
  * (seek → wait a paint → screenshot) and pipes PNGs into ffmpeg: the result is deterministic from t = 0, at a
  * constant frame rate, with every frame crisp. `--record` instead uses Playwright's `recordVideo` screencast of
- * the film playing in real time (variable frame timing, screencast quality) and trims the lead-in.
+ * the film playing in real time and trims the lead-in where the recording itself shows the film starting (see
+ * detectLead); its frame timing and picture quality are the screencast's, so the default mode is the one to ship.
  *
  * Without --base the script serves the production build (`dist/`, run `pnpm build` first) with `vite preview`.
  * Tools: Playwright-core (from this package's node_modules or /opt/node-tools), the headless shell
@@ -149,24 +150,48 @@ async function exportFrames(browser, layout, base) {
   return [mp4, webm];
 }
 
-/** Screencast export: Playwright recordVideo of the film playing, trimmed to the moment play() was called. */
+/**
+ * Where the film starts inside a screencast. Before play() the page holds the film's static t = 0 frame (the dusk
+ * room, lamp off), and the first thing that moves is the lamp at film 250 ms, so the end of that frozen stretch
+ * marks play() + 0.25 s. ffmpeg's freezedetect finds it on the recording itself; `limit` (seconds) keeps the search
+ * inside the lead-in, before the film's own still moments. Returns null when nothing frozen was found.
+ */
+async function detectLead(file, limit) {
+  const log = await new Promise((resolveRun, reject) => {
+    const child = spawn(FFMPEG, ["-hide_banner", "-i", file, "-t", String(Math.ceil(limit + 1)), "-vf", "freezedetect=n=0.002:d=0.25", "-an", "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", reject);
+    child.on("close", () => resolveRun(err));
+  });
+  const ends = [...log.matchAll(/freeze_end: ([\d.]+)/g)].map((m) => Number(m[1])).filter((v) => v <= limit);
+  if (ends.length === 0) return null;
+  return Math.max(0, ends[ends.length - 1] - 0.25);
+}
+
+/** Screencast export: Playwright recordVideo of the film playing in real time, trimmed to where the film starts. */
 async function exportRecording(browser, layout, base) {
   const dir = join(OUT, ".record");
   mkdirSync(dir, { recursive: true });
+  const tCreate = Date.now();
   const { context, page, total } = await openFilm(browser, layout, base, { recordVideo: { dir, size: { width: layout.width, height: layout.height } } });
   const video = page.video();
-  const t0 = Date.now();
+  const tPlay = Date.now();
   await page.evaluate(() => window.__domeFilm.play());
   await page.waitForTimeout(total + 600);
   await page.evaluate(() => window.__domeFilm.pause());
   await context.close();
   const raw = await video.path();
+  // the lead-in ends within (page creation → play) plus a little; fall back to the wall-clock estimate
+  const detected = await detectLead(raw, (tPlay - tCreate) / 1000 + 1.5);
   const info = await probe(raw);
-  // the screencast started with the first paint; the film started `lead` later (approximate: ±1 frame)
-  const lead = Math.max(0, info.duration - (total + 600) / 1000 - (Date.now() - t0 - total - 600) / 1000);
+  const lead = detected ?? Math.max(0, info.duration - (Date.now() - tPlay) / 1000);
+  process.stdout.write(`  ${layout.name}: screencast ${info.duration.toFixed(2)} s, film starts at ${lead.toFixed(2)} s (${detected === null ? "estimated" : "detected"})\n`);
+  // A screencast's clock stretches while the browser renders heavy frames, so the film's 66 s can span more of the
+  // recording: keep everything after the lead-in rather than cutting at a fixed length (the end card just holds on).
   const mp4 = join(OUT, `${layout.name}.mp4`);
   const webm = join(OUT, `${layout.name}.webm`);
-  await run(FFMPEG, ["-y", "-loglevel", "error", "-ss", lead.toFixed(3), "-i", raw, "-t", (total / 1000).toFixed(3), "-r", String(FPS), "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
+  await run(FFMPEG, ["-y", "-loglevel", "error", "-ss", lead.toFixed(3), "-i", raw, "-r", String(FPS), "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
   await run(FFMPEG, ["-y", "-loglevel", "error", "-i", mp4, "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "31", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1", "-pix_fmt", "yuv420p", "-an", webm]);
   rmSync(dir, { recursive: true, force: true });
   return [mp4, webm];
