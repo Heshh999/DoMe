@@ -238,15 +238,16 @@ pricing copy mentions AI or voice.
 | --- | --- |
 | Version negotiation: agent announcing `["2.0"]` gets `PROTOCOL_INCOMPATIBLE` with both lists; MINOR compatibility rule; extension ↔ agent negotiation both ways. `cloud-api/tests/test_relay_routing.py::test_hello_is_required_and_validated`; `shared/python/tests/test_registry_and_schemas.py::test_minor_version_compat`; `pc-agent/tests/test_bridge.py::test_incompatible_extension_is_refused`; `browser-extension/test/background.test.ts` "incompatible agent protocol…", "a newer compatible minor version from the agent is accepted" | unit-tested / integration-tested |
 | Native-host manifest contents and `allowed_origins` composition; native host process forwards frames; host without agent reports an error. `pc-agent/tests/test_bridge.py::test_manifest_origins`, `test_processes.py::test_native_host_process_forwards_frames`, `::test_native_host_without_agent_reports_error` (Linux: manifest written, registry step skipped) | unit-tested |
-| Installer: none (PyInstaller specs written, never built); start-at-login: HKCU Run key code in `platform/windows/startup.py`, never run; updater: none; uninstall: manual steps (`docs/WINDOWS_INSTALL.md` §5, §9). | not yet verified / not implemented |
+| Installer: an Inno Setup per-user development installer (`pc-agent/packaging/installer/DoMe.iss`) built by `.github/workflows/windows-installer.yml` from one PyInstaller folder; its smoke test (`smoke_test.py full`) installs it silently with start at login and a development extension id and checks the files, the Start menu shortcut, the uninstall entry, `dome-server.json`, both HKCU native-host keys and the manifest, the Run value and the icons; runs the frozen command line and a native-messaging round trip; starts the tray and a second launch; upgrades over the running tray; checks that an upgrade while DoMe will not quit changes nothing; refuses a downgrade and an `http://` address; uninstalls with and without `/REMOVEDATA` and checks the cleanup. Start-at-login: `DoMe.exe start-at-login` (unit-tested with a stand-in registry). Uninstall data: kept unless the user says Yes or `/REMOVEDATA` (a reasoned deviation: `pc-agent/DECISIONS.md` 55). Updater: none. | not yet verified (awaiting the first `windows-installer.yml` run; a Windows Server runner as administrator with UAC off, not a PC) / updater not implemented |
 
-**Outstanding:** On Windows 10 and 11 with Chrome and Edge: build both PyInstaller specs; `DoMe.exe
-link`; `install-native-host` and confirm the `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent`
-(and Edge) keys; tray **Start at login** writes `HKCU\…\Run\DoMe` and the agent starts after
-sign-in; `uninstall-native-host` removes the keys and manifest; then the full checklist in
-`pc-agent/README.md`. Code signing, an installer package and a signed update manifest are blocked on
-founder-held credentials and a packaging decision (`docs/WINDOWS_INSTALL.md` §9). Record as
-**Windows-device-tested** with Windows build numbers.
+**Outstanding:** the first green `windows-installer.yml` run. Then, on Windows 10 and 11 with Chrome
+and Edge, as a standard user: run `DoMe-Setup` (wizard and keyboard only), `DoMe.exe link`; confirm the
+`HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` (and Edge) keys with a store or
+development extension; tray **Start at login** writes `HKCU\…\Run\DoMe` and the agent starts after
+sign-in; upgrade over a running DoMe; uninstall removes the keys and manifest; then the full checklist
+in `pc-agent/README.md`. Code signing and a signed update manifest are blocked on founder-held
+credentials (`docs/WINDOWS_INSTALL.md` §9). Record as **Windows-device-tested** with Windows build
+numbers.
 
 ### Scenario 17 — A small load test covers declared concurrent connections and dispatch rate with bounded resource use, plus a sustained idle/reconnect test
 
@@ -408,8 +409,9 @@ recovery":
 - sign in to a second session of the same Windows account (RDS) and confirm the refusal;
 - confirm that another Windows account runs its own agent.
 
-The installer launch and the update restart **cannot be checked yet**, because no installer or
-updater exists (Scenario 16). The Windows mutex and `ProcessIdToSessionId` paths are **not yet
+The installer's upgrade over a running tray (Setup asks DoMe to quit and stops, changing nothing, when
+it does not) is in the installer smoke test, **not yet verified** until its first run; the update
+restart **cannot be checked yet**, because no updater exists (Scenario 16). The Windows mutex and `ProcessIdToSessionId` paths are **not yet
 verified**.
 
 ### Scenario 23 — Now Playing and actual control agree across multiple YouTube tabs, supported browser/profile instances, a separate music app, a closed target and PC focus on an unrelated app
@@ -496,7 +498,7 @@ there is no published download and no installer (Scenario 16, `docs/WINDOWS_INST
 | Layered connection health and guided recovery | `/app/health`, `lib/health.ts`, failure links to Health and Support | unit-tested | spec §11A cases on devices (Scenario 21) |
 | Single-instance agent | named mutex / `flock`, `show`, distinct reports, `repair` | unit- and integration-tested on Linux | Windows mutex and second-session refusal (Scenario 22) |
 | Clear media targets and power-state explanations | Now Playing, target resolution, power copy in agent and phone | unit-tested | Scenario 23 on devices; Scenario 25 power copy on an iPhone |
-| Development installer packaged | PyInstaller specs for `DoMe.exe` and `dome-native-host.exe`; no MSI/MSIX | **not yet verified** (never built) | build on Windows; choose a packaging tool (`docs/WINDOWS_INSTALL.md` §9) |
+| Development installer packaged | One PyInstaller folder for `DoMe.exe` and `dome-native-host.exe`; an unsigned per-user Inno Setup installer with uninstall cleanup, built and smoke-tested by `windows-installer.yml` | PyInstaller folder built and run on Linux; installer **not yet verified** (awaiting the first CI run; runner only, not a PC) | the first green CI run; the founder installs it on his Windows 11 PC as a standard user |
 | Real-device evidence | none | **not yet verified** | Scenarios 1, 2, 3, 7, 9, 10, 11, 16 and 18–25 device checks above, including the actual phone keyboard and the Windows input adapter |
 
 ## 5. Required documents (spec §18) — status

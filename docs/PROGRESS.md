@@ -2,6 +2,54 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-13 — Windows installer (development build) and its CI
+
+HANDOFF §7 item 4, pulled forward ahead of items 1–3 (which keep their order).
+
+- **One PyInstaller folder** (`pc-agent/packaging/dome-agent.spec`; `dome-native-host.spec` deleted):
+  `DoMe.exe` and `dome-native-host.exe` share `_internal\`, so the browser no longer starts a one-file
+  host that unpacks itself to `%TEMP%` every few seconds while DoMe is stopped (browser-extension K5).
+  Both carry `brand/exports/windows/dome.ico`. The protocol contract is bundled without `fixtures/`
+  (the old spec shipped a test private key).
+- **Installer** (`pc-agent/packaging/installer/DoMe.iss`, Inno Setup 6, per user, no admin): installs
+  into `%LOCALAPPDATA%\Programs\DoMe` with a Start menu entry; writes the server address into
+  `dome-server.json` (no environment variable: one would override the addresses stored at link time and
+  could send a test-kit credential to production); registers the native host with
+  `DoMe.exe install-native-host` when an extension id exists, otherwise says plainly that YouTube
+  control is not set up; start at login is an unticked option; an upgrade first unregisters the host and
+  runs `DoMe.exe quit`, and stops with nothing changed (exit code 7) when DoMe does not quit; it refuses
+  to install over a newer version; every DoMe.exe it runs has 60 s, after which only that command is
+  stopped; it warns when run as administrator and never starts DoMe elevated. The uninstaller quits
+  DoMe (or stops and leaves everything in place when DoMe does not quit), removes the program, shortcut,
+  host keys, manifest, start at login and `dome-server.json`, and keeps `%LOCALAPPDATA%\DoMe` unless
+  the user answers Yes or passes `/REMOVEDATA`. `/ApiUrl=` and `/ExtensionId=` exist only in
+  development builds.
+- **pc-agent**: `quit` (the tray's Quit DoMe from the command line; never kills), `start-at-login
+  on|off|status`, a stdout guard so `link`/`pair` no longer crash in a windowed `DoMe.exe` started
+  without a console, `install-native-host`/`repair` keep the extension already registered here, `link`
+  falls back to `dome-server.json`, the installer-facing commands build only the adapter they need and
+  create no state folder, a crash guard on both frozen entry points (`logs\crash.log`, exit 70, never the
+  bootloader's modal error box; only the tray shows a short message), and an exited-but-unreaped child
+  counts as gone (`_pid_alive`). `pc-agent/DECISIONS.md` 51–56.
+- **CI**: `.github/workflows/windows-installer.yml` (Windows tests, then build, smoke test, upload of
+  `DoMe-Setup-<version>.exe` with `SHA256SUMS` and `BUILD-INFO.txt` after a passing smoke test, logs
+  always; no secrets). The Windows test list moved to `pc-agent/tests/windows_suite.txt`, used by both
+  workflows; `ci.yml`'s header no longer claims it never ran.
+- **Run here**: pc-agent ruff, ruff format, mypy (both configs) and pytest (the new
+  `tests/test_installer_commands.py` included) all pass; the packaging scripts pass ruff and
+  `mypy --strict` for Linux and Windows; the spec built with PyInstaller 6.22.3 on Linux and
+  `smoke_test.py bridge` passed against it (`DoMe version`, `AGENT_NOT_RUNNING` from the host alone,
+  `run --headless`, a `bridge_hello` round trip, `DoMe quit`); a frozen crash ended in `crash.log` and
+  exit 70. `DoMe.iss` compiled with Inno Setup 6.7.1 under wine and passed 52 scenario checks there with
+  a stand-in `DoMe.exe` (install, upgrade over a running stand-in, an upgrade and an uninstall that stop
+  because DoMe does not quit, a hung command stopped after its timeout, downgrade and bad-address
+  refusals, keep-data and `/REMOVEDATA` uninstalls, a remembered staging address, a release build
+  ignoring the development options, no empty state folder left). actionlint: both workflows clean.
+- **Evidence**: **not yet verified** on Windows — awaiting the first `windows-installer.yml` run (a
+  Windows Server runner as administrator with UAC off; not a Windows 10/11 PC, not a standard user).
+- **Next**: the first CI run and its fixes; the founder installs it on his Windows 11 PC; a tray "Link
+  this PC…" item; a store listing and the production extension id; signing in a separate protected job.
+
 ## 2026-10-13 — Design A round: domain, two polish rounds, documentation
 
 Follows the rollout entry below (commits 0a7bf6a, b30f0c9, 6d76945 and this documentation commit).

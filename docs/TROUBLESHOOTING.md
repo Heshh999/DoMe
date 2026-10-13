@@ -452,7 +452,7 @@ approves it; the agent polls and receives its credential (`docs/ARCHITECTURE.md`
 | HTTP 429 when entering a code | More than 10 failed code look-ups in 15 minutes from this account or IP (each is a `link_code_lookup_failed` security event) | Wait 15 minutes; type the code exactly (it is case-insensitive). |
 | "Note: this PC is not enabled on your plan yet" after linking | Device limit (section 11) | The link succeeded; enable it under Devices. |
 | Tray: "DoMe needs to be re-linked" | Credential rejected or identity mismatch (section 1) | `DoMe.exe link`; approve; pair phones again. |
-| `link` fails with "set DOME_AGENT_API_URL" | Development run without the API URL | Export `DOME_AGENT_API_URL` (`docs/WINDOWS_INSTALL.md` §8). |
+| `link` fails with "set DOME_AGENT_API_URL" | Development run without the API URL, or an installed `DoMe.exe` whose `dome-server.json` (next to it) is missing or not an https address | Export `DOME_AGENT_API_URL` or pass `--api-url` (`docs/WINDOWS_INSTALL.md` §8); for an installed DoMe, run `DoMe-Setup` again (it rewrites the file). |
 
 ## 16. Throttling and service errors
 
@@ -618,16 +618,22 @@ approval on the PC (**integration-tested**: `pc-agent/tests/test_single_instance
 ## 21. Download and setup repair
 
 There is **no official Windows download yet**. The Download page says "Release status: not yet
-published" and offers no link; there is no unsigned build or beta to download. Development installs follow `docs/WINDOWS_INSTALL.md` §4.
+published" and offers no link. An unsigned **development** installer, `DoMe-Setup-<version>.exe`, is
+built by GitHub Actions for testers (`docs/WINDOWS_INSTALL.md` "The installer"); source installs follow
+`docs/WINDOWS_INSTALL.md` §4.
 
 | Problem | Steps |
 | --- | --- |
 | Windows SmartScreen or antivirus warns about a development build | Development builds are unsigned (`docs/WINDOWS_INSTALL.md` §9). Do not disable antivirus, SmartScreen or any other protection; release builds will be signed. Use a development build only on a machine you control. |
+| `DoMe-Setup` says "DoMe is still running and did not close, so Setup changed nothing" | Right-click the DoMe icon next to the clock → **Quit DoMe**, then run Setup again. Setup never closes DoMe by force. If there is no icon, sign out of Windows and back in, then run Setup again. |
+| `DoMe-Setup` says "A newer version of DoMe … is already installed" | Setup does not install an older version over a newer one. To go back, uninstall DoMe first (Settings → Apps; answer **No** to keep your settings), then run the older Setup. |
+| `DoMe-Setup` shows the page "YouTube control: One part of DoMe is not set up yet" | Expected until the browser add-on is in the Chrome and Edge stores; everything else is installed. Testers: run Setup with `/ExtensionId=<id>` (`docs/WINDOWS_INSTALL.md` "The installer"). |
+| DoMe shows "DoMe could not start because of an unexpected problem" | The details are in `%LOCALAPPDATA%\DoMe\logs\crash.log`; attach that file to a support request (§22). |
 | Setup stopped at a step | The phone's first-use walkthrough (Health, §17) returns you to the first undone step; nothing is restarted. On the PC each step is a separate command: `DoMe.exe link` (§15), `install-native-host` (§2), `DoMe.exe` to run, tray **Pair a phone…** (§4). |
 | The browser extension cannot reach the agent after setup | `DoMe.exe repair` re-registers the native-messaging host (§20); then reload the extension or restart the browser (§2). |
 | The agent will not start or says another instance runs | §20. |
 | Linking fails | §15. |
-| You want to start over | `docs/WINDOWS_INSTALL.md` §5 (uninstall) removes everything DoMe created; then install again. Pairings are not inherited after a re-link. |
+| You want to start over | Settings → Apps → DoMe → Uninstall and answer **Yes** to remove the settings (or `docs/WINDOWS_INSTALL.md` §5 for a source install); then install again. Pairings are not inherited after a re-link. |
 | The mouse on the PC is broken | Pairing and approval need one usable local input on the PC. The pairing approval window is a standard window; whether every step is fully keyboard-navigable has **not yet been verified** on Windows. The console path works by keyboard alone: `DoMe.exe pair` shows the code and prompts for approval in the console, including explicit touchpad/keyboard prompts. |
 
 ## 22. Getting support

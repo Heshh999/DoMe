@@ -23,7 +23,8 @@ Design: `docs/design/pc-agent.md`. Contract: `shared/protocol/` (frozen; verifie
 dome_agent/
   cli.py           dome-agent run|link|unlink|pair|pair-approve|pair-decline|status|enable|disable|
                    approve-app|remove-app|revoke|grant|stop-input|install-native-host|uninstall-native-host|
-                   repair|reconnect|diagnostics
+                   repair|reconnect|diagnostics|quit|start-at-login|version
+  crashguard.py    frozen entry points: any exception → logs/crash.log + exit 70, never a modal error box
   agent.py         orchestrator: frame dispatch, snapshot application, mismatch handling, local controls,
                    input_batch verification, grant_update, every input-session end trigger
   input_session.py manual-input session manager: one session per PC, lease watchdog, seq/age/capability
@@ -48,7 +49,10 @@ dome_agent/
   tray.py ui.py    pystray tray + tkinter pairing windows; NullUI for headless runs
   diagnostics.py   redacted bundle
   testing/         fake_platform.py, fake_relay.py (fake API + relay), fake_extension.py — TEST DOUBLES ONLY
-packaging/         PyInstaller specs for DoMe.exe (tray agent) and dome-native-host.exe
+packaging/         dome-agent.spec (ONE PyInstaller folder: DoMe.exe, dome-native-host.exe, _internal),
+                   agent_entry.py / native_host_entry.py, installer/ (DoMe.iss = Inno Setup per-user
+                   installer, build_installer.py, smoke_test.py; built and tested by
+                   .github/workflows/windows-installer.yml)
 tests/             pytest suite (runs on Linux)
 ```
 
@@ -242,17 +246,27 @@ new controller approval still needs the local approval flow.
 
 ## Windows install (summary)
 
-1. Build on Windows: `uv sync --extra dev --extra build`, then
-   `.venv\Scripts\pyinstaller packaging\dome-agent.spec` and
-   `.venv\Scripts\pyinstaller packaging\dome-native-host.spec`. Place `dome-native-host.exe` next to
-   `DoMe.exe`. (PyInstaller is not run here; see the verification checklist.)
+The installer does steps 1, 3 (when an extension id exists) and the Start at login opt-in; its user
+guide is `docs/WINDOWS_INSTALL.md` "The installer".
+
+1. Build on Windows: `uv sync --locked --extra build`, then
+   `uv run --no-sync python packaging\installer\build_installer.py` (PyInstaller on
+   `packaging\dome-agent.spec` → `dist\DoMe\` with both programs, then Inno Setup 6 →
+   `dist\installer\DoMe-Setup-<version>.exe`, `SHA256SUMS`, `BUILD-INFO.txt`). `--pyinstaller-only`
+   stops after the folder (also on Linux); `--release` builds a Setup without the development options
+   `/ApiUrl=` and `/ExtensionId=`. CI: `.github/workflows/windows-installer.yml` builds it and runs
+   `packaging/installer/smoke_test.py full` (destructive: it refuses outside GitHub Actions without
+   `--allow-this-pc`); `smoke_test.py bridge --app-dir dist/DoMe …` checks a built folder anywhere.
 2. First run: `DoMe.exe link` opens the system browser for the account sign-in (device-code flow;
-   the agent never sees the password). The customer names the PC and enables remote control.
+   the agent never sees the password). The customer names the PC and enables remote control. With no
+   `--api-url` and no `DOME_AGENT_API_URL`, an installed `DoMe.exe` uses the address Setup wrote to
+   `dome-server.json` next to it.
 3. `DoMe.exe install-native-host` writes `%LOCALAPPDATA%\DoMe\com.dome.agent.json` and registers it
    under `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and the Edge equivalent
    (per user, no elevation). `allowed_origins` = the production extension id baked into
    `dome_agent/bridge/manifest.py::PRODUCTION_EXTENSION_IDS` (empty in source until the store listing
-   fixes the key) plus `DOME_AGENT_DEV_EXTENSION_ID` when set.
+   fixes the key) plus `DOME_AGENT_DEV_EXTENSION_ID` when set; with neither, the origins of the manifest
+   already registered here are kept (an upgrade or `repair` keeps a development extension).
 4. `DoMe.exe` (= `run`) shows the tray icon (second launch: the running instance's window comes up).
    Menu: status · Disable/Enable remote control · Stop manual input · Paired phones ▸ (Allow touchpad /
    Allow keyboard per phone) · Pair a phone… · Add an app… · Approved apps… (list, re-approve, remove,
@@ -273,7 +287,10 @@ new controller approval still needs the local approval flow.
    sheet). Re-approving an app keeps its choice.
 7. Secrets (`pc_key.bin`, `pc_credential.bin`) are DPAPI-protected (current user) under
    `%LOCALAPPDATA%\DoMe\secrets`. Logs: `%LOCALAPPDATA%\DoMe\logs\agent.log` (redacted JSON lines).
-   Uninstall: `DoMe.exe uninstall-native-host`, untick Start at login, delete `%LOCALAPPDATA%\DoMe`.
+   Uninstall: Settings → Apps → DoMe (the uninstaller quits DoMe, removes the program, the host keys and
+   manifest and start at login, and keeps `%LOCALAPPDATA%\DoMe` unless told otherwise). From source:
+   `DoMe.exe quit`, `DoMe.exe uninstall-native-host`, `DoMe.exe start-at-login off`, delete
+   `%LOCALAPPDATA%\DoMe`.
 
 ## Windows verification checklist (not runnable here — manual)
 
@@ -303,7 +320,7 @@ tests on Linux cover the logic around each adapter with `fake_platform`.
 | Tray | Icon colour: green connected, amber reconnecting, red disabled/superseded, grey offline; Disable remote control makes the phone fail with `PC_REMOTE_DISABLED`. |
 | Relay URL error | Set `DOME_AGENT_RELAY_URL=not-a-url` and start the agent: tray notification "DoMe cannot connect", `dome-agent status` prints `CONFIGURATION ERROR: The relay URL is invalid...`, `secrets\pc_credential.bin` is unchanged and no re-link is requested; unset the variable and the agent connects again without `link`. |
 | Offline revocation | Disconnect the network, `dome-agent revoke <controller_id>` (agent running or not), reconnect: the relay receives exactly one `revoke_controller` for that controller after the next `grants_snapshot`, `status` shows `pending_revocations: []`, and the account's device list no longer shows the phone as active. |
-| Packaging | Both PyInstaller specs build; `DoMe.exe status` works from a console; `dome-native-host.exe` is console-less. |
+| Packaging | `windows-installer.yml` is green (it builds the folder and smoke-tests install, tray, upgrades and uninstalls on a Windows Server runner). On a Windows 10/11 PC as a standard user: double-click `DoMe-Setup` (keyboard only works), no elevation prompt; Start menu → DoMe shows the tray; `DoMe.exe status` works from a console with redirected output; `dome-native-host.exe` is console-less; Settings → Apps → DoMe uninstalls and asks about the settings. |
 | SendInput on a real desktop | Grant pointer+keyboard to a phone; from the touchpad: one-finger motion moves the cursor relative to its position, tap = left click, double tap = double click (Windows double-click time), two-finger tap = right click, two-finger move scrolls (dy>0 = content up), Drag holds the left button until End Drag; `input_ack.held_buttons` shows `["left"]` during the drag. Type `héllo 😀`, Enter, Backspace, arrows, Ctrl+A/C/V/Z into Notepad and the Chrome address bar (Ctrl+L): surrogate pairs arrive intact, CTRL is never left down (check with a physical modifier indicator / `GetAsyncKeyState`). |
 | Multi-monitor / mixed DPI | Two monitors, one at 150 % and one positioned left/above the primary: the cursor crosses every edge following the real topology; motion is never clamped to one display; "Enhance pointer precision" acceleration applies like a physical mouse (document the observed ratio). |
 | UAC / lock refusal | Open a UAC prompt or lock Windows while a session is live: the session ends `secure_desktop` / `session_locked` within ~1 s and the held drag is released. Click Task Manager / an elevated terminal from the phone: the session stays live, `pc_state.input_restricted` is true, typing is refused `INPUT_RESTRICTED` (no ack as accepted), and clicking a normal window clears it; `foreground_app.elevated` is true where `OpenProcess` succeeds, absent otherwise. |

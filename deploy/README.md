@@ -159,8 +159,11 @@ Cloudflare's dashboard changes over time, so compare these steps with its curren
 - **Identity provider** callback URLs: `https://domeremote.com/v1/auth/callback` (production) and
   `https://staging.domeremote.com/v1/auth/callback` (staging), with return URLs `https://domeremote.com/`
   and `https://staging.domeremote.com/`.
-- **Windows app**: the agent has no built-in server address. The installer (not built yet) sets
-  `DOME_AGENT_API_URL=https://domeremote.com`; the testkit keeps setting its own tunnel address.
+- **Windows app**: the agent has no built-in server address. The installer
+  (`pc-agent/packaging/installer/DoMe.iss`) writes `https://domeremote.com` into `dome-server.json` next
+  to `DoMe.exe`, which only `DoMe.exe link` reads; it deliberately sets no `DOME_AGENT_API_URL`, because
+  that variable would override the address stored at link time (`pc-agent/DECISIONS.md` 54). The test
+  kit keeps setting its own tunnel address for its own process.
 - **Search engines**: `mobile-app/public/robots.txt` and `sitemap.xml` name `https://domeremote.com`;
   outside production every response carries `X-Robots-Tag: noindex, nofollow`, so staging never appears
   in search results. Link previews use `https://domeremote.com/og-image.png` (`mobile-app/index.html`).

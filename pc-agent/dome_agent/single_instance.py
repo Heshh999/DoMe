@@ -104,7 +104,10 @@ class InstanceLock:
         return lock if lock._try_acquire(probe=probe) else None
 
     def _try_acquire(self, *, probe: bool) -> bool:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        if sys.platform != "win32" or not probe:
+            # the lock file lives here; a Windows probe only opens the named mutex, so it creates no folder
+            # (``dome-agent quit`` run by the uninstaller for someone who never started DoMe)
+            self.state_dir.mkdir(parents=True, exist_ok=True)
         if sys.platform == "win32":
             ok = self._acquire_mutex()
         else:
@@ -193,10 +196,19 @@ class InstanceReport:
 
 
 def _pid_alive(pid: int) -> bool:
+    """True while the process runs. An exited process that its parent has not reaped yet (a zombie on
+    Linux/macOS) counts as gone."""
     try:
         import psutil
 
-        return psutil.pid_exists(pid)
+        if not psutil.pid_exists(pid):
+            return False
+        try:
+            return bool(psutil.Process(pid).status() != psutil.STATUS_ZOMBIE)
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.Error:
+            return True  # it exists, we just may not look at it
     except Exception:  # noqa: BLE001
         return False
 
@@ -237,13 +249,27 @@ def _probe_permissions(state_dir: Path) -> str | None:
     return None
 
 
-def _lock_held_by_other(state_dir: Path) -> bool:
+def lock_held_by_other(state_dir: Path) -> bool:
     """Non-destructive probe: acquire-and-release when free (no pid file touched); False when WE could take it."""
     lock = InstanceLock.acquire(state_dir, probe=True)
     if lock is None:
         return True
     lock.release()
     return False
+
+
+def wait_for_exit(state_dir: Path, pid: int | None, *, timeout: float, poll: float = 0.2) -> bool:
+    """Wait until the agent has really gone: its process (``pid``, when known and not this process) has
+    exited AND the instance lock is free. True when that happened within ``timeout`` seconds. Only
+    watches; never terminates anything (``dome-agent quit`` uses it after asking the agent to stop)."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        process_gone = pid is None or pid == os.getpid() or not _pid_alive(pid)
+        if process_gone and not lock_held_by_other(state_dir):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
 
 
 def inspect(state_dir: Path, *, control_timeout: float = 2.0) -> InstanceReport:
@@ -263,7 +289,7 @@ def inspect(state_dir: Path, *, control_timeout: float = 2.0) -> InstanceReport:
         else:
             report.pid_file_stale = True
     if report.permission_problem is None:
-        report.lock_held_by_other = _lock_held_by_other(state_dir)
+        report.lock_held_by_other = lock_held_by_other(state_dir)
     from .bridge import ipc
     from .control import ControlClient, ControlError
 
@@ -310,8 +336,8 @@ def repair(state_dir: Path, *, host_path: Path | None, dev_extension_id: str) ->
     """Re-register the native host and clean stale local endpoints. Preserves identity, credential,
     grants and approved apps (they are never touched); never kills a process. Returns a report."""
     from .bridge import ipc
-    from .bridge.manifest import HOST_NAME, allowed_origins, write_manifest
-    from .platform import build_platform
+    from .bridge.manifest import HOST_NAME, resolve_origins, write_manifest
+    from .platform import build_native_host_registrar
     from .settings import load_settings
 
     out: list[str] = []
@@ -345,8 +371,10 @@ def repair(state_dir: Path, *, host_path: Path | None, dev_extension_id: str) ->
         out.append(f"{name}: {'present, untouched' if (state_dir / name).exists() else 'absent'}")
     out.append(f"secrets: {'present, untouched' if any((state_dir / 'secrets').glob('*.bin')) else 'absent'}")
     settings = load_settings(state_dir=state_dir)
+    manifest_file = state_dir / f"{HOST_NAME}.json"
     try:
-        origins = allowed_origins(dev_extension_id or settings.dev_extension_id)
+        # the production ids, the configured development id, or the extension already registered here
+        origins = resolve_origins(manifest_file, dev_extension_id or settings.dev_extension_id)
     except ValueError as exc:
         out.append(f"native host manifest NOT written: {exc}")
         return out
@@ -357,10 +385,10 @@ def repair(state_dir: Path, *, host_path: Path | None, dev_extension_id: str) ->
     if not host_path.exists():
         out.append(f"native host executable not found at {host_path}; manifest not re-registered (pass --host-path)")
         return out
-    manifest_path = write_manifest(state_dir / f"{HOST_NAME}.json", host_path, origins)
+    manifest_path = write_manifest(manifest_file, host_path, origins)
     out.append(f"native host manifest rewritten: {manifest_path}")
     try:
-        for location in build_platform(settings).native_host.install(manifest_path):
+        for location in build_native_host_registrar(settings).install(manifest_path):
             out.append(f"registered {location}")
     except Exception as exc:  # noqa: BLE001 - PLATFORM_UNSUPPORTED on non-Windows, registry errors on Windows
         out.append(f"registry registration skipped: {getattr(exc, 'message', exc.__class__.__name__)}")

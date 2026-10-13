@@ -42,8 +42,8 @@ because the session cookie, the Origin check and the phone's signing key are per
 into the code: link-preview tags and image, `robots.txt`, `sitemap.xml`, `X-Robots-Tag: noindex` outside
 production, the extension's homepage link. **Nothing is configured at Cloudflare yet.** The DNS records,
 redirect rules, DNSSEC and identity-provider callbacks are written up in `deploy/README.md` "Domain";
-carry them out once the Fly apps exist (§7 item 5). The Windows installer must point the agent at
-`https://domeremote.com` (§7 item 4).
+carry them out once the Fly apps exist (§7 item 5). The Windows installer points `DoMe.exe link` at
+`https://domeremote.com` (`dome-server.json` in the install folder, no environment variable; §7 item 4).
 
 ## 1. Where things stand
 
@@ -53,14 +53,14 @@ Test counts in this table are from 2026-10-09 unless dated; §2 has the latest r
 | --- | --- | --- |
 | `shared/protocol` (protocol 1.2, registry 1.2) | Action registry (37 actions incl. 1.2 window controls and YouTube search, per-action `since` version stamping, 8 capabilities incl. Free `pointer`/`keyboard`), plans, error codes, JSON Schemas for envelopes, commands, confirmations, relay/bridge frames, the signed manual-input stream (`input_batch`, `input_ack`, `input_session`, `grant_update`), per-action results, entitlement claims, REST bodies incl. support tickets; normative rules in `version.json → rules` (incl. `input_sessions`, `grant_update`, `ai_eligibility`); cross-language fixtures. Changes since 1.0 are additive; 1.0 peers stay compatible and never receive input frames. | unit-tested: `shared/python` 210, `shared/ts` 116; each language verifies the other's signed fixtures |
 | `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in, sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller` with signed hello proof), command lifecycle, plan limits, entitlement assertions, security events, support tickets (Alembic `0002`), and the 1.1 input path: signed `input_batch` routing with per-event-type grant coverage and a per-controller budget, `input_ack`/`input_session` delivery, `grant_update`, agent input rejections routed to the batch's phone. Billing/usage/layout/routine/operator tables exist without routes. | integration-tested against real PostgreSQL + `tools/dev-idp`: 120 tests; ruff, mypy (source and tests) clean |
-| `pc-agent` | The Windows user agent: link, identity, outbound relay client, local authorization, coalescing queue, confirmations, SQLite journal, every registry action, Windows adapters (import-gated), Native Messaging host, tray, control channel, diagnostics, PyInstaller specs; for 1.1: the manual-input session manager (one owner per PC, agent-issued id, PC-side lease watchdog, seq/age/capability checks with a skew-tolerant age estimate, ordered dispatch, held-input release on every end reason, content-free crash recovery), a `SendInput` Windows input adapter, local `pointer`/`keyboard` grants with `grant_update`, single instance per Windows session with `repair`, power confirmation copy about losing remote access. | unit-tested on Linux with the fake platform: 604 tests (+3 skipped); the pipe, native-host, window-control, tray and adapter subset also passes on windows-latest CI; ruff + mypy clean; the Windows adapters (SendInput, mutex, secure-desktop detection) are **not yet verified** on a device |
+| `pc-agent` | The Windows user agent: link, identity, outbound relay client, local authorization, coalescing queue, confirmations, SQLite journal, every registry action, Windows adapters (import-gated), Native Messaging host, tray, control channel, diagnostics, one PyInstaller folder for both programs and a per-user Inno Setup development installer (2026-10-13, §7 item 4); for 1.1: the manual-input session manager (one owner per PC, agent-issued id, PC-side lease watchdog, seq/age/capability checks with a skew-tolerant age estimate, ordered dispatch, held-input release on every end reason, content-free crash recovery), a `SendInput` Windows input adapter, local `pointer`/`keyboard` grants with `grant_update`, single instance per Windows session with `repair`, power confirmation copy about losing remote access. | unit-tested on Linux with the fake platform: 604 tests (+3 skipped); the pipe, native-host, window-control, tray and adapter subset also passes on windows-latest CI; ruff + mypy clean; the Windows adapters (SendInput, mutex, secure-desktop detection) are **not yet verified** on a device |
 | `browser-extension` | Chrome/Edge MV3: service worker with native port + reconnect alarms, content-script YouTube player adapter (transition-observed Next/Previous, `tab_token` and `expected_video_id` guards, context flags), build-time precompiled validators (MV3 CSP forbids Ajv's `new Function`), popup. | unit-tested with hand-written DOM fixtures: 154 tests; Vite build succeeds; **never loaded in a real browser against youtube.com** |
 | `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing (QR/code, verification digits), dashboard with Now Playing, remote, command page, apps, devices with touchpad/keyboard permissions, settings, confirmation modal with power-access copy, billing status, routines preview; for 1.1: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard (commit-once composition, Compose and Send, shortcut palette, never deletes text it did not send), the input session client, Health screen with layered states and one next action each, support ticket submission and status, release notes, brand icons. Since then (§0): 1.2 window controls and YouTube search, Ask (AI butler step 1), the "Midnight Studio" redesign of every app and website screen in light and dark, the demo film and `/demo`, Free / Pro / Pro Plus as website content, a development-only design preview (`/preview…`). | component-tested in jsdom: 1218 tests (2026-10-13); typecheck, lint and production build clean; the 1.2 features owner-reported on an iPhone; the redesign **not iPhone-tested** |
 | `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login + an ES256-signing controller simulator + a fake extension; now also the manual-input scenarios (grant_update, ordering, replay/stale rejections reaching the phone, lease expiry releasing a held button, takeover, revocation, keyboard-only grant, no typed text on disk). | integration-tested (Linux): 23 passed in 227 s (incl. 3 manual-input tests and the load smoke: 400 commands in 10.18 s = 39 cmd/s, p50 986 ms, p95 1199 ms, RSS 208 → 212 MiB) |
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. Optional passphrase gate (`DEV_IDP_PASSPHRASE`) for the test kit: the right passphrase always works, wrong ones never lock anyone out; readable refusal page for browsers. | unit-tested: 14 tests (run in CI) |
 | `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. Since then run by the owner on Windows 11 with quick tunnels and an iPhone (§0, §4) |
-| `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension and tray use the exports; the installer wiring is pending. | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
-| `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | written against the real commands; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed, or run on GitHub Actions (no Fly account here) |
+| `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension, tray, both Windows programs, Setup and the Start menu shortcut use the exports (the last three since 2026-10-13, awaiting the first Windows build). | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
+| `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | CI runs on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green; the Windows job runs the pipe, native-host, tray and adapter tests); `windows-installer.yml` (2026-10-13) awaits its first run; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed (no Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
 ## 2. Running everything on a fresh machine
@@ -177,8 +177,9 @@ unless stated.
 - **Windows**: the adapters in `pc-agent/dome_agent/platform/windows/*` have run only on the owner's PC,
   through the test kit, for the features the owner reported above (volume, YouTube via Edge, apps and
   their windows, lock, touchpad, keyboard). Power (sleep, restart, shut down), start-at-login and the
-  Windows media-session fallback are not reported. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the
-  manual checklist at the end of `pc-agent/README.md`.
+  Windows media-session fallback are not reported. The PyInstaller folder has been built and run only
+  on Linux; the Windows build and the installer await their first `windows-installer.yml` run. Follow
+  `docs/WINDOWS_INSTALL.md` and the manual checklist at the end of `pc-agent/README.md`.
 - **Manual input on real devices**: `SendInput` injection, multi-monitor and mixed-DPI motion, pointer
   acceleration, UAC/lock/elevated-window refusal, the named mutex and repair have not run on Windows;
   the touchpad gestures (pointer capture order, two-finger tap), the phone keyboard (IME, autocorrect,
@@ -209,8 +210,9 @@ unless stated.
 - **Pro features**: routines and layouts have tables and plan limits but no API routes or execution;
   the Routines page is an explicitly labelled preview.
 - **Operator tooling**: `OperatorUser`/`OperatorAudit` tables exist, nothing is served.
-- **CI**: `.github/workflows/ci.yml` was written against the real commands but has not run on GitHub
-  Actions yet.
+- **CI**: `.github/workflows/ci.yml` runs on GitHub Actions (since 2026-10-11; 13 runs by 2026-10-13,
+  12 green, the one failure fixed by afdc130). `.github/workflows/windows-installer.yml` (the installer
+  build and smoke test) has not run yet.
 
 ## 5. Failures and quirks met during development (so you do not re-discover them)
 
@@ -297,15 +299,25 @@ Finish polish round 2 of the redesign first (checkpoint 6d76945); then:
    building; it keeps the rest of §7: its own contract MINOR, a new consent version, the action
    challenge-confirmed, pointer and keyboard primitives human-only. The film's point-and-talk (a finger
    on the Screen view picture) also needs #52. The website says "Planned" until then.
-4. **Windows installer**: none exists, and the PyInstaller specs have never been built
-   (`pc-agent/README.md`). It must set `DOME_AGENT_API_URL=https://domeremote.com` (the agent has no
-   built-in address), register the native host under HKCU, use `brand/exports/windows/dome.ico`
-   (`brand/KNOWN_ISSUES.md` 6), and before public release needs Authenticode signing and a verified
-   update path (`docs/SECURITY.md` T12). The Download page says "not yet published" until then.
+4. **Windows installer — pulled forward, in progress (2026-10-13)**: written ahead of items 1–3, which
+   keep their order. What exists: one PyInstaller folder for `DoMe.exe` and `dome-native-host.exe`
+   (`pc-agent/packaging/dome-agent.spec`, `dome.ico` wired in), a per-user Inno Setup installer
+   (`pc-agent/packaging/installer/DoMe.iss`: no admin, the server address in `dome-server.json` for
+   `DoMe.exe link`, the native host under HKCU when an extension id exists, start at login opt-in, an
+   upgrade that asks DoMe to quit and changes nothing when it does not, downgrade refusal, uninstall
+   cleanup that keeps the settings unless asked), `DoMe.exe quit` / `start-at-login`, and
+   `.github/workflows/windows-installer.yml`, which builds it and smoke-tests install, tray, upgrades and
+   uninstalls on windows-latest (`docs/WINDOWS_INSTALL.md` "The installer"). Next: the first green
+   `windows-installer.yml` run (fix what it reports); the founder installs it on his Windows 11 PC as a
+   standard user; a tray "Link this PC…" item; a Chrome Web Store / Edge Add-ons listing, then the
+   production extension id in the release build; Authenticode signing (most likely Azure Trusted
+   Signing) in a separate protected job; an Inno Setup commercial licence before paid launch; an updater
+   with signature verification (`docs/SECURITY.md` T12). The Download page says "not yet published" until
+   signing exists.
 5. **Domain and staging**: create the Fly apps, then carry out `deploy/README.md` "Domain" (DNS-only
    records for Fly, redirect rules for `.app` and `www`, DNSSEC, identity-provider callbacks) and the
    staging steps there: PostgreSQL, Auth0 or Keycloak, `DOME_TRUSTED_PROXIES`, the entitlement signing
-   key; enable the GitHub Actions workflow and fix what it reports.
+   key. (The GitHub Actions workflows already run on every push.)
 6. **Device evidence**: record the owner's Windows 11 + iPhone results in `docs/ACCEPTANCE.md` with build
    and iOS versions; still to report: sleep, restart, shut down, and the redesign and film on the iPhone
    (`mobile-app/README.md` checklist). The manual checklists in `pc-agent/README.md`,

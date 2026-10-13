@@ -4,9 +4,10 @@
 # the ones documented in each component's README / Makefile. It runs on pushes to main and to
 # claude/** branches, on pull requests, and by hand (workflow_dispatch).
 #
-# STATUS: written against the real commands and validated locally with actionlint; it has NOT
-# yet run on GitHub Actions. No secrets are used or needed: the suites run against a PostgreSQL
-# service container and the in-repository development identity provider (tools/dev-idp).
+# STATUS: running on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green). No
+# secrets are used or needed: the suites run against a PostgreSQL service container and the
+# in-repository development identity provider (tools/dev-idp). The Windows installer has its own
+# workflow, windows-installer.yml, which runs the same Windows test list before it builds anything.
 #
 # Actions are pinned to the commit of a release tag that was resolved on 2026-10-09
 # (`git ls-remote --tags`); the comment carries the tag.
@@ -163,32 +164,12 @@ jobs:
         working-directory: pc-agent
         run: uv run mypy --config-file mypy-windows.ini
 
-      - name: pc-agent - pytest (overlapped named pipes, dome-native-host.exe, named mutex, Windows adapters, tray window)
+      - name: pc-agent - pytest (overlapped named pipes, dome-native-host.exe, named mutex, Windows adapters, tray window, installer commands)
         working-directory: pc-agent
         timeout-minutes: 15
-        run: >-
-          uv run pytest -q -p no:cacheprovider
-          tests/test_ipc_duplex.py
-          tests/test_processes.py
-          tests/test_bridge.py
-          tests/test_control_cli_misc.py
-          tests/test_single_instance.py
-          tests/test_windows_volume.py
-          tests/test_windows_media.py
-          tests/test_windows_power.py
-          tests/test_windows_session.py
-          tests/test_windows_startup.py
-          tests/test_ipc_pipe_logic.py
-          tests/test_native_host.py
-          tests/test_status_reporting.py
-          tests/test_extension_protocol_parity.py
-          tests/test_windows_state_read_failures.py
-          tests/test_windows_window_control.py
-          tests/test_windows_input_layout.py
-          tests/test_youtube_search.py
-          tests/test_app_approval_local.py
-          tests/test_app_fullscreen_f11.py
-          tests/test_tray_apps_window.py
+        # The list lives in tests/windows_suite.txt (one test file per line), shared with
+        # windows-installer.yml; quoted, because a bare @ is PowerShell syntax.
+        run: uv run pytest -q -p no:cacheprovider '@tests/windows_suite.txt'
 
   node:
     name: Node (shared/ts, mobile-app, browser-extension)

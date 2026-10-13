@@ -294,3 +294,57 @@
     and the Tk window test skips with that reason. Tests that run a real Tk on a worker thread quit the root
     and never destroy it: destroying it and then freeing it from another thread aborts the process
     ("Tcl_AsyncDelete: async handler deleted by the wrong thread"), reproduced under Xvfb.
+51. **One PyInstaller folder for both programs; the contract without its test fixtures.**
+    `packaging/dome-agent.spec` builds `DoMe.exe` and `dome-native-host.exe` into one COLLECT
+    (`dist\DoMe\`, sharing `_internal\`); `dome-native-host.spec` is gone. While DoMe is stopped the
+    browser starts the host every 1–8 s and then every 30 s (browser-extension K5): a one-file host
+    would unpack ~10 MB to `%TEMP%\_MEI*` on every start, trigger antivirus rescans, leak folders when
+    killed and start slower than the 10 s hello deadline. `install-native-host` already looks for the host
+    next to `DoMe.exe`. The bundled contract is `actions/errors/plans/version.json` + `schemas/` only:
+    the old spec shipped `shared/protocol/fixtures`, including a test private key, and
+    `build_installer.py` now fails if any private key is in the folder. Both programs carry
+    `brand/exports/windows/dome.ico`; the spec stops if it is missing.
+52. **`quit` and `start-at-login` exist for Setup; Setup never kills DoMe.** `dome-agent quit` is the
+    tray's Quit DoMe (control op `quit`), then waits until the agent's pid has exited and the instance
+    lock is free (`single_instance.wait_for_exit`); when the lock is held but the control channel does not
+    answer it retries for up to 10 s (DoMe may be starting) and then exits 1 without touching it. Setup
+    runs `uninstall-native-host` and `quit` before it replaces files and stops with "DoMe is still running
+    and did not close" (exit code 7, nothing changed, the host registered again) when DoMe still holds its
+    `Local\DoMe.Agent.<session>` mutex; the uninstaller asks the user to quit DoMe and stops on Cancel.
+    Restart Manager stays a backstop for other files only: pystray's window ignores `WM_CLOSE`. Every
+    DoMe.exe Setup runs gets 60 s (CreateProcess + a message-pumping wait in `[Code]`); only that command
+    is terminated after it. `start-at-login on|off|status` uses the tray's adapter and `startup_command()`,
+    so the Run value is exactly what the tray reads; it does not write the store's unused copy.
+    `start-at-login`, `install-native-host` and `uninstall-native-host` build only the adapter they need
+    (`platform.build_startup` / `build_native_host_registrar`, not the whole platform) and, like `quit`,
+    create no state folder, so an uninstall for someone who never started DoMe leaves nothing behind.
+53. **`install-native-host` and `repair` keep the extension already registered here** when no production
+    id and no `DOME_AGENT_DEV_EXTENSION_ID` exist (`bridge.manifest.resolve_origins`): an upgrade
+    unregisters the host while it replaces files and must register it again, and the tray's Repair failed
+    without the environment variable. Only a well-formed `com.dome.agent` manifest whose every origin is a
+    `chrome-extension://<32 a-p>/` origin is trusted; it is the user's own file, so this adds no trust. A
+    build with production ids never reads it.
+54. **The server address comes from `dome-server.json`, not an environment variable.** Setup writes
+    `{"api_url": "https://domeremote.com"}` (or a development build's `/ApiUrl=`, remembered for upgrades)
+    next to `DoMe.exe`; only `link` reads it (`settings.installed_api_url`, frozen builds only, https
+    origins only), after `--api-url` and `DOME_AGENT_API_URL`. A persistent `DOME_AGENT_API_URL` would
+    override the addresses the service returned at link time for every later run (`agent.py`), so a PC
+    linked through the test kit would send its test credential to production, get a 401 and discard it.
+    Setup also removes every `DOME_AGENT_*` variable from the environment of the programs it runs.
+55. **Uninstall keeps `%LOCALAPPDATA%\DoMe` by default — a reasoned deviation from spec §15.** The
+    uninstaller always removes the program, the native-host keys and manifest, start at login and
+    `StartupApproved`, but deletes the link, the DPAPI key and credential, the paired phones and their
+    touchpad/keyboard grants, the approved apps and the logs only when the user answers Yes (default No)
+    or a silent uninstall passes `/REMOVEDATA`. Deleting them is irreversible (the PC must be linked and
+    every phone paired again) and the same folder holds the test kit's link; a reinstall should just
+    work. The final message tells the user to remove the PC in the phone app (the agent cannot unlink
+    itself on the service) and the browser add-on. Kept data is still protected by DPAPI (current user).
+    Empty `logs`/`secrets`/`diagnostics` folders and an empty `%LOCALAPPDATA%\DoMe` are removed.
+56. **A crash in a frozen program never shows the bootloader's modal box.** Both entry scripts run through
+    `crashguard.run_guarded`: an exception ends in `<state dir>/logs/crash.log` (and stderr when there is
+    one) and exit code 70; `SystemExit` (argparse) passes through. Setup waits for its DoMe.exe commands
+    and the browser starts the host in the background: a box nobody sees would block them. Only the tray
+    (`run` without `--headless`) shows a short plain-English message with the file's path. A frozen
+    `DOME_AGENT_PLATFORM=fake` (excluded `dome_agent.testing`) now ends this way too, and Setup clears
+    that variable anyway. `cli._flush_stdout` makes `link` and `pair` work without a stdout (a windowed
+    `DoMe.exe` started from the Start menu has none).

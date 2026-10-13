@@ -20,17 +20,22 @@
    PWA manifest (`theme_color`, `background_color`) and the `theme-color` meta tags. They belong to the
    app's theme work (BRAND.md §2 recommends the page backgrounds and DoMe Blue); this component did not
    change them.
-6. **PyInstaller `icon=` is still `None`** in `pc-agent/packaging/*.spec`: the executable and
-   shortcut icon do not use `exports/windows/dome.ico` yet (copy it next to the spec and set `icon=`;
-   needs a Windows build to verify). The tray PNG is bundled (`dome_agent/assets`).
+6. **Resolved in the spec, to be confirmed on the first Windows build (2026-10-13).**
+   `pc-agent/packaging/dome-agent.spec` sets `icon=` to `exports/windows/dome.ico` for `DoMe.exe` and
+   `dome-native-host.exe` (read from here, not copied; the build stops if it is missing), and the
+   installer uses it for Setup, the uninstaller and the Start menu shortcut. The installer smoke test
+   checks that every image of `dome.ico` is inside both programs. The tray PNG is bundled
+   (`dome_agent/assets`).
 7. **The wordmark is not a font.** Any text that is not the lockup uses the system stack; there is no
    way to "type" DoMe in the logo's letters, by design (BRAND.md §3). New lockups (e.g. "DoMe for
    YouTube") are drawn as paths in a new SVG within the subset.
 8. **The subset parser is intentionally narrow.** No `transform`, `style`, `text`, gradients, filters,
    masks, clip paths or rotated arcs. Editing an SVG in a design tool that writes those will make
    `pnpm export` fail with a clear message; flatten the file back to the subset (BRAND.md §7).
-9. **Installer-specific artwork** (wizard side banners, header bitmaps in BMP) is not produced; it
-   depends on the installer toolkit chosen for `pc-agent` and can be made from the wordmark PNGs.
+9. **Installer-specific artwork** (wizard side banners, header bitmaps in BMP) is not produced. The
+   installer is Inno Setup 6 (`pc-agent/packaging/installer/DoMe.iss`) and uses its default modern
+   wizard images with the DoMe icon; `WizardImageFile` / `WizardSmallImageFile` can take BMPs made from
+   the wordmark PNGs once approved artwork exists.
 10. **`pnpm export` writes bytes that depend on Node's bundled zlib.** `--check` and the tests compare
     pixels (D13), so a different Node does not report drift, but re-running `pnpm export` on another
     Node may rewrite the PNG/ICO files with different compressed bytes and identical pixels. Commit

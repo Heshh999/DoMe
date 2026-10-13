@@ -19,12 +19,18 @@
     grant CONTROLLER_ID [--pointer] [--keyboard] [--remove-pointer] [--remove-keyboard]
                             allow/withdraw manual touchpad (pointer) / keyboard input for a paired phone
     stop-input              end the live manual-input session on this PC and release what it holds
-    install-native-host     register the Chrome/Edge native-messaging manifest (per user)
+    install-native-host     register the Chrome/Edge native-messaging manifest (per user); without an
+                            extension id it keeps the one already registered on this PC
     uninstall-native-host
     repair                  re-register the native host and clean stale local endpoints; keeps identity,
                             credential, grants and approved apps; never kills a process
     reconnect               manual reconnect (after another agent superseded this one)
     diagnostics             write a redacted diagnostics bundle
+    quit [--timeout S]      ask the running DoMe of this Windows session to quit (the tray's Quit DoMe) and
+                            wait until it has; exit 0 when it stopped or was not running, 1 otherwise;
+                            never kills a process (Setup and its uninstaller use it)
+    start-at-login on|off|status
+                            the tray's "Start at login" (HKCU Run value DoMe) from the command line
     version
 
 ``run`` is single-instance per Windows user session: a second launch asks the running agent to show
@@ -50,16 +56,32 @@ from dome_protocol import ProtocolError
 
 from . import __version__
 from .logsetup import configure_logging, get_logger
-from .settings import Settings, load_settings
+from .settings import Settings, installed_api_url, load_settings
 
 log = get_logger(__name__)
 
+QUIT_PING_PATIENCE = 10.0  # a DoMe that holds the lock but does not answer yet may still be starting
+
+
+def _settings_only(args: argparse.Namespace) -> Settings:
+    """Settings without creating the state folders: for the commands Setup's uninstaller runs, so that
+    uninstalling DoMe for someone who never started it leaves no empty %LOCALAPPDATA%\\DoMe behind."""
+    state_dir = Path(args.state_dir).expanduser() if getattr(args, "state_dir", None) else None
+    return load_settings(state_dir=state_dir)
+
 
 def _settings(args: argparse.Namespace) -> Settings:
-    state_dir = Path(args.state_dir).expanduser() if getattr(args, "state_dir", None) else None
-    settings = load_settings(state_dir=state_dir)
+    settings = _settings_only(args)
     settings.ensure_dirs()
     return settings
+
+
+def _flush_stdout() -> None:
+    """Flush what was printed so far. A windowed DoMe.exe started without redirected output (the Start
+    menu, Setup) has no stdout at all (``sys.stdout is None``): print() is then a no-op, but calling
+    ``sys.stdout.flush()`` would raise and end the command."""
+    if sys.stdout is not None:
+        sys.stdout.flush()
 
 
 def _print(obj: Any) -> None:
@@ -171,7 +193,8 @@ def _run_locked(args: argparse.Namespace, settings: Settings, headless: bool) ->
 def cmd_link(args: argparse.Namespace) -> int:
     settings = _settings(args)
     configure_logging(settings.log_level, settings.log_path)
-    api_url = args.api_url or settings.api_url
+    # Setup's dome-server.json (installed DoMe.exe only) comes last: an explicit address always wins.
+    api_url = args.api_url or settings.api_url or installed_api_url()
     if not api_url:
         print("error: set DOME_AGENT_API_URL or pass --api-url", file=sys.stderr)
         return 2
@@ -190,7 +213,7 @@ def cmd_link(args: argparse.Namespace) -> int:
         print(f"\n    {start.user_code}\n")
         print(f"Or open: {start.verification_uri_complete}")
         print(f"The code expires in {start.expires_in // 60} minutes. Waiting for approval…")
-        sys.stdout.flush()
+        _flush_stdout()
 
     async def _main() -> int:
         api = ApiClient(api_url)
@@ -323,7 +346,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
     if args.no_wait:
         return 0
     print("Waiting for the phone…")
-    sys.stdout.flush()
+    _flush_stdout()
     deadline = time.time() + args.timeout
     try:
         pending = _wait_for_request(ctl, started["pairing_id"], deadline)
@@ -748,27 +771,31 @@ def cmd_diagnostics(args: argparse.Namespace) -> int:
 
 
 def cmd_install_native_host(args: argparse.Namespace) -> int:
-    settings = _settings(args)
-    from .bridge.manifest import HOST_NAME, allowed_origins, write_manifest
-    from .platform import build_platform
+    settings = _settings_only(args)
+    from .bridge.manifest import HOST_NAME, resolve_origins, write_manifest
+    from .platform import build_native_host_registrar
     from .tray import host_executable_path
 
     host_path = Path(args.host_path).resolve() if args.host_path else host_executable_path()
     if not host_path.exists():
         print(f"error: native host executable not found at {host_path} (pass --host-path)", file=sys.stderr)
         return 1
+    manifest_file = settings.state_dir / f"{HOST_NAME}.json"
     try:
-        origins = allowed_origins(settings.dev_extension_id)
+        # the production ids, DOME_AGENT_DEV_EXTENSION_ID, or the extension already registered on this PC
+        origins = resolve_origins(manifest_file, settings.dev_extension_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    manifest_path = write_manifest(settings.state_dir / f"{HOST_NAME}.json", host_path, origins)
-    platform = build_platform(settings)
     try:
-        written = platform.native_host.install(manifest_path)
+        manifest_path = write_manifest(manifest_file, host_path, origins)
+        written = build_native_host_registrar(settings).install(manifest_path)
     except ProtocolError as exc:
-        print(f"Manifest written to {manifest_path}; registry registration skipped: {exc.message}")
+        print(f"Manifest written to {manifest_file}; registry registration skipped: {exc.message}")
         return 0
+    except OSError as exc:
+        print(f"error: could not register the native host: {exc}", file=sys.stderr)
+        return 1
     print(f"Manifest written to {manifest_path}")
     for location in written:
         print(f"Registered {location}")
@@ -776,16 +803,85 @@ def cmd_install_native_host(args: argparse.Namespace) -> int:
 
 
 def cmd_uninstall_native_host(args: argparse.Namespace) -> int:
-    settings = _settings(args)
-    from .platform import build_platform
+    settings = _settings_only(args)
+    from .platform import build_native_host_registrar
 
     try:
-        removed = build_platform(settings).native_host.uninstall()
+        removed = build_native_host_registrar(settings).uninstall()
     except ProtocolError as exc:
         print(f"Nothing to remove here: {exc.message}")
         return 0
+    except OSError as exc:  # e.g. access denied: Setup's uninstaller then deletes the keys itself
+        print(f"error: could not remove the native host registration: {exc}", file=sys.stderr)
+        return 1
     for location in removed:
         print(f"Removed {location}")
+    return 0
+
+
+def cmd_quit(args: argparse.Namespace) -> int:
+    """The tray's Quit DoMe from the command line: ask the running agent of this Windows session to stop,
+    then wait until its process has exited and the instance lock is free. Never terminates anything."""
+    settings = _settings_only(args)
+    from .control import ControlError
+    from .single_instance import lock_held_by_other, wait_for_exit
+
+    client = _control(settings)
+    patience = time.monotonic() + min(QUIT_PING_PATIENCE, max(0.0, args.timeout))
+    while True:
+        try:
+            pong = client.call("ping")
+            break
+        except ControlError:
+            if not lock_held_by_other(settings.state_dir):
+                print("DoMe is not running in this session.")
+                return 0
+            if time.monotonic() >= patience:
+                print(
+                    "DoMe is running in this session but did not answer, so it was not stopped. Quit it from its "
+                    "icon next to the clock (right-click, Quit DoMe)."
+                )
+                return 1
+            time.sleep(0.5)
+    pid = pong.get("pid") if isinstance(pong, dict) else None
+    try:
+        client.call("quit")
+    except ControlError as exc:
+        if exc.code != "AGENT_DISCONNECTED":  # it may close the pipe while it stops: that is fine
+            print(f"error: {exc.message}", file=sys.stderr)
+            return 1
+    if wait_for_exit(settings.state_dir, pid if isinstance(pid, int) else None, timeout=args.timeout):
+        print("DoMe has quit.")
+        return 0
+    print(f"DoMe did not quit within {args.timeout:g} seconds; nothing was force-closed.")
+    return 1
+
+
+def cmd_start_at_login(args: argparse.Namespace) -> int:
+    """The tray's "Start at login" tick: the HKCU Run value ``DoMe`` (the registry is the source of truth;
+    the tray reads it back). Setup turns it on when its option is ticked; the uninstaller turns it off."""
+    settings = _settings_only(args)
+    from .platform import build_startup
+
+    startup = build_startup(settings)
+    try:
+        if args.action == "status":
+            print("on" if startup.get_start_at_login() else "off")
+        elif args.action == "on":
+            from .tray import startup_command
+
+            command = startup_command()
+            startup.set_start_at_login(True, command)
+            print(f"Start at login is on: {command}")
+        else:
+            startup.set_start_at_login(False, "")
+            print("Start at login is off.")
+    except ProtocolError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -913,6 +1009,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("reconnect", help="reconnect to the relay").set_defaults(fn=cmd_reconnect)
     sub.add_parser("diagnostics", help="write a redacted diagnostics bundle").set_defaults(fn=cmd_diagnostics)
+
+    p = sub.add_parser(
+        "quit", help="ask the running DoMe in this Windows session to quit and wait until it has (never kills)"
+    )
+    p.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for it to stop (default 20)")
+    p.set_defaults(fn=cmd_quit)
+
+    p = sub.add_parser("start-at-login", help="turn 'Start DoMe at login' on or off, or show it")
+    p.add_argument("action", choices=("on", "off", "status"))
+    p.set_defaults(fn=cmd_start_at_login)
+
     sub.add_parser("version").set_defaults(fn=cmd_version)
     return parser
 

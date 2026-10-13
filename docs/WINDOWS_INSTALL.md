@@ -1,16 +1,103 @@
 # DoMe on Windows — install, run, uninstall
 
-Status: **pre-release engineering build. Nothing in this document has been Windows-device-tested.**
-Every Windows API path in `pc-agent/dome_agent/platform/windows/` is implemented against the real
-Windows APIs and unit-tested on Linux behind an explicit fake platform (`DOME_AGENT_PLATFORM=fake`,
-256 passed and 1 skipped at the last full run recorded in `pc-agent/README.md`), but the agent has never been started on a Windows machine, the
-PyInstaller specs have never been built, and there is no installer package yet. This document
-describes what the agent does and the install, run and uninstall steps **as the code implements
-them today**; the last section lists what is still blocked. Evidence tags follow
+Status: **pre-release engineering build. No formal Windows-device-tested pass is recorded.** Every
+Windows API path in `pc-agent/dome_agent/platform/windows/` is implemented against the real Windows
+APIs and unit-tested on Linux behind an explicit fake platform (`DOME_AGENT_PLATFORM=fake`); the owner
+has run the agent from source on his Windows 11 PC through the test kit (`docs/HANDOFF.md` §4). A
+per-user installer, `DoMe-Setup-<version>.exe`, now exists (next section): GitHub Actions builds it on a
+Windows Server runner and smoke-tests install, upgrade and uninstall there. Installer evidence: **not
+yet verified — awaiting the first `windows-installer.yml` run** (a runner, not a PC). This document
+describes what the agent does and the install, run and uninstall steps **as the code implements them
+today**; the last section lists what is still blocked. Evidence tags follow
 `docs/spec/MASTER_PROMPT.md` §17.
 
 Related: `pc-agent/README.md` (developer view and the manual verification checklist),
 `docs/IPHONE_SETUP.md` (the phone side), `docs/TROUBLESHOOTING.md`, `docs/ARCHITECTURE.md`.
+
+## The installer (DoMe-Setup.exe) — start here
+
+This is the normal way to put DoMe on a Windows PC. It needs no administrator rights and installs DoMe
+only for the Windows account that runs it.
+
+**Getting it.** Every time the PC code changes, GitHub builds the installer and tests it on a Windows
+machine. To download the newest one: open the repository on GitHub, click **Actions**, then **Windows
+installer**, open the newest run with a green tick, and under **Artifacts** download
+`DoMe-Setup-<version>+<code>` (you need to be signed in to GitHub). Unzip it. You get
+`DoMe-Setup-<version>.exe`, `SHA256SUMS` and `BUILD-INFO.txt` (which build this is). To check that the
+file arrived undamaged, run this in PowerShell and compare the result with the line in `SHA256SUMS`:
+
+```powershell
+Get-FileHash .\DoMe-Setup-0.1.0.exe -Algorithm SHA256
+```
+
+**Installing.** Double-click `DoMe-Setup-<version>.exe`. Do **not** choose "Run as administrator":
+DoMe belongs to the account you use every day (if Setup is started as an administrator, it asks first).
+Setup:
+
+- puts DoMe in `%LOCALAPPDATA%\Programs\DoMe` and adds **DoMe** to the Start menu;
+- offers **Start DoMe when I sign in to Windows** (unticked; tick it if you want DoMe running all the
+  time);
+- tells DoMe which server to use: `https://domeremote.com`, written to `dome-server.json` in that folder;
+- connects the YouTube browser add-on when it can. Until the add-on is in the Chrome and Edge stores it
+  cannot, and Setup shows a page that says so; everything else is installed;
+- offers **Start DoMe now** at the end. DoMe then sits in the notification area, next to the clock.
+
+**The blue "Windows protected your PC" warning is expected for now.** The test build is not signed yet.
+For your own test build from GitHub you can click **More info**, then **Run anyway**. Customers must
+never be asked to do this: public downloads wait for signing.
+
+**Linking.** This test version cannot connect to your DoMe account by itself yet: linking needs the
+DoMe service at domeremote.com, which is not live yet. Until then, use the test kit
+(`testkit/README.md`). Later, in PowerShell: `& "$env:LOCALAPPDATA\Programs\DoMe\DoMe.exe" link | Out-Host`;
+a "Link this PC" item in DoMe's menu will follow.
+
+**Updating.** Run a newer `DoMe-Setup` over the old one. It closes DoMe first (the same as **Quit
+DoMe**) and keeps your link, paired phones and settings. If DoMe does not close, Setup stops without
+changing anything and asks you to quit DoMe from its icon, then run Setup again. An older Setup refuses
+to install over a newer DoMe; uninstall first if you really want to go back.
+
+**Uninstalling.** Settings → Apps → DoMe → Uninstall. It closes DoMe, removes the program, the Start
+menu entry, the browser registration and Start at login, and asks whether to also remove DoMe's
+settings from this PC (the link to your account, the phones you allowed, the approved apps, the logs).
+**No** (the default) keeps them, so a reinstall works straight away; **Yes** removes them. Uninstalling
+does not remove the PC from your DoMe account: do that in the DoMe app on your phone (Devices). If you
+added the browser add-on, remove it in `chrome://extensions` or `edge://extensions`.
+
+**The test kit and the installer on the same PC.** Both use the same settings folder
+(`%LOCALAPPDATA%\DoMe`), the same browser registration and the same "one DoMe at a time" rule. Quit one
+before starting the other. Answering **Yes** to the uninstaller's question also deletes the test kit's
+link. The installer sets no environment variable, so it never changes which server the test kit uses.
+
+**Options for testers.** Type them after the file name in PowerShell
+(`.\DoMe-Setup-0.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`). The last two work only in the
+development builds that GitHub makes today; a release build (`build_installer.py --release`) ignores
+them.
+
+| Option | What it does |
+| --- | --- |
+| `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` | install with no windows |
+| `/MERGETASKS=startatlogin` | tick "Start DoMe when I sign in" |
+| `/LOG=C:\path\setup.log` | write Setup's log there |
+| `/ApiUrl=https://staging.domeremote.com` | use another DoMe server (https only; upgrades keep it) |
+| `/ExtensionId=<32 letters a-p>` | connect a development browser add-on (the id the test kit prints) |
+
+The uninstaller, `%LOCALAPPDATA%\Programs\DoMe\unins000.exe`, takes `/VERYSILENT /SUPPRESSMSGBOXES`
+and `/REMOVEDATA` (also delete the settings).
+
+**What the installer does not do yet**: it is not signed (Authenticode); it has no automatic updates;
+the YouTube add-on is not in the stores, so there is no production add-on id; DoMe's menu has no
+"Link this PC" item; it has been tested only on GitHub's Windows Server machine, where the account is an
+administrator, not yet on a Windows 10 or 11 PC by a standard user; and Inno Setup's makers ask
+commercial users to buy a licence, which DoMe needs before it is sold. Evidence: **not yet verified**
+until the first green `windows-installer.yml` run; after that, "built and smoke-tested on the GitHub
+windows-latest runner (administrator, UAC off); not yet tested on a Windows 10/11 PC".
+
+How it is built (developers): `pc-agent/packaging/installer/build_installer.py` runs PyInstaller on
+`pc-agent/packaging/dome-agent.spec` (one folder with `DoMe.exe`, `dome-native-host.exe` and
+`_internal\`) and compiles `pc-agent/packaging/installer/DoMe.iss` with Inno Setup 6;
+`pc-agent/packaging/installer/smoke_test.py` is the test the workflow runs. Every DoMe.exe command
+Setup runs gets 60 seconds, and Setup never stops DoMe itself: it asks it to quit
+(`DoMe.exe quit`). Decisions: `pc-agent/DECISIONS.md` 51–56.
 
 ## 1. What the DoMe agent is and is not
 
@@ -63,10 +150,12 @@ changes). Treat all of this as the checklist for the first device pass, not as a
 
 | Item | Location | Created by |
 | --- | --- | --- |
+| Program folder | `%LOCALAPPDATA%\Programs\DoMe`: `DoMe.exe`, `dome-native-host.exe`, `_internal\` (Python and the libraries), `unins000.exe`/`.dat`, `dome-server.json` (the server address `DoMe.exe link` falls back to) | Setup |
+| Start menu entry and uninstall entry | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\DoMe.lnk`; `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{FD238776-147F-4CCF-B2CA-4AC5F30A07FF}_is1` (Settings → Apps) | Setup |
 | State directory | `%LOCALAPPDATA%\DoMe` (override: `DOME_AGENT_STATE_DIR` or `--state-dir`) | first command |
 | Local database | `%LOCALAPPDATA%\DoMe\state.sqlite3` (settings, locally approved phones, bounded command journal, confirmation challenges, approved apps, pending power action, pending revocations, local security events) | first command |
 | PC identity key and account credential | `%LOCALAPPDATA%\DoMe\secrets\pc_key.bin` (P-256 private key) and `pc_credential.bin` — each **DPAPI-protected (current user)** via `CryptProtectData`; decryptable only by the same Windows user on the same machine | `DoMe.exe link` |
-| Logs | `%LOCALAPPDATA%\DoMe\logs\agent.log`, redacted JSON lines, 2 MB × 3 rotations | `run` |
+| Logs | `%LOCALAPPDATA%\DoMe\logs\agent.log`, redacted JSON lines, 2 MB × 3 rotations; `native-host.log`; `crash.log` only after an unexpected error in the installed programs (traceback, exit code 70) | `run`, the native host |
 | Diagnostics bundles | `%LOCALAPPDATA%\DoMe\diagnostics\dome-diagnostics-<timestamp>.json` | tray *Diagnostics…* or `DoMe.exe diagnostics` |
 | Native-messaging manifest | `%LOCALAPPDATA%\DoMe\com.dome.agent.json` | `install-native-host` |
 | Native-host registration | `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.dome.agent` (default value = manifest path) | `install-native-host` |
@@ -75,31 +164,34 @@ changes). Treat all of this as the checklist for the first device pass, not as a
 | Input recovery file | `%LOCALAPPDATA%\DoMe\input_holds.json` — only while the phone holds a button or key: session id, phone id and the held button/key **names**, never typed text; deleted when released | `run` |
 | Local IPC endpoints | Named pipes `\\.\pipe\DoMe.Agent.<hash>` (browser bridge) and `\\.\pipe\DoMe.Control.<hash>` (CLI ⇄ agent), DACL restricted to the current user and checked for the same session | `run` |
 
-No `HKLM` keys, no services, no scheduled tasks, no Program Files writes are made by the agent itself.
+No `HKLM` keys, no services, no scheduled tasks, no Program Files writes are made by the agent or by
+Setup, and Setup sets no environment variable.
 
-## 4. Install — as implemented today
+## 4. Install — the manual steps
 
-There is **no installer**. The steps below are what exists: build the two executables from source on a
-Windows machine, then run the commands the agent provides. (On Linux/macOS, see §8.)
+The installer (previous section) does §4.1, §4.3 (when an extension id is available) and §4.7 for you.
+The steps below are the manual way, for source installs and the test kit. (On Linux/macOS, see §8.)
 
-### 4.1 Build `DoMe.exe` and `dome-native-host.exe` (not yet run anywhere)
+### 4.1 Build `DoMe.exe` and `dome-native-host.exe`
 
-Prerequisites on the build PC: Python 3.12, [`uv`](https://docs.astral.sh/uv/), the repository.
+Prerequisites on the build PC: Python 3.12, [`uv`](https://docs.astral.sh/uv/), the repository, and
+Inno Setup 6 for the installer.
 
 ```bat
 cd pc-agent
-uv venv --python 3.12
-uv sync --extra dev --extra build
-.venv\Scripts\pyinstaller packaging\dome-agent.spec
-.venv\Scripts\pyinstaller packaging\dome-native-host.spec
+uv sync --locked --extra build
+uv run --no-sync python packaging\installer\build_installer.py --pyinstaller-only
 ```
 
-Expected outputs: `dist\DoMe\DoMe.exe` (one-folder build, `console=False`, tray application; `DoMe.exe`
-without arguments means `run`) and `dist\dome-native-host.exe` (single file, `console=False` so Chrome
-never flashes a console window). **Copy `dome-native-host.exe` next to `DoMe.exe`**: `install-native-host`
-looks for it there (`dome_agent/tray.py::host_executable_path`). The shared protocol contract is
-bundled into both as `dome_protocol/_contract`. Evidence: **not yet verified** (the specs exist;
-PyInstaller has never been executed in this repository's environment).
+Output: one folder, `dist\DoMe\`, holding `DoMe.exe` (`console=False`, tray application; `DoMe.exe`
+without arguments means `run`), `dome-native-host.exe` (`console=False`, so the browser never flashes a
+console window) and the `_internal\` runtime they share; `install-native-host` finds the host next to
+`DoMe.exe` (`dome_agent/tray.py::host_executable_path`), so nothing needs copying. The protocol contract
+is bundled as `dome_protocol/_contract` (without the test fixtures and their test key; the script checks
+that). Without `--pyinstaller-only` the same script also compiles the installer into
+`dist\installer\`. Evidence: the folder was built and run on Linux (`DoMe version`, the native host,
+a `bridge_hello` round trip, `DoMe quit`); the Windows build: **not yet verified — awaiting the first
+`windows-installer.yml` run**.
 
 Alternative without PyInstaller (developer PC): `uv sync --extra dev` and use
 `.venv\Scripts\dome-agent.exe` / `.venv\Scripts\dome-native-host.exe` in place of the two executables.
@@ -151,8 +243,10 @@ This writes `%LOCALAPPDATA%\DoMe\com.dome.agent.json`:
 and sets the two `HKCU` registry keys listed in §3. `allowed_origins` is the production extension id
 baked into the build (`dome_agent/bridge/manifest.py::PRODUCTION_EXTENSION_IDS`, **empty in source**
 until a Chrome Web Store listing fixes the key) plus the development id from
-`DOME_AGENT_DEV_EXTENSION_ID`. With neither, the command refuses with
-`no extension id available …`. The agent never downloads this list.
+`DOME_AGENT_DEV_EXTENSION_ID`. With neither, it keeps the extension of the manifest already registered
+on this PC (Setup's `/ExtensionId=`, or the test kit), so upgrades and `repair` keep a development
+extension working; with none of these, the command refuses with `no extension id available …`. The
+agent never downloads this list.
 
 The extension itself is loaded unpacked for now (`browser-extension/README.md` → "Load unpacked"):
 `pnpm build` on any machine, copy `browser-extension/dist` to the PC, `chrome://extensions` →
@@ -160,7 +254,7 @@ Developer mode → Load unpacked. Unpacked ids are derived from the folder path,
 it is or pin a `"key"` in the manifest. Evidence: **not yet verified** in a real browser.
 
 `DoMe.exe uninstall-native-host` deletes the two registry keys (the manifest file is removed with the
-state directory).
+state directory, or by the uninstaller).
 
 ### 4.4 Run the agent
 
@@ -176,7 +270,8 @@ connection, extension, entitlement and paired-phone summary (`--json` for machin
 without the agent running.
 
 Environment variables (none are secrets): `DOME_AGENT_API_URL` / `DOME_AGENT_RELAY_URL` override the
-URLs stored at link time; `DOME_AGENT_STATE_DIR`; `DOME_AGENT_LOG_LEVEL`; `DOME_AGENT_HEADLESS=1` (no
+URLs stored at link time (so the installer does not set them: `DoMe.exe link` falls back to
+`dome-server.json` next to the installed `DoMe.exe` instead); `DOME_AGENT_STATE_DIR`; `DOME_AGENT_LOG_LEVEL`; `DOME_AGENT_HEADLESS=1` (no
 tray); `DOME_AGENT_DEV_EXTENSION_ID`. `DOME_AGENT_PLATFORM=fake` selects the test double and is never
 set by anything that ships.
 
@@ -206,7 +301,9 @@ approvals.
 ### 4.7 Start at login (opt-in)
 
 Tray → **Start at login** (checked = on). Writes `HKCU\…\Run\DoMe` with `"<DoMe.exe>" run`; unticking
-deletes the value. Nothing is written by default. Evidence: **not yet verified** (registry code only).
+deletes the value. Nothing is written by default. `DoMe.exe start-at-login on|off|status` does the same
+from a console (Setup uses it for its opt-in option; the uninstaller turns it off). Evidence: **not yet
+verified** on a PC (unit-tested with a stand-in for the registry).
 
 ### 4.8 Emergency stop
 
@@ -294,9 +391,25 @@ finished. Pairing, grants and approved apps were preserved; nothing was terminat
 needs the local approval. Evidence: **integration-tested** on Linux with a running agent; registry
 re-registration on Windows **not yet verified**.
 
-## 5. Uninstall — as implemented today
+### 4.12 Quit from a console or a script
 
-There is no uninstaller; the steps mirror what the install created:
+```bat
+DoMe.exe quit
+DoMe.exe quit --timeout 30
+```
+
+The tray's **Quit DoMe** from the command line: it asks the DoMe of this Windows session to quit, waits
+until its process has ended (20 s by default) and prints "DoMe has quit." (exit code 0), "DoMe is not
+running in this session." (0), or that it did not answer or did not quit (1). It never terminates a
+process. Setup and the uninstaller run it before they replace or remove files. Evidence:
+**integration-tested** on Linux (a real agent process stops cleanly); Windows: in the installer smoke
+test, **not yet verified**.
+
+## 5. Uninstall — the manual steps
+
+The uninstaller (Settings → Apps → DoMe) does all of this for an installed DoMe (see "The installer");
+it keeps `%LOCALAPPDATA%\DoMe` unless you answer Yes or pass `/REMOVEDATA` (`pc-agent/DECISIONS.md` 55).
+For a source or test-kit install, the steps mirror what the install created:
 
 1. Tray → **Quit DoMe** (or close the headless process). Any armed power countdown is cancelled on exit.
 2. Optionally first revoke the phones from the phone (Devices → Revoke) or unlink the PC (Devices →
@@ -310,7 +423,9 @@ There is no uninstaller; the steps mirror what the install created:
 6. Remove the DoMe extension from `chrome://extensions` / `edge://extensions` and delete the
    `DoMe.exe` folder.
 
-Spec §15 asks for installer-driven cleanup of all of the above; that packaging work is still open (§9).
+Spec §15 asks for installer-driven cleanup of all of the above: the uninstaller does steps 1, 3, 4 and
+(when you answer Yes) 5; steps 2 and 6 stay with you, because the agent cannot unlink itself on the
+service and Setup cannot remove a browser add-on.
 
 ## 6. Day-to-day behaviour worth knowing
 
@@ -384,10 +499,12 @@ test `tests/test_processes.py::test_native_host_process_forwards_frames` (**unit
 
 | Item | Status | What unblocks it |
 | --- | --- | --- |
-| Building `DoMe.exe` / `dome-native-host.exe` | PyInstaller specs written, never run | A Windows build machine; fix whatever the first build reports |
-| Installer package (MSI/MSIX/Inno) with uninstall cleanup | Not started; manual steps only (§4–5) | Choose a packaging tool; it must register the native host, offer the start-at-login opt-in, and remove `HKCU` keys, credentials and pairing state on uninstall (spec §15) |
-| **Code signing** (Authenticode) | Not possible here: needs the founder's publisher certificate/account | Without it SmartScreen will warn on an unsigned `DoMe.exe`; **never instruct customers to disable antivirus or SmartScreen** — ship signed builds instead |
-| Update mechanism with a signed manifest, downgrade rejection, staged rollout | Not implemented (spec §15); the agent has no updater | A maintained update framework plus the signing key; version negotiation on `hello` already exists so mixed versions fail clearly (`PROTOCOL_INCOMPATIBLE`) |
+| Building `DoMe.exe` / `dome-native-host.exe` | One PyInstaller folder (`dome-agent.spec`); built and run on Linux; built on Windows by `windows-installer.yml` | The first green `windows-installer.yml` run; fix whatever it reports |
+| Installer with uninstall cleanup | Inno Setup per-user installer (`pc-agent/packaging/installer/DoMe.iss`): native host, start-at-login opt-in, upgrade that quits DoMe first, downgrade refusal, uninstall cleanup; smoke-tested by CI, **awaiting its first run**; never run on a PC by a standard user | The first green run, then the founder installs it on his Windows 11 PC |
+| Linking from the tray | `DoMe.exe link` works only from a console; the tray says "Not linked — run DoMe link" | A tray "Link this PC…" item (small change), and domeremote.com live |
+| **Code signing** (Authenticode) | Not possible here: needs the founder's publisher certificate/account. `build_installer.py --sign-thumbprint` is ready but deliberately not wired into CI | A certificate (most likely Azure Trusted Signing), then a separate, protected signing job. Without it SmartScreen warns; **never instruct customers to disable antivirus or SmartScreen** — ship signed builds instead |
+| Update mechanism with a signed manifest, downgrade rejection, staged rollout | Not implemented (spec §15); the agent has no updater. Setup refuses to install over a newer version, but an unsigned installer is no protection against tampering | A maintained update framework plus the signing key; version negotiation on `hello` already exists so mixed versions fail clearly (`PROTOCOL_INCOMPATIBLE`) |
+| Inno Setup licence | Free for non-commercial use; its makers ask commercial users to buy a licence | Buy one before the paid launch |
 | Production extension id | `PRODUCTION_EXTENSION_IDS` is empty; only `DOME_AGENT_DEV_EXTENSION_ID` works | Chrome Web Store listing (founder account), pin its `"key"` in `browser-extension/public/manifest.json`, bake the id into the release build |
 | Public download page | `mobile-app` download links are disabled with "coming soon" | A signed build to link to |
 | Windows device evidence | None | The checklist in §7 |

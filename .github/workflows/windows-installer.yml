@@ -1,0 +1,164 @@
+# Windows installer: runs the pc-agent Windows tests, builds DoMe.exe and dome-native-host.exe with
+# PyInstaller (one folder, pc-agent/packaging/dome-agent.spec), compiles the per-user Inno Setup 6
+# installer (pc-agent/packaging/installer/DoMe.iss) and smoke-tests it on the runner
+# (pc-agent/packaging/installer/smoke_test.py): a silent install, its files and HKCU entries, the frozen
+# programs, a native-messaging round trip, the tray and a second launch, an upgrade over the running
+# tray, an upgrade while DoMe will not quit (Setup must change nothing), a refused downgrade, a refused
+# http:// server address, and silent uninstalls with and without /REMOVEDATA. Uploads
+# DoMe-Setup-<version>.exe with SHA256SUMS and BUILD-INFO.txt (only when the smoke test passed), and the
+# logs (always).
+#
+# The runner is an administrator with UAC off, so this proves the installer works there; it does not
+# replace a test on a real Windows 10/11 PC as a standard user.
+#
+# The installer is an UNSIGNED development build. No secrets are used. Code signing is deliberately not
+# wired in here: when the founder has a certificate (most likely Azure Trusted Signing), it goes into a
+# separate job behind a protected GitHub environment that signs the smoke-tested files and runs no tests
+# or third-party build code while the key is available (build_installer.py already has the
+# --sign-thumbprint hook).
+#
+# The Windows test list is pc-agent/tests/windows_suite.txt, shared with ci.yml's pc-agent-windows job.
+# Actions are pinned to the commit of a release tag (re-checked with `git ls-remote --tags` on
+# 2026-10-13); the comment carries the tag.
+
+name: Windows installer
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "pc-agent/**"
+      - "shared/python/**"
+      - "shared/protocol/**"
+      - "brand/exports/windows/**"
+      - ".github/workflows/windows-installer.yml"
+  pull_request:
+    paths:
+      - "pc-agent/**"
+      - "shared/python/**"
+      - "shared/protocol/**"
+      - "brand/exports/windows/**"
+      - ".github/workflows/windows-installer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"      # same as ci.yml and the uv.lock files
+  PYTHON_VERSION: "3.12"     # pc-agent requires <3.13
+  FORCE_COLOR: "1"
+
+jobs:
+  tests:
+    # The same Windows tests as ci.yml's pc-agent-windows job (pc-agent/tests/windows_suite.txt), so an
+    # installer is only ever built from code whose Windows tests passed in this run.
+    name: pc-agent tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync
+        working-directory: pc-agent
+        run: uv sync --locked --extra dev
+
+      - name: pc-agent - mypy (Windows code paths)
+        working-directory: pc-agent
+        run: uv run mypy --config-file mypy-windows.ini
+
+      - name: pc-agent - pytest (Windows set, tests/windows_suite.txt)
+        working-directory: pc-agent
+        timeout-minutes: 15
+        # The @file names one test file per line; quoted, because a bare @ is PowerShell syntax.
+        run: uv run pytest -q -p no:cacheprovider '@tests/windows_suite.txt'
+
+  installer:
+    name: Build and smoke-test DoMe-Setup
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync with the build extra (PyInstaller from the lock)
+        working-directory: pc-agent
+        run: uv sync --locked --extra build
+
+      - name: Find the Inno Setup 6 compiler
+        run: |
+          $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe' }
+          $version = if (Test-Path -LiteralPath $iscc) { [string](Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion } else { '' }
+          if (-not $version.StartsWith('6.')) {
+            Write-Host "Inno Setup 6 not found (found '$iscc' version '$version'); installing 6.7.1 with Chocolatey."
+            choco install innosetup --version 6.7.1 --allow-downgrade -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed (exit code $LASTEXITCODE)" }
+            $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+            if (-not (Test-Path -LiteralPath $iscc)) { throw "ISCC.exe not found at $iscc" }
+            $version = [string](Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
+          }
+          Write-Host "Inno Setup compiler: $iscc ($version)"
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build DoMe.exe, dome-native-host.exe and DoMe-Setup.exe (unsigned development build)
+        id: build
+        working-directory: pc-agent
+        timeout-minutes: 25
+        run: |
+          uv run --no-sync python packaging/installer/build_installer.py --iscc "$env:ISCC"
+          if ($LASTEXITCODE -ne 0) { throw "build_installer.py failed (exit code $LASTEXITCODE)" }
+
+      - name: Smoke-test the installer (install, checks, tray, upgrades, uninstalls)
+        working-directory: pc-agent
+        timeout-minutes: 30
+        env:
+          SETUP_EXE: ${{ steps.build.outputs.setup }}
+          SETUP_VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          uv run --no-sync python -I packaging/installer/smoke_test.py full --setup "$env:SETUP_EXE" --version "$env:SETUP_VERSION" --log-dir "$env:RUNNER_TEMP\installer-smoke"
+          if ($LASTEXITCODE -ne 0) { throw "installer smoke test failed (exit code $LASTEXITCODE)" }
+
+      - name: Upload DoMe-Setup, SHA256SUMS and BUILD-INFO.txt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.build.outputs.artifact_name }}
+          path: |
+            pc-agent/dist/installer/DoMe-Setup-*.exe
+            pc-agent/dist/installer/SHA256SUMS
+            pc-agent/dist/installer/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the smoke-test logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installer-smoke-logs
+          path: |
+            ${{ runner.temp }}/installer-smoke/
+            pc-agent/build/pyinstaller/**/warn-*.txt
+          if-no-files-found: warn
+          retention-days: 30
