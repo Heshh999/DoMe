@@ -4,7 +4,8 @@
  *
  *   node scripts/export-film.mjs --out <dir> [--base <url>] [--fps 30] [--only wide|vertical] [--record] [--quick]
  *
- * Output (in --out): dome-demo-1080p.webm + .mp4 (1920×1080), dome-demo-vertical.webm + .mp4 (1080×1920), poster.png.
+ * Output (in --out, default: <tmp>/dome-film-export; exports are never committed): dome-demo-1080p.webm + .mp4
+ * (1920×1080), dome-demo-vertical.webm + .mp4 (1080×1920), poster.png (scene 1's still, 1920×1080).
  *
  * How: the page /demo?export=1 renders the film chrome-less and installs `window.__domeFilm` (seek / play / pause).
  * Every frame of the film is a pure function of the clock, so the default mode steps the clock frame by frame
@@ -18,8 +19,9 @@
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,7 +46,8 @@ const flag = (name, fallback) => {
 };
 const has = (name) => args.includes(name);
 
-const OUT = resolve(flag("--out", join(appDir, "film-export")));
+// exports are never committed: without --out they go to the system's temp folder
+const OUT = resolve(flag("--out", join(tmpdir(), "dome-film-export")));
 const FPS = Number(flag("--fps", has("--quick") ? "10" : "30"));
 const ONLY = flag("--only", null);
 const RECORD = has("--record");
@@ -165,6 +168,7 @@ async function exportRecording(browser, layout, base) {
   const webm = join(OUT, `${layout.name}.webm`);
   await run(FFMPEG, ["-y", "-loglevel", "error", "-ss", lead.toFixed(3), "-i", raw, "-t", (total / 1000).toFixed(3), "-r", String(FPS), "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
   await run(FFMPEG, ["-y", "-loglevel", "error", "-i", mp4, "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "31", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1", "-pix_fmt", "yuv420p", "-an", webm]);
+  rmSync(dir, { recursive: true, force: true });
   return [mp4, webm];
 }
 
