@@ -2,10 +2,11 @@
 
 The customer-facing web app: public website (landing with the demo film, `/demo`, pricing, FAQ,
 download, support, release notes/known issues, privacy/terms drafts) plus the installable remote
-(`/app/*`). React 19,
-TypeScript 5.9, Vite 7, Tailwind CSS 4, React Router 7, zustand, idb, vite-plugin-pwa, Vitest +
-Testing Library. Depends on the shared protocol library `@dome/protocol` (`link:../shared/ts`),
-protocol **1.1** (manual touchpad/keyboard, spec §10A).
+(`/app/*`), both in the "Midnight Studio" design (light and dark). React 19, TypeScript 5.9, Vite 7,
+Tailwind CSS 4, React Router 7, zustand, idb, vite-plugin-pwa, Vitest + Testing Library. Depends on
+the shared protocol library `@dome/protocol` (`link:../shared/ts`), protocol **1.2** (1.1: manual
+touchpad/keyboard, spec §10A; 1.2: window controls and YouTube search). Production origin:
+`https://domeremote.com` (website, PWA, API and WebSockets on one host; `deploy/README.md` "Domain").
 
 Design: `docs/design/mobile-app.md` and `docs/design/input-control.md` §5. Decisions made here:
 `DECISIONS.md`. Deferred items: `KNOWN_ISSUES.md`. Contract observations: `CONTRACT_ISSUES.md`.
@@ -25,21 +26,160 @@ pnpm gen:validators          # regenerate src/protocol/generated/ after a protoc
 pnpm gen:icons               # install the brand icon renders (brand/icon.svg via brand/exports) into public/icons
 ```
 
-**Design preview (development only).** With `pnpm dev` running, open `http://localhost:5173/preview`
-(or `/preview/remote`, `/preview/assistant`, …): this tab then runs the real app — pages, stores,
-runtime, relay client, signing and the butler — against a fake account and a fake PC from
-`src/dev/preview.ts` ("Living Room PC" online, YouTube playing in Edge, volume 40, approved apps ZStream,
-Edge and Spotify, a short butler conversation). No backend is needed; buttons get believable answers.
-`/preview/off` leaves it. `main.tsx` loads that module only under `import.meta.env.DEV`, and
-`pnpm build`'s bundle check fails if it ever reaches `dist/`.
+To look at every app screen without a backend, use the design preview (`/preview`, below). To export
+the demo film as video files, see "The demo film" below.
 
 Run cloud-api locally on port 8000 with `DOME_PUBLIC_ORIGIN=http://localhost:5173` (and
 `tools/dev-idp` as the OIDC issuer) so sign-in redirects back to the dev server. In production the
 built `dist/` is served by cloud-api from the same origin (`DOME_STATIC_DIR`); there is no CORS setup.
+`index.html` carries Open Graph / Twitter tags with the absolute preview image
+`https://domeremote.com/og-image.png` (1200×630, kept out of the PWA precache); `public/robots.txt`
+keeps `/app`, the device links and the API out of search engines and `public/sitemap.xml` lists exactly
+the public routes (`test/public/domain.test.ts` keeps it in step with the router).
 
 Environment (all optional, see `vite-env.d.ts`): `VITE_DOME_API_ORIGIN` (unusual: API on another
 origin), `VITE_DOME_RELEASE_CHANNEL`, `VITE_DOME_SUPPORT_URL` (an additional direct contact shown on
 Support pages; the in-app ticket form works without it).
+
+## Design system and themes ("Midnight Studio", DECISIONS 55–60)
+
+- **Tokens** live in `src/styles.css` only: colour roles `--dome-color-*` (bg, bg-elevated, bg-raised,
+  bg-sunken, surface, border, border-strong, control-edge, text, text-muted, text-faint, logo-ink, accent,
+  primary, on-primary, coral, success, warning, danger, info, focus), `--dome-card-*`, `--dome-shadow-*`,
+  `--dome-bar-fill` (tab bar and Ask dock: 98 % opaque, with an opaque fallback where `backdrop-filter` is
+  missing), `--dome-radius-*`, `--dome-section`, `--dome-ease` and `--dome-dur*`. `@theme inline` maps them
+  to Tailwind names (`bg-bg`, `text-text-muted`, `rounded-card` …); the type scale is `text-display`,
+  `text-h1`, `text-h2`, `text-title`, `text-caption`.
+- **Light** is the base: #f6f8fc page, white cards with a soft Navy-tinted shadow, Navy #001441 text.
+  **Dark** is the brand's Navy as the page, translucent "glass" cards and a soft DoMe Blue glow at the top
+  (`.dome-backdrop`). `.dome-dark` gives one region the dark palette in either theme (the website's Navy
+  bands, the phone picture, the film stage). Where these values differ from the surface tokens that
+  `brand/BRAND.md` recommends, BRAND.md §2 lists what shipped.
+- **Rules**: one solid DoMe Blue control per screen, the primary action (`.dome-primary`); icon wells are
+  tinted (`IconWell`), not gradients; Coral only as tiny accents (the active tab's dot, a status dot, the
+  logo's cursor); 44 px targets; motion is a short ease-out, all of it off under `prefers-reduced-motion`;
+  WCAG AA contrast in both themes on the composited values (DECISIONS 55).
+- **Building blocks**: `components/ui.tsx` (Button, IconButton, Card, Pill, Chip, PageHeader, HeaderPill,
+  BackLink, IconWell, Segmented, ListCard, ListRow, KeyValue, CheckRow, SectionLabel, EmptyState, Field,
+  Toggle, Notice, Steps, Spinner), `components/icons.tsx` (one 24-unit line set; append, never rename),
+  `components/brand.tsx` (Wordmark, BrandMark, AppIcon from `brandPaths.ts`, which a test compares with
+  `brand/*.svg`). Website CSS is `src/styles/public.css` (every rule under `.dome-public`, imported by
+  `PublicLayout`); the film's is `src/styles/film.css`.
+- **CSP** (cloud-api `security/headers.py`: `default-src 'self'`, `style-src 'self'`, `img-src 'self'
+  data:` …): no inline `<script>` or `<style>` elements and no external fonts, images or scripts; React
+  `style={{…}}` props are fine. Type is the system stack (SF Pro on Apple devices); no font is bundled.
+- **Theme switch**: Light / Auto / Dark (website header, menu and footer; More in the app). Nothing stored
+  means follow the device; a choice is stored as `dome.theme` and applied before the first paint by
+  `public/theme-init.js` (external and render-blocking, because the CSP forbids an inline head script), which
+  also sets `<meta name="theme-color">` (#f6f8fc light, #001441 dark). The dark palette is written twice
+  in `styles.css` (`prefers-color-scheme: dark` without a saved light choice, and `[data-theme=dark]`); a
+  test keeps the two blocks identical.
+
+## Design preview (development only, DECISIONS 59)
+
+With `pnpm dev` running, `/preview…` runs the real app (pages, stores, runtime, relay client, command
+signing and the butler) against a fake account and a fake PC in `src/dev/preview.ts`. No backend is
+needed and nothing talks to a network. The fixture: "Living Room PC" online, YouTube playing in Edge,
+volume 40, approved apps ZStream, Edge and Spotify, a second paired phone, Free's AI taste (4 of 10 used)
+and a short butler conversation that types itself in.
+
+| Route | Shows |
+| --- | --- |
+| `/preview` | Home |
+| `/preview/remote` | Remote (YouTube tab with a live scrubber, Spotify paused, search answers) |
+| `/preview/assistant` | Ask (the butler conversation) |
+| `/preview/apps` | Apps (ZStream and Edge running, Spotify closed; every button answers) |
+| `/preview/devices`, `/preview/devices/pair` | Devices; Pair (type `ABCDE-FGHJK-MNPQR-STVWX` → details → waiting for approval) |
+| `/preview/settings` | Settings & help (AI on; the consent sheet opens) |
+| `/preview/health` | Connection health (Retry and the walkthrough work) |
+| `/preview/billing` | Billing (the Free plan) |
+| `/preview/command`, `/preview/touchpad` | Type a command (plans run on the fake PC); Touchpad (a live input session, keyboard panel) |
+| `/preview/routines`, `/preview/layouts`, `/preview/more` | Routines and Custom remotes (Pro previews); More |
+| `/preview/link?user_code=ABCD-EFGH` | Link a PC (preview answers; approving is not in the preview) |
+
+Flags on any route: `?offline=1` (the offline screen), `?confirm=1` (the PC asks this phone to confirm
+closing Edge: the global confirmation modal), `?pc=offline` (the PC went offline 3 hours ago: Home and
+Remote say what to do, and a command fails with PC_OFFLINE as the relay would answer). `/preview/off`
+leaves preview mode, which lasts for this tab only. `PREVIEW_ROUTES` and `PREVIEW_FLAGS` in `preview.ts`
+are the list; `test/previewRoutes.test.ts` checks that each route exists, that every `/app` page has one
+and that the offline PC answers a command with PC_OFFLINE. Extend the fixtures there when a page needs more state. `main.tsx` imports the module only under
+`import.meta.env.DEV`, a test forbids any static import of `src/dev/`, and `scripts/check-bundle.ts` fails
+`pnpm build` if its marker (`dome-design-preview`) reaches `dist/`.
+
+## The demo film (`src/components/film/`, `/demo`, DECISIONS 61)
+
+A 66-second web animation (SVG + CSS + the design tokens; no video file, no external asset), muted and
+captioned. It plays on the home page ("See it in action", right after the hero) and full-width at
+`/demo`. Six scenes (`timeline.ts`): 1 Across the room (0–8 s), 2 Just ask (8–22 s), 3 Screen view
+(22–40 s), 4 Point-and-talk (40–50 s), 5 Pick your plan (50–60 s), 6 the DoMe Remote end card (60–66 s).
+Each scene's chip says what exists (DECISIONS 63): remote control and the AI butler "Available now",
+Screen view "Coming", point-and-talk "Planned", Pro and Pro Plus "arrive at paid launch". Under the film:
+"Concept preview. Screen view and point-and-talk are in development." Scene 5's plan facts come from
+`content/plans.ts`.
+
+- One clock (`useFilmClock`) drives the stage; every frame is a pure function of the time (`script.ts`
+  holds every beat), so stills, scene jumps and exports are exact.
+- Controls: play/pause, scene chips, a thin progress bar, replay; the frame takes Space / Enter / K,
+  ← / →, Home and 1–6. Captions are a polite live region that stays silent until the visitor starts the
+  film or picks a scene.
+- Autoplay only while at least half of the frame is visible (85 % in the vertical layout); paused while
+  the page is hidden; scene 1's still is the poster. Under `prefers-reduced-motion` the film is a
+  storyboard of stills with Previous / Next.
+- Layouts (`layout.ts`): `wide` 16:9, and `vertical` 9:16 below 600 px (`VERTICAL_BELOW_PX`) or when
+  forced, with a tall caption band under a larger phone.
+- `/demo` query flags: `?scene=N&paused=1` (scene N's still), `?t=<ms>&paused=1` (any moment),
+  `?layout=vertical|wide`, `?export=1` (no page chrome, controls hidden, deterministic from t = 0, and
+  `window.__domeFilm` with seek / play / pause for the export script).
+
+**Export to video.** The files are for sharing and social posts; they are never committed and never
+served by the site.
+
+```sh
+pnpm build                                      # the script serves dist/ with `vite preview` unless --base is given
+node scripts/export-film.mjs --out ~/dome-film  # without --out: <system temp>/dome-film-export
+# options: --base <url>   --fps 30   --only wide|vertical   --quick (10 fps)   --record
+```
+
+Output: `dome-demo-1080p.mp4` + `.webm` (1920×1080), `dome-demo-vertical.mp4` + `.webm` (1080×1920) and
+`poster.png` (scene 1's still). The default mode seeks the film clock frame by frame, screenshots each
+frame with Playwright and pipes the PNGs into ffmpeg: constant 30 fps, every frame sharp, the same result
+on every run (about 9 MB per MP4, 66.0 s). `--record` instead uses Playwright's real-time `recordVideo`
+screencast and trims the lead-in where the recording shows the film starting; its timing and quality are
+the screencast's, so it is a fallback only. Tools: `playwright-core` (this package or `/opt/node-tools`),
+a Chromium headless shell (`DOME_CHROMIUM`) and ffmpeg (`FFMPEG`, `FFPROBE`; default `/usr/bin/ffmpeg`).
+Check an export by pulling frames:
+`ffmpeg -ss 17.6 -i dome-demo-1080p.mp4 -frames:v 1 frame.png` (each scene's `still` time is in
+`timeline.ts`).
+
+## Plan content (`src/content/plans.ts`, `src/lib/pricing.ts`; DECISIONS 62–63)
+
+Free / Pro / Pro Plus as static copy: the owner's decisions of 2026-10-12, not yet metered or sold.
+
+| | Free | Pro | Pro Plus |
+| --- | --- | --- | --- |
+| Status | "Available now" (chip) | "Coming at paid launch" (status line, not a button) | same as Pro |
+| Price (USD, before tax) | $0 | $9.99 / month or $99.99 / year | $24.99 / month or $249.99 / year |
+| PCs / phones | 1 / 2 | 5 / 5 | 5 / 5 |
+| Screen view ("Coming") | 10 minutes per 5-hour window | unlimited | unlimited |
+| AI butler | one-time taste of 10 requests | 30 per 5-hour window, up to 120 per week | 90 per 5-hour window, up to 300 per week |
+| Top-up | — | 100 AI requests for $2.99, only when bought | same |
+
+- The module holds the figures, the plain-words allowance rules (`AI_RULES`: what one request is,
+  everyday commands never count, the windows, the taste, top-ups, privacy, billing) and the status
+  constants `AVAILABLE_NOW`, `COMING_AT_PAID_LAUNCH`, `SCREEN_VIEW_STATUS` ("Coming") and
+  `POINT_AND_TALK_STATUS` ("Planned").
+- Readers: the pricing page and its comparison table (`lib/pricing.ts → pricingGroups()`), the FAQ, the
+  home page's plan teaser, the film's scene 5 and `/demo`, the in-app Billing page and `ProExplanation`.
+  One module means they cannot disagree.
+- Device counts and routine limits are read from the contract (`PLANS` from `@dome/protocol`, i.e.
+  `shared/protocol/plans.json`), which the server enforces. The contract has no Pro Plus plan yet, so Pro
+  Plus shows Pro's counts.
+- Nothing here meters, sells or unlocks anything. Until the metering task (#51) lands, the server applies
+  `plans.json` (a monthly AI allowance, 0 in the committed file; `pricing_defaults` still the old $5.99 /
+  $49.99 experiment), and Settings words Free's allowance as "N of 10 AI requests to try used" (no
+  renewal promised) while paid plans keep the monthly wording (`allowanceLine` in `lib/assistant.ts`).
+- `test/public/plans.test.ts` pins the figures; the PricingPage, FaqPage, BillingPage, UpgradeAndHealth and
+  film tests check that every surface shows them with their labels.
 
 ## Layout
 
@@ -280,15 +420,37 @@ scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key mate
 - **Upgrade experience** (component-tested): no upgrade copy, modal or banner on Dashboard, Remote,
   Touchpad, Devices, Health or the shell (online or offline); Routines and Custom remotes (deliberate
   selections from More) show one dismissible `ProExplanation` naming the benefit and never a
-  connectivity claim.
+  connectivity claim (dismissal is remembered). It and the Billing page take the paid plans' prices and
+  "coming at paid launch" from `content/plans.ts`; nothing can be bought or charged from the app.
 - **Brand**: `pnpm gen:icons` installs the brand icon (`brand/icon.svg`) renders into `public/icons`
   (192/512 + maskable, apple-touch-icon, favicon SVG/PNG/ICO); manifest and `index.html` updated.
 - **PWA / theme / accessibility**: `autoUpdate` worker precaching the shell only; 44 px targets; safe
   areas; reduced motion. Theme ("Midnight Studio", DECISIONS 55): follows the device by default; the
   Light / Auto / Dark switch (website header, menu and footer; More in the app) is remembered in
-  `localStorage` (`dome.theme`) and applied before the first paint by `public/theme-init.js`.
+  `localStorage` (`dome.theme`) and applied before the first paint by `public/theme-init.js` (see
+  "Design system and themes" above).
 
 ## Tests
+
+`pnpm test` — **68 files / 1218 tests, all passing** (2026-10-13, at commit 6d76945; `pnpm typecheck`,
+`pnpm lint` and `pnpm build` with its bundle check also clean).
+
+Design A rollout, film and plan content (2026-10-12/13): `test/public/` — `plans` (every figure, the
+contract-derived device counts, the status constants, the rules' wording), `PricingPage` (three cards,
+"Available now" chip, paid plans as status lines and never buttons, the grouped comparison, "Coming" on
+Screen view), `FaqPage`, `PublicLayout` (nav, skip link, menu, theme switch, page titles), `pages` (the
+other public pages and their caveats), `domain` (canonical origin, robots, sitemap = the router's public
+routes, preview image not precached) and `heroLayout.browser` (the hero's toast never covers a call to
+action or the caveat at 1024–1920 px, measured in headless Chromium; skipped where Playwright is not
+installed). `test/film/` — `timeline` (scene boundaries, stills, chips and their labels, plan facts from
+`plans.ts`; no recording, screenshot or AI-vision claim in the film's words), `Film` (controls, keyboard,
+captions silent until played, the end card's real links, the storyboard under reduced motion, export
+mode, the vertical layout), `DemoPage` (query flags, export mode) and `LandingPage` (the film right after
+the hero, Screen view listed as Coming, the plan teaser). Autoplay-in-view is not covered: jsdom has no
+IntersectionObserver, so it was only looked at in a browser. Also `components/BillingPage` (the website's prices
+and "coming at paid launch", no purchase control), `previewRoutes` (every preview route exists, every
+`/app` page is covered, the offline PC answers PC_OFFLINE) and `styles-bars` (bar fills ≥ 0.9 in both
+themes, the no-`backdrop-filter` fallback, tinted icon wells).
 
 Voice assistant (step 1): `assistantPlan` (equivalence with typed words, app resolution, refusals, plan
 rules, `commandText` round trip for every AI-eligible action, the shared fixture
@@ -306,8 +468,8 @@ thinking, tags, allowance chip, banners, XSS, dictation, the dock spacer) and `A
 entries).
 `parseCommand`'s clarifications gained a `topic`; three expectations in `intents.grammar` name it.
 
-`pnpm test` — **51 files / 1116 tests, all passing** (jsdom, fake-indexeddb, fake sockets/timers; no
-network). New in 1.2: `commands`/`confirmations` (each action stamped with its `since`, verified by the
+At protocol 1.2 and the Assistant (2026-10-11) the suite was 51 files / 1116 tests (jsdom,
+fake-indexeddb, fake sockets/timers; no network). New in 1.2: `commands`/`confirmations` (each action stamped with its `since`, verified by the
 real verifier; confirmations carry the command's stamp), `protocol-parity` (`since` per action, 1.2
 params/targets/results, a below-`since` stamp refused), `targets` (search target: chosen tab, new tab,
 browser choice; results-tab target), `labels` (1.2 labels, steps, help categories, result summaries),
@@ -363,6 +525,7 @@ Nothing below has been run on a device. Each row is **not yet verified**.
 | Real relay path | With cloud-api + pc-agent running: Next changes the video in a background tab; result shows the transition. |
 | Confirmation on device | Sleep… → modal shows the registry line, the fixed loss-of-access / no-remote-wake copy and the PC's countdown detail; Approve → "Windows accepted the request". |
 | Lighthouse/PWA audit | Installability, contrast ≥ 4.5:1, touch target sizes on a real iPhone; 5-tab bar legible at 375 px; both themes. |
+| Redesign and film on iPhone | Safari and the Home Screen app, Light, Auto and Dark: no flash of the wrong theme on launch; Home, Remote, Ask, Touchpad fit above the tab bar and dock with nothing showing through them; website home, `/demo` and `/pricing` have no sideways scroll at 375–430 px; the film starts only once scrolled into view, pauses when the tab is hidden and restacks to the vertical layout; with Reduce Motion on, the storyboard of stills. |
 
 ### Manual iPhone checklist — voice assistant (docs/design/assistant.md §8.6)
 

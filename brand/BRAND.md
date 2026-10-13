@@ -80,7 +80,8 @@ Contrast (WCAG 2 formula on the hex values, rounded; not device-measured):
 
 Derived neutrals are Navy-tinted greys so the interface reads as one family with the logo. The PWA
 implements its own theme in `mobile-app/src/styles.css`; these are the brand's recommendation for it
-and for the website's light/dark switch (which should also follow `prefers-color-scheme`).
+and for the website's light/dark switch (which should also follow `prefers-color-scheme`). The shipped
+theme differs in places, mostly in dark; see "As shipped" below.
 
 | Token | Dark theme | Light theme | Notes |
 | --- | --- | --- | --- |
@@ -96,6 +97,32 @@ and for the website's light/dark switch (which should also follow `prefers-color
 | Primary button | DoMe Blue fill, white label (6.6 : 1) | DoMe Blue fill, white label (6.6 : 1) | Same in both themes: the brand colour is the action colour |
 | Brand panel / hero band | Navy `#001441` with `wordmark-dark.svg` | White or the page colour with `wordmark.svg` | |
 | Coral | the cursor; at most a small dot or a single highlight per screen | same | 6.4 : 1 on the dark page; 3.1 : 1 on white, so never text on light surfaces |
+
+### As shipped: the website and PWA ("Midnight Studio", 2026-10-12)
+
+The design the owner chose (mobile-app DECISIONS 55 and 60) uses **Navy itself as the dark page**
+instead of the near-black above, with translucent "glass" cards and a soft DoMe Blue glow, so the dark
+theme is the logo's own background; the design review judged a near-black page generic. Light changed
+only slightly. The values in `mobile-app/src/styles.css` are the ones in use; this table lists where they
+differ from the recommendation. Contrast is computed with the WCAG 2 formula on composited values, not
+device-measured.
+
+| Token | Dark: recommended → shipped | Light: recommended → shipped |
+| --- | --- | --- |
+| Page background | `#060b1d` → Navy `#001441` | `#f6f8fc` (unchanged) |
+| Surface (cards) | `#0d1631` → white at 7.5–8 % over the page (composites to about `#142750`) | `#ffffff` (unchanged); filled controls use `#eff3fa` |
+| Raised surface | `#142046` → `#0b2156` | `#ffffff` (unchanged) |
+| Subtle / sunken fill | `#111c3b` → `#000c2e` | `#eef2f9` → `#edf1f8` |
+| Hairline border | `#22305a` → white at 9 % | `#dce3ef` → Navy at 8 % |
+| Text primary | `#f4f6fb` → `#f3f6fd` (16.5 : 1 on the page, 13.5 : 1 on a card) | Navy (unchanged) |
+| Text secondary | `#a9b4cf` → `#b2bfdd` (9.7 : 1; 7.9 : 1) | `#4a5878` → `#44527a` (7.2 : 1 on the page) |
+| Text tertiary | `#7d89a8` → `#8f9dc4` (6.6 : 1; 5.4 : 1) | `#647191` → `#5d6b8e` (5.0 : 1 on the page, 4.8 : 1 on `#eff3fa`) |
+| Accent (links, focus, selected) | `#6e9bff` → `#86abff` (7.9 : 1; 6.5 : 1) | DoMe Blue (unchanged) |
+| Primary button | unchanged: DoMe Blue fill, white label (6.6 : 1) | unchanged |
+| `theme-color` | Navy `#001441` | `#f6f8fc` |
+
+Coral stays a small accent in the shipped UI: the logo's cursor, the active tab's dot, the listening
+ring and status dots; never a fill and never text.
 
 Status colours (success/warning/danger) are product UI tokens, not brand colours; the tray's
 connection-state badge colours stay as the agent defines them.
@@ -196,7 +223,7 @@ export's paint luminance against its suffix.
 | Windows tray (default) | `exports/windows/tray-16.png`, `tray-32.png`, `tray-48.png`, `tray-256.png` (the colour tile, RGBA) | `pc-agent/dome_agent/tray.py` loads its copy of `tray-256.png` and draws the connection state as a small badge (status-coloured dot in a white ring) in the bottom-right corner; Windows scales it to the tray size. If the PNG cannot be read, the tray draws a simplified tile itself. |
 | Windows tray (fallback: high-contrast / monochrome only) | `exports/windows/tray-mono-on-dark-16.png` … `-256.png` (white silhouette, for dark taskbars) and `tray-mono-on-light-*.png` (Ink silhouette, for light taskbars) | only when Windows asks for a single-colour icon |
 | Windows executable / installer | `exports/windows/dome.ico` (16/32/48 DIB + 256 PNG) | PyInstaller `icon=` in `pc-agent/packaging/*.spec` (not wired yet, see KNOWN_ISSUES), installer and shortcut icon |
-| PWA `theme_color` / `background_color` | token values, not files | the recommended page backgrounds (§2) per theme; DoMe Blue for the install splash if a brand-coloured splash is wanted |
+| PWA `theme_color` / `background_color` | token values, not files | the shipped page backgrounds (§2 "As shipped"): `<meta name="theme-color">` is `#f6f8fc` in light and Navy `#001441` in dark; the web manifest uses Navy for both; DoMe Blue for the install splash if a brand-coloured splash is wanted |
 
 ## 7. Editing the sources
 

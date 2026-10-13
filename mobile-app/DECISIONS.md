@@ -474,3 +474,67 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     components. `main.tsx` imports it only under `import.meta.env.DEV` (dropped by `vite build`); its
     marker (`dome-design-preview`) makes `scripts/check-bundle.ts` fail the build if it ever ships, and a
     test forbids any static import of `src/dev/`.
+
+60. **Design A "Midnight Studio" over Design B "Clean Precision" (the owner's choice, 2026-10-12).** Both
+    directions were built in full (website and app, light and dark) in separate worktrees and reviewed
+    by a design critic from phone and desktop screenshots in both themes. Neither won on the basics: both
+    passed WCAG AA in both themes, kept 44 px targets, handled reduced motion and had no sideways scroll at
+    375–430 px. The difference was the brand, which is what the owner asked for ("really nice and
+    expensive looking", light and dark). A's dark theme is the logo's own Navy and its light theme keeps
+    Navy ink; the orbit line, Coral kept to the cursor's tiny dots and the full DoMe REMOTE lockup carry
+    the logo through the site. B was calmer and slightly quicker to scan, but its dark theme was a
+    generic near-black and the brand nearly disappeared inside the app; making it look like DoMe meant
+    re-basing its whole dark palette, a larger change than A's list of local defects (a clipped hero
+    shadow, a toast over the product picture, a 250 px desktop gap, see-through tab bar and Ask dock, a
+    lopsided dock, too much saturated blue, an unlabelled device switcher). The rollout fixed all fourteen
+    of the critic's A items and took five of B's ideas: the pricing layout ("Available now" chip on Free,
+    left-aligned comparison table, "Good to know" as quiet prose), the labelled "Devices" pill on Home,
+    the balanced Ask dock with a round "Type" button, tinted icon wells with solid blue saved for the one
+    primary control per screen, and `role="img"` with a one-sentence label on the hero picture. B was
+    never merged; its branch (`worktree-wf_8fd43751-de4-3`) is a reference only.
+
+61. **The demo film is a vector web animation; video files are exported from it, never shipped.** The
+    owner wanted "a video example" of Screen view and the AI butler. A video file on the site would weigh
+    megabytes per view, go stale whenever a screen, a price or a status label changes, need burned-in or
+    separate captions and offer no reduced-motion alternative; the CSP (`'self'` only) also rules out a
+    hosted player. So the film is React SVG + CSS drawn with the design tokens and
+    the same plan content as the pricing page: a price or a "Coming" label changes in one place and the
+    film follows. Captions are real text in a live region, the controls are keyboard operable and reduced
+    motion gets a storyboard of stills. Every frame is a pure function of one clock, which makes the
+    export deterministic: `scripts/export-film.mjs` seeks the clock frame by frame in Playwright's
+    headless shell and pipes the screenshots into ffmpeg (1920×1080 and 1080×1920, MP4 and WebM, 30 fps,
+    plus a poster) for sharing and social posts. Playwright's real-time `recordVideo` screencast is
+    available as `--record` but is a fallback only: its frame timing and sharpness are the screencast's. Exports go to a temp
+    folder or `--out` and are not committed (about 9 MB per MP4, regenerable from any commit). Costs: the
+    film's code is in the main bundle (not split yet), and exporting needs a Chromium headless shell and
+    ffmpeg on the machine that runs it.
+
+62. **Plan content is static copy until the metering task lands.** The owner decided Free / Pro / Pro Plus
+    (prices, devices, Screen view minutes, 5-hour and weekly AI windows, a one-time Free taste, top-ups)
+    before any of the machinery existed, and the website had to explain the plans now. `src/content/plans.ts`
+    states them as content, with "Coming at paid launch" on both paid plans, and is the one source for
+    every surface that names a price or an allowance: the pricing page and comparison table, the FAQ, the
+    home teaser, the film and `/demo`, and the in-app Billing page and `ProExplanation` (which until then
+    showed the contract's $5.99 experiment price). Device counts and routine limits are read from
+    `plans.json`, which the server enforces, so those cannot drift; the contract has no Pro Plus plan yet,
+    so Pro Plus shows Pro's counts. The module meters, sells and unlocks nothing. Until the metering task
+    (#51) replaces it with contract values: `plans.json` keeps `pricing_defaults` 599 / 4999 cents and a
+    monthly AI allowance; `docs/BILLING.md`, `docs/COST_MODEL.md` and `docs/PRODUCT_AND_PLANS.md` keep the
+    old experiment price; Settings words Free's allowance as "N of 10 AI requests to try used" (no renewal
+    promised) and paid plans keep the monthly wording (`allowanceLine`).
+
+63. **Honesty labels are shared constants, shown wherever a feature appears.** The product's promise is
+    honest results, so no surface presents a planned feature as available. Today: Free "Available now"
+    (a chip); Pro and Pro Plus "Coming at paid launch" as a status line with a clock icon, never a
+    button (a disabled outline button looked tappable); Screen view "Coming" on every card, comparison
+    row and film chip; point-and-talk / click by name "Planned"; the AI butler "Available now", since it
+    exists today behind consent and is off until turned on. The strings are exported from
+    `content/plans.ts` (`AVAILABLE_NOW`, `COMING_AT_PAID_LAUNCH`, `SCREEN_VIEW_STATUS`,
+    `POINT_AND_TALK_STATUS`) and the film's chips are built from them. The fixed claims travel with them:
+    the AI never sees the screen (no screenshots, no pictures), nothing is recorded, search words and
+    speech are not stored, and "DoMe is in development. The Windows app is not published yet." The film
+    adds one line under it: "Concept preview. Screen view and point-and-talk are in development." Tests
+    (plans, PricingPage, BillingPage, UpgradeAndHealth, film timeline, Film, DemoPage, LandingPage) assert
+    the labels and the absence of recording, screenshot or AI-vision claims. When Screen view or
+    point-and-talk ships, change the constant, the copy that says "in development" and those tests
+    together.

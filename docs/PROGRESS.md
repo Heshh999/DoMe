@@ -2,6 +2,55 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-13 — Design A round: domain, two polish rounds, documentation
+
+Follows the rollout entry below (commits 0a7bf6a, b30f0c9, 6d76945 and this documentation commit).
+
+- **Domain** (0a7bf6a): the founder registered `domeremote.com` and `domeremote.app` (Cloudflare
+  Registrar) today. `https://domeremote.com` is the one origin for the website, PWA, API and WebSockets;
+  `staging.domeremote.com` for staging; `.app` and `www` will only redirect, because the session cookie,
+  the Origin check and the phone's signing key belong to one origin. In the code: Open Graph / Twitter
+  tags with a 1200×630 preview image, `robots.txt` and `sitemap.xml` (a test keeps the sitemap equal to
+  the router's public routes), `X-Robots-Tag: noindex, nofollow` outside production (cloud-api), the
+  extension's `homepage_url`. The DNS, redirect, DNSSEC and identity-provider plan is in
+  `deploy/README.md` "Domain"; **none of it is configured yet** (no Fly apps exist).
+- **Polish round 1** (b30f0c9), from screenshot reviews of the website, the film and the app: the hero's
+  "Volume set to 40%" toast only from 1280 px and never over a call to action or the caveat (a
+  real-browser test measures it); copy that describes the AI exactly as the app runs it; compact pricing
+  rows on phones; skip link, page titles, a focusable main, Escape closes the menu, no sideways scroll at
+  320–430 px; film scene 5 on an opaque veil, the end card's real links, a readable vertical layout, the
+  lit room as poster, captions silent until the visitor starts the film; in the app a PC-offline warning
+  with two steps on Home and Remote, Touchpad fitting above the tab bar at 390×844 and 375×667, focus
+  never hidden under the tab bar or the Ask dock, status lines instead of disabled buttons, a
+  control-edge token for switches that are off, empty slider tracks and field borders.
+- **Polish round 2, checkpoint** (6d76945; the round is not finished): Settings words Free's AI
+  allowance as a one-time taste ("4 of 10 AI requests to try used", no renewal date); Health says "1
+  item needs attention"; the vertical film draws the lamp's glow only where the lamp is and raises the
+  caption band so a two-line chip fits; the preview's `?pc=offline` sends nothing at start and answers
+  commands with PC_OFFLINE, as the relay does. Tests added for each.
+- **Documentation** (this commit): `mobile-app/README.md` (design system and themes, the preview routes,
+  the film and its export script, the plan content module, the new tests, an iPhone checklist row),
+  `mobile-app/DECISIONS.md` 60–63 (Design A over B; the film as a vector animation with an export
+  pipeline; plan content as static copy until metering; honesty labels), `brand/BRAND.md` §2 "As
+  shipped" (the app's dark theme uses Navy as the page, not the recommended near-black), `docs/HANDOFF.md`.
+- Runs (Linux, at 6d76945 plus this documentation): mobile-app `pnpm typecheck`, `pnpm lint`, `pnpm test`
+  (68 files, 1218 passed, including the real-browser hero layout test at 1024/1280/1440/1920 px, which
+  runs here because Playwright is installed), `pnpm build` (bundle check: no key material, no design
+  preview); brand `pnpm check` (33 tests, exports and consumer copies up to date); browser-extension
+  `test/manifest.test.ts` (5 passed); cloud-api `test_security_fixes.py` header test (staging noindex,
+  production HSTS; 1 passed). The film was re-exported after 6d76945: 1920×1080 and 1080×1920, 30 fps,
+  66.0 s, MP4 + WebM + poster (ffprobe), and a contact sheet of the six scenes was looked at.
+  **Evidence tag: component-tested** (app and website), **looked at** (film frames), **not yet verified**
+  on an iPhone; the domain is registered but not configured.
+- **Still open**: polish round 2; the main JS chunk is 890 kB (278 kB gzip; Vite warns over 500 kB) and
+  holds the website and the film, so splitting the public pages from the app is worth doing; the
+  film's autoplay-when-visible is untested (jsdom has no IntersectionObserver); `plans.json` has no Pro
+  Plus, still says `pricing_defaults` 599 / 4999 and a monthly AI allowance, and `docs/BILLING.md`,
+  `COST_MODEL.md`, `PRODUCT_AND_PLANS.md` keep the old price (all for #51); Screen view and point-and-talk
+  exist only as website copy and film scenes.
+- Next: plans metering (#51), then Screen view (#52), the butler's click by name (#42) and the Windows
+  installer; `docs/HANDOFF.md` §7.
+
 ## 2026-10-13 — Design A "Midnight Studio" rollout, demo film, Free / Pro / Pro Plus content
 
 Three builders worked in parallel worktrees from `docs`-free briefs (app, public website, film);

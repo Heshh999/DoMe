@@ -1,14 +1,53 @@
 # Handoff
 
-Last updated 2026-10-09 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
+Last updated 2026-10-13 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
 continuing the work. `docs/PROGRESS.md` is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix;
 each component keeps its own `README.md`, `DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
 
 Evidence tags used everywhere in this repository: **unit-tested**, **integration-tested**,
-**load-tested**, **Windows-device-tested**, **iPhone-tested**, **not yet verified**. Nothing in this
-repository has been Windows-device-tested or iPhone-tested yet.
+**load-tested**, **Windows-device-tested**, **iPhone-tested**, **not yet verified**. No formal
+Windows-device-tested or iPhone-tested pass has been recorded in `docs/ACCEPTANCE.md` yet; the owner has
+reported features working on their Windows 11 PC and iPhone through the test kit (§0).
+
+## 0. Current state (2026-10-13)
+
+What happened since the 2026-10-09 baseline that §1–§6 describe (details in `docs/PROGRESS.md`):
+
+- **Owner's devices** (2026-10-09 to 10-11, through `testkit/`): the iPhone (Safari) paired with the
+  Windows 11 PC over quick tunnels; after the second test round's fixes the owner reports the Remote
+  volume slider, YouTube control in Edge and Remote → Search YouTube, the Type phrases, the Apps window
+  buttons and Lock working. Sleep, restart and shut down are not reported yet.
+- **Protocol 1.2** (2026-10-11): window controls (maximise, restore, full screen), YouTube search and
+  open result, a much richer Type grammar, the tray's **Add an app…**.
+- **AI butler, step 1** (2026-10-11): the Ask screen (talk or type), the deterministic parser first and
+  Claude only for words it does not know, every plan shown before it runs, behind consent and off until
+  turned on. The real Anthropic API had not been called from here (no key); the committed `plans.json`
+  keeps AI allowances at 0.
+- **Brand** (2026-10-10/11): the owner's logo and the full name "DoMe Remote" recorded, the logo
+  traced into vector files, new icons everywhere.
+- **Design A "Midnight Studio"** (2026-10-12/13): the owner chose Design A over B
+  (`mobile-app/DECISIONS.md` 60); every website and app screen restyled in light and dark; a 66 s demo
+  film on the home page and `/demo`, exportable as 1080p and vertical video (DECISIONS 61); the website
+  states Free / Pro / Pro Plus as static content, with Pro and Pro Plus "Coming at paid launch",
+  Screen view "Coming" and point-and-talk "Planned" (DECISIONS 62–63). Two polish rounds followed; the
+  second is saved as a checkpoint (6d76945) and still in progress. mobile-app: 68 files, 1218 tests pass.
+- **Domain** (2026-10-13): see the next subsection.
+
+### Domain
+
+The founder **registered `domeremote.com` and `domeremote.app` on Cloudflare (Registrar, founder's
+account) on 2026-10-13**. Commit 0a7bf6a made `https://domeremote.com` the single origin for the
+website, PWA, API and WebSockets (`staging.domeremote.com` for staging; `.app` and `www` only redirect,
+because the session cookie, the Origin check and the phone's signing key are per origin) and wired it
+into the code: link-preview tags and image, `robots.txt`, `sitemap.xml`, `X-Robots-Tag: noindex` outside
+production, the extension's homepage link. **Nothing is configured at Cloudflare yet.** The DNS records,
+redirect rules, DNSSEC and identity-provider callbacks are written up in `deploy/README.md` "Domain";
+carry them out once the Fly apps exist (§7 item 5). The Windows installer must point the agent at
+`https://domeremote.com` (§7 item 4).
 
 ## 1. Where things stand
+
+Test counts in this table are from 2026-10-09 unless dated; §2 has the latest recorded counts.
 
 | Area | What exists | Evidence |
 | --- | --- | --- |
@@ -16,11 +55,11 @@ repository has been Windows-device-tested or iPhone-tested yet.
 | `cloud-api` | FastAPI + PostgreSQL: OIDC Authorization Code + PKCE sign-in, sessions, device-code PC linking, controllers, grants, PC-side pairing, relay (`/ws/agent`, `/ws/controller` with signed hello proof), command lifecycle, plan limits, entitlement assertions, security events, support tickets (Alembic `0002`), and the 1.1 input path: signed `input_batch` routing with per-event-type grant coverage and a per-controller budget, `input_ack`/`input_session` delivery, `grant_update`, agent input rejections routed to the batch's phone. Billing/usage/layout/routine/operator tables exist without routes. | integration-tested against real PostgreSQL + `tools/dev-idp`: 120 tests; ruff, mypy (source and tests) clean |
 | `pc-agent` | The Windows user agent: link, identity, outbound relay client, local authorization, coalescing queue, confirmations, SQLite journal, every registry action, Windows adapters (import-gated), Native Messaging host, tray, control channel, diagnostics, PyInstaller specs; for 1.1: the manual-input session manager (one owner per PC, agent-issued id, PC-side lease watchdog, seq/age/capability checks with a skew-tolerant age estimate, ordered dispatch, held-input release on every end reason, content-free crash recovery), a `SendInput` Windows input adapter, local `pointer`/`keyboard` grants with `grant_update`, single instance per Windows session with `repair`, power confirmation copy about losing remote access. | unit-tested on Linux with the fake platform: 604 tests (+3 skipped); the pipe, native-host, window-control, tray and adapter subset also passes on windows-latest CI; ruff + mypy clean; the Windows adapters (SendInput, mutex, secure-desktop detection) are **not yet verified** on a device |
 | `browser-extension` | Chrome/Edge MV3: service worker with native port + reconnect alarms, content-script YouTube player adapter (transition-observed Next/Previous, `tab_token` and `expected_video_id` guards, context flags), build-time precompiled validators (MV3 CSP forbids Ajv's `new Function`), popup. | unit-tested with hand-written DOM fixtures: 154 tests; Vite build succeeds; **never loaded in a real browser against youtube.com** |
-| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing (QR/code, verification digits), dashboard with Now Playing, remote, command page, apps, devices with touchpad/keyboard permissions, settings, confirmation modal with power-access copy, billing status, routines preview; for 1.1: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard (commit-once composition, Compose and Send, shortcut palette, never deletes text it did not send), the input session client, Health screen with layered states and one next action each, support ticket submission and status, release notes, brand icons. | unit-tested in jsdom: 715 tests; typecheck, lint and production build clean; **not iPhone-tested** |
+| `mobile-app` | React 19 + Vite + Tailwind PWA: sign-in, PC link approval, pairing (QR/code, verification digits), dashboard with Now Playing, remote, command page, apps, devices with touchpad/keyboard permissions, settings, confirmation modal with power-access copy, billing status, routines preview; for 1.1: Touchpad (gesture state machine, explicit drag, clicks, Stop Input), Keyboard (commit-once composition, Compose and Send, shortcut palette, never deletes text it did not send), the input session client, Health screen with layered states and one next action each, support ticket submission and status, release notes, brand icons. Since then (§0): 1.2 window controls and YouTube search, Ask (AI butler step 1), the "Midnight Studio" redesign of every app and website screen in light and dark, the demo film and `/demo`, Free / Pro / Pro Plus as website content, a development-only design preview (`/preview…`). | component-tested in jsdom: 1218 tests (2026-10-13); typecheck, lint and production build clean; the 1.2 features owner-reported on an iPhone; the redesign **not iPhone-tested** |
 | `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login + an ES256-signing controller simulator + a fake extension; now also the manual-input scenarios (grant_update, ordering, replay/stale rejections reaching the phone, lease expiry releasing a held button, takeover, revocation, keyboard-only grant, no typed text on disk). | integration-tested (Linux): 23 passed in 227 s (incl. 3 manual-input tests and the load smoke: 400 commands in 10.18 s = 39 cmd/s, p50 986 ms, p95 1199 ms, RSS 208 → 212 MiB) |
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. Optional passphrase gate (`DEV_IDP_PASSPHRASE`) for the test kit: the right passphrase always works, wrong ones never lock anyone out; readable refusal page for browsers. | unit-tested: 14 tests (run in CI) |
-| `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. **Quick tunnels, Windows PowerShell 5.1 and a real iPhone not yet verified** |
-| `brand/` | Original DoMe icon and wordmark as editable SVG (light, dark, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (colour tokens, type, sizes, usage). The PWA uses the exports; the tray and installer wiring is pending. | unit-tested: 29 tests and an export drift check; renders not compared against a browser rasterizer |
+| `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. Since then run by the owner on Windows 11 with quick tunnels and an iPhone (§0, §4) |
+| `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension and tray use the exports; the installer wiring is pending. | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
 | `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | written against the real commands; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed, or run on GitHub Actions (no Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
@@ -39,22 +78,27 @@ make pwa                   # terminal 3: PWA on :5173
 make agent                 # terminal 4: agent (Linux → development platform, actions report PLATFORM_UNSUPPORTED)
 ```
 
-Tests, per component (each is a standalone package with its own lockfile):
+Tests, per component (each is a standalone package with its own lockfile). Counts are the last recorded
+runs: 2026-10-11 (`docs/PROGRESS.md`, AI butler step 1) except mobile-app and brand (2026-10-13):
 
 ```sh
-cd shared/python && uv run pytest -q           # 210
-cd shared/ts && pnpm test                       # 116
-cd cloud-api && uv run pytest -q                # 126 (needs the local PostgreSQL and tools/dev-idp venv)
+cd shared/python && uv run pytest -q           # 264
+cd shared/ts && pnpm test                       # 124
+cd cloud-api && uv run pytest -q                # 316 (+1 live AI test skipped without a key; needs the local PostgreSQL and tools/dev-idp venv)
 cd pc-agent && uv run pytest -q                 # 604 (+3 skipped: root, named-pipe-only, no Tk)
 cd pc-agent && uv run mypy --config-file mypy-windows.ini  # Windows code paths vs. pywin32 stubs
 cd browser-extension && pnpm test               # 154
-cd mobile-app && pnpm test                      # 715
+cd mobile-app && pnpm test                      # 1218 (68 files); `pnpm check` = typecheck + lint + test + build
 cd tools/dev-idp && uv run --extra dev pytest -q  # 14
-pwsh -NoProfile -File testkit/tests/kit.tests.ps1  # 121 test-kit script checks
-cd brand && pnpm check                          # 29 tests + export drift check
+pwsh -NoProfile -File testkit/tests/kit.tests.ps1  # 270 test-kit script checks
+cd brand && pnpm check                          # 33 tests + export and consumer-copy drift checks
 cd tests && uv run pytest -q                    # 30, ~5.5 min; `-k load` for the load smoke alone
 make lint typecheck                             # ruff / mypy / eslint / tsc across the repo
 ```
+
+The website and app design can be reviewed without a backend: `cd mobile-app && pnpm dev`, then
+`/preview…` (`mobile-app/README.md` "Design preview"). The demo film is exported to video with
+`node scripts/export-film.mjs` in `mobile-app/` (README "The demo film"); exports are never committed.
 
 If `initdb` refuses to run as root, run the cluster as an unprivileged user (this is what the build
 environment did); the `make db-*` targets accept `PG_DIR`/`PG_PORT`. Every directory above the data
@@ -126,29 +170,42 @@ unless stated.
   ctypes calls have no stubs, so the Windows adapters can still fail at runtime the first time they run.
   Later runs fixed a QR-picture lock (Windows Photos) and a Safari-only pairing refusal (`Origin: null`
   under `no-referrer`, now `same-origin`); then **the iPhone (Safari) paired with the PC over quick
-  tunnels**. The step 5 features (volume, media, YouTube, touchpad, keyboard, apps, lock, power) have
-  not been reported yet.
-- **Windows**: none of `pc-agent/dome_agent/platform/windows/*` (volume via pycaw, media sessions via
-  winsdk, app launching, lock, power, start-at-login, native-host registry entries) has run on a
-  Windows machine. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the
+  tunnels**. Later rounds (2026-10-11, `docs/PROGRESS.md`) fixed volume, the YouTube bridge and other
+  Windows adapter mismatches; the owner then reported volume, YouTube in Edge, YouTube search, Type,
+  the Apps window buttons, touchpad, keyboard and Lock working. Sleep, restart and shut down are not
+  reported, and none of it is recorded in `docs/ACCEPTANCE.md` with build and iOS versions yet.
+- **Windows**: the adapters in `pc-agent/dome_agent/platform/windows/*` have run only on the owner's PC,
+  through the test kit, for the features the owner reported above (volume, YouTube via Edge, apps and
+  their windows, lock, touchpad, keyboard). Power (sleep, restart, shut down), start-at-login and the
+  Windows media-session fallback are not reported. The PyInstaller specs have not been built. Follow `docs/WINDOWS_INSTALL.md` and the
   manual checklist at the end of `pc-agent/README.md`.
 - **Manual input on real devices**: `SendInput` injection, multi-monitor and mixed-DPI motion, pointer
   acceleration, UAC/lock/elevated-window refusal, the named mutex and repair have not run on Windows;
   the touchpad gestures (pointer capture order, two-finger tap), the phone keyboard (IME, autocorrect,
-  dictation, emoji, `beforeinput` order) and backgrounding have not run on an iPhone. The checklists
+  dictation, emoji, `beforeinput` order) and backgrounding have not run on an iPhone as checklists. (The
+  owner reports the touchpad and keyboard working in everyday use, 2026-10-11; the edge cases in the
+  checklists are not reported.) The checklists
   are in `pc-agent/README.md`, `mobile-app/README.md` and `docs/INPUT_CONTROL.md`; spec §10A F lists
   the required observations. The Free-feature claim must wait for them (spec §10A).
 - **Chrome/Edge**: the extension has never been loaded unpacked against the real youtube.com DOM
   (`browser-extension/KNOWN_ISSUES.md` K1); the manual checklist is in `browser-extension/README.md`.
-- **iPhone**: the PWA has not been opened in iOS Safari (standalone mode, resume behaviour, QR
-  scanning, WebCrypto/IndexedDB persistence); see `docs/IPHONE_SETUP.md` and
-  `mobile-app/KNOWN_ISSUES.md` #5.
+- **iPhone**: the owner has used the PWA in iOS Safari (pairing, the remote, touchpad, keyboard, Type);
+  standalone (Home Screen) mode, resume behaviour, QR scanning and key persistence across restarts are
+  not reported; see `docs/IPHONE_SETUP.md` and `mobile-app/KNOWN_ISSUES.md` #5.
 - **Production identity provider**: only `tools/dev-idp` was used; Auth0/Keycloak settings exist in
   `cloud-api/README.md` but have not been exercised.
 - **Hosting**: `deploy/` has not been deployed; `DOME_TRUSTED_PROXIES` for Fly.io is a deployment fact
-  that must be set by hand (`cloud-api/KNOWN_ISSUES.md` #5).
-- **Billing**: no Stripe code exists. `cloud-api` only reports `billing_enabled` from the presence of
-  a Stripe key, and the PWA shows plan state without any checkout. `docs/BILLING.md` is a design.
+  that must be set by hand (`cloud-api/KNOWN_ISSUES.md` #5). The domain is registered but no DNS record,
+  redirect or certificate exists yet (§0 "Domain").
+- **Billing and plans**: no Stripe code exists. `cloud-api` only reports `billing_enabled` from the
+  presence of a Stripe key, and the PWA shows plan state without any checkout. `docs/BILLING.md` is a
+  design. The website's Free / Pro / Pro Plus figures are static content (`mobile-app/src/content/plans.ts`);
+  the contract (`shared/protocol/plans.json`) has no Pro Plus, a monthly AI period with allowances of 0,
+  and the old $5.99 / $49.99 `pricing_defaults`.
+- **The redesign and the film on an iPhone**: checked only in headless Chromium screenshots at phone
+  and desktop sizes; the checklist row is in `mobile-app/README.md`.
+- **Screen view and point-and-talk** do not exist in the product; they appear only on the website and
+  in the film, labelled "Coming" and "Planned".
 - **Pro features**: routines and layouts have tables and plan limits but no API routes or execution;
   the Routines page is an explicitly labelled preview.
 - **Operator tooling**: `OperatorUser`/`OperatorAudit` tables exist, nothing is served.
@@ -213,29 +270,55 @@ in a protocol MINOR bump (`shared/protocol/version.json`), regenerate fixtures a
 9. A `hello_ack` re-push when a connected unbound controller socket gets its controller row
    (mobile-app #2), or keep the current reopen.
 
-## 7. Next tasks, in order
+## 7. Next tasks, in order (2026-10-13)
 
-0. **Run the test kit for real** (`testkit/README.md`): Windows 11 + Docker Desktop + an iPhone. It is
-   the fastest route to items 1 and 2 below; record what breaks in `docs/PROGRESS.md`.
-1. **Windows device pass**: install Python 3.12 on a Windows 11 machine, `uv sync` in `pc-agent`,
-   run `dome-agent link`, register the native host, load the extension unpacked, and work through the
-   manual checklists in `pc-agent/README.md` and `browser-extension/README.md` (now including the
-   touchpad/keyboard injection, single-instance and repair rows). Fix what breaks;
-   record results in `docs/ACCEPTANCE.md` with the tag Windows-device-tested.
-2. **iPhone pass**: serve the PWA over HTTPS (Fly.io staging or a tunnel), follow
-   `docs/IPHONE_SETUP.md`, verify pairing by QR, Add to Home Screen, resume after lock, confirmation
-   modal. Record as iPhone-tested.
-3. **Staging deployment**: `deploy/README.md` — Fly.io app + PostgreSQL, Auth0 or Keycloak as the
-   identity provider, `DOME_TRUSTED_PROXIES`, entitlement signing key, run `tests/` against the local
-   stack before each deploy; enable the GitHub Actions workflow and fix anything it reports.
-4. **Phase B beta**: invite-only Free accounts, support diagnostics intake (table exists), the
-   operator read-only views (`OperatorUser`/`OperatorAudit`).
-5. **Phase C billing**: implement `docs/BILLING.md` (Stripe Checkout/Portal, webhook intake with
-   dedup, the subscription → entitlement state machine, grace and downgrade selection), then routines
-   and layouts routes and the agent-side routine execution.
-6. **Protocol MINOR bump** applying §6.
-7. **Agent socket frame budget** and the other deferred items in each `KNOWN_ISSUES.md`.
-8. Re-run the **cross-component security review** after the Windows and iPhone passes (the first one,
+Finish polish round 2 of the redesign first (checkpoint 6d76945); then:
+
+1. **Plans metering (#51)**: make the website's Free / Pro / Pro Plus real (the figures are in
+   `mobile-app/README.md` "Plan content"). A contract MINOR: a `pro_plus` plan; AI allowances as a 5-hour
+   window that starts at the first AI request plus a weekly window that refreshes 7 days after the week's
+   first use, replacing the monthly period; Free's one-time taste of 10 requests; top-ups (100 requests
+   for $2.99, bought only on request, never automatic); Free's Screen view minutes ready for #52.
+   cloud-api: extend the existing metering ledger and reservations to the two windows and top-ups;
+   Stripe prices for both paid plans, monthly and annual, and `pricing_defaults` to match. App: the
+   exact refresh time ("Refreshes Saturday at 2 pm"), a warning at 80 %, the allowance line in Settings.
+   Then read the figures in `mobile-app/src/content/plans.ts` from the contract (keep the "Coming at paid
+   launch" labels until paid launch) and update `docs/BILLING.md`, `COST_MODEL.md` and
+   `PRODUCT_AND_PLANS.md`. Everyday commands DoMe understands by itself never count, on any plan.
+2. **Screen view (#52)**: the PC's screen live on the phone with tap to click, two-finger scroll, a
+   floating mini view, PC sound with mute and a TV-style remote for full-screen apps, as the website and
+   film describe it. Not designed yet: it needs a design document, an ADR for the video transport (the
+   relay carries JSON frames today), a contract MINOR, capture on the agent, and Free's 10 minutes per
+   5-hour window metered by #51. Nothing is recorded and the AI never sees the stream. When it ships,
+   change `SCREEN_VIEW_STATUS` and every "in development" line together (`mobile-app/DECISIONS.md` 63).
+3. **AI butler step 2: click by name (#42)**: "click that" / "click Subscribe" acts on a control found by
+   its Windows accessibility name, shown on the phone and confirmed before it runs. The owner ruled out
+   screenshots, so `docs/design/assistant.md` §7 (screenshot with a box) must be rewritten before
+   building; it keeps the rest of §7: its own contract MINOR, a new consent version, the action
+   challenge-confirmed, pointer and keyboard primitives human-only. The film's point-and-talk (a finger
+   on the Screen view picture) also needs #52. The website says "Planned" until then.
+4. **Windows installer**: none exists, and the PyInstaller specs have never been built
+   (`pc-agent/README.md`). It must set `DOME_AGENT_API_URL=https://domeremote.com` (the agent has no
+   built-in address), register the native host under HKCU, use `brand/exports/windows/dome.ico`
+   (`brand/KNOWN_ISSUES.md` 6), and before public release needs Authenticode signing and a verified
+   update path (`docs/SECURITY.md` T12). The Download page says "not yet published" until then.
+5. **Domain and staging**: create the Fly apps, then carry out `deploy/README.md` "Domain" (DNS-only
+   records for Fly, redirect rules for `.app` and `www`, DNSSEC, identity-provider callbacks) and the
+   staging steps there: PostgreSQL, Auth0 or Keycloak, `DOME_TRUSTED_PROXIES`, the entitlement signing
+   key; enable the GitHub Actions workflow and fix what it reports.
+6. **Device evidence**: record the owner's Windows 11 + iPhone results in `docs/ACCEPTANCE.md` with build
+   and iOS versions; still to report: sleep, restart, shut down, and the redesign and film on the iPhone
+   (`mobile-app/README.md` checklist). The manual checklists in `pc-agent/README.md`,
+   `browser-extension/README.md` and `docs/IPHONE_SETUP.md` remain the reference.
+7. **Phase B beta**: invite-only Free accounts, support diagnostics intake (table exists), the operator
+   read-only views (`OperatorUser`/`OperatorAudit`).
+8. **Phase C billing, before paid launch**: implement `docs/BILLING.md` (Stripe Checkout/Portal, webhook
+   intake with dedup, the subscription → entitlement state machine, grace and downgrade selection; top-up
+   purchases from #51 go through it), then routines and layouts routes and the agent-side routine
+   execution. Only then do the "Coming at paid launch" labels change.
+9. **Protocol MINOR bump** applying §6 (it can ride with #51's MINOR); the **agent socket frame budget**
+   and the other deferred items in each `KNOWN_ISSUES.md`.
+10. Re-run the **cross-component security review** after the device passes and #51 (the first one,
    2026-10-09, confirmed the core guarantees and produced the hello proof and the honest-outcome
    fixes; see `docs/PROGRESS.md`).
 
