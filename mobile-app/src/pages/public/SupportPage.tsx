@@ -16,23 +16,25 @@ import { APP_VERSION, buildDiagnostics, diagnosticsText, type DiagnosticsReport 
 import { absoluteTime } from "../../lib/format.ts";
 import { errorMessage } from "../../lib/labels.ts";
 import { CATEGORIES, submissionFailure, type SubmissionFailure } from "../../lib/support.ts";
+import { Icon, type IconName } from "../../components/icons.tsx";
 import { Button, Field, inputClass, Notice } from "../../components/ui.tsx";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useInputStore } from "../../store/input.ts";
 import { useLiveStore } from "../../store/live.ts";
 import { useSessionStore } from "../../store/session.ts";
+import { PublicIcon, type PublicIconName } from "./publicIcons.tsx";
 
 const SUPPORT_URL: string | undefined = import.meta.env.VITE_DOME_SUPPORT_URL;
 
-const TOPICS: Array<{ title: string; steps: string[] }> = [
-  { title: "The PC shows Offline", steps: ["Check the PC is awake and connected to the internet.", "Click the DoMe tray icon on the PC; it should say Connected. Use Reconnect if not.", "If the tray icon is missing, start DoMe from the Start menu.", "Connection health in the app shows which part is failing."] },
-  { title: "YouTube controls say the extension is not connected", steps: ["Open Chrome or Edge on the PC and check the DoMe extension is installed and enabled.", "Reload the YouTube tab so the extension attaches to it.", "Restart the browser if the extension icon still shows it is disconnected."] },
-  { title: "The touchpad or keyboard says it is not permitted", steps: ["Touchpad and keyboard are separate permissions the PC owner grants on the PC (tray → Paired phones).", "Existing pairings do not get them automatically.", "They reach every app of the unlocked Windows session, so grant them only to phones you trust."] },
-  { title: "Typing paused or went to the wrong place", steps: ["DoMe types into whatever the PC has focused; click the field with the touchpad first.", "Live typing pauses when an edit cannot be mirrored safely (middle edits, emoji deletion). Use Compose and Send for the rest.", "If the window in front changed, the PC stops the remaining keys on purpose."] },
-  { title: "The pairing code is rejected", steps: ["Codes last 5 minutes and work once. Ask the PC for a new one (tray → Pair a phone).", "Make sure the phone is signed in to the same account the PC is linked to.", "Compare the six-digit verification code on both screens before approving on the PC."] },
-  { title: "This phone was revoked", steps: ["Revocation is permanent for that installation. Pair again from the PC.", "If you did not revoke it yourself, review Devices and remove anything you do not recognise."] },
-  { title: "An action shows “Outcome unknown”", steps: ["The PC lost its connection while running it. It may or may not have happened.", "Check the PC’s current state (it refreshes when the PC reconnects) before sending the same action again."] },
-  { title: "Microphone or dictation does not work", steps: ["DoMe uses your keyboard’s dictation; check that dictation is enabled in iOS Settings → General → Keyboard.", "Typing works exactly the same way."] },
+const TOPICS: Array<{ title: string; icon: IconName | { public: PublicIconName }; steps: string[] }> = [
+  { title: "The PC shows Offline", icon: "pulse", steps: ["Check the PC is awake and connected to the internet.", "Click the DoMe tray icon on the PC; it should say Connected. Use Reconnect if not.", "If the tray icon is missing, start DoMe from the Start menu.", "Connection health in the app shows which part is failing."] },
+  { title: "YouTube controls say the extension is not connected", icon: "youtube", steps: ["Open Chrome or Edge on the PC and check the DoMe extension is installed and enabled.", "Reload the YouTube tab so the extension attaches to it.", "Restart the browser if the extension icon still shows it is disconnected."] },
+  { title: "The touchpad or keyboard says it is not permitted", icon: "touchpad", steps: ["Touchpad and keyboard are separate permissions the PC owner grants on the PC (tray → Paired phones).", "Existing pairings do not get them automatically.", "They reach every app of the unlocked Windows session, so grant them only to phones you trust."] },
+  { title: "Typing paused or went to the wrong place", icon: "keyboard", steps: ["DoMe types into whatever the PC has focused; click the field with the touchpad first.", "Live typing pauses when an edit cannot be mirrored safely (middle edits, emoji deletion). Use Compose and Send for the rest.", "If the window in front changed, the PC stops the remaining keys on purpose."] },
+  { title: "The pairing code is rejected", icon: "key", steps: ["Codes last 5 minutes and work once. Ask the PC for a new one (tray → Pair a phone).", "Make sure the phone is signed in to the same account the PC is linked to.", "Compare the six-digit verification code on both screens before approving on the PC."] },
+  { title: "This phone was revoked", icon: "phone", steps: ["Revocation is permanent for that installation. Pair again from the PC.", "If you did not revoke it yourself, review Devices and remove anything you do not recognise."] },
+  { title: "An action shows “Outcome unknown”", icon: { public: "help" }, steps: ["The PC lost its connection while running it. It may or may not have happened.", "Check the PC’s current state (it refreshes when the PC reconnects) before sending the same action again."] },
+  { title: "Microphone or dictation does not work", icon: "mic", steps: ["DoMe uses your keyboard’s dictation; check that dictation is enabled in iOS Settings → General → Keyboard.", "Typing works exactly the same way."] },
 ];
 
 function isCategory(v: string | null): v is rest.SupportTicketRequest["category"] {
@@ -129,37 +131,60 @@ export function SupportPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Support</h1>
-        <p className="text-text-muted mt-2">Most problems have a specific cause that DoMe reports directly in the app. The steps below cover the common ones; the form sends a request to us when they do not help.</p>
+    <div>
+      <header className="dome-page-intro animate-rise">
+        <p className="dome-eyebrow">Support</p>
+        <h1 className="mt-3 text-h1 font-bold">Help, with specifics.</h1>
+        <p className="mt-4 max-w-2xl text-lg text-text-muted">Most problems have a specific cause that DoMe reports directly in the app. The steps below cover the common ones; the form sends a request to us when they do not help.</p>
       </header>
 
-      <section className="space-y-3">
-        {TOPICS.map((t) => (
-          <details key={t.title} className="rounded-card border border-border p-4">
-            <summary className="cursor-pointer font-semibold">{t.title}</summary>
-            <ol className="list-decimal pl-5 text-sm text-text-muted mt-2 space-y-1">
-              {t.steps.map((s) => (
-                <li key={s}>{s}</li>
-              ))}
-            </ol>
-          </details>
-        ))}
-        <p className="text-sm text-text-muted">
-          See also the <Link to="/release-notes" className="text-accent font-semibold">release history and known issues</Link>.
+      <section aria-labelledby="common-problems">
+        <h2 id="common-problems" className="text-title font-semibold">
+          Common problems
+        </h2>
+        <div className="dome-card dome-hairlines mt-4 px-5 sm:px-6">
+          {TOPICS.map((t) => (
+            <details key={t.title} className="dome-disclosure">
+              <summary>
+                <span className="flex min-w-0 items-center gap-3.5">
+                  <span className="dome-well dome-well-sm">{typeof t.icon === "string" ? <Icon name={t.icon} size={18} /> : <PublicIcon name={t.icon.public} size={18} />}</span>
+                  <span className="text-[15px] sm:text-base">{t.title}</span>
+                </span>
+                <span aria-hidden="true" className="dome-disclosure-chevron">
+                  <Icon name="chevron" size={16} strokeWidth={2} />
+                </span>
+              </summary>
+              <ol className="space-y-2.5 pb-5 pl-[3.125rem] text-[15px] leading-relaxed text-text-muted">
+                {t.steps.map((s, i) => (
+                  <li key={s} className="flex gap-3">
+                    <span aria-hidden="true" className="w-4 shrink-0 font-semibold tabular-nums text-text-faint">
+                      {i + 1}
+                    </span>
+                    <span>{s}</span>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          ))}
+        </div>
+        <p className="mt-4 text-[15px] text-text-muted">
+          See also the{" "}
+          <Link to="/release-notes" className="font-semibold text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-current">
+            release history and known issues
+          </Link>
+          .
         </p>
       </section>
 
-      <section className="rounded-card bg-bg-elevated border border-border p-5 space-y-4" aria-labelledby="support-form-title">
-        <h2 id="support-form-title" className="font-semibold text-lg">
+      <section className="dome-card mt-12 space-y-4 p-6 sm:p-7" aria-labelledby="support-form-title">
+        <h2 id="support-form-title" className="text-title font-semibold">
           Send a support request
         </h2>
         {!signedIn ? (
-          <div className="space-y-2 text-sm text-text-muted">
+          <div className="space-y-3 text-[15px] text-text-muted">
             <p>Sign in so the request is tied to your account; we never need your password or any pairing code.</p>
             {status === "loading" || status === "unknown" ? <p>Checking your sign-in…</p> : null}
-            <a href={loginUrl(`/support${params.toString() ? `?${params.toString()}` : ""}`)} className="tap inline-flex items-center rounded-control dome-primary font-semibold px-5 text-sm">
+            <a href={loginUrl(`/support${params.toString() ? `?${params.toString()}` : ""}`)} className="tap dome-primary dome-press inline-flex items-center rounded-full px-5 text-[15px] font-semibold">
               Sign in to continue
             </a>
           </div>
@@ -263,8 +288,8 @@ export function SupportPage() {
       </section>
 
       {signedIn ? (
-        <section className="space-y-2" aria-labelledby="your-requests">
-          <h2 id="your-requests" className="font-semibold text-lg">
+        <section className="mt-12 space-y-3" aria-labelledby="your-requests">
+          <h2 id="your-requests" className="text-title font-semibold">
             Your requests
           </h2>
           {ticketsError ? <p className="text-sm text-text-muted">Could not load your requests: {ticketsError}</p> : null}
@@ -272,7 +297,7 @@ export function SupportPage() {
           {tickets && tickets.length > 0 ? (
             <ul className="space-y-2">
               {tickets.map((t) => (
-                <li key={t.ticket_id} className="rounded-card border border-border p-3 text-sm">
+                <li key={t.ticket_id} className="dome-card p-4 text-sm">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono font-semibold">{t.reference}</span>
                     <span className="text-xs text-text-muted">{t.status.replace("_", " ")}</span>

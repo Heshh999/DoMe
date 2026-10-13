@@ -1,0 +1,408 @@
+/* ──────────────────────────────────────────────────────────────────────────────────────────────
+   DoMe public website — page styles (imported by src/app/PublicLayout.tsx; src/styles.css holds
+   the design system and is not edited here). Everything is scoped to `.dome-public`, the website's
+   root element, and uses the `--dome-*` tokens so both themes come for free. No @apply: this file
+   is plain CSS next to Tailwind's utilities, and it never styles a bare control element (the base
+   layer in styles.css does that).
+   ────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.dome-public {
+  /* tokens the website needs beyond the system: a tinted icon well, a quiet hairline and a soft chip */
+  --dome-public-well: color-mix(in oklab, var(--dome-color-accent) 11%, transparent);
+  --dome-public-well-ink: var(--dome-color-accent);
+  --dome-public-hairline: var(--dome-color-border);
+  --dome-public-chip: color-mix(in oklab, var(--dome-color-accent) 12%, transparent);
+  --dome-public-chip-ink: var(--dome-color-accent);
+  --dome-public-status: var(--dome-color-text-muted);
+  --dome-public-prose-max: 68ch;
+}
+
+/* ── Header navigation: the active page carries a short accent underline (B's pattern). ───────── */
+.dome-public .dome-nav-link {
+  position: relative;
+}
+.dome-public .dome-nav-link[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  width: 16px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--dome-color-accent);
+  transform: translateX(-50%);
+}
+
+/* ── The phone menu: a sheet under the header that slides down. ───────────────────────────────── */
+.dome-public .dome-menu {
+  animation: dome-menu-in var(--dome-dur) var(--dome-ease) both;
+}
+@keyframes dome-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Chips: "Available now", "Coming", "Planned". Tinted, never a button. ─────────────────────── */
+.dome-public .dome-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 999px;
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--dome-public-chip);
+  color: var(--dome-public-chip-ink);
+}
+.dome-public .dome-chip-quiet {
+  background: var(--dome-color-surface);
+  color: var(--dome-color-text-muted);
+}
+.dome-public .dome-chip-live {
+  background: color-mix(in oklab, var(--dome-color-success) 13%, transparent);
+  color: color-mix(in oklab, var(--dome-color-success) 86%, var(--dome-color-text));
+}
+.dome-public .dome-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* ── Status line for plans that cannot be bought yet: text with a clock, never button-shaped. ──── */
+.dome-public .dome-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 52px;
+  border-top: 1px solid var(--dome-public-hairline);
+  color: var(--dome-public-status);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+/* ── Tinted icon wells (solid blue stays reserved for the one primary control on a page). ─────── */
+.dome-public .dome-well {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 1rem;
+  background: var(--dome-public-well);
+  color: var(--dome-public-well-ink);
+}
+.dome-public .dome-well-sm {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.75rem;
+}
+.dome-public .dome-well-xs {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.625rem;
+}
+
+/* ── Hairline lists: "Good to know", requirement lists, footers of cards. ─────────────────────── */
+.dome-public .dome-hairlines > * + * {
+  border-top: 1px solid var(--dome-public-hairline);
+}
+
+/* ── Disclosure rows (FAQ, support topics, release verification): no marker, a chevron that turns. ─ */
+.dome-public .dome-disclosure > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 44px;
+  padding: 0.875rem 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  -webkit-tap-highlight-color: transparent;
+}
+.dome-public .dome-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.dome-public .dome-disclosure > summary:hover {
+  color: var(--dome-color-accent);
+}
+.dome-public .dome-disclosure > summary:focus-visible {
+  outline: 3px solid var(--dome-color-focus);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.dome-public .dome-disclosure .dome-disclosure-chevron {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: var(--dome-color-surface);
+  color: var(--dome-color-text-muted);
+  transition: transform var(--dome-dur) var(--dome-ease), background-color var(--dome-dur-fast) var(--dome-ease);
+}
+.dome-public .dome-disclosure[open] .dome-disclosure-chevron {
+  transform: rotate(90deg);
+  background: var(--dome-public-well);
+  color: var(--dome-public-well-ink);
+}
+.dome-public .dome-disclosure > :not(summary) {
+  animation: dome-fade var(--dome-dur) var(--dome-ease) both;
+}
+
+/* ── The comparison table: left-aligned, hairline rows, a sticky header on long tables. ───────── */
+.dome-public .dome-compare {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9375rem;
+  text-align: left;
+}
+.dome-public .dome-compare th,
+.dome-public .dome-compare td {
+  padding: 0.875rem 0.75rem;
+  vertical-align: top;
+  border-top: 1px solid var(--dome-public-hairline);
+}
+.dome-public .dome-compare thead th {
+  position: sticky;
+  top: calc(4rem + var(--safe-top));
+  z-index: 1;
+  border-top: 0;
+  border-bottom: 1px solid var(--dome-color-border-strong);
+  background: var(--dome-color-bg);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dome-color-text-faint);
+}
+.dome-public .dome-compare thead th.dome-compare-plan {
+  color: var(--dome-color-text);
+  letter-spacing: -0.01em;
+  text-transform: none;
+  font-size: 1rem;
+}
+.dome-public .dome-compare tbody th {
+  font-weight: 400;
+  color: var(--dome-color-text-muted);
+}
+.dome-public .dome-compare .dome-compare-group th {
+  padding-top: 1.75rem;
+  padding-bottom: 0.5rem;
+  border-top: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dome-color-text-faint);
+}
+.dome-public .dome-compare .dome-compare-group + tr th,
+.dome-public .dome-compare .dome-compare-group + tr td {
+  border-top-color: var(--dome-color-border-strong);
+}
+.dome-public .dome-compare td {
+  font-weight: 500;
+  color: var(--dome-color-text);
+}
+
+/* Phones: the same facts as a list (the table is display:none there, so nothing is read twice). */
+.dome-public .dome-compare-list .dome-compare-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.75rem;
+  background: var(--dome-color-surface);
+}
+.dome-public .dome-compare-list .dome-compare-cell > span:first-child {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dome-color-text-faint);
+}
+
+/* ── Reading pages (Privacy, Terms, Download, Release notes): calm long-form typography. ──────── */
+.dome-public .dome-prose {
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--dome-color-text-muted);
+}
+.dome-public .dome-prose > section + section {
+  margin-top: 2.25rem;
+}
+.dome-public .dome-prose h1 {
+  color: var(--dome-color-text);
+}
+.dome-public .dome-prose h2 {
+  margin: 0 0 0.625rem;
+  font-size: 1.25rem;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--dome-color-text);
+}
+.dome-public .dome-prose h3 {
+  margin: 1.25rem 0 0.375rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--dome-color-text);
+}
+.dome-public .dome-prose p {
+  margin: 0;
+  max-width: var(--dome-public-prose-max);
+}
+.dome-public .dome-prose p + p {
+  margin-top: 0.75rem;
+}
+.dome-public .dome-prose ul,
+.dome-public .dome-prose ol {
+  margin: 0;
+  padding-left: 1.375rem;
+  max-width: var(--dome-public-prose-max);
+}
+.dome-public .dome-prose ul {
+  list-style: disc;
+}
+.dome-public .dome-prose ol {
+  list-style: decimal;
+}
+.dome-public .dome-prose li + li {
+  margin-top: 0.5rem;
+}
+.dome-public .dome-prose li::marker {
+  color: var(--dome-color-text-faint);
+}
+.dome-public .dome-prose strong {
+  font-weight: 600;
+  color: var(--dome-color-text);
+}
+.dome-public .dome-prose a {
+  color: var(--dome-color-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--dome-color-accent) 35%, transparent);
+  text-underline-offset: 3px;
+}
+.dome-public .dome-prose a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ── Page intro shared by the reading pages: eyebrow, headline, one-paragraph lede. ──────────── */
+.dome-public .dome-page-intro {
+  padding-bottom: 2.25rem;
+  margin-bottom: 2.25rem;
+  border-bottom: 1px solid var(--dome-public-hairline);
+}
+
+/* ── Steps: a numbered badge in the brand's tinted well. ─────────────────────────────────────── */
+.dome-public .dome-step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--dome-public-well);
+  color: var(--dome-public-well-ink);
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The release timeline: a hairline spine with a dot per release. ─────────────────────────── */
+.dome-public .dome-timeline {
+  position: relative;
+  padding-left: 1.75rem;
+}
+.dome-public .dome-timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 0.75rem;
+  bottom: 0.75rem;
+  width: 1px;
+  background: var(--dome-color-border-strong);
+}
+.dome-public .dome-timeline-dot {
+  position: absolute;
+  left: 0;
+  top: 1.5rem;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--dome-color-bg);
+  border: 1px solid var(--dome-color-border-strong);
+  box-shadow: inset 0 0 0 3px var(--dome-color-bg), inset 0 0 0 8px var(--dome-color-accent);
+}
+
+/* ── Quiet "DRAFT" note on the legal pages: a card, a warning-tinted icon well, warning ink on the word. ─ */
+.dome-public .dome-draft {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  border-radius: var(--dome-radius-card);
+  border: 1px solid var(--dome-card-edge);
+  background: var(--dome-card-fill);
+  box-shadow: var(--dome-shadow-card);
+  padding: 0.875rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--dome-color-text-muted);
+}
+.dome-public .dome-draft-well {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.625rem;
+  background: color-mix(in oklab, var(--dome-color-warning) 14%, transparent);
+  color: var(--dome-color-warning);
+}
+.dome-public .dome-draft strong {
+  color: var(--dome-color-warning);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* ── Jump list on the FAQ (desktop): quiet links, the current one accented. ─────────────────── */
+.dome-public .dome-jump a {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.75rem;
+  border-radius: var(--dome-radius-control);
+  color: var(--dome-color-text-muted);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  transition: background-color var(--dome-dur-fast) var(--dome-ease), color var(--dome-dur-fast) var(--dome-ease);
+}
+.dome-public .dome-jump a:hover {
+  background: var(--dome-color-surface);
+  color: var(--dome-color-text);
+}
+
+/* ── Scroll margins so jump links land under the sticky header. ─────────────────────────────── */
+.dome-public [id] {
+  scroll-margin-top: calc(5rem + var(--safe-top));
+}
