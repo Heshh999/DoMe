@@ -10,7 +10,7 @@
  *   /preview/apps             Apps (ZStream and Edge running, Spotify closed; every button answers)
  *   /preview/devices          Devices (this phone, the PC with its grant, one paired phone)
  *   /preview/devices/pair     Pair (type ABCDE-FGHJK-MNPQR-STVWX → details → "waiting for approval")
- *   /preview/settings         Settings & help (AI on, 6 of 300 used; the consent sheet opens)
+ *   /preview/settings         Settings & help (AI on, Free's taste: 4 of 10 used; the consent sheet opens)
  *   /preview/health           Connection health (every layer answers; Retry and the walkthrough work)
  *   /preview/billing          Billing (the Free plan from the fake session)
  *   /preview/command          Type a command (parses locally; plans run against the fake PC)
@@ -18,12 +18,13 @@
  *   /preview/routines, /preview/layouts, /preview/more
  *   /preview/link?user_code=ABCD-EFGH   Link a PC (the agent-link preview answers; approve is not in the preview)
  * Flags (on any route): `?offline=1` shows the offline screen; `?confirm=1` has the PC ask this phone
- * to confirm closing Edge, which opens the global confirmation modal.
+ * to confirm closing Edge, which opens the global confirmation modal; `?pc=offline` has the PC offline
+ * since 3 hours ago (its last report still known).
  *
  * This tab then runs the REAL app — real pages, stores, runtime, relay client, command signing and the butler —
  * against a fake account and a fake PC living in this module, instead of cloud-api:
  *   - REST answers (`configureApi({ fetchImpl })`): a signed-in account, one PC "Living Room PC", this
- *     phone's grant, the assistant's status (AI on, 294 requests left), pairing and agent-link stubs;
+ *     phone's grant, the assistant's status (AI on, Free's taste: 6 of 10 requests left), pairing and agent-link stubs;
  *   - the relay socket (`Runtime({ relay: { socketFactory } })`): hello → hello_ack, subscribe → online +
  *     the PC's state (YouTube playing in Edge, Spotify paused, Windows volume 55 → 40 after the
  *     conversation), believable answers to the everyday commands, confirmation challenges for Close and
@@ -70,6 +71,7 @@ export const PREVIEW_ROUTES: ReadonlyArray<{ preview: string; app: string; note:
 export const PREVIEW_FLAGS: ReadonlyArray<{ flag: string; note: string }> = [
   { flag: "offline=1", note: "the offline screen (navigator.onLine reads false)" },
   { flag: "confirm=1", note: "the PC asks this phone to confirm closing Edge: the global confirmation modal" },
+  { flag: "pc=offline", note: "the PC went offline 3 hours ago: Home and Remote say what to do" },
 ];
 
 /** The app route a preview path opens (`/preview/link` is the only one outside `/app`). */
@@ -123,7 +125,9 @@ function assistantStatus(): rest.AssistantStatusResponse {
     turn_deadline_seconds: 30,
     consent_version: "2026-10-11",
     consent: { version: "2026-10-11", given_at: CREATED },
-    allowance: { limit: 300, used: 6, period_start: start.toISOString(), period_end: end.toISOString(), exhausted: null },
+    // Free's one-time taste (10 requests, 4 used → "6 AI requests left"), as the website sells it; the monthly
+    // period fields stay until the metering task (#51) replaces the allowance copy in lib/assistant.ts
+    allowance: { limit: 10, used: 4, period_start: start.toISOString(), period_end: end.toISOString(), exhausted: null },
   };
 }
 
@@ -194,6 +198,8 @@ const INPUT_SESSION = "cHJldmlldy1pbnB1dC1zZQ";
 type Reply = (f: Record<string, unknown>, delay?: number) => void;
 
 class PreviewPc {
+  /** `?pc=offline`: the PC went offline 3 hours ago (its last report is still known). */
+  offline = false;
   private video = 0;
   private sockets = new Set<PreviewSocket>();
   /** Commands waiting for this phone's answer to a confirmation challenge. */
@@ -259,6 +265,12 @@ class PreviewPc {
         return;
       }
       case "subscribe":
+        if (this.offline) {
+          const seen = new Date(Date.now() - 3 * 3600_000).toISOString();
+          reply({ type: "state", pc_id: PC, at: seen, state: this.state() });
+          reply({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: seen, enabled: true }, 40);
+          return;
+        }
         reply({ type: "pc_status", pc_id: PC, connection: "online", last_seen: now(), enabled: true });
         reply({ type: "state", pc_id: PC, at: now(), state: this.state() }, 60);
         return;
@@ -550,6 +562,7 @@ export async function startPreviewIfAsked(): Promise<void> {
   }
 
   const pc = new PreviewPc();
+  pc.offline = flags.get("pc") === "offline";
   const runtime = new Runtime({ relay: { socketFactory: () => new PreviewSocket(pc) } });
   configureApi({ fetchImpl: previewFetch });
   setVoiceForTests({ speaker: quietSpeaker(), recognizer: pretendMicrophone() });

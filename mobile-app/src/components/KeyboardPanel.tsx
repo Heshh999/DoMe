@@ -260,7 +260,7 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
           <label htmlFor="live-typing" className="sr-only">
             Type here; each character is sent to the PC as you type
           </label>
-          <textarea id="live-typing" ref={liveRef} rows={2} disabled={!live} autoCapitalize="off" autoCorrect="on" spellCheck={false} placeholder={live ? "Type here — sent as you type" : "Keyboard inactive"} className="min-h-[56px] w-full rounded-control border border-border bg-bg-sunken px-3.5 py-2.5 text-base text-text transition-colors placeholder:text-text-faint focus:border-accent/60" data-testid="live-textarea" />
+          <textarea id="live-typing" ref={liveRef} rows={2} disabled={!live} autoCapitalize="off" autoCorrect="on" spellCheck={false} placeholder={live ? "Type here — sent as you type" : "Keyboard inactive"} className="min-h-[56px] w-full rounded-control border border-control-edge bg-bg-sunken px-3.5 py-2.5 text-base text-text transition-colors placeholder:text-text-faint focus:border-accent/60" data-testid="live-textarea" />
           <div className="flex items-center justify-between gap-3 text-[11px] text-text-faint">
             <span>{echo ? `${echo.length} characters sent in this run` : "Shows what this phone sent, not the PC’s field."}</span>
             <button type="button" onClick={clearEcho} className="tap shrink-0 font-semibold text-accent">
@@ -273,7 +273,7 @@ export function KeyboardPanel({ session, enqueue, flush, awaitAck, onClose }: Ke
           <label htmlFor="composer" className="sr-only">
             Compose text to send
           </label>
-          <textarea id="composer" value={composer} onChange={(e) => setComposer(e.currentTarget.value.slice(0, TEXT_EVENT_MAX * 4))} rows={3} disabled={!live || sendState.kind === "sending"} placeholder="Write here, then Send. Enter is a separate key." className="min-h-[72px] w-full rounded-control border border-border bg-bg-sunken px-3.5 py-2.5 text-base text-text transition-colors placeholder:text-text-faint focus:border-accent/60" data-testid="composer" />
+          <textarea id="composer" value={composer} onChange={(e) => setComposer(e.currentTarget.value.slice(0, TEXT_EVENT_MAX * 4))} rows={3} disabled={!live || sendState.kind === "sending"} placeholder="Write here, then Send. Enter is a separate key." className="min-h-[72px] w-full rounded-control border border-control-edge bg-bg-sunken px-3.5 py-2.5 text-base text-text transition-colors placeholder:text-text-faint focus:border-accent/60" data-testid="composer" />
           {sendState.kind === "review" ? (
             <Notice tone="warning" title="DoMe cannot tell whether this text reached the PC">
               <p>{sendState.outcome === "timeout" ? "The PC did not confirm it in time." : sendState.outcome === "dropped" ? "The PC reported dropped input around the time it was sent." : "The touchpad session ended before the PC confirmed it."} Look at the PC: if the text is there, discard it here; if not, send it again. Nothing is resent on its own.</p>

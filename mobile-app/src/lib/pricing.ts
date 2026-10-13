@@ -13,7 +13,8 @@ export const NOT_INCLUDED = "—";
 export const AT_PAID_LAUNCH = "At paid launch";
 
 export type Row = { label: string; free: string; pro: string; proPlus: string };
-export type RowGroup = { title: string; status?: string; rows: Row[] };
+/** `summary` names the group's rows that every plan includes, as one line (the phone list merges them). */
+export type RowGroup = { title: string; status?: string; summary?: string; rows: Row[] };
 
 const same = (label: string, value: string): Row => ({ label, free: value, pro: value, proPlus: value });
 
@@ -31,9 +32,10 @@ export function pricingGroups(): RowGroup[] {
   return [
     {
       title: "Remote control",
+      summary: "All of it: YouTube, Windows media and volume, approved apps, lock and power, touchpad, keyboard, typed commands and dictation, at home or away",
       rows: [
         same("YouTube controls, Windows media, system volume", yes),
-        same("Approved app launch, focus, minimise, close", yes),
+        same("Approved app launch, focus, minimize, close", yes),
         same("Lock and confirmed power controls", yes),
         same("Touchpad, keyboard, typed commands and dictation", yes),
         same("Secure access away from home through the DoMe service", yes),
@@ -56,7 +58,8 @@ export function pricingGroups(): RowGroup[] {
     {
       title: "AI butler",
       rows: [
-        { label: `AI requests per ${WINDOW_HOURS}-hour window`, free: `${FREE_TASTE_REQUESTS} to try, once`, pro: String(proContent.ai.perWindow?.requests ?? ""), proPlus: String(proPlus.ai.perWindow?.requests ?? "") },
+        { label: "One-time taste to try the butler", free: `${FREE_TASTE_REQUESTS}, once (does not renew)`, pro: no, proPlus: no },
+        { label: `AI requests per ${WINDOW_HOURS}-hour window`, free: no, pro: String(proContent.ai.perWindow?.requests ?? ""), proPlus: String(proPlus.ai.perWindow?.requests ?? "") },
         { label: "AI requests per week", free: no, pro: `Up to ${proContent.ai.perWeek?.requests ?? ""}`, proPlus: `Up to ${proPlus.ai.perWeek?.requests ?? ""}` },
         { label: `Top-up: ${TOP_UP.requests} requests for ${usd(TOP_UP.priceCents)}, only when you choose`, free: no, pro: yes, proPlus: yes },
       ],
@@ -70,6 +73,7 @@ export function pricingGroups(): RowGroup[] {
     },
     {
       title: "Security",
+      summary: "Permissions, revocation, security activity and the emergency stop on the PC",
       rows: [same("Permissions, revocation, security activity", yes), same("Emergency stop on the PC", yes)],
     },
   ];

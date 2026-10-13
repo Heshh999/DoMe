@@ -226,7 +226,7 @@ describe("Search YouTube", () => {
     expect(screen.getByText("YouTube search results: pick a video below")).toBeInTheDocument();
     for (const name of ["Previous video", "Back 10 seconds", "Pause", "Forward 10 seconds", "Next video"]) expect(screen.getByRole("button", { name }), name).toBeDisabled();
     expect(screen.getByRole("button", { name: /Theater mode/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Fullscreen" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Full screen" })).toBeDisabled();
   });
 
   it("with only a results page open, the remote says there is no video instead of controlling the list", () => {

@@ -22,7 +22,7 @@ describe("public reading pages", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Privacy notice" })).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent(/DRAFT — prepared for founder review/);
     const headings = Array.from(container.querySelectorAll("h2")).map((h) => h.textContent);
-    expect(headings).toEqual(["What DoMe is", "Data we hold for your account", "Data that passes through the DoMe service", "On your phone", "The voice assistant (optional)", "On your PC", "Your choices", "Open items for founder review"]);
+    expect(headings).toEqual(["What DoMe is", "Data we hold for your account", "Data that passes through the DoMe service", "On your phone", "The AI butler (optional)", "On your PC", "Your choices", "Open items for founder review"]);
     expect(container.textContent).toContain("Never sent to Anthropic: audio, your screen");
     expect(container.textContent).toContain("DoMe is not end-to-end encrypted and we do not claim otherwise");
   });
@@ -32,7 +32,7 @@ describe("public reading pages", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Terms of service" })).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent(/Not yet legally reviewed/);
     const headings = Array.from(container.querySelectorAll("h2")).map((h) => h.textContent);
-    expect(headings).toEqual(["The service", "Accounts", "Acceptable use", "Free and Pro", "Availability and limits", "Disclaimer and liability", "Changes and termination", "Open items for founder review"]);
+    expect(headings).toEqual(["The service", "Accounts", "Acceptable use", "Free, Pro and Pro Plus", "Availability and limits", "Disclaimer and liability", "Changes and termination", "Open items for founder review"]);
     expect(container.textContent).toContain("Prices shown before paid launch are planned, not binding.");
   });
 
@@ -40,7 +40,8 @@ describe("public reading pages", () => {
     const { container } = page(<DownloadPage />);
     const button = screen.getByTestId("download-button");
     expect(button).toBeDisabled();
-    expect(button).toHaveTextContent("Download for Windows 10/11 — not yet published");
+    expect(button).toHaveAccessibleName("Download for Windows 10/11 — not yet published");
+    expect(button).toHaveTextContent("Windows app: not yet published");
     expect(button).toHaveAttribute("aria-describedby", "download-status");
     expect(container.querySelector("#download-status")).toHaveTextContent(/Release status: not yet published\./);
     expect(container.textContent).toMatch(/never to disable antivirus or other protection/);
@@ -64,6 +65,6 @@ describe("public reading pages", () => {
     page(<NotFoundPage />);
     expect(screen.getByRole("heading", { level: 1, name: "Page not found" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Website" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "Open app" })).toHaveAttribute("href", "/app");
+    expect(screen.getByRole("link", { name: /Open the app/ })).toHaveAttribute("href", "/app");
   });
 });

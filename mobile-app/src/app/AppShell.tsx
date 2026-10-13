@@ -22,6 +22,7 @@ import { useLabels } from "./hooks.ts";
 import { navigation, signInRedirect } from "./navigation.ts";
 import { getRuntime } from "./runtime.ts";
 import { getSpeaker } from "./voice.ts";
+import { appTitle, useDocumentTitle } from "./documentTitle.ts";
 
 type Tab = { to: string; label: string; icon: IconName; end?: boolean };
 const TYPE_TAB: Tab = { to: "/app/command", label: "Type", icon: "keyboard" };
@@ -216,19 +217,21 @@ function AppRuntime() {
 export function AppShell() {
   const online = useOnline();
   const showAssistant = useAssistantStore((s) => s.prefs.showAssistant);
+  const { pathname } = useLocation();
+  useDocumentTitle(appTitle(pathname));
   if (!online) return <OfflineScreen />;
   return (
     <RequireSession>
       <AppRuntime />
       <SpeechUnlock />
-      <div className="relative isolate min-h-dvh text-text flex flex-col">
+      <div data-app-shell="" className="relative isolate min-h-dvh text-text flex flex-col">
         <div className="dome-backdrop" aria-hidden="true" />
-        <div className="flex-1 w-full max-w-lg mx-auto px-5 pt-[calc(var(--safe-top)+0.75rem)] pb-[calc(92px+var(--safe-bottom))]">
+        <main id="main" className="flex-1 w-full max-w-lg mx-auto px-5 pt-[calc(var(--safe-top)+0.75rem)] pb-[calc(92px+var(--safe-bottom))]">
           <div className="mb-3 empty:hidden">
             <RelayBanner />
           </div>
           <Outlet />
-        </div>
+        </main>
         <nav aria-label="Main" className="dome-bar fixed bottom-0 inset-x-0 z-20 border-t border-border pb-[var(--safe-bottom)]">
           <ul className="max-w-lg mx-auto grid grid-cols-5 px-1">
             {tabs(showAssistant).map((t) => (

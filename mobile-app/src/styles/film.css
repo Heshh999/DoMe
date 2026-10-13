@@ -74,7 +74,7 @@
   background: transparent;
   cursor: pointer;
   --fill: 0%;
-  --track: linear-gradient(90deg, var(--dome-color-accent) 0 var(--fill), var(--dome-color-border-strong) var(--fill) 100%);
+  --track: linear-gradient(90deg, var(--dome-color-accent) 0 var(--fill), var(--dome-color-control-edge) var(--fill) 100%);
 }
 .film-progress::-webkit-slider-runnable-track {
   height: 4px;
@@ -84,7 +84,7 @@
 .film-progress::-moz-range-track {
   height: 4px;
   border-radius: 999px;
-  background: var(--dome-color-border-strong);
+  background: var(--dome-color-control-edge);
 }
 .film-progress::-moz-range-progress {
   height: 4px;
@@ -128,8 +128,31 @@
 .film-progress:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 3px var(--dome-color-focus);
 }
+.film-progress:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--dome-color-focus);
+}
+/* touch screens have no hover: the handle is always there, so the bar reads as something to drag */
+@media (hover: none) {
+  .film-progress::-webkit-slider-thumb {
+    opacity: 1;
+  }
+  .film-progress::-moz-range-thumb {
+    opacity: 1;
+  }
+}
 
-/* scene chips */
+/* scene chips: a row that scrolls sideways on phones, fading out at its right edge so it reads as scrollable */
+.film-chips {
+  scroll-padding-inline: 16px;
+  -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+  mask-image: linear-gradient(90deg, #000 85%, transparent);
+}
+@media (min-width: 640px) {
+  .film-chips {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
 .film-chip {
   display: inline-flex;
   align-items: center;
@@ -165,7 +188,7 @@
   height: 1.5rem;
   border-radius: 999px;
   background: var(--dome-color-surface);
-  color: var(--dome-color-text-faint);
+  color: var(--dome-color-text-muted);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
@@ -226,14 +249,19 @@
   outline-offset: 4px;
 }
 
-/* the "Watch again" overlay at the end */
-.film-replay {
+/* the end card's calls to action and "Watch again", full size over the stage once the film has ended */
+.film-end-actions {
   position: absolute;
-  left: 50%;
-  bottom: 6%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
   z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0 1rem;
 }
+
 
 /* the storyboard (reduced motion): no animation, one still per scene */
 .film-storyboard .film-canvas * {

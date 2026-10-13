@@ -137,7 +137,7 @@ describe("Type a command", () => {
     await typeCommand("open notepad and maximise it");
     expect(preview()).toHaveTextContent("Will run 2 steps on Office PC, one after another:");
     expect(screen.getByRole("list", { name: "Steps" })).toHaveTextContent("Open Notepad");
-    expect(screen.getByRole("list", { name: "Steps" })).toHaveTextContent("Maximise Notepad");
+    expect(screen.getByRole("list", { name: "Steps" })).toHaveTextContent("Maximize Notepad");
     await userEvent.click(screen.getByRole("button", { name: "Run 2 steps" }));
     await waitFor(() => expect(sent("app.launch")).toHaveLength(1));
     expect(sent("app.maximize")).toHaveLength(0);
@@ -298,11 +298,11 @@ describe("Type a command", () => {
   it("app examples name the app so they parse back: Spotify first, and an id when the name can't be typed", async () => {
     renderPage();
     await answerAppList([{ app_id: "spotify", display_name: "Spotify", running: true, windows: [{ window_id: "s1", title: "Spotify" }] }, NOTEPAD]);
-    for (const ex of ["Open Spotify", "Bring Spotify to the front", "Full screen Spotify", "Exit full screen Spotify", "Open Spotify and maximise it"]) {
+    for (const ex of ["Open Spotify", "Bring Spotify to the front", "Full screen Spotify", "Exit full screen Spotify", "Open Spotify and maximize it"]) {
       await userEvent.click(screen.getByRole("button", { name: ex }));
       expect(preview(), ex).toHaveTextContent(/Will (send|run)/);
     }
-    expect(preview()).toHaveTextContent("Maximise Spotify");
+    expect(preview()).toHaveTextContent("Maximize Spotify");
   });
 
   it("app examples use the app id when the display name could not be typed back as a command", async () => {
@@ -315,7 +315,7 @@ describe("Type a command", () => {
   it("examples teach the new phrases and only fill the box", async () => {
     renderPage();
     await answerAppList([NOTEPAD]);
-    for (const ex of ["Make the volume 100%", "Search YouTube for lofi beats", "Play the second video", "Full screen Notepad", "Open Notepad and maximise it"]) expect(screen.getByRole("button", { name: ex })).toBeInTheDocument();
+    for (const ex of ["Make the volume 100%", "Search YouTube for lofi beats", "Play the second video", "Full screen Notepad", "Open Notepad and maximize it"]) expect(screen.getByRole("button", { name: ex })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Full screen Notepad" }));
     expect(box()).toHaveValue("Full screen Notepad");
     expect(preview()).toHaveTextContent("Will send: Make Notepad full screen (F11) on Office PC.");
@@ -327,7 +327,7 @@ describe("Type a command", () => {
     const expected: Record<string, string> = {
       "Full screen ZStream": "Will send: Make ZStream full screen (F11) on Office PC.",
       "Exit full screen ZStream": "Will send: Leave full screen in ZStream on Office PC.",
-      "Open ZStream and maximise it": "Maximise ZStream",
+      "Open ZStream and maximize it": "Maximize ZStream",
     };
     for (const [ex, says] of Object.entries(expected)) {
       await userEvent.click(screen.getByRole("button", { name: ex }));
@@ -347,13 +347,13 @@ describe("Type a command", () => {
     await waitFor(() => expect(sent("app.set_fullscreen")).toHaveLength(1));
     expect(sent("app.set_fullscreen")[0]).toMatchObject({ params: { enabled: true }, target: { app_id: "zstream-app" } });
     answer(sent("app.set_fullscreen")[0]!.command_id, null, { code: "FULLSCREEN_UNSUPPORTED", message: PC_SAYS_NO_F11 });
-    const chip = await screen.findByRole("button", { name: "Maximise instead" });
+    const chip = await screen.findByRole("button", { name: "Maximize instead" });
     expect(screen.getByText(PC_SAYS_NO_F11)).toBeInTheDocument();
-    expect(screen.getByText("Try Maximise instead.")).toBeInTheDocument();
+    expect(screen.getByText("Try Maximize instead.")).toBeInTheDocument();
     expect(screen.queryByText(/That app did not switch to full screen with F11/)).toBeNull();
     await userEvent.click(chip);
-    expect(box()).toHaveValue("maximise ZStream");
-    expect(preview()).toHaveTextContent("Will send: Maximise ZStream on Office PC.");
+    expect(box()).toHaveValue("maximize ZStream");
+    expect(preview()).toHaveTextContent("Will send: Maximize ZStream on Office PC.");
     expect(sent("app.maximize")).toHaveLength(0); // never maximised in its place without a tap on Send
   });
 
@@ -369,8 +369,8 @@ describe("Type a command", () => {
     expect(await screen.findByText("Stopped at step 2 of 2")).toBeInTheDocument();
     // in the failed step's outcome and in the notice that ends the plan
     expect(screen.getAllByText(PC_SAYS_NO_F11)).toHaveLength(2);
-    await userEvent.click(screen.getByRole("button", { name: "Maximise instead" }));
-    expect(box()).toHaveValue("maximise ZStream");
+    await userEvent.click(screen.getByRole("button", { name: "Maximize instead" }));
+    expect(box()).toHaveValue("maximize ZStream");
     expect(sent("app.maximize")).toHaveLength(0);
   });
 
@@ -384,6 +384,6 @@ describe("Type a command", () => {
     await waitFor(() => expect(document.querySelector('[data-step-status="failed"]')).not.toBeNull());
     expect(screen.getAllByText(/runs as administrator/).length).toBeGreaterThan(0);
     expect(screen.queryByText("elevated")).toBeNull(); // the PC's text is shown only where it explains the code
-    expect(screen.queryByRole("button", { name: "Maximise instead" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Maximize instead" })).toBeNull();
   });
 });

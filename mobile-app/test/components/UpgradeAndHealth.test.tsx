@@ -30,6 +30,7 @@ let h: RuntimeHarness;
 
 beforeEach(async () => {
   freshStorage();
+  localStorage.clear();
   signedIn();
   h = makeRuntime();
   await h.connect();
@@ -79,19 +80,27 @@ describe("Upgrade experience (spec §12)", () => {
   it("a deliberate Pro selection (Routines, Custom remotes) shows a dismissible explanation naming the specific benefit, never a connectivity claim", async () => {
     const r = page(<RoutinesPage />, "/app/routines");
     const exp = screen.getByTestId("pro-explanation");
-    expect(exp).toHaveTextContent(/One-tap routines is part of DoMe Pro/);
+    expect(exp).toHaveTextContent(/Part of Pro and Pro Plus: One-tap routines/);
     expect(exp).toHaveTextContent(/stays free/);
     expect(exp.textContent).not.toMatch(/connection|reconnect|compatib/i);
-    // the explanation agrees with the website's plan content: Pro's price, Pro Plus, coming at paid launch, nothing to buy
+    // the explanation agrees with the website's plan content: Pro's price, coming at paid launch, nothing to buy
     expect(exp).toHaveTextContent(/nothing to buy yet/);
-    expect(exp).toHaveTextContent(/DoMe Pro \(\$9\.99 \/ month or \$99\.99 \/ year\) and DoMe Pro Plus are coming at paid launch/);
+    expect(exp).toHaveTextContent(/Coming at paid launch \(Pro from \$9\.99 \/ month\)/);
     expect(exp.textContent).not.toMatch(/5\.99|planned pricing|not final/);
     expect(within(exp).getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/app/billing");
+    expect(within(exp).getByRole("link", { name: "What’s in Pro" })).toHaveAttribute("href", "/pricing");
+    // the example routines end in a status line, never a disabled button that looks tappable
+    expect(screen.queryByRole("button", { name: /Run/ })).toBeNull();
+    expect(screen.getAllByText("Runs with Pro and Pro Plus, at paid launch")).toHaveLength(3);
     await userEvent.click(within(exp).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByTestId("pro-explanation")).toBeNull();
     r.unmount();
+    // the dismissal is remembered on this phone, per page
+    const again = page(<RoutinesPage />, "/app/routines");
+    expect(screen.queryByTestId("pro-explanation")).toBeNull();
+    again.unmount();
     page(<LayoutsPage />, "/app/layouts");
-    expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Saving your own remote layouts is part of DoMe Pro/);
+    expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Part of Pro and Pro Plus: Saving your own remote layouts/);
   });
 
   it("public pages: the official Windows download is visibly not yet published, and the release notes say pre-release with no device verification", () => {
@@ -117,13 +126,17 @@ describe("HealthPage", () => {
     const items = within(list).getAllByRole("listitem");
     expect(items.map((i) => i.getAttribute("aria-label"))).toEqual(["This phone", "Your account", "Office PC", "Remote control on the PC", "Touchpad and keyboard permission", "Browser extension", "Media target"]);
     expect(within(items[3]!).getByText("Needs attention")).toBeInTheDocument();
+    // one glyph per status pill: its icon, never a dot and an icon side by side
+    const pill = within(items[3]!).getByText("Needs attention");
+    expect(pill.querySelectorAll("svg")).toHaveLength(1);
+    expect(pill.querySelector("span[aria-hidden]")).toBeNull();
     expect(within(items[3]!).getByText("Enable remote control on the PC")).toBeInTheDocument();
     expect(within(items[5]!).getByText("Install or update the extension on the PC")).toBeInTheDocument();
     expect(within(items[4]!).getByText("OK")).toBeInTheDocument();
     expect(screen.queryByText("PC_REMOTE_DISABLED")).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: /Show technical details/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Technical details" }));
     expect(screen.getByText("PC_REMOTE_DISABLED")).toBeInTheDocument();
-    expect(screen.getByText(/What DoMe needs \(V1\)/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "What DoMe needs" })).toBeInTheDocument();
     expect(screen.getByText(/cannot wake or power on a PC remotely/)).toBeInTheDocument();
     expect(screen.getByText(/A green row never implies the others work/)).toBeInTheDocument();
   });
@@ -132,8 +145,8 @@ describe("HealthPage", () => {
     useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: TS });
     page(<HealthPage />, "/app/health");
     const sentBefore = h.sockets[0]!.sent.length;
-    const retry = screen.getByRole("button", { name: /^Retry/ });
-    for (let i = 0; i < MAX_RETRIES; i++) await userEvent.click(screen.getByRole("button", { name: /^Retry/ }));
+    const retry = screen.getByRole("button", { name: /^Check again/ });
+    for (let i = 0; i < MAX_RETRIES; i++) await userEvent.click(screen.getByRole("button", { name: /^Check again/ }));
     expect(retry).toBeDisabled();
     expect(screen.getByText(/Still not working after several retries/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", expect.stringContaining("/support?category="));

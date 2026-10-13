@@ -7,8 +7,9 @@ import { Link, useSearchParams } from "react-router";
 
 import type { rest } from "@dome/protocol";
 
+import { titled, useDocumentTitle } from "../../app/documentTitle.ts";
 import { api, ApiError } from "../../lib/api.ts";
-import { secondsUntil } from "../../lib/format.ts";
+import { expiresIn } from "../../lib/format.ts";
 import { errorMessage } from "../../lib/labels.ts";
 import { Wordmark } from "../../components/brand.tsx";
 import { Button, Card, CheckRow, Field, IconWell, inputClass, KeyValue, Notice, Spinner } from "../../components/ui.tsx";
@@ -22,6 +23,7 @@ function normaliseUserCode(raw: string): string | null {
 }
 
 export function LinkPage() {
+  useDocumentTitle(titled("Link a PC"));
   const [params] = useSearchParams();
   const initial = params.get("user_code") ?? "";
   const [codeInput, setCodeInput] = useState(initial);
@@ -132,7 +134,7 @@ export function LinkPage() {
                   rows={[
                     { label: "DoMe agent", value: `version ${preview.agent_version}` },
                     { label: "Platform", value: preview.platform === "windows" ? "Windows" : "Development build" },
-                    { label: "Code expires", value: `in ${secondsUntil(preview.expires_at)} s` },
+                    { label: "Code expires", value: expiresIn(preview.expires_at) },
                   ]}
                 />
                 <div className="mt-4 space-y-3">

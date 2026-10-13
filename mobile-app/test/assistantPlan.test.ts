@@ -56,7 +56,7 @@ describe("planFromAssistant builds the plan the typed words build", () => {
 
   it("gives every step words that parse back to it", () => {
     const plan = planOf(planFromAssistant([s("app.launch", {}, "edge"), s("app.maximize", {}, "it")], CTX));
-    expect(plan.map((p) => p.text)).toEqual(["open msedge", "maximise msedge"]);
+    expect(plan.map((p) => p.text)).toEqual(["open msedge", "maximize msedge"]);
   });
 
   it("keeps the YouTube-as-app substitution visible: the card shows the action that will really run", () => {

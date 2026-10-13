@@ -3,7 +3,7 @@
   "status": {
     "channel": "pre-release",
     "headline": "DoMe is a pre-release build. There is no public Windows installer yet and no customer-facing release has been verified on real devices.",
-    "verification": "Automated tests run on every component (unit and integration, with simulated Windows and phone behaviour). Real iPhone and real Windows PC checks are listed as pending below; nothing on this page claims they passed."
+    "verification": "Automated tests run on every component (unit and integration, with simulated Windows and phone behavior). Real iPhone and real Windows PC checks are listed as pending below; nothing on this page claims they passed."
   },
   "releases": [
     {
@@ -16,10 +16,11 @@
         "Connection health screen with one next action per state, a first-use walkthrough, and help links from every failure.",
         "Support requests from the app with a reference number after receipt and a copyable redacted summary when sending fails.",
         "Now Playing panel showing exactly which PC, app or browser tab a media control will affect.",
-        "Sleep, restart and shutdown confirmations state that remote access can end and that remote wake is not supported."
+        "Sleep, restart and shutdown confirmations state that remote access can end and that remote wake is not supported.",
+        "Ask: an optional AI butler, off until you turn it on. Speak or type a request; only requests DoMe can’t work out by itself go to Anthropic’s AI, and the phone shows every step it runs."
       ],
       "verified": ["Unit and component tests in the phone app (jsdom), the PC agent (simulated Windows adapter) and the relay (real PostgreSQL)."],
-      "not_verified": ["Real iPhone Safari / installed PWA gestures, keyboard varieties (IME, autocorrect, dictation, emoji), rotation and backgrounding.", "Real Windows input injection, multi-monitor and mixed-DPI behaviour, lock screen and UAC restrictions.", "Network loss during a drag, key hold or text send on real devices.", "Installer, update and uninstall on Windows 10/11."]
+      "not_verified": ["Real iPhone Safari / installed PWA gestures, keyboard varieties (IME, autocorrect, dictation, emoji), rotation and backgrounding.", "Real Windows input injection, multi-monitor and mixed-DPI behavior, lock screen and UAC restrictions.", "Network loss during a drag, key hold or text send on real devices.", "Installer, update and uninstall on Windows 10/11.", "Ask on a real iPhone: speech recognition, spoken replies and AI requests against the live AI service."]
     },
     {
       "version": "0.1.0 (protocol 1.0)",

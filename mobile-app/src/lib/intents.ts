@@ -711,15 +711,15 @@ const APP_FORMS: ReadonlyArray<readonly [RegExp, AppVerb | "launch_fullscreen" |
 const VERB_PHRASE: Record<AppVerb, string> = {
   launch: "open {}",
   focus: "bring {} to the front",
-  minimize: "minimise {}",
-  maximize: "maximise {}",
+  minimize: "minimize {}",
+  maximize: "maximize {}",
   restore: "restore {}",
   fullscreen_on: "full screen {}",
   fullscreen_off: "exit full screen in {}",
   close: "close {}",
 };
 
-/** "maximise ZStream": a command for one approved app, in words that parse back to that verb and that app. */
+/** "maximize ZStream": a command for one approved app, in words that parse back to that verb and that app. */
 export function appCommandText(verb: AppVerb, app: IntentApp, apps: readonly IntentApp[]): string {
   return VERB_PHRASE[verb].replace("{}", appPhrase(app, apps));
 }
@@ -736,7 +736,7 @@ export function exampleAppPhrase(apps: readonly IntentApp[] | null | undefined):
 }
 
 /** What to say after "open X and …" when the app is not running yet. */
-const AFTER_LAUNCH: Partial<Record<AppVerb, string>> = { maximize: "maximise it", restore: "restore it", fullscreen_on: "make it full screen", minimize: "minimise it", fullscreen_off: "exit full screen in it" };
+const AFTER_LAUNCH: Partial<Record<AppVerb, string>> = { maximize: "maximize it", restore: "restore it", fullscreen_on: "make it full screen", minimize: "minimize it", fullscreen_off: "exit full screen in it" };
 const ACTIVE_VERBS: ReadonlySet<AppVerb> = new Set(["focus", "minimize", "maximize", "restore", "fullscreen_on", "fullscreen_off", "close"]);
 /**
  * Words that stand for something other than an app ("pause the music", "lock the screen"). An approved app with
@@ -894,8 +894,8 @@ const helpRules: Rule = (p) => {
  */
 const AFTER_APP: ReadonlyArray<readonly [RegExp, string]> = [
   [new RegExp(`^(?:(?:go|switch to|turn on|enter|make it|put it in|go to) )?${FS}(?: mode)?(?: on)?$`), "make it full screen"],
-  [/^(?:maximi[sz]e|max|enlarge)(?: it)?$/, "maximise it"],
-  [/^(?:minimi[sz]e|hide)(?: it)?$/, "minimise it"],
+  [/^(?:maximi[sz]e|max|enlarge)(?: it)?$/, "maximize it"],
+  [/^(?:minimi[sz]e|hide)(?: it)?$/, "minimize it"],
   [/^(?:restore|unmaximi[sz]e|un maximi[sz]e)(?: it)?$/, "restore it"],
   [new RegExp(`^(?:(?:exit|leave|quit|end|escape|turn off|get out of|cancel|stop) ${FS}(?: mode)?|${FS} off|un ?${FS})$`), "exit full screen in it"],
   [/^(?:bring (?:it )?to the front|bring it forward|focus(?: on)? it|switch to it)$/, "bring it to the front"],
@@ -913,7 +913,7 @@ const RULES: readonly Rule[] = [helpRules, afterAppRules, pcRules, searchRules, 
 const QUERY_RULES: readonly Rule[] = [searchRules, searchFallbackRules];
 
 /** After "open notepad and …", a bare app name repeats the verb: "open notepad and chrome". */
-const CARRY_VERB: Partial<Record<ActionName, string>> = { "app.launch": "open", "app.minimize": "minimise", "app.maximize": "maximise", "app.restore": "restore" };
+const CARRY_VERB: Partial<Record<ActionName, string>> = { "app.launch": "open", "app.minimize": "minimize", "app.maximize": "maximize", "app.restore": "restore" };
 
 function runRules(p: Piece, rules: readonly Rule[]): PieceResult | null {
   for (const rule of rules) {
@@ -1217,9 +1217,9 @@ export function commandText(s: PlanStep, apps: readonly IntentApp[] | null | und
     case "app.focus":
       return `bring ${name} to the front`;
     case "app.minimize":
-      return `minimise ${name}`;
+      return `minimize ${name}`;
     case "app.maximize":
-      return `maximise ${name}`;
+      return `maximize ${name}`;
     case "app.restore":
       return `restore ${name}`;
     case "app.set_fullscreen":

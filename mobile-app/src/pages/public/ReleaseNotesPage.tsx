@@ -19,6 +19,9 @@ interface KnownIssue {
 
 const data = notes as { status: { channel: string; headline: string; verification: string }; releases: Release[]; known_issues: KnownIssue[] };
 
+/** "pre-release" → "Pre-release" (sentence case, the way the page's text writes it). */
+const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function ReleaseNotesPage() {
   return (
     <div>
@@ -26,8 +29,8 @@ export function ReleaseNotesPage() {
         <p className="dome-eyebrow">Release notes</p>
         <h1 className="mt-3 text-h1 font-bold">Release history and known issues</h1>
         <p className="mt-4 max-w-2xl text-lg text-text-muted">{data.status.headline}</p>
-        <div className="mt-6 flex gap-3 rounded-control border border-border bg-bg-elevated px-4 py-3.5 text-sm leading-relaxed text-text-muted">
-          <span className="dome-chip dome-chip-quiet mt-0.5 shrink-0 self-start capitalize">{data.status.channel}</span>
+        <div className="mt-6 flex flex-col items-start gap-2 rounded-card border border-border bg-bg-elevated px-4 py-3.5 text-sm leading-relaxed text-text-muted sm:flex-row sm:gap-3">
+          <span className="dome-chip dome-chip-quiet mt-0.5 shrink-0">{sentenceCase(data.status.channel)}</span>
           <p>{data.status.verification}</p>
         </div>
       </header>
@@ -61,10 +64,12 @@ export function ReleaseNotesPage() {
               <article className="dome-card p-5 sm:p-6">
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                   <h3 className="text-[17px] font-semibold tracking-[-0.01em]">{r.version}</h3>
-                  <p className="inline-flex flex-wrap items-center gap-2 text-sm text-text-faint">
-                    <span>{r.date}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{r.state}</span>
+                  <p className="inline-flex flex-wrap items-center gap-x-2 text-sm text-text-faint">
+                    <span className="whitespace-nowrap">{r.date}</span>
+                    <span aria-hidden="true" className="hidden sm:inline">
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap">{r.state}</span>
                   </p>
                 </div>
                 <ul className="mt-4 space-y-2 text-[15px] leading-relaxed text-text-muted">

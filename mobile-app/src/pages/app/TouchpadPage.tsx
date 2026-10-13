@@ -15,10 +15,10 @@ import { Icon } from "../../components/icons.tsx";
 import { KeyboardPanel } from "../../components/KeyboardPanel.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { TouchpadSurface } from "../../components/TouchpadSurface.tsx";
-import { Button, IconWell, Notice, PageHeader, Pill, Steps, type WellTone } from "../../components/ui.tsx";
+import { Button, IconWell, Notice, PageHeader, Pill, Steps } from "../../components/ui.tsx";
 import { GestureMachine, type GestureOutput } from "../../lib/gestures.ts";
 import type { InputEvent } from "../../lib/input.ts";
-import { foregroundLabel, sessionStatus } from "../../lib/inputStatus.ts";
+import { foregroundParts, sessionStatus } from "../../lib/inputStatus.ts";
 import { errorMessage, INPUT_SCOPE_EXPLANATION, recoverySteps } from "../../lib/labels.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
@@ -143,7 +143,7 @@ export function TouchpadPage() {
   const status = sessionStatus(session, now);
   const problem = session.problem;
   const showProblem = problem !== null;
-  const statusWell: WellTone = status.tone === "success" ? "success" : status.tone === "info" ? "accent" : status.tone === "warning" ? "warning" : status.tone === "danger" ? "danger" : "muted";
+  const front = foregroundParts(session.foregroundApp);
 
   return (
     <div className="space-y-3">
@@ -151,7 +151,7 @@ export function TouchpadPage() {
         title="Touchpad"
         action={
           // Stop Input is a safety control: always visible, quiet in red, never the screen's primary.
-          <button type="button" onClick={stopInput} disabled={session.phase === "idle"} aria-label="Stop Input" className="tap dome-press inline-flex h-11 items-center gap-1.5 rounded-full border border-danger/30 bg-danger/8 pl-3 pr-3.5 text-sm font-semibold text-danger hover:bg-danger/12 disabled:cursor-not-allowed disabled:opacity-40">
+          <button type="button" onClick={stopInput} disabled={session.phase === "idle"} aria-label="Stop Input" className="tap dome-press inline-flex h-11 items-center gap-1.5 rounded-full border border-danger/30 bg-danger/8 pl-3 pr-3.5 text-sm font-semibold text-danger-strong hover:bg-danger/12 dark:text-danger disabled:cursor-not-allowed disabled:opacity-40">
             <Icon name="stop" size={16} />
             Stop Input
           </button>
@@ -160,16 +160,19 @@ export function TouchpadPage() {
       <PcSwitcher pc={pc} live={live} />
 
       <div className="dome-card flex items-center gap-3 px-4 py-3">
-        <IconWell icon="cursor" tone={statusWell} size={40} />
+        <IconWell icon="cursor" size={40} />
         <div className="min-w-0 flex-1 text-sm">
           <p className="truncate">
             <span className="text-text-muted">In front on {pcName ?? "the PC"}: </span>
-            <span className="font-semibold" title={session.foregroundApp?.window_title}>
-              {foregroundLabel(session.foregroundApp)}
-            </span>
+            <span className="font-semibold">{front.name}</span>
           </p>
+          {front.title ? (
+            <p className="truncate text-xs text-text-muted" title={front.title}>
+              {front.title}
+            </p>
+          ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <Link to="/app/health" className="tap -my-1.5 inline-flex shrink-0 items-center" aria-label={`Connection health: ${status.label}`}>
+            <Link to="/app/health" className="tap -my-1.5 inline-flex shrink-0 items-center" aria-label={`Connection health: ${status.label}${status.detail ? ` (${status.detail})` : ""}`} title={status.detail}>
               <Pill tone={status.tone} pulse={status.pulse}>
                 {status.label}
               </Pill>

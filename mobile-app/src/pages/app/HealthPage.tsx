@@ -27,7 +27,8 @@ export const MAX_RETRIES = 3;
 
 const TONE: Record<LayerStatus, Tone> = { ok: "success", problem: "danger", unknown: "neutral", waiting: "info" };
 const LABEL: Record<LayerStatus, string> = { ok: "OK", problem: "Needs attention", unknown: "Unknown", waiting: "Waiting" };
-const WELL_TONE: Record<LayerStatus, WellTone> = { ok: "success", problem: "danger", unknown: "muted", waiting: "accent" };
+/** OK rows sit in the brand's accent well: the screen reads DoMe blue, with green kept for the overall summary. */
+const WELL_TONE: Record<LayerStatus, WellTone> = { ok: "accent", problem: "danger", unknown: "muted", waiting: "accent" };
 const STATUS_ICON: Record<LayerStatus, IconName> = { ok: "check", problem: "warning", unknown: "help", waiting: "clock" };
 const LAYER_ICON: Record<HealthLayer["id"], IconName> = { phone: "phone", account: "user", pc: "pc", remote: "remote", input: "touchpad", extension: "youtube", target: "play" };
 
@@ -93,7 +94,7 @@ export function HealthPage() {
   const problems = layers.filter((l) => l.status === "problem");
   const last = lastVerifiedResult(commands, pcId);
   const retriesLeft = MAX_RETRIES - retries;
-  const overall: { tone: Tone; well: WellTone; label: string } = problems.length === 0 ? (layers.some((l) => l.status === "waiting" || l.status === "unknown") ? { tone: "info", well: "accent", label: "No known problem" } : { tone: "success", well: "success", label: "No known problem" }) : { tone: "warning", well: "warning", label: `${problems.length} item${problems.length === 1 ? "" : "s"} need attention` };
+  const overall: { tone: Tone; well: WellTone; label: string } = problems.length === 0 ? (layers.some((l) => l.status === "waiting" || l.status === "unknown") ? { tone: "info", well: "accent", label: "No known problem" } : { tone: "success", well: "accent", label: "No known problem" }) : { tone: "warning", well: "warning", label: `${problems.length} item${problems.length === 1 ? "" : "s"} need attention` };
 
   // A retry re-checks the connection only. It never resends a command: an uncertain PC action stays
   // uncertain until the PC reports (spec §11A "a connection retry must not retry an uncertain PC action").
@@ -132,8 +133,8 @@ export function HealthPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
                   <p className="pt-0.5 font-semibold leading-snug">{l.title}</p>
-                  <Pill tone={TONE[l.status]} pulse={l.status === "waiting"}>
-                    <Icon name={STATUS_ICON[l.status]} size={12} className="-ml-0.5" />
+                  <Pill tone={TONE[l.status]} dot={false}>
+                    <Icon name={STATUS_ICON[l.status]} size={12} className={`-ml-0.5 ${l.status === "waiting" ? "pulse" : ""}`} />
                     {LABEL[l.status]}
                   </Pill>
                 </div>
@@ -156,7 +157,7 @@ export function HealthPage() {
       <div className="px-1">
         <Button variant="quiet" size="sm" className="-ml-3" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}>
           <Icon name="chevron" size={16} className={showDetails ? "-rotate-90" : "rotate-90"} />
-          {showDetails ? "Hide technical details" : "Show technical details (codes, versions)"}
+          Technical details
         </Button>
       </div>
 
@@ -164,15 +165,16 @@ export function HealthPage() {
         <div className="flex items-start gap-3.5">
           <IconWell icon="refresh" size={40} />
           <div className="min-w-0 flex-1 pt-0.5">
-            <h2 className="font-semibold leading-snug">Retry</h2>
+            <h2 className="font-semibold leading-snug">Check again</h2>
             <p className="mt-1 text-sm text-text-muted">Re-checks this phone’s connection and asks the PC for its current state. It never re-sends a command: an action whose outcome is unknown stays unknown until the PC reports.</p>
           </div>
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <Button variant="primary" onClick={retry} disabled={retriesLeft <= 0}>
-            Retry{retriesLeft > 0 && retries > 0 ? ` (${retriesLeft} left)` : ""}
+          {/* solid blue only when something needs attention: with no known problem, checking again is a quiet option */}
+          <Button variant={problems.length > 0 ? "primary" : "secondary"} onClick={retry} disabled={retriesLeft <= 0}>
+            Check again{retriesLeft > 0 && retries > 0 ? ` (${retriesLeft} left)` : ""}
           </Button>
-          {retryAt ? <span className="text-xs text-text-faint">Last retry {relativeTime(new Date(retryAt).toISOString())}</span> : null}
+          {retryAt ? <span className="text-xs text-text-faint">Last checked {relativeTime(new Date(retryAt).toISOString())}</span> : null}
         </div>
         {retriesLeft <= 0 ? (
           <div className="mt-4">
@@ -221,7 +223,7 @@ export function HealthPage() {
       </Card>
 
       <Card>
-        <h2 className="font-semibold">What DoMe needs (V1)</h2>
+        <h2 className="font-semibold">What DoMe needs</h2>
         <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-text-muted marker:text-text-faint">
           <li>Internet access on this phone and on the PC. Both connect out to the DoMe service; no port forwarding or VPN.</li>
           <li>The DoMe Windows app running in a signed-in Windows user session (tray icon visible), linked to your account.</li>

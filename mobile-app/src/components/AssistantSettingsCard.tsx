@@ -111,18 +111,18 @@ export function AssistantSettingsCard() {
       <div className="flex items-start gap-3.5">
         <IconWell icon="ask" size={40} />
         <div className="min-w-0 flex-1 pt-0.5">
-          <h2 className="font-semibold leading-snug">Assistant</h2>
+          <h2 className="font-semibold leading-snug">AI butler</h2>
           <p className="mt-1 text-sm text-text-muted">Talk to DoMe from the Ask page. Commands DoMe understands by itself always work, without any AI service.</p>
         </div>
       </div>
 
       <div className="mt-3 space-y-2" aria-live="polite">
-        {statusError ? <p className="text-sm text-text-muted">The AI assistant's status could not be read right now. Voice without AI still works.</p> : null}
+        {statusError ? <p className="text-sm text-text-muted">The AI butler's status could not be read right now. Voice without AI still works.</p> : null}
         {why ? <Notice tone="info">{why}</Notice> : null}
         {status && consented ? (
           <p className="flex items-center gap-1.5 text-sm font-medium text-success">
             <Icon name="checkCircle" size={16} />
-            AI assistant is on for your account.
+            AI butler is on for your account.
           </p>
         ) : null}
         {outdated ? <Notice tone="warning">The terms changed; read and turn on again.</Notice> : null}
@@ -132,15 +132,15 @@ export function AssistantSettingsCard() {
 
       {canConsent && !consented ? (
         <Button className="mt-3" variant="primary" onClick={() => setSheet(true)}>
-          Turn on the AI assistant…
+          Turn on the AI butler…
         </Button>
       ) : null}
 
       <div className="mt-4 divide-y divide-border border-y border-border">
-        <Row label="Show the Assistant tab" hint="The tab bar shows Ask instead of Type. Both stay under More.">
-          <Toggle label="Show the Assistant tab" checked={prefs.showAssistant} onChange={(v) => setPrefs({ showAssistant: v })} />
+        <Row label="Show the Ask tab" hint="The tab bar shows Ask instead of Type. Both stay under More.">
+          <Toggle label="Show the Ask tab" checked={prefs.showAssistant} onChange={(v) => setPrefs({ showAssistant: v })} />
         </Row>
-        <Row label="Use AI on this phone" hint={consented ? "Requests DoMe can't work out go to the AI assistant." : "Turn on the AI assistant first."}>
+        <Row label="Use AI on this phone" hint={consented ? "Requests DoMe can't work out go to the AI butler." : "Turn on the AI butler first."}>
           <Toggle
             label="Use AI on this phone"
             checked={prefs.useAi && consented}
@@ -162,10 +162,10 @@ export function AssistantSettingsCard() {
       <div className="mt-4 space-y-4">
         <div className="space-y-1.5">
           <label htmlFor={`${id}-name`} className="block text-sm font-semibold">
-            Assistant's name
+            Butler's name
           </label>
           <input id={`${id}-name`} className={inputClass} value={name} maxLength={20} autoComplete="off" onChange={(e) => setName(e.currentTarget.value)} onBlur={(e) => saveName(e.currentTarget.value)} aria-invalid={nameInvalid} />
-          <p className="text-xs text-text-muted">{nameInvalid ? "Letters, spaces, full stops, apostrophes and hyphens only, up to 20 characters." : "What the assistant calls itself. Default: DoMe."}</p>
+          <p className="text-xs text-text-muted">{nameInvalid ? "Letters, spaces, full stops, apostrophes and hyphens only, up to 20 characters." : "What the butler calls itself. Default: DoMe."}</p>
         </div>
         <div className="space-y-1.5">
           <label htmlFor={`${id}-address`} className="block text-sm font-semibold">
@@ -252,10 +252,11 @@ export function AssistantSettingsCard() {
       </div>
 
       {consented ? (
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
-          <p className="text-xs text-text-muted">Turns it off for your account on every phone.</p>
-          <Button variant="danger-ghost" size="sm" className="-mr-2 shrink-0" busy={busy === "withdraw"} onClick={() => void withdraw()}>
-            Turn off the AI assistant
+        // the sentence on its own line, then a full-width quiet button: never a squeezed three-line column
+        <div className="mt-4 space-y-2 border-t border-border pt-3">
+          <p className="text-xs text-text-muted">Turning it off applies to your account on every phone.</p>
+          <Button variant="danger-ghost" size="md" full className="border border-danger/30" busy={busy === "withdraw"} onClick={() => void withdraw()}>
+            Turn off the AI butler
           </Button>
         </div>
       ) : null}

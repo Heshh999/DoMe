@@ -99,7 +99,7 @@ export function TouchpadSurface({ machine, onOutput, disabled, dragActive, label
       }}
       onContextMenu={(e) => e.preventDefault()}
       style={{ touchAction: "none" }}
-      className={`dome-touchpad relative w-full select-none rounded-card border-2 transition-colors ${dragActive ? "border-warning bg-warning/10" : disabled ? "border-border opacity-70" : "border-border-strong"} ${compact ? "h-[34dvh] min-h-[180px]" : "h-[52dvh] min-h-[260px]"}`}
+      className={`dome-touchpad relative w-full select-none rounded-card border-2 transition-colors ${dragActive ? "border-warning bg-warning/10" : disabled ? "border-border opacity-70" : "border-border-strong"} ${compact ? "h-[34dvh] min-h-[180px]" : "h-[clamp(200px,calc(100dvh_-_30rem_-_var(--safe-bottom)),440px)]"}`}
     >
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
         {dragActive ? (

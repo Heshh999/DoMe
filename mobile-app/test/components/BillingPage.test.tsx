@@ -4,7 +4,7 @@
  * and the pricing page agree: Pro $9.99 / month or $99.99 / year, Pro Plus $24.99 / month or $249.99 / year,
  * both coming at paid launch. Nothing on the page offers or implies a purchase.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 
@@ -38,16 +38,17 @@ describe("BillingPage", () => {
     expect(limits).toHaveTextContent(/Routines\s*Not included/);
     expect(limits).toHaveTextContent(/Custom layouts\s*Not included/);
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.queryByRole("link")).toBeNull();
+    // the only link compares the plans on the website; nothing here buys anything
+    expect(screen.getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual(["/pricing"]);
     expect(container.textContent).not.toMatch(/upgrade now|subscribe|buy now|checkout now/i);
   });
 
   it("states the coming plans exactly as the website does: Pro $9.99 / $99.99, Pro Plus $24.99 / $249.99, coming at paid launch, nothing can be bought", () => {
     const { container } = renderBilling();
     const notice = screen.getByText("Upgrading is not available yet").closest('[role="status"]') as HTMLElement;
-    expect(notice).toHaveTextContent("DoMe Pro will be $9.99 / month or $99.99 / year and DoMe Pro Plus $24.99 / month or $249.99 / year");
-    expect(notice).toHaveTextContent(/both are coming at paid launch/);
-    expect(notice).toHaveTextContent(/nothing can be bought or charged from this app today/);
+    expect(notice).toHaveTextContent("Pro ($9.99 / month or $99.99 / year) and Pro Plus ($24.99 / month or $249.99 / year) are coming at paid launch");
+    expect(notice).toHaveTextContent(/Nothing can be bought or charged from this app today/);
+    expect(within(notice).getByRole("link", { name: "Compare plans" })).toHaveAttribute("href", "/pricing");
     // the figures are the plan content's, so a price change on the website reaches this page too
     const pro = planById("pro").price!;
     const proPlus = planById("pro_plus").price!;

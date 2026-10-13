@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -33,7 +33,12 @@ describe("Dashboard", () => {
     renderDashboard();
     expect(screen.getAllByText("Office PC").length).toBeGreaterThanOrEqual(1); // PC switcher and the Now Playing panel both name the PC
     expect(screen.getByText("Offline")).toBeInTheDocument();
-    expect(screen.getByText(/Commands are not stored for later/)).toBeInTheDocument();
+    // a warning with a reason and a next step, never a bare grey badge
+    const notice = screen.getByRole("alert");
+    expect(notice).toHaveTextContent("Office PC is offline");
+    expect(notice).toHaveTextContent(/Turn the PC on and sign in to Windows/);
+    expect(notice).toHaveTextContent(/Commands are not stored for later/);
+    expect(within(notice).getByRole("link", { name: /Check connection/ })).toHaveAttribute("href", "/app/health");
     for (const name of ["Next video", "Back 10 s", "Lock Windows", "Sleep…"]) expect(screen.getByRole("button", { name })).toBeDisabled();
     expect(screen.getByRole("slider")).toBeDisabled();
     expect(screen.getByText(/Media state is not available/)).toBeInTheDocument();

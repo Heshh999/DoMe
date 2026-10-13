@@ -17,6 +17,45 @@
   --dome-public-prose-max: 68ch;
 }
 
+/* ── Focus never hides under the sticky header: browsers scroll focused elements this far below the top. ── */
+html:has(.dome-public) {
+  scroll-padding-top: calc(4rem + var(--safe-top) + 12px);
+}
+
+/* ── "Skip to content": the first stop for keyboard users, visible only while focused. ─────────── */
+.dome-public .dome-skip {
+  position: fixed;
+  left: 1rem;
+  top: calc(0.75rem + var(--safe-top));
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 1rem;
+  border-radius: 999px;
+  background: var(--dome-color-bg-raised);
+  color: var(--dome-color-text);
+  font-weight: 600;
+  box-shadow: var(--dome-shadow-raised);
+  transform: translateY(-200%);
+}
+.dome-public .dome-skip:focus-visible,
+.dome-public .dome-skip:focus {
+  transform: none;
+}
+
+/* ── Header CTA: on phones the hero's "Open the app" is the one solid-blue primary, so this one is outlined. ─ */
+@media (max-width: 767.98px) {
+  .dome-public .dome-header-cta {
+    background: var(--dome-color-bg-elevated);
+    color: var(--dome-color-text);
+    box-shadow: inset 0 0 0 1px var(--dome-color-border-strong);
+  }
+  .dome-public .dome-header-cta:hover {
+    background: var(--dome-color-surface);
+  }
+}
+
 /* ── Header navigation: the active page carries a short accent underline (B's pattern). ───────── */
 .dome-public .dome-nav-link {
   position: relative;
@@ -221,23 +260,46 @@
   color: var(--dome-color-text);
 }
 
-/* Phones: the same facts as a list (the table is display:none there, so nothing is read twice). */
-.dome-public .dome-compare-list .dome-compare-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-  padding: 0.625rem 0.75rem;
-  border-radius: 0.75rem;
-  background: var(--dome-color-surface);
+/* Phones: the same facts as a compact list under one sticky header row of plan names (the table is
+   display:none there, so nothing is read twice). Label first, then the three values in narrow centred columns. */
+.dome-public .dome-compare-head,
+.dome-public .dome-compare-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 4.25rem);
+  align-items: center;
+  column-gap: 0.25rem;
 }
-.dome-public .dome-compare-list .dome-compare-cell > span:first-child {
-  font-size: 0.6875rem;
+.dome-public .dome-compare-head {
+  position: sticky;
+  top: calc(4rem + var(--safe-top));
+  z-index: 1;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid var(--dome-color-border-strong);
+  background: var(--dome-color-bg);
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--dome-color-text-faint);
+  text-align: center;
+  color: var(--dome-color-text);
 }
+.dome-public .dome-compare-row {
+  padding: 0.625rem 0;
+}
+/* a row that is the same on every plan: the label takes the width, "Every plan" sits on the right */
+.dome-public .dome-compare-row-all {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 1rem;
+  padding: 0.625rem 0;
+}
+.dome-public .dome-compare-value {
+  display: flex;
+  justify-content: center;
+  text-align: center;
+  font-weight: 500;
+  color: var(--dome-color-text);
+}
+
 
 /* ── Reading pages (Privacy, Terms, Download, Release notes): calm long-form typography. ──────── */
 .dome-public .dome-prose {
@@ -342,10 +404,11 @@
   width: 1px;
   background: var(--dome-color-border-strong);
 }
+/* The dot's centre (7.5 px) sits on the spine (left: 7px) of the padded list, outside the card. */
 .dome-public .dome-timeline-dot {
   position: absolute;
-  left: 0;
-  top: 1.5rem;
+  left: -1.75rem;
+  top: 1.6rem;
   width: 15px;
   height: 15px;
   border-radius: 999px;
@@ -402,7 +465,7 @@
   color: var(--dome-color-text);
 }
 
-/* ── Scroll margins so jump links land under the sticky header. ─────────────────────────────── */
+/* ── Jump links: the html scroll-padding above already clears the sticky header; a little extra air. ─ */
 .dome-public [id] {
-  scroll-margin-top: calc(5rem + var(--safe-top));
+  scroll-margin-top: 0.75rem;
 }

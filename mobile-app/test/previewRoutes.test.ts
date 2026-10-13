@@ -34,6 +34,6 @@ describe("design preview routes", () => {
   });
 
   it("documents the offline and confirmation flags", () => {
-    expect(PREVIEW_FLAGS.map((f) => f.flag)).toEqual(["offline=1", "confirm=1"]);
+    expect(PREVIEW_FLAGS.map((f) => f.flag)).toEqual(["offline=1", "confirm=1", "pc=offline"]);
   });
 });

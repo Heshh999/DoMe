@@ -5,6 +5,7 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 
 import { Film } from "../../src/components/film/Film.tsx";
 import { SCENES, TOTAL_MS } from "../../src/components/film/timeline.ts";
@@ -28,10 +29,41 @@ describe("Film", () => {
     expect(chips.map((c) => c.getAttribute("aria-label"))).toEqual(SCENES.map((s) => `Scene ${s.n}: ${s.title}`));
     expect(chips[0]).toHaveAttribute("aria-current", "true");
     const live = screen.getByRole("status");
-    expect(live).toHaveAttribute("aria-live", "polite");
+    // silent until the visitor starts the film: an autoplaying film never talks over the page
+    expect(live).toHaveAttribute("aria-live", "off");
     expect(live).toHaveTextContent("Your PC, in your hand.");
     expect(live).toHaveTextContent("Remote control · Available now, free");
+    expect(screen.getByRole("group", { name: "DoMe demo film" })).toHaveAttribute("aria-describedby", live.id);
     expect(filmTime()).toBe(0);
+  });
+
+  it("shows scene 1's lit room as the poster before playback, and announces captions once played", async () => {
+    render(<Film reducedMotion={false} />);
+    // the clock reads 0, but the stage draws scene 1's still (the phone has arrived, the caption is up)
+    expect(filmTime()).toBe(0);
+    expect(document.querySelector(".film-canvas [data-film-beat]")).toHaveTextContent(/Tap Pause on the phone/);
+    await userEvent.click(screen.getByRole("button", { name: "Play the film" }));
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("makes the end card's calls to action real links that navigate, without toggling the film", async () => {
+    function Where() {
+      return <p data-testid="where">{useLocation().pathname}</p>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/demo"]}>
+        <Routes>
+          <Route path="/demo" element={<Film reducedMotion={false} initialTime={64_000} />} />
+          <Route path="/app" element={<Where />} />
+          <Route path="/pricing" element={<Where />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: /Compare plans/ })).toHaveAttribute("href", "/pricing");
+    const open = screen.getByRole("link", { name: /Open the app/ });
+    expect(open).toHaveAttribute("href", "/app");
+    await userEvent.click(open);
+    expect(screen.getByTestId("where")).toHaveTextContent("/app");
   });
 
   it("jumps to a scene from its chip and shows that scene's caption and honest status chip", async () => {
@@ -41,9 +73,10 @@ describe("Film", () => {
     const live = screen.getByRole("status");
     expect(live).toHaveTextContent("See your PC. Tap what you see.");
     expect(live).toHaveTextContent("Screen view · Coming");
+    expect(live).toHaveAttribute("aria-live", "polite");
     expect(screen.getByRole("button", { name: "Scene 3: Screen view" })).toHaveAttribute("aria-current", "true");
-    await userEvent.click(screen.getByRole("button", { name: "Scene 4: Point and talk" }));
-    expect(live).toHaveTextContent("Point and talk · Planned");
+    await userEvent.click(screen.getByRole("button", { name: "Scene 4: Point-and-talk" }));
+    expect(live).toHaveTextContent("Point-and-talk · Planned");
     expect(live).toHaveTextContent("the AI never sees your screen");
     await userEvent.click(screen.getByRole("button", { name: "Scene 5: Pick your plan" }));
     expect(live).toHaveTextContent("Pro and Pro Plus arrive at paid launch");
@@ -132,7 +165,10 @@ describe("Film", () => {
     act(() => handle!.seek(SCENES[3]!.still));
     expect(filmTime()).toBe(SCENES[3]!.still);
     expect(handle!.time()).toBe(SCENES[3]!.still);
-    expect(screen.getByRole("status")).toHaveTextContent("Point and talk");
+    expect(screen.getByRole("status")).toHaveTextContent("Point-and-talk");
+    // export draws the end card's buttons as pictures, never as links
+    act(() => handle!.seek(64_000));
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
     act(() => handle!.seek(TOTAL_MS + 5_000));
     expect(filmTime()).toBe(TOTAL_MS);
     // the captions are still rendered (the export must carry them)

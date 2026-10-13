@@ -102,7 +102,7 @@ describe("status and consent", () => {
     status = { ...NO_CONSENT, available: false, unavailable_reason: reason };
     card();
     expect(await screen.findByText(new RegExp(text.replace(/[.?]/g, "\\$&")))).toBeInTheDocument();
-    if (reason !== "spend_limit") expect(screen.queryByRole("button", { name: "Turn on the AI assistant…" })).toBeNull();
+    if (reason !== "spend_limit") expect(screen.queryByRole("button", { name: "Turn on the AI butler…" })).toBeNull();
   });
 
   it("allowance exhausted names the limit", async () => {
@@ -114,8 +114,8 @@ describe("status and consent", () => {
   it("Turn on: the consent text, then POST with the pinned version and CSRF; this phone uses AI and shows the Ask tab", async () => {
     card();
     expect(await screen.findByText(/5 of 300 used this month · renews/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Turn on the AI assistant…" }));
-    const sheet = screen.getByRole("dialog", { name: "Turn on the AI assistant?" });
+    await userEvent.click(screen.getByRole("button", { name: "Turn on the AI butler…" }));
+    const sheet = screen.getByRole("dialog", { name: "Turn on the AI butler?" });
     expect(sheet).toHaveTextContent("Claude, an AI model made by Anthropic");
     expect(sheet).toHaveTextContent("Never sent: audio, your screen, the list of apps on your PC");
     expect(sheet).toHaveTextContent("300 requests a month");
@@ -132,7 +132,7 @@ describe("status and consent", () => {
 
   it("Not now sends nothing and changes nothing", async () => {
     card();
-    await userEvent.click(await screen.findByRole("button", { name: "Turn on the AI assistant…" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Turn on the AI butler…" }));
     await userEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
     expect(useAssistantStore.getState().prefs.useAi).toBe(false);
@@ -144,7 +144,7 @@ describe("status and consent", () => {
     const toggle = await screen.findByRole("switch", { name: "Use AI on this phone" });
     await waitFor(() => expect(toggle).toBeEnabled());
     await userEvent.click(toggle);
-    await userEvent.click(within(screen.getByRole("dialog", { name: "Turn on the AI assistant?" })).getByRole("button", { name: "Turn on" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Turn on the AI butler?" })).getByRole("button", { name: "Turn on" }));
     expect(useAssistantStore.getState().prefs.useAi).toBe(true);
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
     // switching it off needs no sheet
@@ -156,25 +156,25 @@ describe("status and consent", () => {
     status = CONSENTED;
     useAssistantStore.getState().setPrefs({ useAi: true });
     card();
-    await userEvent.click(await screen.findByRole("button", { name: "Turn off the AI assistant" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Turn off the AI butler" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
     expect(calls.find((c) => c.method === "DELETE")!.csrf).toBe("C".repeat(40));
     await waitFor(() => expect(useAssistantStore.getState().prefs.useAi).toBe(false));
-    expect(await screen.findByRole("button", { name: "Turn on the AI assistant…" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Turn on the AI butler…" })).toBeInTheDocument();
   });
 
   it("an older consent asks again", async () => {
     status = { ...NO_CONSENT, consent: { version: "2026-01-01", given_at: TS } };
     card();
     expect(await screen.findByText("The terms changed; read and turn on again.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Turn on the AI assistant…" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Turn on the AI butler…" })).toBeInTheDocument();
   });
 });
 
 describe("phone preferences", () => {
   it("name and form of address are validated and saved", async () => {
     card();
-    const name = screen.getByRole("textbox", { name: "Assistant's name" });
+    const name = screen.getByRole("textbox", { name: "Butler's name" });
     await userEvent.clear(name);
     await userEvent.type(name, "Jenkins");
     await userEvent.tab();
@@ -225,7 +225,7 @@ describe("phone preferences", () => {
     card();
     await userEvent.click(screen.getByRole("switch", { name: "Ask before every action" }));
     await userEvent.click(screen.getByRole("switch", { name: "Read replies aloud" }));
-    await userEvent.click(screen.getByRole("switch", { name: "Show the Assistant tab" }));
+    await userEvent.click(screen.getByRole("switch", { name: "Show the Ask tab" }));
     expect(useAssistantStore.getState().prefs).toMatchObject({ confirmEveryAction: true, muted: true, showAssistant: true });
   });
 
@@ -307,7 +307,7 @@ describe("navigation", () => {
         <MorePage />
       </MemoryRouter>,
     );
-    expect(screen.getByRole("link", { name: /Assistant/ })).toHaveAttribute("href", "/app/assistant");
+    expect(screen.getByRole("link", { name: /^Ask/ })).toHaveAttribute("href", "/app/assistant");
     expect(screen.getByRole("link", { name: /Type a command/ })).toHaveAttribute("href", "/app/command");
   });
 });

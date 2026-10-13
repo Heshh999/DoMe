@@ -117,6 +117,15 @@ export function AssistantPage() {
   useEffect(() => {
     if (pcId && grant === undefined) void loadGrants(pcId);
   }, [pcId, grant, loadGrants]);
+  // focus the browser scrolls into view stops above the dock and the tab bar, never behind them (WCAG 2.4.11)
+  useEffect(() => {
+    if (dockHeight === null) return;
+    const html = document.documentElement;
+    html.style.scrollPaddingBottom = `calc(${dockHeight}px + ${inset > 0 ? `${inset}px` : TAB_BAR} + 16px)`;
+    return () => {
+      html.style.scrollPaddingBottom = "";
+    };
+  }, [dockHeight, inset]);
   // after the spacer below has taken the dock's height, so the newest card's buttons end up above the dock
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
@@ -230,20 +239,20 @@ export function AssistantPage() {
         <div className="flex min-w-0 items-center gap-3">
           <ButlerAvatar size={40} />
           <div className="min-w-0">
-            <p className="dome-eyebrow text-[0.6875rem] leading-none">Ask</p>
-            <h1 className="mt-1 truncate text-[1.375rem] font-semibold leading-tight tracking-[-0.02em]">{prefs.butlerName}</h1>
+            <h1 className="truncate text-[1.375rem] font-semibold leading-tight tracking-[-0.02em]">Ask</h1>
+            <p className="mt-0.5 truncate text-[13px] text-text-muted">{prefs.butlerName}, your AI butler</p>
           </div>
         </div>
         {aiOn && allowance ? (
           <Link to="/app/settings" className="tap inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left: open Settings`}>
             <Icon name="sparkle" size={14} className="text-accent" />
-            {allowance.exhausted || exhausted ? "Limit reached" : `${Math.max(0, allowance.limit - allowance.used)} left`}
+            {allowance.exhausted || exhausted ? "Limit reached" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left`}
           </Link>
         ) : null}
       </header>
       <PcSwitcher pc={pc} live={live} />
       {banner ? (
-        <Notice tone="warning" title="AI assistant paused">
+        <Notice tone="warning" title="AI butler paused">
           <p>{banner}</p>
         </Notice>
       ) : null}
@@ -317,7 +326,7 @@ export function AssistantPage() {
               <DockButton icon="keyboard" label={typing ? "Hide" : "Type"} ariaLabel={typing ? "Hide keyboard" : "Type instead"} active={typing} aria-expanded={typing} onClick={() => setTyping((t) => !t)} />
             )}
             <TalkButton state={talkState} dictate={dictateMode} onTap={tap} onCancel={() => getAssistant().cancelTurn()} onStop={() => getAssistant().stop()} />
-            <DockButton icon={prefs.muted ? "mute" : "volume"} label="Mute" ariaLabel="Mute replies" active={prefs.muted} aria-pressed={prefs.muted} onClick={() => setPrefs({ muted: !prefs.muted })} />
+            <DockButton icon={prefs.muted ? "mute" : "volume"} label={prefs.muted ? "Unmute" : "Mute"} ariaLabel="Mute replies" active={prefs.muted} aria-pressed={prefs.muted} onClick={() => setPrefs({ muted: !prefs.muted })} />
           </div>
           {typing || dictateMode ? (
             <form

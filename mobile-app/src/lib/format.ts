@@ -54,3 +54,10 @@ export function secondsUntil(ts: string, now: Date = new Date()): number {
     return 0;
   }
 }
+
+/** "in 9 min" (rounded up), "in 45 s" under a minute, "now" when it has passed: easy to read at a glance. */
+export function expiresIn(ts: string, now: Date = new Date()): string {
+  const s = secondsUntil(ts, now);
+  if (s <= 0) return "now";
+  return s < 60 ? `in ${s} s` : `in ${Math.ceil(s / 60)} min`;
+}

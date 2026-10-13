@@ -8,7 +8,20 @@
  * paid launch". The AI butler exists today. Nothing here claims recordings, screenshots or AI vision.
  */
 
+import { AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../../content/plans.ts";
+
 export type StatusTone = "now" | "coming" | "planned" | "info";
+
+/**
+ * One beat inside a scene: a short line under the caption that says what is happening right now, so the film works
+ * without sound and at phone size (the phone mock-up's own text is too small to read there). `speech` lines are
+ * words someone says, drawn in quotes.
+ */
+export interface Beat {
+  at: number;
+  text: string;
+  speech?: boolean;
+}
 
 export interface Scene {
   /** 1-based number, as the scene chips and `?scene=N` use it. */
@@ -25,6 +38,8 @@ export interface Scene {
   status: { label: string; tone: StatusTone };
   /** A representative moment for stills (ms on the film clock). */
   still: number;
+  /** What happens beat by beat (optional), in time order. */
+  beats?: readonly Beat[];
 }
 
 /** The film clock's last millisecond: the end card holds until here, then the film stops. */
@@ -40,6 +55,7 @@ export const SCENES: readonly Scene[] = [
     caption: "Your PC, in your hand.",
     status: { label: "Remote control · Available now, free", tone: "now" },
     still: 7_100,
+    beats: [{ at: 4_300, text: "Tap Pause on the phone: the PC pauses, and the phone says it’s done" }],
   },
   {
     n: 2,
@@ -47,9 +63,14 @@ export const SCENES: readonly Scene[] = [
     title: "Just ask",
     start: 8_000,
     end: 22_000,
-    caption: "Just ask. The AI butler turns everyday requests into safe, approved actions — and always shows you first.",
-    status: { label: "AI butler · Pro and Pro Plus (Free: 10 to try)", tone: "now" },
+    caption: "Just ask. The AI butler turns requests in your own words into safe, approved actions, and shows you each step.",
+    status: { label: `AI butler · Available now · Free: ${FREE_TASTE_REQUESTS} to try · more with Pro and Pro Plus`, tone: "now" },
     still: 17_600,
+    beats: [
+      { at: 9_400, text: "Put on the next episode and make it full screen", speech: true },
+      { at: 13_600, text: "DoMe: “Very good. Playing the next episode, full screen.”" },
+      { at: 15_000, text: "Tap Run: the next episode plays, full screen" },
+    ],
   },
   {
     n: 3,
@@ -58,18 +79,32 @@ export const SCENES: readonly Scene[] = [
     start: 22_000,
     end: 40_000,
     caption: "See your PC. Tap what you see.",
-    status: { label: "Screen view · Coming · Free: 10 min per 5 h · Pro: unlimited", tone: "coming" },
+    status: { label: `Screen view · ${SCREEN_VIEW_STATUS} · Free: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h · Pro: unlimited`, tone: "coming" },
     still: 36_500,
+    beats: [
+      { at: 22_600, text: "Your PC’s screen, live on the phone" },
+      { at: 24_200, text: "Tap a button on your PC’s screen" },
+      { at: 26_400, text: "Two fingers to scroll" },
+      { at: 29_000, text: "Swipe away: it keeps playing in a corner" },
+      { at: 30_800, text: "TV apps get arrow keys" },
+      { at: 36_000, text: "Hear your PC on your phone, or mute it" },
+    ],
   },
   {
     n: 4,
     id: "point",
-    title: "Point and talk",
+    title: "Point-and-talk",
     start: 40_000,
     end: 50_000,
-    caption: "Point and talk. No screenshots, ever — the AI never sees your screen.",
-    status: { label: "Point and talk · Planned", tone: "planned" },
+    caption: "Point-and-talk. No screenshots, ever\u00a0— the AI never sees your screen.",
+    status: { label: `Point-and-talk · ${POINT_AND_TALK_STATUS}`, tone: "planned" },
     still: 46_400,
+    beats: [
+      { at: 41_100, text: "Rest a finger on a button" },
+      { at: 42_600, text: "click that", speech: true },
+      { at: 43_400, text: "Windows names the button: “Subscribe”" },
+      { at: 44_200, text: "DoMe: “Clicking Subscribe.”" },
+    ],
   },
   {
     n: 5,
@@ -104,36 +139,95 @@ export function sceneByNumber(n: number): Scene {
   return SCENES.find((s) => s.n === n) ?? SCENES[0]!;
 }
 
-/** The plan facts shown in scene 5 and on the end card (rollout brief §5; content only, not live metering). */
-export const PLAN_FACTS = [
+/** The beat showing at time t within its scene (the last one started), or null. */
+export function beatAt(t: number): Beat | null {
+  const scene = sceneAt(t);
+  let found: Beat | null = null;
+  for (const b of scene.beats ?? []) if (t >= b.at) found = b;
+  return found;
+}
+
+/** One line on a plan card; `status` ("Coming") is drawn as a chip after it; `key` lines are the two the vertical card keeps. */
+export interface PlanLine {
+  text: string;
+  status?: string;
+  key?: boolean;
+}
+
+export interface PlanFact {
+  id: "free" | "pro" | "proplus";
+  name: string;
+  /** "$0", "$9.99": the headline price. */
+  price: string;
+  /** After the price ("/ month"), empty on Free. */
+  per: string;
+  /** The line under the price: the annual price, or Free's "No credit card". */
+  sub: string;
+  status: string;
+  tone: StatusTone;
+  lines: PlanLine[];
+}
+
+const freePlan = planById("free");
+const proPlan = planById("pro");
+const plusPlan = planById("pro_plus");
+/** "AI: 30 requests per 5 h, up to 120 a week" (the weekly part never breaks across lines). */
+const aiLine = (perWindow: number | undefined, perWeek: number | undefined) => `AI: ${perWindow} requests per ${WINDOW_HOURS} h, up\u00a0to\u00a0${perWeek}\u00a0a\u00a0week`;
+const topUpLine = `Top-up: ${TOP_UP.requests} requests for ${usd(TOP_UP.priceCents)}`;
+
+/**
+ * The plan facts shown in scene 5 and on /demo, read from the website's plan content (src/content/plans.ts) so the
+ * film, the demo page and the pricing page never disagree. Screen view carries its "Coming" status on every card.
+ */
+export const PLAN_FACTS: readonly PlanFact[] = [
   {
     id: "free",
-    name: "Free",
-    price: "$0",
-    per: "forever",
-    status: "Available now",
-    tone: "now" as StatusTone,
-    lines: ["1 PC · 2 phones", "Remote control: all of it", "Screen view: 10 min per 5 h", "AI: 10 requests to try, once"],
+    name: freePlan.name,
+    price: usd(0),
+    per: "",
+    sub: "No credit card",
+    status: AVAILABLE_NOW,
+    tone: "now",
+    lines: [
+      { text: `${freePlan.pcs} PC · ${freePlan.phones} phones` },
+      { text: "Remote control: all of it", key: true },
+      { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h`, status: SCREEN_VIEW_STATUS },
+      { text: `AI: ${FREE_TASTE_REQUESTS} requests to try, once`, key: true },
+    ],
   },
   {
     id: "pro",
-    name: "Pro",
-    price: "$9.99",
-    per: "/ month · $99.99 / year",
-    status: "Coming at paid launch",
-    tone: "info" as StatusTone,
-    lines: ["5 PCs · 5 phones", "Remote control: all of it", "Screen view: unlimited", "AI: 30 requests per 5 h, 120 a week", "Top-up: 100 requests for $2.99"],
+    name: proPlan.name,
+    price: usd(proPlan.price!.monthlyCents),
+    per: "/ month",
+    sub: `or ${usd(proPlan.price!.annualCents)} / year`,
+    status: COMING_AT_PAID_LAUNCH,
+    tone: "info",
+    lines: [
+      { text: `${proPlan.pcs} PCs · ${proPlan.phones} phones` },
+      { text: "Remote control: all of it" },
+      { text: "Screen view: unlimited", status: SCREEN_VIEW_STATUS, key: true },
+      { text: aiLine(proPlan.ai.perWindow?.requests, proPlan.ai.perWeek?.requests), key: true },
+      { text: topUpLine },
+    ],
   },
   {
     id: "proplus",
-    name: "Pro Plus",
-    price: "$24.99",
-    per: "/ month · $249.99 / year",
-    status: "Coming at paid launch",
-    tone: "info" as StatusTone,
-    lines: ["5 PCs · 5 phones", "Remote control: all of it", "Screen view: unlimited", "AI: 90 requests per 5 h, 300 a week", "Top-up: 100 requests for $2.99"],
+    name: plusPlan.name,
+    price: usd(plusPlan.price!.monthlyCents),
+    per: "/ month",
+    sub: `or ${usd(plusPlan.price!.annualCents)} / year`,
+    status: COMING_AT_PAID_LAUNCH,
+    tone: "info",
+    lines: [
+      { text: `${plusPlan.pcs} PCs · ${plusPlan.phones} phones` },
+      { text: "Remote control: all of it" },
+      { text: "Screen view: unlimited", status: SCREEN_VIEW_STATUS, key: true },
+      { text: aiLine(plusPlan.ai.perWindow?.requests, plusPlan.ai.perWeek?.requests), key: true },
+      { text: topUpLine },
+    ],
   },
-] as const;
+];
 
 /** The honest line under the film on the website. */
 export const CONCEPT_NOTE = "Concept preview. Screen view and point-and-talk are in development.";

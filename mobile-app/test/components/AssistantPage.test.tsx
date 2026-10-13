@@ -165,7 +165,7 @@ const talk = () => screen.getByRole("button", { name: /Tap to talk|Getting ready
 const liveRegion = () => screen.getByTestId("assistant-live");
 const conversation = () => within(screen.getByRole("list", { name: "Conversation" }));
 /** The AI status has loaded (the allowance chip shows). */
-const aiReady = () => screen.findByText(/\d+ left/);
+const aiReady = () => screen.findByText(/\d+ AI requests left/);
 
 async function speakWords(words: string) {
   await userEvent.click(talk());
@@ -226,6 +226,8 @@ describe("talking", () => {
     expect(sent("windows.lock")).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: "Run" }));
     await waitFor(() => expect(sent("windows.lock")).toHaveLength(1));
+    // the Run button is gone: focus moved to the plan's card, never back to the page itself
+    expect(document.activeElement).toBe(card.closest("[data-plan-status]"));
   });
 
   it("Cancel on a waiting card leaves it", async () => {
@@ -234,6 +236,7 @@ describe("talking", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
     expect(screen.getByText("Not run.")).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByText("Not run.").closest("[data-plan-status]"));
     expect(sent("windows.lock")).toHaveLength(0);
   });
 });
@@ -265,11 +268,11 @@ describe("the AI assistant", () => {
   it("AI bubbles say whether they counted; the allowance chip follows the answers", async () => {
     replies.push({ mode: "answer", reply: "Good evening.", charged: true }, { mode: "answer", reply: "Nothing to count.", charged: false, allowance: { ...ALLOWANCE, used: 6 } });
     renderPage();
-    expect(await screen.findByText("295 left")).toBeInTheDocument();
+    expect(await screen.findByText("295 AI requests left")).toBeInTheDocument();
     await speakWords("good evening to you");
     expect(await conversation().findByText("Good evening.")).toBeInTheDocument();
     expect(conversation().getByText("Good evening.").closest("li")).toHaveTextContent("Asked Claude · counts as 1 request");
-    expect(screen.getByText("294 left")).toBeInTheDocument();
+    expect(screen.getByText("294 AI requests left")).toBeInTheDocument();
     await speakWords("tell me nothing in particular");
     expect(await conversation().findByText("Nothing to count.")).toBeInTheDocument();
     expect(conversation().getByText("Nothing to count.").closest("li")).toHaveTextContent("Asked Claude · not counted");
@@ -526,15 +529,18 @@ describe("dictation and typing", () => {
 });
 
 describe("header", () => {
-  it("the butler's name is the title; the speaker toggle mutes", async () => {
+  it("the page is titled Ask with the butler's name under it; the speaker toggle mutes and says Unmute when muted", async () => {
     useAssistantStore.getState().setPrefs({ butlerName: "Jenkins" });
     renderPage();
-    expect(screen.getByRole("heading", { name: "Jenkins" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Ask" })).toBeInTheDocument();
+    expect(screen.getByText("Jenkins, your AI butler")).toBeInTheDocument();
     const mute = screen.getByRole("button", { name: "Mute replies" });
     expect(mute).toHaveAttribute("aria-pressed", "false");
+    expect(mute).toHaveTextContent("Mute");
     await userEvent.click(mute);
     expect(useAssistantStore.getState().prefs.muted).toBe(true);
     expect(mute).toHaveAttribute("aria-pressed", "true");
+    expect(mute).toHaveTextContent("Unmute");
   });
 });
 

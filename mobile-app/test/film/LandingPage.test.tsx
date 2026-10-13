@@ -40,7 +40,8 @@ describe("LandingPage", () => {
     expect(h1).toHaveTextContent(/in your hand\./);
     expect(screen.getByText(/DoMe is in development\. The Windows app is not published yet/)).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /The DoMe app on an iPhone/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Get DoMe for Windows/ })).toHaveAttribute("href", "/download");
+    // the secondary hero button never promises a download that does not exist yet
+    expect(screen.getByRole("link", { name: /Windows app · coming soon/ })).toHaveAttribute("href", "/download");
   });
 
   it("lists Screen view in What you can do as Coming, never as available", () => {

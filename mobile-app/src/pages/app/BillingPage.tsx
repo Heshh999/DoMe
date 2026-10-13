@@ -4,6 +4,8 @@
  * backend says so. The coming paid plans and their prices come from the website's plan content
  * (src/content/plans.ts), so this page and the pricing page never disagree.
  */
+import { Link } from "react-router";
+
 import { PLANS } from "@dome/protocol";
 
 import { Card, IconWell, KeyValue, Notice, PageHeader, Pill, Steps, type Tone } from "../../components/ui.tsx";
@@ -13,16 +15,16 @@ import { useSessionStore } from "../../store/session.ts";
 
 const STATE_COPY: Record<string, { label: string; tone: Tone; text: string }> = {
   free: { label: "Free", tone: "neutral", text: "You are on DoMe Free. Everything you use today stays free; no card is needed." },
-  active: { label: "Active", tone: "success", text: "Your DoMe Pro subscription is active." },
+  active: { label: "Active", tone: "success", text: "Your paid subscription is active." },
   pending: { label: "Pending activation", tone: "warning", text: "Your payment is being confirmed. Pro features unlock automatically once the payment is verified." },
   past_due: { label: "Payment problem", tone: "danger", text: "Your last payment did not go through. Free features keep working." },
-  canceling: { label: "Ends at period end", tone: "warning", text: "Your subscription is set to end at the close of the current period. Pro features stay until then; your settings are kept afterwards." },
-  expired: { label: "Expired", tone: "neutral", text: "Your Pro subscription ended. You are on DoMe Free; your PCs, phones and settings were kept." },
+  canceling: { label: "Ends at period end", tone: "warning", text: "Your subscription is set to end at the close of the current period. Paid features stay until then; your settings are kept afterwards." },
+  expired: { label: "Expired", tone: "neutral", text: "Your paid subscription ended. You are on DoMe Free; your PCs, phones and settings were kept." },
 };
 
 /** "$9.99 / month or $99.99 / year", written the way the website's pricing page writes it; each price stays on one line. */
 function priceLine(plan: PlanContent): string {
-  return plan.price ? `${usd(plan.price.monthlyCents)}\u00a0/\u00a0month or ${usd(plan.price.annualCents)}\u00a0/\u00a0year` : `${usd(0)} forever`;
+  return plan.price ? `${usd(plan.price.monthlyCents)}\u00a0/\u00a0month or ${usd(plan.price.annualCents)}\u00a0/\u00a0year` : usd(0);
 }
 
 export function BillingPage() {
@@ -66,8 +68,11 @@ export function BillingPage() {
       </Card>
       <Notice tone="info" title="Upgrading is not available yet">
         <p>
-          {pro.displayName} will be {priceLine(pro)} and {proPlus.displayName} {priceLine(proPlus)}; both are {COMING_AT_PAID_LAUNCH.toLowerCase()}. Checkout, invoices and the payment portal arrive with them; nothing can be bought or charged from this app today.
+          {pro.name} ({priceLine(pro)}) and {proPlus.name} ({priceLine(proPlus)}) are {COMING_AT_PAID_LAUNCH.toLowerCase()}. Nothing can be bought or charged from this app today.
         </p>
+        <Link to="/pricing" className="tap mt-1 inline-flex items-center gap-1 font-semibold text-accent">
+          Compare plans
+        </Link>
       </Notice>
       <p className="px-1 text-xs text-text-faint">Security controls — revoking phones, unlinking PCs, emergency stop on the PC — are included on every plan and are never paywalled.</p>
     </div>

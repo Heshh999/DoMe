@@ -85,7 +85,11 @@ describe("plan content", () => {
     expect(AI_RULES.windows).toMatch(/5-hour window starts with your first AI request/);
     expect(AI_RULES.windows).toMatch(/refreshes 7 days after the week’s first use/);
     expect(AI_RULES.windows).toMatch(/Refreshes Saturday at 2 pm/);
-    expect(AI_RULES.windows).toMatch(/warns you at 80 %/);
+    expect(AI_RULES.windows).toMatch(/When paid plans launch, the app will show the exact refresh time/);
+    expect(AI_RULES.windows).toMatch(/warn you at 80%/);
+    expect(AI_RULES.request).not.toMatch(/before anything runs/);
+    expect(AI_RULES.actions).toMatch(/run right away/);
+    expect(AI_RULES.actions).toMatch(/Ask before every action/);
     expect(AI_RULES.taste).toMatch(/one-time taste of 10 AI requests/);
     expect(AI_RULES.privacy).toMatch(/never sees your screen: no screenshots/);
     expect(AI_RULES.billing).toMatch(/US dollars, before tax/);
@@ -112,12 +116,15 @@ describe("pricing rows", () => {
     expect(screen.status).toBe("Coming");
     expect(screen.rows[0]).toMatchObject({ free: "10 min per 5-hour window", pro: "Unlimited", proPlus: "Unlimited" });
     const ai = groups.find((g) => g.title === "AI butler")!;
+    // Free's one-time taste has its own row, so it never reads as "10 per window"
     expect(ai.rows.map((r) => [r.free, r.pro, r.proPlus])).toEqual([
-      ["10 to try, once", "30", "90"],
+      ["10, once (does not renew)", NOT_INCLUDED, NOT_INCLUDED],
+      [NOT_INCLUDED, "30", "90"],
       [NOT_INCLUDED, "Up to 120", "Up to 300"],
       [NOT_INCLUDED, INCLUDED, INCLUDED],
     ]);
-    expect(ai.rows[2]!.label).toBe("Top-up: 100 requests for $2.99, only when you choose");
+    expect(ai.rows[0]!.label).toBe("One-time taste to try the butler");
+    expect(ai.rows[3]!.label).toBe("Top-up: 100 requests for $2.99, only when you choose");
     const everyday = groups[0]!.rows.find((r) => r.label.startsWith("Everyday commands"))!;
     expect([everyday.free, everyday.pro, everyday.proPlus]).toEqual(["Unlimited, never counted", "Unlimited, never counted", "Unlimited, never counted"]);
   });

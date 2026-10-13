@@ -14,7 +14,7 @@ export const CONSENT_VERSION: rest.AssistantConsentVersion = "2026-10-11";
 
 export function AssistantConsentSheet({ open, allowance, busy, error, onAccept, onClose }: { open: boolean; allowance: rest.AssistantAllowance | null; busy: boolean; error: string | null; onAccept(): void; onClose(): void }) {
   return (
-    <Sheet open={open} title="Turn on the AI assistant?" onClose={onClose} labelledBy="assistant-consent-title">
+    <Sheet open={open} title="Turn on the AI butler?" onClose={onClose} labelledBy="assistant-consent-title">
       <div className="max-h-[60dvh] overflow-y-auto space-y-2 text-sm text-text-muted">
         <p>The assistant uses Claude, an AI model made by Anthropic, to understand requests DoMe can't work out by itself and to answer short questions about using your PC.</p>
         <p>

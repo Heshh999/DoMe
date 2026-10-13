@@ -18,7 +18,7 @@ import { clamp, EASE_IN_OUT, lerp, press, seg, stopIndex, typedWords, window as 
 
 /** The (fictional) series playing on the PC. */
 export const EPISODES = {
-  3: { title: "Night Drive — Episode 3: Harbour Lights", short: "Episode 3", length: "31:40" },
+  3: { title: "Night Drive — Episode 3: Harbor Lights", short: "Episode 3", length: "31:40" },
   4: { title: "Night Drive — Episode 4: First Light", short: "Episode 4", length: "29:12" },
 } as const;
 
@@ -315,7 +315,8 @@ export function stageAt(t: number): StageView {
   return {
     room: 1,
     lamp: seg(t, 250, 800),
-    veil: t < 50_000 ? 0 : t < 60_000 ? seg(t, 50_000, 800) * 0.92 : lerp(0.92, 1, seg(t, 60_000, 700)),
+    // fully opaque once in: the room and devices fade out under it, so nothing shows through the plan cards
+    veil: t < 50_000 ? 0 : seg(t, 50_000, 800),
     cards: inPlans ? [seg(t, 50_400, 800) * fadeCards, seg(t, 50_750, 800) * fadeCards, seg(t, 51_100, 800) * fadeCards] : [0, 0, 0],
     proGlow: inPlans ? seg(t, 51_800, 900) * fadeCards : 0,
     footnote: inPlans ? seg(t, 53_000, 600) * fadeCards : 0,

@@ -27,7 +27,8 @@ describe("FAQ", () => {
       "Can someone with my password control my PC?",
       "What if I clear my browser data or reinstall?",
       "What does the Windows app see or change?",
-      "Why can’t fullscreen be turned on from my phone?",
+      "Why can’t YouTube’s own full-screen button be pressed from my phone?",
+      "Can I buy Pro or Pro Plus today?",
     ]) {
       expect(questions).toContain(q);
     }
@@ -57,7 +58,21 @@ describe("FAQ", () => {
     expect(answer("What do Pro and Pro Plus include?")).toMatch(/\$9\.99 a month or \$99\.99 a year/);
     expect(answer("What do Pro and Pro Plus include?")).toMatch(/\$24\.99 a month or \$249\.99 a year/);
     expect(answer("What is a top-up?")).toMatch(/100 AI requests for \$2\.99/);
-    expect(answer("Can I buy Pro today?")).toMatch(/Not yet/);
+    expect(answer("Can I buy Pro or Pro Plus today?")).toMatch(/Not yet/);
+    // the butler's answer says exactly what runs at once, what waits for Run and what asks for confirmation
+    expect(answer("What is the AI butler?")).toMatch(/Simple actions such as pause or volume run right away/);
+    expect(answer("What is the AI butler?")).toMatch(/wait for your tap on Run/);
+    expect(answer("What is the AI butler?")).not.toMatch(/before anything runs/);
+    // the microphone: tap to talk, not hold, and Apple may process the words
+    expect(answer("Is my speech stored?")).toMatch(/only after you tap the microphone/);
+    expect(answer("Is my speech stored?")).toMatch(/at most 15 seconds/);
+    expect(answer("Is my speech stored?")).toMatch(/Apple’s servers/);
+    expect(answer("Is my speech stored?")).not.toMatch(/hold/);
+    // the Windows app's "only" list names manual input too
+    expect(answer("What does the Windows app see or change?")).toMatch(/touchpad and keyboard input/);
+    expect(answer("What does the Windows app see or change?")).not.toMatch(/registry/);
+    // the app's 80% warning is future behaviour, not today's
+    expect(answer("What is a top-up?")).toMatch(/When paid plans launch, the app will warn you at 80%/);
     expect(answer("Is this end-to-end encrypted?")).toMatch(/encrypted\?Not yet\. Connections are encrypted in transit/);
 
     // nothing on the page claims the AI sees the screen, that anything is recorded, or that Screen view exists today
@@ -65,6 +80,8 @@ describe("FAQ", () => {
     expect(text).not.toMatch(/the AI (can )?sees? your screen(?! *:)/i);
     expect(text).toContain("Screen view");
     expect(screen.getByRole("navigation", { name: "Topics" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
+    const privacy = screen.getAllByRole("link", { name: "Privacy" });
+    expect(privacy.length).toBeGreaterThanOrEqual(2);
+    for (const l of privacy) expect(l).toHaveAttribute("href", "/privacy");
   });
 });

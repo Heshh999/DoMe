@@ -21,7 +21,7 @@ export function PrivacyPage() {
           <li>Pairing: a hash of each pairing code and its outcome. The code itself is never sent to us.</li>
           <li>Commands: a lifecycle record per command — which phone, which PC, the action name, state, timing and error code. Not the parameters, results, typed text or media titles.</li>
           <li>Security events: sign-ins, pairing attempts, revocations and refused requests, with hashed IP addresses.</li>
-          <li>Billing (when Pro launches): subscription state and provider identifiers. Card details are handled by the payment provider, never by DoMe.</li>
+          <li>Billing (when Pro and Pro Plus launch): subscription state and provider identifiers. Card details are handled by the payment provider, never by DoMe.</li>
         </ul>
       </section>
       <section>
@@ -37,14 +37,14 @@ export function PrivacyPage() {
         </ul>
       </section>
       <section>
-        <h2>The voice assistant (optional)</h2>
+        <h2>The AI butler (optional)</h2>
         <ul>
-          <li>Talking to DoMe uses your iPhone’s own speech recognition, provided by Apple, which may process your words on Apple’s servers. DoMe listens only while you tap the microphone button and never records, uploads or keeps audio.</li>
+          <li>Talking to DoMe uses your iPhone’s own speech recognition, provided by Apple, which may process your words on Apple’s servers. DoMe listens only after you tap the microphone, until you tap again or finish speaking (at most 15 seconds), and never records, uploads or keeps audio.</li>
           <li>Requests DoMe understands by itself are handled on your phone and go nowhere else.</li>
-          <li>Only if you turn on the AI assistant (an explicit consent, which you can withdraw in Settings at any time), requests DoMe can’t work out by itself are sent through DoMe’s server to Anthropic, which provides the Claude AI model: those words (including any YouTube search words in them), your earlier requests to the assistant and its replies from the past 10 minutes, a short note of what DoMe did by itself in that time (without naming apps, players, videos or searches), the assistant name and form of address you chose, and a few facts about your PC (whether it is online, whether something is playing, volume levels, how many search results are showing, which kinds of actions your phone may perform).</li>
+          <li>Only if you turn on the AI butler (an explicit consent, which you can withdraw in Settings at any time), requests DoMe can’t work out by itself are sent through DoMe’s server to Anthropic, which provides the Claude AI model: those words (including any YouTube search words in them), your earlier requests to the butler and its replies from the past 10 minutes, a short note of what DoMe did by itself in that time (without naming apps, players, videos or searches), the butler’s name and form of address you chose, and a few facts about your PC (whether it is online, whether something is playing, volume levels, how many search results are showing, which kinds of actions your phone may perform).</li>
           <li>Never sent to Anthropic: audio, your screen, the list of apps on your PC or their names, player names, video or window titles, the words of commands DoMe handled by itself, anything typed with the Touchpad keyboard, your clipboard or files.</li>
-          <li>DoMe does not store what you say or what the assistant answers. It keeps counts (requests and tokens, and their cost) per month to apply your allowance. Anthropic’s API data terms apply to the text it receives. [FOUNDER: confirm Anthropic’s data terms and list Anthropic as a sub-processor.]</li>
-          <li>The conversation on your phone is kept in memory only and is cleared when you sign out, switch PC, after 10 minutes without a request, or when the app reloads. Your assistant preferences (name, form of address, voice) are stored on the phone.</li>
+          <li>DoMe does not store what you say or what the butler answers. It keeps counts (requests and tokens, and their cost) per allowance window to apply your plan’s allowance. Anthropic’s API data terms apply to the text it receives. [FOUNDER: confirm Anthropic’s data terms and list Anthropic as a sub-processor.]</li>
+          <li>The conversation on your phone is kept in memory only and is cleared when you sign out, switch PC, after 10 minutes without a request, or when the app reloads. Your butler preferences (name, form of address, voice) are stored on the phone.</li>
         </ul>
       </section>
       <section>

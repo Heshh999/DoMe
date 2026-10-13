@@ -49,7 +49,7 @@ describe("PublicLayout", () => {
     expect(within(nav).getByRole("link", { name: "FAQ" })).toHaveAttribute("aria-current", "page");
     expect(NAV.find((n) => n.label === "Demo")?.to).toBe("/demo");
     expect(FOOTER.flatMap((g) => g.links).some((l) => l.to === "/demo")).toBe(true);
-    expect(screen.getByRole("link", { name: "Open app" })).toHaveAttribute("href", "/app");
+    expect(within(screen.getByRole("banner")).getByRole("link", { name: "Open the app" })).toHaveAttribute("href", "/app");
   });
 
   it("opens the phone menu with the same links and closes it when one is followed", async () => {
@@ -99,5 +99,34 @@ describe("ThemeSwitch (website header)", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Dark" }));
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(localStorage.getItem(THEME_KEY)).toBe("dark");
+  });
+
+  it("names each page in the document title, so tabs and history tell pages apart", async () => {
+    site("/pricing");
+    expect(document.title).toBe("Pricing · DoMe Remote");
+    await userEvent.click(within(screen.getByRole("navigation", { name: "Site" })).getByRole("link", { name: "FAQ" }));
+    expect(document.title).toBe("FAQ · DoMe Remote");
+    await userEvent.click(screen.getAllByRole("link", { name: "DoMe Remote home" })[0]!);
+    expect(document.title).toBe("DoMe Remote");
+  });
+
+  it("offers Skip to content as the first stop, to a focusable main landmark", () => {
+    site("/faq");
+    const skip = screen.getByRole("link", { name: "Skip to content" });
+    expect(skip).toHaveAttribute("href", "#main");
+    expect(document.querySelector(".dome-public a")).toBe(skip);
+    expect(screen.getByRole("main")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("points aria-controls at the menu only while it exists, and Escape closes it back to the Menu button", async () => {
+    site("/faq");
+    const button = screen.getByRole("button", { name: "Menu" });
+    expect(button).not.toHaveAttribute("aria-controls");
+    await userEvent.click(button);
+    expect(screen.getByRole("button", { name: "Close menu" })).toHaveAttribute("aria-controls", "site-menu");
+    expect(document.getElementById("site-menu")).not.toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(document.getElementById("site-menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "Menu" })).toHaveFocus();
   });
 });

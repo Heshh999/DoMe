@@ -5,13 +5,14 @@
  * results open on the PC. A tab without a player (search results) is never controlled implicitly;
  * when picked by hand, its player buttons stay off.
  */
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { Icon } from "../../components/icons.tsx";
 import { Artwork, PlayButton } from "../../components/NowPlaying.tsx";
+import { PcOfflineNotice } from "../../components/PcOfflineNotice.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, Card, IconButton, Notice, PageHeader, Segmented, Steps } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
@@ -22,6 +23,20 @@ import { browserLabel, controllableTabs, resolveMediaTarget, resolveYoutubeTarge
 import { useLiveStore } from "../../store/live.ts";
 
 type Source = "youtube" | "media";
+
+/** Phones narrower than 360 px (320 px reflow): the transport row uses 44 px buttons and a 60 px play button. */
+function useNarrow(): boolean {
+  const query = "(max-width: 359px)";
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(query);
+    const update = () => setNarrow(mq.matches);
+    mq.addEventListener?.("change", update);
+    return () => mq.removeEventListener?.("change", update);
+  }, []);
+  return narrow;
+}
 
 /** A picker row (which tab, which player). */
 const PICK = "dome-press w-full text-left rounded-control border px-4 py-3";
@@ -51,11 +66,16 @@ export function RemotePage() {
   const ytOk = canControl && yt.ok && !noPlayer;
   const position = scrub ?? tab?.position_seconds ?? null;
   const duration = tab && typeof tab.duration_seconds === "number" && tab.duration_seconds > 0 ? tab.duration_seconds : null;
+  const narrow = useNarrow();
+  const btn = narrow ? 44 : 52;
+  // while the PC's state is not current, what is shown is only the last thing it reported
+  const lastKnown = fresh ? "" : "Last known · ";
 
   return (
     <div className="space-y-4">
       <PageHeader title="Remote" />
       <PcSwitcher pc={pc} live={live} />
+      <PcOfflineNotice pc={pc} live={live} />
 
       <Segmented<Source>
         label="What to control"
@@ -101,12 +121,16 @@ export function RemotePage() {
               <div className="min-w-0 flex-1">
                 {tab && noPlayer ? (
                   <>
-                    <p className="text-xs text-text-faint">{browserLabel(state, tab.browser_instance_id)}</p>
+                    <p className="text-xs text-text-faint">
+                      {lastKnown}
+                      {browserLabel(state, tab.browser_instance_id)}
+                    </p>
                     <p className="mt-0.5 text-[17px] font-semibold leading-snug">YouTube search results: pick a video below</p>
                   </>
                 ) : tab ? (
                   <>
                     <p className="truncate text-xs text-text-faint">
+                      {lastKnown}
                       {browserLabel(state, tab.browser_instance_id)}
                       {tab.ad_showing ? " · ad playing" : ""}
                       {tab.is_live ? " · live" : ""}
@@ -125,7 +149,7 @@ export function RemotePage() {
             </div>
             {tab && noPlayer ? <p className="mt-3 text-sm text-text-muted">This tab shows a list, not a player, so the player buttons are off until a video plays in it.</p> : null}
 
-            {duration !== null && tab ? (
+            {duration !== null && tab && fresh ? (
               <div className="mt-4">
                 <label htmlFor="scrub" className="sr-only">
                   Position
@@ -138,41 +162,45 @@ export function RemotePage() {
               </div>
             ) : null}
 
-            <div className={`flex items-center justify-between px-1 ${duration !== null ? "mt-3" : "mt-5"}`}>
-              <IconButton plain label="Previous video" size={52} disabled={!ytOk || tab?.has_previous === false} onClick={() => yt.ok && void send("youtube.previous", {}, yt.target, "button")}>
+            <div className={`flex items-center justify-between ${narrow ? "" : "px-1"} ${duration !== null && fresh ? "mt-3" : "mt-5"}`}>
+              <IconButton plain label="Previous video" size={btn} disabled={!ytOk || tab?.has_previous === false} onClick={() => yt.ok && void send("youtube.previous", {}, yt.target, "button")}>
                 <Icon name="prev" size={26} />
               </IconButton>
-              <IconButton plain label="Back 10 seconds" size={52} disabled={!ytOk} onClick={() => yt.ok && void send("youtube.seek_relative", { seconds: -10 }, yt.target, "button")}>
+              <IconButton plain label="Back 10 seconds" size={btn} disabled={!ytOk} onClick={() => yt.ok && void send("youtube.seek_relative", { seconds: -10 }, yt.target, "button")}>
                 <Icon name="back10" size={28} strokeWidth={1.6} />
               </IconButton>
-              <PlayButton size={76} playing={tab?.paused === false} label={tab?.paused ? "Play" : "Pause"} disabled={!ytOk || tab?.paused === undefined} onClick={() => yt.ok && void send("youtube.set_paused", { paused: !yt.tab.paused }, yt.target, "button")} />
-              <IconButton plain label="Forward 10 seconds" size={52} disabled={!ytOk} onClick={() => yt.ok && void send("youtube.seek_relative", { seconds: 10 }, yt.target, "button")}>
+              <PlayButton size={narrow ? 60 : 76} playing={tab?.paused === false} label={tab?.paused ? "Play" : "Pause"} disabled={!ytOk || tab?.paused === undefined} onClick={() => yt.ok && void send("youtube.set_paused", { paused: !yt.tab.paused }, yt.target, "button")} />
+              <IconButton plain label="Forward 10 seconds" size={btn} disabled={!ytOk} onClick={() => yt.ok && void send("youtube.seek_relative", { seconds: 10 }, yt.target, "button")}>
                 <Icon name="fwd10" size={28} strokeWidth={1.6} />
               </IconButton>
-              <IconButton plain label="Next video" size={52} disabled={!ytOk || tab?.has_next === false} onClick={() => yt.ok && void send("youtube.next", {}, yt.target, "button")}>
+              <IconButton plain label="Next video" size={btn} disabled={!ytOk || tab?.has_next === false} onClick={() => yt.ok && void send("youtube.next", {}, yt.target, "button")}>
                 <Icon name="next" size={26} />
               </IconButton>
             </div>
 
             <div className="mt-5 grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-2">
+              {/* a toggle: its name is the feature, aria-pressed carries the state, and the visible On/Off word repeats it for sighted users */}
               <Button size="sm" disabled={!ytOk} aria-pressed={tab?.theater === true} onClick={() => yt.ok && void send("youtube.set_theater", { enabled: !(yt.tab.theater ?? false) }, yt.target, "button")}>
                 <Icon name="theater" size={18} />
-                Theater mode {tab?.theater ? "off" : "on"}
+                Theater mode
+                <span aria-hidden="true" className={`ml-0.5 rounded-full px-1.5 py-px text-[11px] font-semibold ${tab?.theater ? "bg-accent/15 text-accent" : "bg-bg-sunken text-text-muted"}`}>
+                  {tab?.theater ? "On" : "Off"}
+                </span>
               </Button>
               <Button size="sm" disabled={!ytOk} onClick={() => yt.ok && void send("youtube.request_fullscreen", {}, yt.target, "button")}>
                 <Icon name="fullscreen" size={18} />
-                Fullscreen
+                Full screen
               </Button>
             </div>
             <div className="mt-3 space-y-1.5">
               {tab?.has_previous === false ? <p className="text-xs text-text-muted">No previous video in this player, so Previous is unavailable.</p> : null}
               {tab?.has_next === false ? <p className="text-xs text-text-muted">This player reports no next video, so Next is unavailable.</p> : null}
               {tab?.ad_showing ? <p className="text-xs text-text-muted">An ad is playing: seeking and skipping apply to the ad context and may be refused. DoMe does not skip ads.</p> : null}
-              <p className="text-xs text-text-faint">Most browsers block remote fullscreen; Theater mode always works.</p>
+              <p className="text-xs text-text-faint">Most browsers block YouTube’s own full screen from a phone; Theater mode always works.</p>
             </div>
           </Card>
 
-          <VolumeSlider label="YouTube player volume" scopeHint="Only the video in this tab." value={tab && typeof tab.volume === "number" ? tab.volume : null} muted={tab?.muted ?? null} disabled={!ytOk} onChange={(v) => yt.ok && void send("youtube.set_volume", { value: v }, yt.target, "slider")} onToggleMute={() => yt.ok && void send("youtube.set_muted", { muted: !(yt.tab.muted ?? false) }, yt.target, "button")} />
+          <VolumeSlider label="YouTube player volume" scopeHint="Only the video in this tab." value={fresh && tab && typeof tab.volume === "number" ? tab.volume : null} muted={fresh ? (tab?.muted ?? null) : null} disabled={!ytOk} onChange={(v) => yt.ok && void send("youtube.set_volume", { value: v }, yt.target, "slider")} onToggleMute={() => yt.ok && void send("youtube.set_muted", { muted: !(yt.tab.muted ?? false) }, yt.target, "button")} />
 
           <YoutubeSearch pcId={pcId} state={state} canControl={canControl} send={send} />
         </>
@@ -204,7 +232,10 @@ export function RemotePage() {
               <div className="min-w-0 flex-1">
                 {media.ok ? (
                   <>
-                    <p className="truncate text-xs text-text-faint">{media.session.app_label ?? "Windows media"}</p>
+                    <p className="truncate text-xs text-text-faint">
+                      {lastKnown}
+                      {media.session.app_label ?? "Windows media"}
+                    </p>
                     <p className="mt-0.5 line-clamp-2 text-[19px] font-semibold leading-snug tracking-[-0.015em]">{media.session.title ?? "Playing"}</p>
                     {media.session.artist ? <p className="truncate text-sm text-text-muted">{media.session.artist}</p> : null}
                   </>
@@ -213,12 +244,12 @@ export function RemotePage() {
                 )}
               </div>
             </div>
-            <div className="mt-5 flex items-center justify-center gap-8">
-              <IconButton plain label="Previous track" size={52} disabled={!canControl || !media.ok || !media.session.controls.includes("previous")} onClick={() => media.ok && void send("media.previous", {}, media.target, "button")}>
+            <div className={`mt-5 flex items-center justify-center ${narrow ? "gap-4" : "gap-8"}`}>
+              <IconButton plain label="Previous track" size={btn} disabled={!canControl || !media.ok || !media.session.controls.includes("previous")} onClick={() => media.ok && void send("media.previous", {}, media.target, "button")}>
                 <Icon name="prev" size={26} />
               </IconButton>
-              <PlayButton size={76} playing={media.ok && media.session.status === "playing"} label={media.ok && media.session.status === "playing" ? "Pause" : "Play"} disabled={!canControl || !media.ok || !(media.session.controls.includes("pause") || media.session.controls.includes("play"))} onClick={() => media.ok && void send("media.set_paused", { paused: media.session.status === "playing" }, media.target, "button")} />
-              <IconButton plain label="Next track" size={52} disabled={!canControl || !media.ok || !media.session.controls.includes("next")} onClick={() => media.ok && void send("media.next", {}, media.target, "button")}>
+              <PlayButton size={narrow ? 60 : 76} playing={media.ok && media.session.status === "playing"} label={media.ok && media.session.status === "playing" ? "Pause" : "Play"} disabled={!canControl || !media.ok || !(media.session.controls.includes("pause") || media.session.controls.includes("play"))} onClick={() => media.ok && void send("media.set_paused", { paused: media.session.status === "playing" }, media.target, "button")} />
+              <IconButton plain label="Next track" size={btn} disabled={!canControl || !media.ok || !media.session.controls.includes("next")} onClick={() => media.ok && void send("media.next", {}, media.target, "button")}>
                 <Icon name="next" size={26} />
               </IconButton>
             </div>

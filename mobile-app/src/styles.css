@@ -38,6 +38,8 @@
   --dome-color-surface-hover: #e4eaf5;
   --dome-color-border: rgb(0 20 65 / 0.08);
   --dome-color-border-strong: rgb(0 20 65 / 0.18);
+  /* the edge of a control (off switch track, empty slider track, text field border): about 3:1 on a card */
+  --dome-color-control-edge: rgb(0 20 65 / 0.42);
 
   /* text */
   --dome-color-text: #001441;
@@ -110,6 +112,7 @@
     --dome-color-surface-hover: rgb(255 255 255 / 0.13);
     --dome-color-border: rgb(255 255 255 / 0.09);
     --dome-color-border-strong: rgb(255 255 255 / 0.2);
+    --dome-color-control-edge: rgb(255 255 255 / 0.38);
     --dome-color-text: #f3f6fd;
     --dome-color-text-muted: #b2bfdd;
     --dome-color-text-faint: #8f9dc4;
@@ -155,6 +158,7 @@
   --dome-color-surface-hover: rgb(255 255 255 / 0.13);
   --dome-color-border: rgb(255 255 255 / 0.09);
   --dome-color-border-strong: rgb(255 255 255 / 0.2);
+  --dome-color-control-edge: rgb(255 255 255 / 0.38);
   --dome-color-text: #f3f6fd;
   --dome-color-text-muted: #b2bfdd;
   --dome-color-text-faint: #8f9dc4;
@@ -207,6 +211,7 @@
   --color-surface-hover: var(--dome-color-surface-hover);
   --color-border: var(--dome-color-border);
   --color-border-strong: var(--dome-color-border-strong);
+  --color-control-edge: var(--dome-color-control-edge);
   --color-text: var(--dome-color-text);
   --color-text-muted: var(--dome-color-text-muted);
   --color-text-faint: var(--dome-color-text-faint);
@@ -344,6 +349,13 @@ body {
   .dome-primary:hover:not(:disabled) {
     background: linear-gradient(180deg, color-mix(in oklab, var(--dome-color-primary-strong) 80%, white), var(--dome-color-primary-strong) 55%);
   }
+  /* a primary that cannot be used yet: a quiet surface with a readable label, never a faded blue bar */
+  .dome-primary:disabled {
+    background: var(--dome-color-surface);
+    color: var(--dome-color-text-faint);
+    box-shadow: inset 0 0 0 1px var(--dome-color-border);
+    opacity: 1;
+  }
 
   /* Translucent bars (website header, tab bar, assistant dock): opaque enough that page text never
      reads through the labels; where there is no backdrop blur, a solid raised fill instead. */
@@ -407,7 +419,25 @@ body {
   .dome-segment > [role="tab"][aria-selected="true"] {
     background: var(--dome-segment-on);
     color: var(--dome-color-text);
-    box-shadow: var(--dome-segment-shadow);
+    /* the chosen segment also carries an accent edge, so its state never rests on a faint fill difference */
+    box-shadow:
+      var(--dome-segment-shadow),
+      0 0 0 1px color-mix(in oklab, var(--dome-color-accent) 50%, transparent);
+  }
+
+  /* "More" disclosures inside a card (an app's Window controls): no marker, a chevron that turns. */
+  .dome-more > summary {
+    list-style: none;
+  }
+  .dome-more > summary::-webkit-details-marker {
+    display: none;
+  }
+  .dome-more .dome-more-chevron {
+    transform: rotate(90deg);
+    transition: transform var(--dome-dur) var(--dome-ease);
+  }
+  .dome-more[open] .dome-more-chevron {
+    transform: rotate(-90deg);
   }
 
   /* Rows inside a card, separated by hairlines. */
@@ -514,7 +544,7 @@ input[type="range"].slider {
   background: transparent;
   touch-action: pan-y;
   --fill: 0%;
-  --track: linear-gradient(90deg, var(--dome-color-primary) 0 var(--fill), var(--dome-color-border-strong) var(--fill) 100%);
+  --track: linear-gradient(90deg, var(--dome-color-primary) 0 var(--fill), var(--dome-color-control-edge) var(--fill) 100%);
 }
 input[type="range"].slider::-webkit-slider-runnable-track {
   height: 6px;
@@ -524,7 +554,7 @@ input[type="range"].slider::-webkit-slider-runnable-track {
 input[type="range"].slider::-moz-range-track {
   height: 6px;
   border-radius: 999px;
-  background: var(--dome-color-border-strong);
+  background: var(--dome-color-control-edge);
 }
 input[type="range"].slider::-moz-range-progress {
   height: 6px;
@@ -625,4 +655,10 @@ dialog::backdrop {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* The app's fixed tab bar: focus that the browser scrolls into view stops above it, never behind it (WCAG 2.4.11).
+   The Ask page adds its dock's height on top while it is mounted (AssistantPage). */
+html:has([data-app-shell]) {
+  scroll-padding-bottom: calc(56px + var(--safe-bottom) + 16px);
 }

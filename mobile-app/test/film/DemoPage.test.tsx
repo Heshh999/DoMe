@@ -37,6 +37,11 @@ describe("DemoPage", () => {
     expect(screen.getAllByText("Coming at paid launch")).toHaveLength(2);
     expect(screen.getByText("$9.99")).toBeInTheDocument();
     expect(screen.getByText("$24.99")).toBeInTheDocument();
+    // Screen view carries its "Coming" status on every plan card
+    for (const name of ["Free", "Pro", "Pro Plus"]) {
+      const card = screen.getByRole("heading", { level: 3, name }).closest("li") as HTMLElement;
+      expect(card.querySelector("li:nth-child(3)")).toHaveTextContent(/^Screen view: .*Coming$/);
+    }
     expect(screen.getByText(/Nothing is recorded; the AI never sees your screen/)).toBeInTheDocument();
     expect(screen.getByText(/the Windows app is not published yet/)).toBeInTheDocument();
   });
@@ -44,7 +49,7 @@ describe("DemoPage", () => {
   it("?scene=N&paused=1 renders that scene's representative still, not playing", () => {
     at("/demo?scene=4&paused=1");
     expect(Number(document.querySelector("[data-film-time]")?.getAttribute("data-film-time"))).toBe(SCENES[3]!.still);
-    expect(screen.getByRole("status")).toHaveTextContent("Point and talk");
+    expect(screen.getByRole("status")).toHaveTextContent("Point-and-talk");
     expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
   });
 

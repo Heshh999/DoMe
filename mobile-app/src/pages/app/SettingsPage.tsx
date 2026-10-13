@@ -10,7 +10,7 @@ import { navigation } from "../../app/navigation.ts";
 import { getRuntime } from "../../app/runtime.ts";
 import { AssistantSettingsCard } from "../../components/AssistantSettingsCard.tsx";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
-import type { IconName } from "../../components/icons.tsx";
+import { Icon, type IconName } from "../../components/icons.tsx";
 import { Button, Card, IconWell, Notice, PageHeader, SectionLabel, type WellTone } from "../../components/ui.tsx";
 import { APP_VERSION, buildDiagnostics, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
 import { useDevicesStore } from "../../store/devices.ts";
@@ -33,6 +33,23 @@ export function SettingCard({ icon, tone = "accent", title, text, children, clas
       </div>
       {children}
     </Card>
+  );
+}
+
+/** A setting that is mostly explanation: one row (icon, title, one line) that opens to show the details. */
+function SettingDisclosure({ icon, title, line, children }: { icon: IconName; title: string; line: string; children: ReactNode }) {
+  return (
+    <details className="dome-card dome-more group overflow-hidden p-0">
+      <summary className="flex min-h-[64px] cursor-pointer items-center gap-3.5 px-5 py-4">
+        <IconWell icon={icon} size={40} />
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold leading-snug">{title}</span>
+          <span className="mt-0.5 block text-sm text-text-muted">{line}</span>
+        </span>
+        <Icon name="chevron" size={18} className="dome-more-chevron shrink-0 text-text-faint" />
+      </summary>
+      <div className="px-5 pb-5">{children}</div>
+    </details>
   );
 }
 
@@ -111,13 +128,14 @@ export function SettingsPage() {
       </section>
 
       <section>
-        <SectionLabel>Assistant</SectionLabel>
+        <SectionLabel>Ask (AI butler)</SectionLabel>
         <AssistantSettingsCard />
       </section>
 
       <section className="space-y-3">
         <SectionLabel>This phone</SectionLabel>
-        <SettingCard icon="download" title="Install on your iPhone" text={standalone ? "DoMe is installed on this device’s home screen." : `Adding DoMe to your home screen makes it open full-screen like an app.${ios ? "" : " These steps are for Safari on iPhone; on Android use Chrome’s “Install app” menu item."}`}>
+        <SettingDisclosure icon="download" title="Install on your iPhone" line={standalone ? "Installed on this phone’s home screen." : "Open DoMe full-screen, like an app."}>
+          <p className="text-sm text-text-muted">{standalone ? "DoMe is installed on this device’s home screen." : `Adding DoMe to your home screen makes it open full-screen like an app.${ios ? "" : " These steps are for Safari on iPhone; on Android use Chrome’s “Install app” menu item."}`}</p>
           {standalone ? null : (
             <>
               <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm marker:text-text-faint">
@@ -133,14 +151,14 @@ export function SettingsPage() {
               <p className="mt-3 text-xs text-text-faint">The installed app is a separate installation: pair it with your PC once from Devices. Clearing Safari’s website data removes its pairing, and you pair again — there is no shortcut around that by design.</p>
             </>
           )}
-        </SettingCard>
+        </SettingDisclosure>
 
-        <SettingCard icon="shield" title="Privacy">
-          <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-text-muted marker:text-text-faint">
+        <SettingDisclosure icon="shield" title="Privacy" line="Signed commands, no analytics, nothing cached.">
+          <ul className="list-disc space-y-1.5 pl-5 text-sm text-text-muted marker:text-text-faint">
             <li>Commands are signed by a key that never leaves this phone; your PC only accepts phones you approved on the PC.</li>
             <li>The DoMe service routes commands and current PC state between your devices and keeps a lifecycle record per command (action, state, timing, error code) — not parameters, results, typed text or media titles.</li>
             <li>This app stores no analytics, advertising or session-replay scripts, and never caches your PC’s data.</li>
-            <li>The Assistant keeps the conversation in memory only. With the AI assistant on, only requests DoMe can’t work out by itself go to Anthropic, through DoMe’s server; see the Assistant card above.</li>
+            <li>Ask keeps the conversation in memory only. With the AI butler on, only requests DoMe can’t work out by itself go to Anthropic, through DoMe’s server; see the AI butler card above.</li>
             <li>
               Full details:{" "}
               <Link to="/privacy" className="font-semibold text-accent">
@@ -149,9 +167,10 @@ export function SettingsPage() {
               .
             </li>
           </ul>
-        </SettingCard>
+        </SettingDisclosure>
 
-        <SettingCard icon="info" title="Diagnostics" text="Download a redacted report (versions, connection states, command outcomes without content) to attach to a support request. Nothing is sent automatically.">
+        <SettingDisclosure icon="info" title="Diagnostics" line="A redacted report for a support request.">
+          <p className="text-sm text-text-muted">Download a redacted report (versions, connection states, command outcomes without content) to attach to a support request. Nothing is sent automatically.</p>
           <Button className="mt-4" full onClick={diagnostics}>
             Download diagnostics
           </Button>
@@ -159,7 +178,7 @@ export function SettingsPage() {
             DoMe app {APP_VERSION}
             {session ? ` · signed in as ${session.account.email}` : ""}
           </p>
-        </SettingCard>
+        </SettingDisclosure>
 
         <SettingCard
           icon="help"

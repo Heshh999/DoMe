@@ -5,6 +5,11 @@ import { Wordmark } from "../../components/brand.tsx";
 import { Film } from "../../components/film/Film.tsx";
 import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
+import { FREE_SCREEN_VIEW_MINUTES, planById, usd, WINDOW_HOURS } from "../../content/plans.ts";
+
+const FREE = planById("free");
+const PRO = planById("pro");
+const PRO_PLUS = planById("pro_plus");
 
 const STEPS = [
   { title: "Install DoMe on your PC", text: "Sign in on your Windows PC and give it a name. It connects out to DoMe, so there are no ports to open and no router to change." },
@@ -15,11 +20,11 @@ const STEPS = [
 const CAPABILITIES: Array<{ icon: IconName; title: string; text: string; status?: string }> = [
   { icon: "youtube", title: "YouTube, the right tab", text: "Play, pause, skip and seek in the PC’s browser, even while another window has focus." },
   { icon: "volume", title: "Media and volume", text: "Pause or skip whatever Windows is playing, and set the exact system volume." },
-  { icon: "apps", title: "Your approved apps", text: "Open, bring to front, minimise or close the apps you approved on the PC. Nothing else." },
+  { icon: "apps", title: "Your approved apps", text: "Open, bring to front, minimize or close the apps you approved on the PC. Nothing else." },
   { icon: "lock", title: "Lock and power", text: "Lock Windows in one tap. Sleep, restart and shut down always ask you first." },
-  { icon: "ask", title: "Just ask", text: "Say or type “skip this video” or “set the volume to 35”. Everyday requests need no AI." },
+  { icon: "ask", title: "Just ask", text: "Say or type “skip this video” or “set the volume to 35”. Everyday commands need no AI and never count." },
   { icon: "check", title: "Honest results", text: "Every control shows what the PC actually did. “Sent” is never shown as “done”." },
-  { icon: "pc", title: "Screen view", text: "See your PC’s screen on your phone and tap what you see. In development: Free will get 10 minutes per 5 hours, Pro and Pro Plus unlimited.", status: "Coming" },
+  { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. In development: Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window, Pro and Pro Plus unlimited.`, status: "Coming" },
 ];
 
 const TRUST: Array<{ title: string; text: React.ReactNode }> = [
@@ -151,7 +156,8 @@ function PhonePicture() {
           </div>
         </div>
       </div>
-      <div className="absolute -left-48 bottom-28 hidden items-center gap-2.5 rounded-2xl border border-white/10 bg-[rgb(11_33_86/0.82)] px-3.5 py-2.5 text-[13px] shadow-[0_20px_40px_-16px_rgb(0_0_0/0.6)] backdrop-blur-md lg:flex">
+      {/* xl and up only: below the caveat line and over the phone's left bezel alone, never on the CTAs or the caveat */}
+      <div data-testid="hero-toast" className="absolute -left-48 bottom-6 hidden items-center gap-2.5 rounded-2xl border border-white/10 bg-[rgb(11_33_86/0.82)] px-3.5 py-2.5 text-[13px] shadow-[0_20px_40px_-16px_rgb(0_0_0/0.6)] backdrop-blur-md xl:flex">
         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-success/20 text-success">
           <Icon name="check" size={14} strokeWidth={2.5} />
         </span>
@@ -183,16 +189,16 @@ export function LandingPage() {
             </h1>
             <p className="mx-auto mt-6 max-w-[34rem] text-lg text-text-muted sm:text-xl lg:mx-0">Your iPhone becomes a simple, secure remote for your Windows PC. Free, no credit card.</p>
             <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
-              <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center gap-2 rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
+              <Link to="/app" data-testid="hero-open" className="tap dome-primary dome-press inline-flex w-full items-center justify-center gap-2 rounded-full sm:whitespace-nowrap px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
                 Open the app
                 <Icon name="arrow" size={18} />
               </Link>
-              <Link to="/download" className="tap dome-press inline-flex w-full items-center justify-center gap-2 rounded-full border border-border-strong bg-bg-elevated px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
+              <Link to="/download" data-testid="hero-windows" className="tap dome-press inline-flex w-full items-center justify-center gap-2 rounded-full sm:whitespace-nowrap border border-border-strong bg-bg-elevated px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
                 <Icon name="pc" size={18} />
-                Get DoMe for Windows
+                Windows app · coming soon
               </Link>
             </div>
-            <p className="mt-4 text-xs text-text-faint">DoMe is in development. The Windows app is not published yet: see Download for its status.</p>
+            <p data-testid="hero-caveat" className="mt-4 text-xs text-text-faint">DoMe is in development. The Windows app is not published yet: see Download for its status.</p>
           </div>
           <PhonePicture />
         </div>
@@ -303,7 +309,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section aria-labelledby="free" className="px-3 pb-16 [--closing-fill:var(--dome-navy)] [--closing-glow:0_40px_80px_-40px_rgb(0_20_65/0.55)] sm:px-5 lg:px-8 lg:pb-24 dark:[--closing-fill:#0b2156] dark:[--closing-glow:0_0_0_1px_rgb(255_255_255/0.06),0_40px_120px_-30px_rgb(1_66_251/0.6)]">
+      <section aria-labelledby="free" className="px-5 pb-16 [--closing-fill:var(--dome-navy)] [--closing-glow:0_40px_80px_-40px_rgb(0_20_65/0.55)] lg:px-8 lg:pb-24 dark:[--closing-fill:#0b2156] dark:[--closing-glow:0_0_0_1px_rgb(255_255_255/0.06),0_40px_120px_-30px_rgb(1_66_251/0.6)]">
         <div className="dome-dark relative mx-auto max-w-6xl overflow-hidden rounded-hero bg-[var(--closing-fill)] px-6 py-16 text-center shadow-[var(--closing-glow)] ring-1 ring-white/12 sm:px-12 lg:py-24">
           <div aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(50rem_22rem_at_50%_-4rem,rgb(1_66_251/0.55),transparent_70%)]" />
           <div className="relative">
@@ -311,7 +317,9 @@ export function LandingPage() {
             <h2 id="free" className="mx-auto mt-10 max-w-3xl text-h2 font-bold">
               Free today. Pro and Pro Plus when they’re worth it.
             </h2>
-            <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">Remote control stays free, with 1 PC and 2 phones. Pro ($9.99 a month) and Pro Plus ($24.99 a month) add up to 5 PCs and 5 phones, unlimited Screen view when it ships, and more AI butler time. Both arrive at paid launch.</p>
+            <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">
+              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, unlimited Screen view when it ships, and more AI butler time. Both arrive at paid launch.
+            </p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
                 Open the app

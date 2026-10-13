@@ -51,7 +51,12 @@ describe("PricingPage", () => {
     expect(text).toContain("90 requests (about 45 minutes) per 5-hour window, up to 300 (about 2.5 hours) a week");
     expect(text).toContain("are free, unlimited and never count, on every plan, even after you reach an AI limit");
     expect(text).toContain("Refreshes Saturday at 2 pm");
-    expect(text).toContain("warns you at 80 %");
+    expect(text).toContain("the app will show the exact refresh time");
+    expect(text).toContain("warn you at 80%");
+    // no promise of "forever" (not in the brief): Free is "$0, no credit card"
+    expect(text).not.toMatch(/forever/i);
+    // nothing claims every AI action is shown before it runs
+    expect(text).not.toMatch(/always shown to you before anything runs/);
     expect(text).toContain("100 extra AI requests for $2.99, only when you choose");
     expect(text).toContain("nothing is ever added or charged automatically");
     expect(text).toContain("Prices in US dollars, before tax");
@@ -72,7 +77,7 @@ describe("PricingPage", () => {
     expect(screenRow).toHaveTextContent("10 min per 5-hour window");
     expect(screenRow).toHaveTextContent("Unlimited");
     expect(within(table).getByRole("columnheader", { name: /Screen view/ })).toHaveTextContent("Coming");
-    expect(container.textContent).toContain("If Pro ends, you keep every PC, phone and setting and choose which 1 PC and 2 phones stay enabled (within 14 days");
+    expect(container.textContent).toContain("If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which 1 PC and 2 phones stay enabled (within 14 days");
     expect(screen.getByRole("link", { name: "Read the FAQ" })).toHaveAttribute("href", "/faq");
   });
 });

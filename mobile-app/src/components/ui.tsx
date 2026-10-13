@@ -35,13 +35,15 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export function Button({ variant = "secondary", size = "md", busy = false, full = false, className = "", children, disabled, ...rest }: ButtonProps) {
+  // a disabled primary gets its own quiet look (styles.css `.dome-primary:disabled`), never a faded blue bar
+  const dim = variant === "primary" ? "" : "disabled:opacity-40";
   return (
     <button
       type="button"
       {...rest}
       disabled={disabled || busy}
       aria-busy={busy || undefined}
-      className={`dome-press inline-flex items-center justify-center rounded-control font-semibold tracking-[-0.01em] select-none disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none ${VARIANT[variant]} ${SIZE[size]} ${full ? "w-full" : ""} ${className}`}
+      className={`dome-press inline-flex items-center justify-center rounded-control font-semibold tracking-[-0.01em] select-none ${dim} disabled:cursor-not-allowed disabled:shadow-none ${VARIANT[variant]} ${SIZE[size]} ${full ? "w-full" : ""} ${className}`}
     >
       {busy ? <Spinner small /> : null}
       {children}
@@ -87,10 +89,11 @@ const TONE: Record<Tone, string> = {
   info: "bg-info/12 text-info border-info/25",
 };
 
-export function Pill({ tone = "neutral", children, pulse = false, className = "" }: { tone?: Tone; children: ReactNode; pulse?: boolean; className?: string }) {
+/** A status pill. `dot={false}` drops the leading dot when the pill carries its own icon (one glyph, never two). */
+export function Pill({ tone = "neutral", children, pulse = false, dot = true, className = "" }: { tone?: Tone; children: ReactNode; pulse?: boolean; dot?: boolean; className?: string }) {
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold ${TONE[tone]} ${className}`}>
-      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full bg-current ${tone === "success" ? "shadow-[0_0_0_3px_color-mix(in_oklab,currentColor_22%,transparent)]" : ""} ${pulse ? "pulse" : ""}`} />
+      {dot ? <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full bg-current ${tone === "success" ? "shadow-[0_0_0_3px_color-mix(in_oklab,currentColor_22%,transparent)]" : ""} ${pulse ? "pulse" : ""}`} /> : null}
       {children}
     </span>
   );
@@ -298,11 +301,11 @@ export function Field({ label, hint, children, id }: { label: string; hint?: str
   );
 }
 
-export const inputClass = "w-full rounded-control bg-bg-sunken border border-border px-4 py-3 text-base text-text placeholder:text-text-faint transition-colors focus:border-accent/60 min-h-[48px]";
+export const inputClass = "w-full rounded-control bg-bg-sunken border border-control-edge px-4 py-3 text-base text-text placeholder:text-text-faint transition-colors focus:border-accent/60 min-h-[48px]";
 
 export function Toggle({ checked, onChange, label, disabled = false, id }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean; id?: string }) {
   return (
-    <button id={id} type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)} className={`relative inline-flex h-[31px] w-[51px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-40 ${checked ? "bg-primary" : "bg-border-strong"}`}>
+    <button id={id} type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)} className={`relative inline-flex h-[31px] w-[51px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-40 ${checked ? "bg-primary" : "bg-control-edge"}`}>
       <span aria-hidden="true" className={`inline-block h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_6px_rgb(0_20_65/0.3)] transition-transform duration-200 ease-dome ${checked ? "translate-x-[22px]" : "translate-x-[2px]"}`} />
     </button>
   );

@@ -38,8 +38,8 @@ const TITLES: Record<ActionName, string> = {
   "app.list": "List apps",
   "app.launch": "Open app",
   "app.focus": "Bring app to front",
-  "app.minimize": "Minimise app",
-  "app.maximize": "Maximise app",
+  "app.minimize": "Minimize app",
+  "app.maximize": "Maximize app",
   "app.restore": "Restore window",
   "app.set_fullscreen": "App full screen",
   "app.close": "Close app",
@@ -133,9 +133,9 @@ export function describeAction(action: string, params: Record<string, unknown>, 
     case "app.focus":
       return `Bring ${appName(target?.app_id, ctx)} to the front`;
     case "app.minimize":
-      return `Minimise ${appName(target?.app_id, ctx)}`;
+      return `Minimize ${appName(target?.app_id, ctx)}`;
     case "app.maximize":
-      return `Maximise ${appName(target?.app_id, ctx)}`;
+      return `Maximize ${appName(target?.app_id, ctx)}`;
     case "app.restore":
       return `Show ${appName(target?.app_id, ctx)} at normal size`;
     case "app.set_fullscreen":
@@ -354,11 +354,11 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
     case "APP_NOT_APPROVED":
       return ["Approve the app on the PC first: open the DoMe tray menu and choose Add an app…", "It then appears under Apps here by itself."];
     case "APP_NOT_RUNNING":
-      return ["Open it first from Apps, then try again.", "Maximise, Restore and Full screen never start an app by themselves."];
+      return ["Open it first from Apps, then try again.", "Maximize, Restore and Full screen never start an app by themselves."];
     case "FULLSCREEN_UNSUPPORTED":
-      return ["Try Maximise instead.", "Not every app has an F11 full screen, and DoMe never maximises in its place without asking."];
+      return ["Try Maximize instead.", "Not every app has an F11 full screen, and DoMe never maximizes in its place without asking."];
     case "WINDOW_STATE_UNCHANGED":
-      return ["Some windows have a fixed size and cannot be maximised or resized.", "If the app is busy or not responding, wait for it on the PC and try again."];
+      return ["Some windows have a fixed size and cannot be maximized or resized.", "If the app is busy or not responding, wait for it on the PC and try again."];
     case "APP_ELEVATED":
       return ["That app runs as administrator, and Windows does not let other programs control its windows.", "Use it on the PC itself, or start it without administrator rights."];
     case "RATE_LIMITED":

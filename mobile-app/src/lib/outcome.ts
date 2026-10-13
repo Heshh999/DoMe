@@ -55,7 +55,7 @@ export function resultSummary(record: CommandRecord): string | null {
     case "app.focus":
       return r.focused ? "The app is in front." : "The app is running but Windows did not bring it to the front.";
     case "app.minimize":
-      return r.minimized ? "The window was minimised." : "Done.";
+      return r.minimized ? "The window was minimized." : "Done.";
     case "app.maximize":
     case "app.restore":
     case "app.set_fullscreen":
@@ -77,6 +77,6 @@ export function resultSummary(record: CommandRecord): string | null {
 
 /** app_window_state_result read back by the PC: what the window looks like now, and whether it came to the front. */
 function windowStateSummary(r: Record<string, unknown>): string {
-  const shape = r.fullscreen === true ? "in full screen" : r.state === "maximized" ? "maximised" : r.state === "minimized" ? "minimised" : "at normal size";
+  const shape = r.fullscreen === true ? "in full screen" : r.state === "maximized" ? "maximized" : r.state === "minimized" ? "minimized" : "at normal size";
   return `The window is ${shape}.${r.foreground === false && r.state !== "minimized" ? " Windows did not bring it to the front." : ""}`;
 }

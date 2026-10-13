@@ -14,7 +14,7 @@ import { Icon } from "../../components/icons.tsx";
 import { Button, Card, CheckRow, Field, IconWell, inputClass, Notice, PageHeader, Pill, Segmented, Spinner, Steps } from "../../components/ui.tsx";
 import { api, ApiError } from "../../lib/api.ts";
 import { getControllerIdentity, KeyStorageError, setStoredControllerId } from "../../lib/controllerKey.ts";
-import { secondsUntil } from "../../lib/format.ts";
+import { expiresIn } from "../../lib/format.ts";
 import { capabilityLabel, INPUT_SCOPE_EXPLANATION, errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { errorSummary, log } from "../../lib/log.ts";
 import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation, takeScanAgainHint } from "../../lib/pairing.ts";
@@ -300,7 +300,7 @@ export function PairPage() {
               {step.status.pc_online === false ? "PC is offline — it will ask when it reconnects" : "Waiting for approval on the PC"}
             </Pill>
           </div>
-          <p className="mt-3 text-xs text-text-faint">Expires in {secondsUntil(step.status.expires_at)} s. Nothing is paired until you approve on the PC.</p>
+          <p className="mt-3 text-xs text-text-faint">Expires {expiresIn(step.status.expires_at)}. Nothing is paired until you approve on the PC.</p>
           <Button className="mt-4" variant="quiet" onClick={reset}>
             Cancel
           </Button>

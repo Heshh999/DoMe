@@ -37,7 +37,7 @@ export function Artwork({ kind, size = 64 }: { kind: NowPlayingView["kind"]; siz
 /** The large round play/pause button. */
 export function PlayButton({ playing, label, size = 56, disabled, onClick }: { playing: boolean; label: string; size?: number; disabled: boolean; onClick: () => void }) {
   return (
-    <button type="button" aria-label={label} disabled={disabled} onClick={onClick} style={{ width: size, height: size }} className="dome-primary dome-press flex shrink-0 items-center justify-center rounded-full disabled:opacity-40 disabled:shadow-none">
+    <button type="button" aria-label={label} disabled={disabled} onClick={onClick} style={{ width: size, height: size }} className="dome-primary dome-press flex shrink-0 items-center justify-center rounded-full disabled:shadow-none">
       <Icon name={playing ? "pause" : "play"} size={Math.round(size * 0.4)} />
     </button>
   );

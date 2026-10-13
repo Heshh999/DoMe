@@ -109,7 +109,7 @@ describe("AppsPage", () => {
     useLiveStore.getState().markAllStale();
     renderApps();
     expect(screen.getByRole("button", { name: "Close…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Open again" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Open another window" })).toBeDisabled();
   });
 });
 
@@ -162,7 +162,7 @@ describe("AppsPage window controls (protocol 1.2)", () => {
   it("Maximise, Restore and Full screen send ids only, stamped with the actions' since; app.list stays 1.0", async () => {
     renderApps();
     const notepad = within(card("Notepad"));
-    await userEvent.click(notepad.getByRole("button", { name: "Maximise" }));
+    await userEvent.click(notepad.getByRole("button", { name: "Maximize" }));
     await userEvent.click(notepad.getByRole("button", { name: "Restore" }));
     await userEvent.click(notepad.getByRole("button", { name: "Full screen" }));
     await waitFor(() => expect(sentCommands("app.set_fullscreen")).toHaveLength(1));
@@ -191,15 +191,16 @@ describe("AppsPage window controls (protocol 1.2)", () => {
   it("window controls are off for an app that is not running (they never start it) and for every app while locked", () => {
     const { unmount } = renderApps();
     const spotify = within(card("Spotify"));
-    for (const name of ["Bring to front", "Minimise", "Maximise", "Restore", "Full screen", "Close…"]) expect(spotify.getByRole("button", { name }), name).toBeDisabled();
+    // a closed app offers Open and nothing else: no window controls that could only fail
+    for (const name of ["Bring to front", "Minimize", "Maximize", "Restore", "Full screen", "Close…"]) expect(spotify.queryByRole("button", { name }), name).toBeNull();
     expect(spotify.getByRole("button", { name: "Open" })).toBeEnabled();
-    expect(within(card("Notepad")).getByRole("button", { name: "Maximise" })).toBeEnabled();
+    expect(within(card("Notepad")).getByRole("button", { name: "Maximize" })).toBeEnabled();
     unmount();
     freshState({ session_locked: true });
     renderApps();
     for (const app of ["Notepad", "Edge"]) {
       // every Maximise/Restore/Full screen of the app, and each of its windows' rows
-      for (const name of ["Maximise", "Restore", "Full screen", "Max", "Full"]) for (const b of within(card(app)).queryAllByRole("button", { name })) expect(b, `${app} ${name}`).toBeDisabled();
+      for (const name of ["Maximize", "Restore", "Full screen", "Max", "Full"]) for (const b of within(card(app)).queryAllByRole("button", { name })) expect(b, `${app} ${name}`).toBeDisabled();
     }
     expect(within(card("Edge")).getAllByRole("button", { name: "Restore" })).toHaveLength(3);
   });
@@ -223,17 +224,17 @@ describe("AppsPage window controls (protocol 1.2)", () => {
     await userEvent.click(within(card("Notepad")).getByRole("button", { name: "Full screen" }));
     await waitFor(() => expect(sentCommands("app.set_fullscreen")).toHaveLength(1));
     answer(sentCommands("app.set_fullscreen")[0]!.command_id, { state: "failed", error: { code: "FULLSCREEN_UNSUPPORTED", message: PC_SAYS_NO_F11, retryable: false }, result: { app_id: "notepad", window_id: "w1", state: "normal", fullscreen: false, foreground: true } });
-    const instead = await screen.findByRole("button", { name: "Maximise instead" });
+    const instead = await screen.findByRole("button", { name: "Maximize instead" });
     // the agent's words (how to allow full screen for that app on the PC), not the generic copy
     expect(within(screen.getByTestId("command-outcome")).getByText(PC_SAYS_NO_F11)).toBeInTheDocument();
     expect(screen.queryByText(/That app did not switch to full screen with F11/)).toBeNull();
-    expect(screen.getByText("Try Maximise instead.")).toBeInTheDocument();
+    expect(screen.getByText("Try Maximize instead.")).toBeInTheDocument();
     expect(sentCommands("app.maximize")).toHaveLength(0);
     await userEvent.click(instead);
     await waitFor(() => expect(sentCommands("app.maximize")).toHaveLength(1));
     expect(sentCommands("app.maximize")[0]!.target).toEqual({ app_id: "notepad" });
     // the new command's outcome replaces the failure, so the offer goes away
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Maximise instead" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Maximize instead" })).toBeNull());
   });
 
   it("an app running without a window (Edge's Startup boost) offers Open; its window buttons are off", () => {
@@ -242,13 +243,13 @@ describe("AppsPage window controls (protocol 1.2)", () => {
     const edge = within(card("Edge"));
     expect(edge.getByText("Running in the background · no open window")).toBeInTheDocument();
     expect(edge.getByText("Background")).toBeInTheDocument();
-    for (const name of ["Bring to front", "Minimise", "Maximise", "Restore", "Full screen", "Close…"]) expect(edge.getByRole("button", { name }), name).toBeDisabled();
+    for (const name of ["Bring to front", "Minimize", "Maximize", "Restore", "Full screen", "Close…"]) expect(edge.queryByRole("button", { name }), name).toBeNull();
     expect(edge.getByRole("button", { name: "Open" })).toBeEnabled();
   });
 
   it("TARGET_GONE for an app's window says it has no open window and to open it (not to refresh a tab)", async () => {
     renderApps();
-    await userEvent.click(within(card("Notepad")).getByRole("button", { name: "Maximise" }));
+    await userEvent.click(within(card("Notepad")).getByRole("button", { name: "Maximize" }));
     await waitFor(() => expect(sentCommands("app.maximize")).toHaveLength(1));
     answer(sentCommands("app.maximize")[0]!.command_id, { state: "failed", error: { code: "TARGET_GONE", message: "The app is running but has no window to control", retryable: false } });
     expect(await screen.findByText("The app has no open window on the PC.")).toBeInTheDocument();
@@ -258,7 +259,7 @@ describe("AppsPage window controls (protocol 1.2)", () => {
 
   it("APP_NOT_RUNNING says to open the app first", async () => {
     renderApps();
-    await userEvent.click(within(card("Notepad")).getByRole("button", { name: "Maximise" }));
+    await userEvent.click(within(card("Notepad")).getByRole("button", { name: "Maximize" }));
     await waitFor(() => expect(sentCommands("app.maximize")).toHaveLength(1));
     answer(sentCommands("app.maximize")[0]!.command_id, { state: "failed", error: { code: "APP_NOT_RUNNING", message: "x", retryable: false } });
     expect(await screen.findByText(/Open it first from Apps/)).toBeInTheDocument();
@@ -272,7 +273,7 @@ describe("AppsPage list refresh", () => {
     await waitFor(() => expect(sentCommands("app.list")).toHaveLength(1)); // on entry
     answer(sentCommands("app.list")[0]!.command_id, { state: "succeeded", result: { apps: [{ app_id: "spotify", display_name: "Spotify", running: false, windows: [] }] } });
     const spotify = () => within(card("Spotify"));
-    expect(spotify().getByRole("button", { name: "Maximise" })).toBeDisabled();
+    expect(spotify().queryByRole("button", { name: "Maximize" })).toBeNull();
     await userEvent.click(spotify().getByRole("button", { name: "Open" }));
     await waitFor(() => expect(sentCommands("app.launch")).toHaveLength(1));
     answer(sentCommands("app.launch")[0]!.command_id, { state: "succeeded", result: { app_id: "spotify", launched: true, running: true } });
@@ -281,7 +282,7 @@ describe("AppsPage list refresh", () => {
     expect(await screen.findByText("Running in the background · no open window")).toBeInTheDocument();
     await waitFor(() => expect(sentCommands("app.list")).toHaveLength(3), { timeout: 3000 }); // again ~1.5 s later
     answer(sentCommands("app.list")[2]!.command_id, { state: "succeeded", result: { apps: [{ app_id: "spotify", display_name: "Spotify", running: true, windows: [{ window_id: "s1", title: "Spotify" }] }] } });
-    await waitFor(() => expect(spotify().getByRole("button", { name: "Maximise" })).toBeEnabled());
+    await waitFor(() => expect(spotify().getByRole("button", { name: "Maximize" })).toBeEnabled());
     expect(spotify().getByText("Running · 1 window")).toBeInTheDocument();
   }, 10_000);
 

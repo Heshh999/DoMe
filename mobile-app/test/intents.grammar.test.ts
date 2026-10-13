@@ -365,18 +365,18 @@ describe("apps (fuzzy matching against the approved apps)", () => {
   });
   it("'it' without an app before it asks, offering the running apps (the one in front first)", () => {
     const r = parseCommand("maximise it", CTX);
-    expect(r).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximise Notepad”, for example." });
-    expect(r.kind === "clarify" && r.choices.map((c) => c.text)).toEqual(["maximise Notepad", "maximise msedge", "maximise Google Chrome", "maximise Visual Studio Code"]);
+    expect(r).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximize Notepad”, for example." });
+    expect(r.kind === "clarify" && r.choices.map((c) => c.text)).toEqual(["maximize Notepad", "maximize msedge", "maximize Google Chrome", "maximize Visual Studio Code"]);
   });
   it("the 'which app' help names one of the customer's own approved apps, never a made-up one", () => {
     const zstream = { app_id: "zstream-app", display_name: "ZStream", running: true, windows: [{ foreground: false }] };
     const only = (apps: NonNullable<IntentContext["apps"]>): IntentContext => ({ ...CTX, apps });
-    expect(parseCommand("maximise it", only([zstream]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximise ZStream”, for example.", choices: [{ text: "maximise ZStream" }] });
+    expect(parseCommand("maximize it", only([zstream]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximize ZStream”, for example.", choices: [{ text: "maximize ZStream" }] });
     expect(parseCommand("full screen the app", only([zstream]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Full screen ZStream”, for example." });
     // nothing running: no chips, but the example still names an approved app
-    expect(parseCommand("maximise it", only([{ ...zstream, running: false, windows: [] }]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximise ZStream”, for example.", choices: [] });
+    expect(parseCommand("maximize it", only([{ ...zstream, running: false, windows: [] }]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximize ZStream”, for example.", choices: [] });
     // only while no app is approved does the example fall back to Notepad
-    expect(parseCommand("maximise it", only([]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximise Notepad”, for example." });
+    expect(parseCommand("maximize it", only([]))).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximize Notepad”, for example." });
     expect(brief(planOf("full screen zstream", only([zstream])))).toEqual([["app.set_fullscreen", { enabled: true }, W("zstream-app")]]);
   });
 
@@ -387,14 +387,14 @@ describe("apps (fuzzy matching against the approved apps)", () => {
     expect(exampleAppPhrase([zstream])).toBe("ZStream");
     expect(exampleAppPhrase([{ app_id: "player", display_name: "<b>Player</b>", running: true }])).toBe("player");
     expect(exampleAppPhrase(null)).toBe("Notepad");
-    expect(appCommandText("maximize", zstream, [zstream, edge])).toBe("maximise ZStream");
+    expect(appCommandText("maximize", zstream, [zstream, edge])).toBe("maximize ZStream");
     expect(brief(planOf(appCommandText("maximize", zstream, [zstream, edge]), { ...CTX, apps: [zstream, edge] }))).toEqual([["app.maximize", {}, W("zstream-app")]]);
   });
 
   it("a window command for an app that was not running warns and offers to open it first", () => {
     const r = parseCommand("maximise vlc", CTX);
     expect(r.kind === "plan" && r.steps[0]!.warning).toBe("VLC media player was not running when DoMe last checked. If it still isn't, the PC will say so.");
-    expect(r.kind === "plan" && r.choices).toEqual([{ label: "Open VLC media player first", text: "open VLC media player and maximise it" }]);
+    expect(r.kind === "plan" && r.choices).toEqual([{ label: "Open VLC media player first", text: "open VLC media player and maximize it" }]);
     expect(brief(planOf("open VLC media player and maximise it"))).toEqual([["app.launch", { app_id: "vlc" }, null], ["app.maximize", {}, W("vlc")]]);
     // opened in the step before: no warning
     expect(planOf("open vlc and maximise it")[1]!.warning).toBeNull();
@@ -566,7 +566,7 @@ describe("review findings (owner phrases that went wrong)", () => {
     expect(brief(planOf("search lofi on youtube and mute the pc"))).toEqual([["youtube.search", { query: "lofi" }, "youtube_browser"], ["windows.set_muted", { muted: true }, null]]);
   });
   it("'the window' or 'the app' with no app before it asks which app; 'close the video' explains closing the browser", () => {
-    expect(parseCommand("maximize the window", CTX)).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximise Notepad”, for example." });
+    expect(parseCommand("maximize the window", CTX)).toMatchObject({ kind: "clarify", message: "Which app? Say “Maximize Notepad”, for example." });
     expect(parseCommand("close the app", CTX)).toMatchObject({ kind: "clarify", message: "Which app? Say “Close Notepad”, for example." });
     expect(parseCommand("close the video", CTX)).toMatchObject({ kind: "clarify", message: "DoMe can't close a single tab. Closing the browser closes all of its tabs." });
     for (const text of ["maximize the window", "close the app", "minimise the window"]) expect(parseCommand(text, CTX), text).not.toHaveProperty("missingApp");
@@ -592,7 +592,7 @@ describe("review findings (owner phrases that went wrong)", () => {
     const apps = APPS.map((a) => (a.app_id === "msedge" ? { ...a, windows: [] } : a));
     const r = parseCommand("maximise edge", { ...CTX, apps });
     expect(r.kind === "plan" && r.steps[0]!.warning).toBe("msedge is running without a window on the PC. Open it first to show its window.");
-    expect(r.kind === "plan" && r.choices).toEqual([{ label: "Open msedge first", text: "open msedge and maximise it" }]);
+    expect(r.kind === "plan" && r.choices).toEqual([{ label: "Open msedge first", text: "open msedge and maximize it" }]);
     expect(parseCommand("full screen edge", { ...CTX, apps })).toMatchObject({ kind: "plan", choices: [{ text: "open msedge and make it full screen" }] });
   });
 });

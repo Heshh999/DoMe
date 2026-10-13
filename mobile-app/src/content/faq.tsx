@@ -32,7 +32,7 @@ export const FAQ_GROUPS: FaqGroup[] = [
       { q: "Does it work when I am away from home?", a: "Yes, over mobile data or any Wi-Fi, as long as both your phone and your PC have internet. There is no local-only mode yet: if the DoMe service is unreachable, controls pause rather than pretending to work." },
       { q: "Can DoMe control YouTube when the browser is in the background?", a: "Yes. The DoMe browser extension in Chrome or Edge on the PC controls the player in the chosen tab directly, so another window can have focus. The extension only asks for access to YouTube pages." },
       { q: "Why does Next sometimes say “no next video”?", a: "DoMe only reports success when the player really moved to a different video. Ads, live streams, Shorts and some playlists behave differently; DoMe tells you instead of guessing." },
-      { q: "Why can’t fullscreen be turned on from my phone?", a: "Browsers only allow fullscreen from a click on the PC itself. DoMe reports this honestly rather than faking it. Theater mode is offered as a separate, working control." },
+      { q: "Why can’t YouTube’s own full-screen button be pressed from my phone?", a: "The browser only lets a click on the PC start YouTube’s player full screen, so DoMe doesn’t fake it. DoMe can make an approved app’s whole window full screen (like pressing F11), and Theater mode always works." },
       { q: "What happens if my PC is asleep or off?", a: "The PC shows as offline and commands are not stored for later — nothing will run hours later by surprise. Waking a PC remotely (Wake-on-LAN) is not offered yet." },
     ],
   },
@@ -43,7 +43,13 @@ export const FAQ_GROUPS: FaqGroup[] = [
     entries: [
       {
         q: "What is the AI butler?",
-        a: "Ask is DoMe’s optional assistant. Say or type what you want in your own words. When DoMe cannot work it out by itself, the AI interprets your request and proposes safe PC actions from DoMe’s fixed list — media, volume, your approved apps, lock and confirmed power — and shows them to you before anything runs. It is off until you turn it on in Settings, and you can turn it off again at any time.",
+        a: (
+          <>
+            <p>Ask is where you talk to DoMe’s optional AI butler. Say or type what you want in your own words. When DoMe cannot work it out by itself, the AI interprets your request and picks safe PC actions from DoMe’s fixed list: media, volume, your approved apps, lock and confirmed power. The app shows every step it takes.</p>
+            <p>{AI_RULES.actions}</p>
+            <p>The AI butler is off until you turn it on in Settings, and you can turn it off again at any time.</p>
+          </>
+        ),
       },
       {
         q: "Does DoMe use AI for everything?",
@@ -75,14 +81,14 @@ export const FAQ_GROUPS: FaqGroup[] = [
         q: "Does the AI see my screen?",
         a: (
           <>
-            <p>Never. DoMe takes no screenshots and sends no pictures anywhere. The AI receives only the words of your request, your recent requests to the butler, and a few facts about your PC (whether it is online, whether something is playing, the volume). It never receives your screen, the names of your apps, window or video titles, or anything you type with the keyboard.</p>
+            <p>Never. DoMe takes no screenshots and sends no pictures anywhere. The AI receives only the words of your request (including any search words), your recent requests and its replies from the last 10 minutes, a short note of what DoMe did by itself (without app or video names), the name you gave the butler, and a few facts about your PC (whether it is online, whether something is playing, the volume, which kinds of actions your phone may perform). It never receives your screen, the names of your apps, window or video titles, or anything you type with the keyboard. See {link("/privacy", "Privacy")} for the full list.</p>
             <p>Point-and-talk (“click that”) is {POINT_AND_TALK_STATUS.toLowerCase()}, not built. When it comes it will use the names of on-screen elements only, as Windows exposes them for accessibility — still no screenshots, ever.</p>
           </>
         ),
       },
       {
         q: "Is my speech stored?",
-        a: "No. Talking to DoMe uses your iPhone’s own speech recognition, provided by Apple. DoMe listens only while you hold the microphone button and never records, uploads or keeps audio. DoMe does not store what you say, your search words or what the butler answers; it keeps counts of requests to apply your allowance. The conversation on your phone is cleared after 10 minutes without a request, when you sign out or switch PC, or when the app reloads.",
+        a: "No. DoMe listens only after you tap the microphone, until you tap again or finish speaking (at most 15 seconds). Your iPhone’s speech recognition is provided by Apple and may process your words on Apple’s servers; DoMe never records, uploads or keeps audio. DoMe does not store what you say, your search words or what the butler answers; it keeps counts of requests to apply your allowance. The conversation on your phone is cleared after 10 minutes without a request, when you sign out or switch PC, or when the app reloads.",
       },
     ],
   },
@@ -96,7 +102,7 @@ export const FAQ_GROUPS: FaqGroup[] = [
         q: "What is Screen view, and when is it coming?",
         a: (
           <>
-            <p>Screen view shows your PC’s screen live on your phone so you can tap what you see, scroll with two fingers, and keep a floating mini view while you use another app. It is in development and not in the app yet; this page will say so until it ships.</p>
+            <p>Screen view shows your PC’s screen live on your phone so you can tap what you see, scroll with two fingers, keep a floating mini view while you use another app, hear the PC’s sound on your phone, and use a TV-style remote for full-screen apps. It is in development and not in the app yet; this page will say so until it ships.</p>
             <p>
               Free will include {FREE_SCREEN_VIEW_MINUTES} minutes per {WINDOW_HOURS}-hour window; Pro and Pro Plus will have unlimited Screen view.
             </p>
@@ -126,14 +132,14 @@ export const FAQ_GROUPS: FaqGroup[] = [
       },
       {
         q: "What is a top-up?",
-        a: `${AI_RULES.topUp} A top-up is a one-off purchase, not a subscription, and the app warns you at ${WARN_AT_PERCENT} % of a window before you need one.`,
+        a: `${AI_RULES.topUp} A top-up is a one-off purchase, not a subscription. When paid plans launch, the app will warn you at ${WARN_AT_PERCENT}% of a window before you need one.`,
       },
       {
         q: "How do I cancel?",
-        a: "From Billing in the DoMe web app, at any time, once paid plans launch. Access continues until the end of the period you paid for and your settings are kept. If Pro ends, you keep every PC, phone and setting and choose which PC and phones stay enabled on Free. Revocation and emergency stop always work, on every plan.",
+        a: "From Billing in the DoMe web app, at any time, once paid plans launch. Access continues until the end of the period you paid for and your settings are kept. If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which PC and phones stay enabled on Free. Revocation and emergency stop always work, on every plan.",
       },
       {
-        q: "Can I buy Pro today?",
+        q: "Can I buy Pro or Pro Plus today?",
         a: `Not yet. Only Free exists today; Pro and Pro Plus are ${COMING_AT_PAID_LAUNCH.toLowerCase()}. Free includes a one-time taste of ${FREE_TASTE_REQUESTS} AI requests, so you can try the butler before then.`,
       },
     ],
@@ -148,7 +154,7 @@ export const FAQ_GROUPS: FaqGroup[] = [
       { q: "What if I clear my browser data or reinstall?", a: "Each browser or home-screen installation has its own key. Clearing site data removes the key, and that installation must pair again on the PC. There is deliberately no shortcut." },
       {
         q: "What does the Windows app see or change?",
-        a: <>It runs as you (no administrator rights), shows a tray icon, and performs only the actions in the registry: media, volume, approved apps, lock, and confirmed power actions. It never bypasses the Windows lock screen or UAC. See {link("/privacy", "Privacy")}.</>,
+        a: <>It runs as you (no administrator rights), shows a tray icon, and performs only actions from DoMe’s fixed list: YouTube and media controls, volume, your approved apps, lock and confirmed power actions, plus touchpad and keyboard input for phones you grant those permissions to on the PC. It never bypasses the Windows lock screen or UAC. See {link("/privacy", "Privacy")}.</>,
       },
     ],
   },

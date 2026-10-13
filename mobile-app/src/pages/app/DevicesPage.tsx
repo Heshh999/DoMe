@@ -68,12 +68,12 @@ function RenameInline({ value, onSave, label }: { value: string; onSave: (v: str
 }
 
 /** A destructive action that stays quiet until tapped; then Keep / the real thing, in red. */
-function ConfirmButton({ label, confirmLabel, onConfirm, variant = "danger-ghost" }: { label: string; confirmLabel: string; onConfirm: () => Promise<void>; variant?: "danger-ghost" | "secondary" }) {
+function ConfirmButton({ label, confirmLabel, onConfirm, variant = "danger-ghost", outlined = false }: { label: string; confirmLabel: string; onConfirm: () => Promise<void>; variant?: "danger-ghost" | "secondary"; outlined?: boolean }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   if (!armed)
     return (
-      <Button size="sm" variant={variant} onClick={() => setArmed(true)}>
+      <Button size="sm" variant={variant} className={outlined ? "border border-danger/35" : ""} onClick={() => setArmed(true)}>
         {label}
       </Button>
     );
@@ -125,6 +125,8 @@ export function DevicesPage() {
 
   const thisController = controllers.find((c) => c.kid === kid) ?? null;
   const enabledCount = pcs.filter((p) => p.enabled).length;
+  // already paired with every PC the plan allows: pairing again is not this screen's main action
+  const pairingQuiet = thisController !== null && limits !== undefined && enabledCount >= limits.max_enabled_pcs;
 
   return (
     <div className="space-y-6">
@@ -155,8 +157,8 @@ export function DevicesPage() {
       <section className="space-y-3">
         <SectionLabel
           action={
-            <Link to="/app/devices/pair" className="tap dome-primary dome-press inline-flex h-11 items-center gap-1.5 rounded-full pl-3.5 pr-4 text-sm font-semibold">
-              <Icon name="qr" size={18} />
+            <Link to="/app/devices/pair" className={`tap dome-press inline-flex h-11 items-center gap-1.5 rounded-full pl-3.5 pr-4 text-sm font-semibold ${pairingQuiet ? "border border-border bg-surface text-text hover:bg-surface-hover" : "dome-primary"}`}>
+              <Icon name="qr" size={18} className={pairingQuiet ? "text-accent" : ""} />
               Pair with a PC
             </Link>
           }
@@ -165,7 +167,7 @@ export function DevicesPage() {
         </SectionLabel>
         {thisController ? (
           <Card className="flex items-center gap-3.5 p-4">
-            <IconWell icon="phone" tone="success" size={44} radius={14} />
+            <IconWell icon="phone" size={44} radius={14} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[17px] font-semibold leading-snug tracking-[-0.01em]">{thisController.display_name}</p>
               <p className="text-xs text-text-muted">Paired {absoluteTime(thisController.created_at)}</p>
@@ -203,7 +205,7 @@ export function DevicesPage() {
                 <IconWell icon="pc" tone={c.tone === "success" ? "accent" : "muted"} size={44} radius={14} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[17px] font-semibold leading-snug tracking-[-0.01em]">{pc.name}</p>
-                  <p className="truncate text-xs text-text-muted">{c.detail}</p>
+                  <p className="truncate text-xs text-text-muted">{selectedPcId === pc.id ? <span className="font-semibold text-accent">Controlling now · </span> : null}{c.detail}</p>
                 </div>
                 <Pill tone={c.tone} pulse={c.pulse}>
                   {c.label}
@@ -215,7 +217,23 @@ export function DevicesPage() {
                   { label: "Last seen", value: relativeTime(live?.lastSeen ?? pc.last_seen) },
                   ...(pc.agent_version ? [{ label: "DoMe agent", value: pc.agent_version }] : []),
                   { label: "Remote control on PC", value: live?.state ? (live.state.remote_enabled ? "On" : "Off (tray icon on the PC)") : pc.remote_enabled_reported === undefined ? "Unknown" : pc.remote_enabled_reported ? "On (last report)" : "Off (last report)" },
-                  { label: "This phone may", value: mine ? mine.capabilities.map(capabilityLabel).join(", ") : grants.length === 0 && !grantsByPc[pc.id] ? "…" : "Nothing — not paired with this PC" },
+                  {
+                    label: "This phone may",
+                    stack: true,
+                    value: mine ? (
+                      <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label={`What this phone may do on ${pc.name}`}>
+                        {mine.capabilities.map((cap) => (
+                          <li key={cap} className="rounded-full bg-surface px-2.5 py-1 text-xs font-medium text-text-muted">
+                            {capabilityLabel(cap)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : grants.length === 0 && !grantsByPc[pc.id] ? (
+                      "…"
+                    ) : (
+                      "Nothing — not paired with this PC"
+                    ),
+                  },
                   { label: "Touchpad / keyboard", value: mine ? (mine.capabilities.some(isInputCapability) ? `Allowed: ${mine.capabilities.filter(isInputCapability).map((c) => (c === "pointer" ? "touchpad" : "keyboard")).join(" and ")}` : "Not allowed — the PC owner grants it on the PC (tray → Paired phones)") : "—", testId: `input-perm-${pc.id}` },
                 ]}
               />
@@ -248,15 +266,13 @@ export function DevicesPage() {
                   <Button size="sm" onClick={() => void select(pc.id)}>
                     Control this PC
                   </Button>
-                ) : (
-                  <Pill tone="info">Selected</Pill>
-                )}
+                ) : null}
                 <RenameInline value={pc.name} label={pc.name} onSave={(name) => run(() => api.patchPc(pc.id, { name }))} />
-                <Button size="sm" variant="quiet" onClick={() => run(() => api.patchPc(pc.id, { enabled: !pc.enabled }))}>
+                <Button size="sm" onClick={() => run(() => api.patchPc(pc.id, { enabled: !pc.enabled }))}>
                   {pc.enabled ? "Disable" : "Enable"}
                 </Button>
                 <span className="ml-auto">
-                  <ConfirmButton label="Unlink…" confirmLabel="Unlink PC" onConfirm={() => run(() => api.unlinkPc(pc.id))} />
+                  <ConfirmButton label="Unlink…" confirmLabel="Unlink PC" outlined onConfirm={() => run(() => api.unlinkPc(pc.id))} />
                 </span>
               </div>
               {!pc.enabled ? <p className="mt-2 text-xs text-text-muted">Disabled PCs cannot be controlled but keep their pairings and settings.</p> : null}
@@ -271,7 +287,7 @@ export function DevicesPage() {
         {controllers.map((c: rest.Controller) => (
           <Card key={c.id} as="article" aria-label={c.display_name} className="p-4">
             <div className="flex items-center gap-3.5">
-              <IconWell icon="phone" tone={c.status === "active" ? (c.id === thisController?.id ? "success" : "accent") : "muted"} size={44} radius={14} />
+              <IconWell icon="phone" tone={c.status === "active" ? "accent" : "muted"} size={44} radius={14} />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold leading-snug">{c.display_name}</p>
                 <p className="text-xs text-text-muted">

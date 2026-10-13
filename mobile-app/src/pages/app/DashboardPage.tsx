@@ -10,6 +10,7 @@ import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { Wordmark } from "../../components/brand.tsx";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { NowPlaying } from "../../components/NowPlaying.tsx";
+import { PcOfflineNotice } from "../../components/PcOfflineNotice.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { Button, HeaderPill, Notice, Pill, SectionLabel } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
@@ -58,6 +59,7 @@ export function DashboardPage() {
         </HeaderPill>
       </header>
       <PcSwitcher pc={pc} live={live} hero />
+      <PcOfflineNotice pc={pc} live={live} />
 
       {pc && !fresh && live.connection === "online" && !live.stale && state === null ? <Notice tone="info">Waiting for the PC to report its state…</Notice> : null}
       {remoteOff ? (

@@ -22,17 +22,17 @@ function succeeded(action: string, result: Record<string, unknown>, params: Comm
 describe("labels for the 1.2 actions", () => {
   it("every action in the registry has a title of its own", () => {
     for (const [name] of registry.actions()) expect(actionTitle(name), name).not.toBe("Unknown action");
-    expect(actionTitle("app.maximize")).toBe("Maximise app");
+    expect(actionTitle("app.maximize")).toBe("Maximize app");
     expect(actionTitle("youtube.search")).toBe("Search YouTube");
   });
 
   it("window actions name the app from the PC's list (as text) and say what full screen does", () => {
     const ctx = { appNames: { edge: "Microsoft Edge" } };
-    expect(describeAction("app.maximize", {}, { app_id: "edge" }, ctx)).toBe("Maximise Microsoft Edge");
+    expect(describeAction("app.maximize", {}, { app_id: "edge" }, ctx)).toBe("Maximize Microsoft Edge");
     expect(describeAction("app.restore", {}, { app_id: "edge", window_id: "w1" }, ctx)).toBe("Show Microsoft Edge at normal size");
     expect(describeAction("app.set_fullscreen", { enabled: true }, { app_id: "edge" }, ctx)).toBe("Make Microsoft Edge full screen (F11)");
     expect(describeAction("app.set_fullscreen", { enabled: false }, { app_id: "edge" }, ctx)).toBe("Leave full screen in Microsoft Edge");
-    expect(describeAction("app.maximize", {}, { app_id: "vlc" })).toBe("Maximise vlc"); // unknown name: the id, never PC text
+    expect(describeAction("app.maximize", {}, { app_id: "vlc" })).toBe("Maximize vlc"); // unknown name: the id, never PC text
   });
 
   it("search quotes the query back shortened; opening a result names its position", () => {
@@ -53,7 +53,7 @@ describe("recovery steps and help categories", () => {
 
   it("points to the right place: Open from Apps, Maximise instead, the extension update, the tray's Add an app…", () => {
     expect(recoverySteps("APP_NOT_RUNNING").join(" ")).toMatch(/Open it first from Apps/);
-    expect(recoverySteps("FULLSCREEN_UNSUPPORTED")[0]).toBe("Try Maximise instead.");
+    expect(recoverySteps("FULLSCREEN_UNSUPPORTED")[0]).toBe("Try Maximize instead.");
     expect(recoverySteps("EXTENSION_UPDATE_REQUIRED").join(" ")).toMatch(/Update it/);
     expect(recoverySteps("APP_NOT_APPROVED").join(" ")).toMatch(/DoMe tray menu and choose Add an app…/);
     expect(recoverySteps("APP_NOT_APPROVED").join(" ")).not.toMatch(/command|CLI/i);
@@ -82,7 +82,7 @@ describe("recovery steps and help categories", () => {
     // WINDOW_STATE_UNCHANGED also carries the PC's specific reason; other codes keep the shared copy
     expect(errorMessage({ code: "WINDOW_STATE_UNCHANGED", message: "agent text" }, fromAgent)).toBe("agent text");
     expect(errorMessage({ code: "APP_ELEVATED", message: "agent text" }, fromAgent)).not.toBe("agent text");
-    expect(recoverySteps("FULLSCREEN_UNSUPPORTED", fromAgent)[0]).toBe("Try Maximise instead.");
+    expect(recoverySteps("FULLSCREEN_UNSUPPORTED", fromAgent)[0]).toBe("Try Maximize instead.");
   });
 
   it("window errors go to Apps help, search and extension errors to media help", () => {
@@ -98,10 +98,10 @@ describe("recovery steps and help categories", () => {
 describe("result summaries", () => {
   it("window actions report the state the PC read back, and an unfocused window honestly", () => {
     const base = { app_id: "edge", window_id: "w1", foreground: true };
-    expect(resultSummary(succeeded("app.maximize", { ...base, state: "maximized", fullscreen: false }))).toBe("The window is maximised.");
+    expect(resultSummary(succeeded("app.maximize", { ...base, state: "maximized", fullscreen: false }))).toBe("The window is maximized.");
     expect(resultSummary(succeeded("app.restore", { ...base, state: "normal", fullscreen: false }))).toBe("The window is at normal size.");
     expect(resultSummary(succeeded("app.set_fullscreen", { ...base, state: "maximized", fullscreen: true }, { enabled: true }))).toBe("The window is in full screen.");
-    expect(resultSummary(succeeded("app.maximize", { ...base, state: "maximized", fullscreen: false, foreground: false }))).toBe("The window is maximised. Windows did not bring it to the front.");
+    expect(resultSummary(succeeded("app.maximize", { ...base, state: "maximized", fullscreen: false, foreground: false }))).toBe("The window is maximized. Windows did not bring it to the front.");
   });
 
   it("search counts the videos; opening one notes a paused start", () => {

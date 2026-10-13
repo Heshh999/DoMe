@@ -151,7 +151,9 @@ describe("TouchpadPage", () => {
     const { unmount } = renderPage();
     await answerStart();
     expect(screen.getAllByText("Office PC").length).toBeGreaterThan(0);
-    expect(screen.getByText("Chrome — Google - Chrome")).toBeInTheDocument();
+    // the app name stays whole on its own line; the window title goes under it and is what truncates
+    expect(screen.getByText("Chrome")).toBeInTheDocument();
+    expect(screen.getByText("Google - Chrome")).toHaveAttribute("title", "Google - Chrome");
     expect(screen.getByText("Connected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop Input" })).toBeEnabled();
     unmount();
@@ -186,7 +188,8 @@ describe("TouchpadPage", () => {
       socket.receive({ type: "input_ack", pc_id: PC, input_session_id: SESSION_ID, last_seq: 3, accepted_events: 3, dropped_events: 0, held_buttons: [], held_keys: [], at: TS });
       await flush();
     });
-    expect(screen.getByText("Live · Windows accepted 3")).toBeInTheDocument();
+    expect(screen.getByText("Live")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connection health: Live (Windows accepted 3 input events)" })).toBeInTheDocument();
   });
 
   it("Drag mode has a conspicuous active state, holds the left button, End Drag releases; pointercancel during a drag releases without a click", async () => {

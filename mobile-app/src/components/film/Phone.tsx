@@ -95,23 +95,27 @@ function PageTitle({ title, sub, chip }: { title: string; sub?: string; chip?: R
   );
 }
 
+/** The real app's tabs (Home · Remote · Touchpad · Ask · More). */
 const TABS: Array<[IconName, string]> = [
   ["home", "Home"],
   ["remote", "Remote"],
-  ["pc", "Screen"],
+  ["touchpad", "Touchpad"],
   ["ask", "Ask"],
   ["more", "More"],
 ];
+/** While the Screen view beats play (scenes 3–4), a "Screen" tab stands in for Touchpad, with a coral "coming" dot. */
+const SCREEN_TABS: Array<[IconName, string]> = [TABS[0]!, TABS[1]!, ["pc", "Screen"], TABS[3]!, TABS[4]!];
 
-function TabBar({ active }: { active: string }) {
+function TabBar({ active, screen = false }: { active: string; screen?: boolean }) {
   return (
     <At x={0} y={772} w={390} h={72} className="grid grid-cols-5 border-t border-white/10 bg-[rgb(0_14_50/0.9)] px-1 pt-1.5">
-      {TABS.map(([icon, label]) => {
+      {(screen ? SCREEN_TABS : TABS).map(([icon, label]) => {
         const on = label === active;
         return (
           <span key={label} className={`relative flex flex-col items-center gap-[3px] text-[11px] font-semibold tracking-[-0.01em] ${on ? "text-text" : "text-text-faint"}`}>
             <Icon name={icon} size={24} strokeWidth={on ? 2 : 1.75} className={on ? "text-accent" : ""} />
             {label}
+            {label === "Screen" ? <span className="absolute right-[18px] top-0 h-2 w-2 rounded-full border border-navy bg-coral" /> : null}
             <span className={`absolute -bottom-2 h-1 w-1 rounded-full ${on ? "bg-coral" : "bg-transparent"}`} />
           </span>
         );
@@ -150,7 +154,7 @@ function HomePage({ view, pc }: { view: PhoneView; pc: PcView }) {
       <PcRow />
       <At x={16} y={208} w={358} h={226} className={CARD}>
         <At x={16} y={16} className="text-[12px] font-medium text-text-faint">
-          YouTube · Edge
+          Now playing · Edge
         </At>
         <At x={262} y={14} className="flex items-center gap-0.5 text-[14px] font-semibold text-accent">
           Remote
@@ -229,7 +233,7 @@ function Bubble({ side, children, y, x = 16, w = 358 }: { side: "owner" | "butle
   if (side === "owner") {
     return (
       <At x={x} y={y} w={w} className="flex justify-end">
-        <p className="dome-primary max-w-[82%] rounded-[1.25rem] rounded-br-md px-4 py-2.5 text-[15px] leading-[1.4]">{children}</p>
+        <p className="max-w-[82%] rounded-[1.25rem] rounded-br-md border border-accent/25 bg-accent/15 px-4 py-2.5 text-[15px] leading-[1.4] text-text">{children}</p>
       </At>
     );
   }
@@ -261,7 +265,7 @@ function AskPage({ view }: { view: PhoneView }) {
       {view.ownerText ? (
         <Bubble side="owner" y={150}>
           {view.ownerText}
-          {view.listening ? <span className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] bg-white/80" /> : null}
+          {view.listening ? <span className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] bg-accent" /> : null}
         </Bubble>
       ) : null}
       {view.butlerText ? (
@@ -308,7 +312,7 @@ function AskPage({ view }: { view: PhoneView }) {
         </At>
       ) : null}
       <At x={0} y={612} w={390} className="text-center text-[12px] text-text-faint">
-        AI assistant is on · What DoMe can see
+        AI on · requests DoMe can’t work out go to Anthropic
       </At>
       <At x={16} y={640} w={358} h={120}>
         <At x={36} y={12} w={48} h={48} className="flex items-center justify-center rounded-full border border-white/12 bg-white/8 text-text">
@@ -375,7 +379,7 @@ function ScreenPage({ view }: { view: PhoneView }) {
           {view.clickingText}
         </Bubble>
       ) : null}
-      <TabBar active="Screen" />
+      <TabBar active="Screen" screen />
     </>
   );
 }
@@ -417,9 +421,17 @@ function Dpad({ pressed }: { pressed: "right" | null }) {
 function AppsPage({ view }: { view: PhoneView }) {
   return (
     <>
-      <PageTitle title="Apps" sub="Approved on Living Room PC" />
+      <PageTitle
+        title="Apps"
+        sub="Approved on Living Room PC"
+        chip={
+          <Pill tone="coral">
+            <span className="text-text-muted">Coming</span>
+          </Pill>
+        }
+      />
       <AppRow y={120} name="ZStream" detail="TV and films" action="Open" press={view.zPress} iconEl={<span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(145deg,#f29d6a,#4b2a6e)] text-white"><FilmIcon name="tv" size={22} /></span>} />
-      <AppRow y={206} name="Edge" detail="Night Drive · Episode 4 · paused" action="Bring to front" iconEl={<span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent"><span className="h-5 w-5 rounded-full border-[3px] border-current" /></span>} />
+      <AppRow y={206} name="Edge" detail="Episode 4 · paused" action="Bring to front" iconEl={<span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent"><span className="h-5 w-5 rounded-full border-[3px] border-current" /></span>} />
       <AppRow y={292} icon="music" name="Spotify" detail="Not running" action="Open" />
       {view.tvRemote > 0 ? (
         <At x={16} y={380} w={358} h={216} className={`${CARD} overflow-hidden`} style={{ opacity: view.tvRemote, transform: `translateY(${lerp(40, 0, view.tvRemote)}px)` }}>
@@ -457,7 +469,7 @@ function AppsPage({ view }: { view: PhoneView }) {
           </span>
         </At>
       ) : null}
-      <TabBar active="More" />
+      <TabBar active="More" screen />
     </>
   );
 }
@@ -496,7 +508,7 @@ function Mirror({ view, pc }: { view: PhoneView; pc: PcView }) {
         <span className="pointer-events-none absolute rounded-full border-2 border-sky" style={{ left: TOUCH.subscribe.x - f.x - 32, top: TOUCH.subscribe.y - f.y - 32, width: 64, height: 64, opacity: hold * 0.9, transform: `scale(${lerp(0.5, 1, hold)})`, boxShadow: "0 0 0 8px rgb(66 129 250 / 0.25)" }} />
       ) : null}
       {view.nameTag > 0 ? (
-        <span className="absolute rounded-md bg-sky px-2 py-1 text-[12px] font-semibold text-white shadow-[0_8px_20px_-8px_rgb(66_129_250/0.9)]" style={{ left: TOUCH.subscribe.x - f.x + 22, top: TOUCH.subscribe.y - f.y - 44, opacity: view.nameTag, transform: `translateY(${lerp(6, 0, view.nameTag)}px)` }}>
+        <span className="absolute rounded-md bg-[#0142fb] px-2 py-1 text-[12px] font-semibold text-white shadow-[0_8px_20px_-8px_rgb(1_66_251/0.9)]" style={{ left: TOUCH.subscribe.x - f.x + 22, top: TOUCH.subscribe.y - f.y - 44, opacity: view.nameTag, transform: `translateY(${lerp(6, 0, view.nameTag)}px)` }}>
           Subscribe
         </span>
       ) : null}

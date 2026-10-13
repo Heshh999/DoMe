@@ -17,7 +17,7 @@ const LINK = "font-semibold text-accent underline decoration-accent/35 underline
 
 export function FaqPage() {
   return (
-    <div className="mx-auto max-w-5xl px-5 py-12 lg:px-8 lg:py-16">
+    <div className="mx-auto max-w-6xl px-5 py-12 lg:px-8 lg:py-16">
       <header className="dome-page-intro animate-rise">
         <p className="dome-eyebrow">FAQ</p>
         <h1 className="mt-3 text-h1 font-bold">Questions, answered plainly.</h1>

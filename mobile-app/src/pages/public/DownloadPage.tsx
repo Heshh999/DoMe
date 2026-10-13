@@ -33,12 +33,13 @@ export function DownloadPage() {
             <p className="mt-1 text-sm text-text-muted">One official download path: a signed installer with a checksum, listed here when it exists.</p>
           </div>
         </div>
-        <button type="button" disabled className="mt-6 flex min-h-[52px] w-full cursor-not-allowed items-center justify-center gap-2 rounded-full border border-border bg-surface px-5 text-[15px] font-semibold text-text-faint" aria-describedby="download-status" data-testid="download-button">
+        {/* still the (disabled) download control with its full name, but drawn as a quiet status line, never a button-shaped pill */}
+        <button type="button" disabled aria-label="Download for Windows 10/11 — not yet published" className="mt-6 flex min-h-[44px] w-full cursor-not-allowed items-center justify-start gap-2 border-0 bg-transparent px-0 text-left text-[15px] font-semibold text-text-muted" aria-describedby="download-status" data-testid="download-button">
           <PublicIcon name="clock" size={18} />
-          Download for Windows 10/11 — not yet published
+          Windows app: not yet published
         </button>
-        <p id="download-status" className="mt-5 text-[15px] leading-relaxed text-text-muted">
-          <strong className="font-semibold text-text">Release status: not yet published.</strong> This is the one official download path and it will appear here, with a checksum and a signed installer, once the installer, update channel and uninstall have been verified. We will not publish an unsigned build, and there is no “beta” to download today. If a download or installation ever fails, the page will say what went wrong and what to do — never to disable antivirus or other protection.
+        <p id="download-status" className="mt-3 text-[15px] leading-relaxed text-text-muted">
+          <strong className="font-semibold text-text">Release status: not yet published.</strong> A signed installer with a checksum will appear here once install, update and uninstall have been verified — never an unsigned build, and if an install ever fails, this page will say what to do, never to disable antivirus or other protection.
         </p>
         <p className="mt-3 text-[15px] text-text-muted">
           Until then, see the{" "}

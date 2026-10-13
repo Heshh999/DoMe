@@ -169,9 +169,9 @@ function BrowserPage({ view }: { view: PcView }) {
         <div className="flex h-8 items-center gap-2 rounded-t-lg bg-[#1a2450] px-3 text-[13px] text-white/90">
           <span className="h-3.5 w-3.5 rounded-sm bg-[#ff5c5c]" />
           <span className="truncate">{ep.title}</span>
-          <span className="ml-2 text-white/40">×</span>
+          <span className="ml-2 text-white/60">×</span>
         </div>
-        <span className="mb-1 text-[18px] leading-none text-white/40">+</span>
+        <span className="mb-1 text-[18px] leading-none text-white/60">+</span>
       </div>
       <div className="flex h-11 items-center gap-3 bg-[#1a2450] px-3 text-white/60">
         <FilmIcon name="back" size={16} />
@@ -187,7 +187,7 @@ function BrowserPage({ view }: { view: PcView }) {
         </div>
         <p className="absolute left-6 top-[472px] w-[768px] truncate text-[20px] font-semibold text-white">{ep.title}</p>
         <div className="absolute left-6 top-[506px] flex w-[768px] items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(145deg,#f29d6a,#4b2a6e)] text-[13px] font-bold text-white">N</span>
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[linear-gradient(145deg,#9a4a2a,#4b2a6e)] text-[13px] font-bold text-white">N</span>
           <span className="text-[15px] font-semibold text-white">Night Drive</span>
           <span className="text-[13px] text-white/50">Series</span>
           <span className="relative ml-3">
@@ -198,7 +198,7 @@ function BrowserPage({ view }: { view: PcView }) {
             </span>
           </span>
           {ring > 0 ? (
-            <span className="absolute left-[392px] top-[6px] whitespace-nowrap rounded-md bg-[#4281fa] px-2.5 py-1 text-[13px] font-semibold text-white shadow-[0_8px_20px_-8px_rgb(66_129_250/0.8)]" style={{ opacity: ring, transform: `translateX(${lerp(-8, 0, ring)}px)` }}>
+            <span className="absolute left-[392px] top-[6px] whitespace-nowrap rounded-md bg-[#0142fb] px-2.5 py-1 text-[13px] font-semibold text-white shadow-[0_8px_20px_-8px_rgb(1_66_251/0.8)]" style={{ opacity: ring, transform: `translateX(${lerp(-8, 0, ring)}px)` }}>
               Button name from Windows: “Subscribe”
             </span>
           ) : null}
@@ -270,7 +270,7 @@ function FullscreenPlayer({ view }: { view: PcView }) {
 
 /** ZStream: a ten-foot TV app, steered with the phone's D-pad. */
 function TvApp({ focus }: { focus: number }) {
-  const row = ["Night Drive S2 E5", "Harbour", "The Long Way", "Coast Road", "Home Again"];
+  const row = ["Night Drive S2 E5", "Harbor", "The Long Way", "Coast Road", "Home Again"];
   return (
     <div className="absolute inset-0 overflow-hidden bg-[#070d2a] text-white">
       <div className="absolute inset-y-0 left-0 flex w-[72px] flex-col items-center gap-7 bg-[rgb(255_255_255/0.04)] pt-9 text-white/55">
@@ -291,7 +291,7 @@ function TvApp({ focus }: { focus: number }) {
             Resume
           </span>
         </div>
-        <span className="absolute right-10 top-8 flex items-center gap-2 text-[15px] font-semibold text-white/80">
+        <span className="absolute right-10 top-8 flex items-center gap-2 rounded-full bg-[rgb(7_13_42/0.72)] px-3.5 py-1.5 text-[15px] font-semibold text-white">
           <FilmIcon name="tv" size={18} />
           ZStream
         </span>

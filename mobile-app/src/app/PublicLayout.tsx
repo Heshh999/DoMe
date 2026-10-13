@@ -5,7 +5,7 @@
  * pricing, FAQ and demo pages lay out their own full-width sections; every other page gets a reading column.
  * Page styles live in src/styles/public.css, scoped to `.dome-public` (styles.css is the design system).
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 
 import "../styles/public.css";
@@ -13,6 +13,7 @@ import { Wordmark } from "../components/brand.tsx";
 import { Icon } from "../components/icons.tsx";
 import { ThemeSwitch } from "../components/ThemeSwitch.tsx";
 import { FOOTER, NAV } from "../content/nav.ts";
+import { publicTitle, useDocumentTitle } from "./documentTitle.ts";
 
 /** Pages that draw their own full-width sections. */
 const WIDE = new Set(["/", "/pricing", "/faq", "/demo"]);
@@ -31,8 +32,24 @@ export function PublicLayout() {
   const [menuAt, setMenuAt] = useState<string | null>(null);
   const menu = menuAt === pathname;
   const close = () => setMenuAt(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  useDocumentTitle(publicTitle(pathname));
+  // Escape closes the phone menu and puts focus back on the Menu button.
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenuAt(null);
+      menuButton.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menu]);
   return (
     <div className="dome-public relative isolate flex min-h-dvh flex-col text-text">
+      <a href="#main" className="dome-skip">
+        Skip to content
+      </a>
       <div className="dome-backdrop" aria-hidden="true" />
       <header className="dome-bar sticky top-0 z-30 border-b border-border pt-[var(--safe-top)]">
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-5 lg:px-8">
@@ -48,10 +65,11 @@ export function PublicLayout() {
             <div className="hidden md:block">
               <ThemeSwitch labels="lg" />
             </div>
-            <Link to="/app" className="tap dome-primary dome-press inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[15px] font-semibold">
-              Open app
+            {/* below md the hero carries the page's one solid-blue primary, so this one is outlined there (public.css) */}
+            <Link to="/app" className="dome-header-cta tap dome-primary dome-press inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[15px] font-semibold max-[359px]:px-3 max-[359px]:text-[14px]">
+              Open the app
             </Link>
-            <button type="button" aria-label={menu ? "Close menu" : "Menu"} aria-expanded={menu} aria-controls="site-menu" onClick={() => setMenuAt(menu ? null : pathname)} className="dome-press -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-full text-text hover:bg-surface md:hidden">
+            <button ref={menuButton} type="button" aria-label={menu ? "Close menu" : "Menu"} aria-expanded={menu} aria-controls={menu ? "site-menu" : undefined} onClick={() => setMenuAt(menu ? null : pathname)} className="dome-press -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-full text-text hover:bg-surface md:hidden">
               <Icon name={menu ? "close" : "menu"} />
             </button>
           </div>
@@ -66,20 +84,24 @@ export function PublicLayout() {
                 </NavLink>
               ))}
             </nav>
-            <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 border-t border-border px-5 py-4 pb-[calc(1rem+var(--safe-bottom))]">
-              <span className="text-sm font-medium text-text-muted">Appearance</span>
+            <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-3 gap-y-3 border-t border-border px-5 py-4 pb-[calc(1rem+var(--safe-bottom))]">
+              {/* the switch is itself named "Appearance": on narrow phones the visible word gives way to it */}
+              <span className="text-sm font-medium text-text-muted max-[399px]:sr-only">Appearance</span>
               <ThemeSwitch labels />
             </div>
           </div>
         ) : null}
       </header>
 
-      <main id="main" className="flex-1">
+      <main id="main" tabIndex={-1} className="flex-1 outline-none">
         {WIDE.has(pathname) ? (
           <Outlet />
         ) : (
-          <div className="mx-auto w-full max-w-3xl px-5 py-12 lg:py-16">
-            <Outlet />
+          // a reading column that starts at the logo's x (the header's max-w-6xl), not centred on its own
+          <div className="mx-auto w-full max-w-6xl px-5 py-12 lg:px-8 lg:py-16">
+            <div className="max-w-3xl">
+              <Outlet />
+            </div>
           </div>
         )}
       </main>
@@ -101,7 +123,7 @@ export function PublicLayout() {
               <ul className="mt-2">
                 {group.links.map((l) => (
                   <li key={l.to}>
-                    <Link to={l.to} className="tap inline-flex items-center text-[15px] text-text-muted transition-colors hover:text-text">
+                    <Link to={l.to} className="tap inline-flex min-w-11 items-center text-[15px] text-text-muted transition-colors hover:text-text">
                       {l.label}
                     </Link>
                   </li>

@@ -128,7 +128,7 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     id: "pro",
     name: "Pro",
     displayName: pro.display_name,
-    tagline: "More PCs, unlimited Screen view and a real allowance for the AI butler.",
+    tagline: "More PCs, unlimited Screen view once it ships, and a real allowance for the AI butler.",
     status: { kind: "coming", label: COMING_AT_PAID_LAUNCH },
     price: { monthlyCents: 999, annualCents: 9999 },
     pcs: pro.max_enabled_pcs,
@@ -142,7 +142,7 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     id: "pro_plus",
     name: "Pro Plus",
     displayName: "DoMe Pro Plus",
-    tagline: "For people who talk to their PC all day: three times the AI butler allowance.",
+    tagline: `For people who talk to their PC all day: three times Pro’s AI requests per ${WINDOW_HOURS}-hour window.`,
     status: { kind: "coming", label: COMING_AT_PAID_LAUNCH },
     price: { monthlyCents: 2499, annualCents: 24999 },
     pcs: pro.max_enabled_pcs,
@@ -162,9 +162,11 @@ export function planById(id: PlanId): PlanContent {
 
 /** The plain-words rules of the AI butler's allowance, shared by the pricing page and the FAQ. */
 export const AI_RULES = {
-  request: "One request is one thing you ask that DoMe cannot work out on its own, so the AI interprets it and picks safe PC actions, always shown to you before anything runs. One request is roughly 30 seconds of use.",
+  request: "One request is one thing you ask that DoMe cannot work out on its own, so the AI interprets it and picks safe PC actions from DoMe’s fixed list. One request is roughly 30 seconds of use.",
+  /** What happens to the actions the AI picks: exactly what the app does today (lib/assistant.ts, the action registry's risk levels). */
+  actions: "Simple actions such as pause or volume run right away and show what happened; opening apps, full screen and locking wait for your tap on Run; power actions and closing apps ask you to confirm. Turn on “Ask before every action” in Settings to approve everything first.",
   everyday: `Everyday commands DoMe understands by itself (“${EVERYDAY_EXAMPLES[0]}”, “${EVERYDAY_EXAMPLES[1]}”, “${EVERYDAY_EXAMPLES[2]}”) are free, unlimited and never count, on every plan, even after you reach an AI limit.`,
-  windows: `The ${WINDOW_HOURS}-hour window starts with your first AI request; the weekly window refreshes ${WEEK_DAYS} days after the week’s first use. The app shows the exact refresh time (“Refreshes Saturday at 2 pm”) and warns you at ${WARN_AT_PERCENT} %.`,
+  windows: `The ${WINDOW_HOURS}-hour window starts with your first AI request; the weekly window refreshes ${WEEK_DAYS} days after the week’s first use. When paid plans launch, the app will show the exact refresh time (“Refreshes Saturday at 2 pm”) and warn you at ${WARN_AT_PERCENT}%.`,
   taste: `Free includes a one-time taste of ${FREE_TASTE_REQUESTS} AI requests, so you can try the butler before deciding. It does not renew.`,
   topUp: `On Pro and Pro Plus you can add ${TOP_UP.requests} AI requests for ${usd(TOP_UP.priceCents)} when you run out. You choose to buy a top-up; nothing is ever added or charged automatically.`,
   privacy: "The AI never sees your screen: no screenshots, no pictures. Nothing is recorded, and your speech and search words are not stored.",

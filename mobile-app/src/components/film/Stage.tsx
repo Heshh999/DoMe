@@ -4,15 +4,15 @@
  * canvas (layout.ts) and scaled to its container by film.css; everything it shows is a function of `t`.
  */
 import { memo } from "react";
+import { Link as RouterLink, useInRouterContext } from "react-router";
 
 import { Wordmark } from "../brand.tsx";
 import { Icon } from "../icons.tsx";
-import { FilmIcon } from "./filmIcons.tsx";
-import type { StageLayout } from "./layout.ts";
+import { endCardRows, lockupHeight, type StageLayout } from "./layout.ts";
 import { PcScreen } from "./Pc.tsx";
 import { Phone } from "./Phone.tsx";
 import { handAt, linkAt, pcAt, phoneAt, stageAt } from "./script.ts";
-import { CONCEPT_NOTE, lerp, PLAN_FACTS, sceneAt, seg, type StatusTone } from "./timeline.ts";
+import { beatAt, CONCEPT_NOTE, lerp, PLAN_FACTS, sceneAt, seg, type StatusTone } from "./timeline.ts";
 
 /* ── the room ────────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -156,9 +156,11 @@ function Link({ L, t }: { L: StageLayout; t: number }) {
   const link = linkAt(t);
   if (link.visible <= 0) return null;
   const wide = L.name === "wide";
-  const from = { x: L.phone.x + L.phone.w / 2, y: L.phone.y + 24 };
-  const to = wide ? { x: L.pc.x + L.pc.w + 14, y: L.pc.y + L.pc.h * 0.45 } : { x: L.pc.x + L.pc.w / 2, y: L.pc.y + L.pc.h + 48 };
-  const ctrl = wide ? { x: (from.x + to.x) / 2 + 40, y: Math.min(from.y, to.y) - 120 } : { x: from.x + 220, y: (from.y + to.y) / 2 };
+  // wide: from the phone's top across to the monitor's right edge; vertical: the phone stands in front of the
+  // monitor, so the pulse arcs from its top-right corner up onto the screen
+  const from = wide ? { x: L.phone.x + L.phone.w / 2, y: L.phone.y + 24 } : { x: L.phone.x + L.phone.w - 30, y: L.phone.y + 40 };
+  const to = wide ? { x: L.pc.x + L.pc.w + 14, y: L.pc.y + L.pc.h * 0.45 } : { x: L.pc.x + L.pc.w * 0.8, y: L.pc.y + L.pc.h * 0.62 };
+  const ctrl = wide ? { x: (from.x + to.x) / 2 + 40, y: Math.min(from.y, to.y) - 120 } : { x: from.x + 150, y: (from.y + to.y) / 2 };
   const p = link.pulse;
   const q = 1 - p;
   const dot = { x: q * q * from.x + 2 * q * p * ctrl.x + p * p * to.x, y: q * q * from.y + 2 * q * p * ctrl.y + p * p * to.y };
@@ -176,26 +178,52 @@ function Link({ L, t }: { L: StageLayout; t: number }) {
 
 const TONE_DOT: Record<StatusTone, string> = { now: "bg-success", coming: "bg-coral", planned: "bg-sky", info: "bg-[#8f9dc4]" };
 
-function Captions({ L, t }: { L: StageLayout; t: number }) {
+/** The id of the caption region, which the film's frame points at with aria-describedby. */
+export const CAPTION_ID = "dome-film-caption";
+
+function Captions({ L, t, announce }: { L: StageLayout; t: number; announce: boolean }) {
   const scene = sceneAt(t);
+  const beat = beatAt(t);
   const c = L.caption;
+  const vertical = L.name === "vertical";
   const inAt = scene.n === 1 ? 3_200 : scene.start + 900;
-  const visible = scene.id === "end" ? 0 : Math.min(seg(t, inAt, 600), 1 - seg(t, scene.end - 320, 320));
+  const out = 1 - seg(t, scene.end - 320, 320);
+  const visible = scene.id === "end" ? 0 : Math.min(seg(t, inAt, 600), out);
+  const beatIn = beat ? Math.min(seg(t, beat.at, 420), out) : 0;
   return (
-    <div className="absolute flex flex-col justify-end" style={{ left: c.x, top: c.y, width: c.w, height: c.h, alignItems: c.align === "center" ? "center" : "flex-start", textAlign: c.align }}>
-      {/* the live region keeps the words even while the band is visually faded */}
-      <div className="film-caption" role="status" aria-live="polite" aria-atomic="true" style={{ opacity: visible, transform: `translateY(${lerp(14, 0, visible)}px)`, fontSize: c.size }}>
+    <>
+        {/* a soft navy floor under the caption band, so the words never sit on the furniture or the phone's edge */}
+      <div aria-hidden="true" className="absolute bottom-0 left-0 bg-[linear-gradient(180deg,rgb(0_20_65/0),rgb(0_20_65/0.88)_38%,#001441)]" style={{ top: c.y - 40, right: vertical ? 0 : L.w - L.phone.x - 40, opacity: Math.max(visible, beatIn), ...(vertical ? {} : { WebkitMaskImage: "linear-gradient(90deg,#000 70%,transparent)", maskImage: "linear-gradient(90deg,#000 70%,transparent)" }) }} />
+    <div className="absolute flex flex-col justify-end" style={{ left: c.x, top: c.y, width: c.w, height: c.h, alignItems: vertical ? "center" : "flex-start", textAlign: c.align }}>
+      {/* the live region keeps the words even while the band is visually faded; it stays silent until the visitor
+          has started the film themselves, so an autoplaying film never talks over the page */}
+      <div id={CAPTION_ID} className="film-caption" role="status" aria-live={announce ? "polite" : "off"} aria-atomic="false" style={{ opacity: visible, transform: `translateY(${lerp(14, 0, visible)}px)`, fontSize: c.size }}>
         <p className="font-semibold leading-[1.2] tracking-[-0.015em] text-white [text-wrap:balance]">{scene.caption}</p>
-        <p className="mt-[0.55em] inline-flex items-center gap-[0.45em] rounded-full border border-white/12 bg-white/[0.07] px-[0.9em] py-[0.42em] text-[0.5em] font-semibold text-[#dfe6f8]">
-          <span className={`h-[0.55em] w-[0.55em] rounded-full ${TONE_DOT[scene.status.tone]}`} />
-          {scene.status.label}
+        {beat ? (
+          <p className={`mt-[0.4em] font-medium leading-[1.3] text-[#c9d4f0] [text-wrap:balance] ${vertical ? "text-[0.78em]" : "text-[0.62em]"}`} style={{ opacity: beatIn }} data-film-beat="">
+            {beat.speech ? `“${beat.text}”` : beat.text}
+          </p>
+        ) : null}
+        <p className={`mt-[0.55em] inline-flex items-center gap-[0.45em] rounded-[1em] border border-white/14 bg-white/[0.08] px-[0.9em] py-[0.42em] font-semibold leading-[1.25] text-[#dfe6f8] ${vertical ? "max-w-full text-[0.72em]" : "text-[0.5em]"}`}>
+          <span className={`h-[0.55em] w-[0.55em] shrink-0 rounded-full ${TONE_DOT[scene.status.tone]}`} />
+          <span>{scene.status.label}</span>
         </p>
       </div>
     </div>
+    </>
   );
 }
 
 /* ── scene 5: the plans ──────────────────────────────────────────────────────────────────────────────── */
+
+function StatusPill({ tone, children, size }: { tone: StatusTone; children: React.ReactNode; size: number }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-white/14 bg-white/8 px-3 py-1 font-semibold text-[#dfe6f8]" style={{ fontSize: size }}>
+      <span className={`h-2 w-2 rounded-full ${TONE_DOT[tone]}`} />
+      {children}
+    </span>
+  );
+}
 
 function PlanCards({ L, t }: { L: StageLayout; t: number }) {
   const s = stageAt(t);
@@ -208,38 +236,84 @@ function PlanCards({ L, t }: { L: StageLayout; t: number }) {
         const e = s.cards[i]!;
         const pro = plan.id === "pro";
         const glow = pro ? s.proGlow : 0;
+        // the vertical card keeps the two lines that matter most, in a size a phone can read
+        const lines = wide ? plan.lines : plan.lines.filter((l) => l.key);
         return (
-          <div key={plan.id} className="absolute rounded-[28px] border border-white/12 bg-[linear-gradient(180deg,rgb(255_255_255/0.09),rgb(255_255_255/0.04))] text-white" style={{ left: r.x, top: r.y, width: r.w, height: r.h, opacity: e, transform: `translateY(${lerp(44, 0, e)}px) scale(${lerp(0.97, 1, e)})`, boxShadow: `0 1px 0 rgb(255 255 255 / 0.08) inset, 0 40px 80px -40px rgb(0 0 0 / 0.8), 0 0 0 ${2 * glow}px rgb(66 129 250 / ${0.9 * glow}), 0 30px 90px -20px rgb(1 66 251 / ${0.75 * glow})` }}>
+          // an opaque navy base under the glass, so nothing of the room can read through a card
+          <div key={plan.id} className="absolute rounded-[28px] border border-white/12 bg-[#0a1c50] bg-[linear-gradient(180deg,rgb(255_255_255/0.09),rgb(255_255_255/0.04))] text-white" style={{ left: r.x, top: r.y, width: r.w, height: r.h, opacity: e, transform: `translateY(${lerp(44, 0, e)}px) scale(${lerp(0.97, 1, e)})`, boxShadow: `0 1px 0 rgb(255 255 255 / 0.08) inset, 0 40px 80px -40px rgb(0 0 0 / 0.8), 0 0 0 ${2 * glow}px rgb(66 129 250 / ${0.9 * glow}), 0 30px 90px -20px rgb(1 66 251 / ${0.75 * glow})` }}>
             {pro ? <div className="pointer-events-none absolute inset-0 rounded-[28px] bg-[radial-gradient(60%_50%_at_50%_0%,rgb(1_66_251/0.5),transparent_70%)]" style={{ opacity: glow }} /> : null}
-            <div className={`relative flex h-full flex-col ${wide ? "p-9" : "p-8"}`}>
-              <div className={wide ? "" : "flex items-center justify-between"}>
+            {wide ? (
+              <div className="relative flex h-full flex-col p-9">
                 <p className="whitespace-nowrap text-[30px] font-semibold tracking-[-0.02em]">{plan.name}</p>
-                <p className={`flex items-baseline gap-2.5 ${wide ? "mt-4" : ""}`}>
+                <p className="mt-4 flex items-baseline gap-2.5">
                   <span className="font-display text-[52px] font-bold leading-none tracking-[-0.04em]">{plan.price}</span>
-                  <span className="text-[18px] text-[#b2bfdd]">{plan.per}</span>
+                  {plan.per ? <span className="text-[18px] text-[#b2bfdd]">{plan.per}</span> : null}
                 </p>
+                <p className="mt-2 whitespace-nowrap text-[17px] text-[#b2bfdd]">{plan.sub}</p>
+                <p className="mt-5">
+                  <StatusPill tone={plan.tone} size={16}>
+                    {plan.status}
+                  </StatusPill>
+                </p>
+                <ul className="mt-6 space-y-2.5 text-[18px] leading-[1.35]">
+                  {lines.map((line) => (
+                    <li key={line.text} className="flex items-start gap-3">
+                      <span className="mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
+                        <Icon name="check" size={14} strokeWidth={2.75} />
+                      </span>
+                      <span>
+                        {line.text}
+                        {line.status ? (
+                          <span className="ml-2 inline-flex translate-y-[-1px] items-center gap-1.5 whitespace-nowrap rounded-full border border-white/14 bg-white/8 px-2 py-px align-middle text-[13px] font-semibold text-[#dfe6f8]">
+                            <span className="h-1.5 w-1.5 rounded-full bg-coral" />
+                            {line.status}
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <p className={wide ? "mt-5" : "mt-4"}>
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/14 bg-white/8 px-3.5 py-1.5 text-[16px] font-semibold text-[#dfe6f8]">
-                  <span className={`h-2 w-2 rounded-full ${TONE_DOT[plan.tone]}`} />
-                  {plan.status}
-                </span>
-              </p>
-              <ul className={`mt-6 ${wide ? "space-y-2.5" : "grid grid-cols-2 gap-x-6 gap-y-2.5"} text-[18px]`}>
-                {plan.lines.map((line) => (
-                  <li key={line} className="flex items-center gap-3">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
-                      <Icon name="check" size={14} strokeWidth={2.75} />
-                    </span>
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            ) : (
+              <div className="relative flex h-full flex-col justify-between p-8">
+                <div className="flex items-start justify-between gap-6">
+                  <div>
+                    <p className="whitespace-nowrap text-[36px] font-semibold leading-none tracking-[-0.02em]">{plan.name}</p>
+                    <p className="mt-4">
+                      <StatusPill tone={plan.tone} size={22}>
+                        {plan.status}
+                      </StatusPill>
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="flex items-baseline justify-end gap-2">
+                      <span className="font-display text-[56px] font-bold leading-none tracking-[-0.04em]">{plan.price}</span>
+                      {plan.per ? <span className="text-[22px] text-[#b2bfdd]">{plan.per}</span> : null}
+                    </p>
+                    <p className="mt-2 whitespace-nowrap text-[22px] text-[#b2bfdd]">{plan.sub}</p>
+                  </div>
+                </div>
+                <ul className="space-y-2 text-[30px] font-medium leading-[1.3]">
+                  {lines.map((line) => (
+                    <li key={line.text} className="flex items-center gap-4">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
+                        <Icon name="check" size={20} strokeWidth={2.75} />
+                      </span>
+                      <span className="min-w-0">{line.text}</span>
+                      {line.status ? (
+                        <StatusPill tone="coming" size={20}>
+                          {line.status}
+                        </StatusPill>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         );
       })}
-      <p className="absolute text-[20px] text-[#b2bfdd]" style={{ left: L.cards[0]!.x, width: wide ? L.cards[2]!.x + L.cards[2]!.w - L.cards[0]!.x : L.cards[0]!.w, top: wide ? 640 : 1206, textAlign: "center", opacity: s.footnote, transform: `translateY(${lerp(10, 0, s.footnote)}px)` }}>
+      <p className={`absolute text-[#b2bfdd] ${wide ? "text-[20px]" : "text-[26px] leading-[1.35]"}`} style={{ left: L.cards[0]!.x, width: wide ? L.cards[2]!.x + L.cards[2]!.w - L.cards[0]!.x : L.cards[0]!.w, top: wide ? 642 : 1140, textAlign: "center", opacity: s.footnote, transform: `translateY(${lerp(10, 0, s.footnote)}px)` }}>
         Everyday commands (“pause”, “volume 40”, “open Spotify”) are free and unlimited on every plan.
       </p>
     </>
@@ -248,30 +322,73 @@ function PlanCards({ L, t }: { L: StageLayout; t: number }) {
 
 /* ── scene 6: the end card ───────────────────────────────────────────────────────────────────────────── */
 
-function EndCard({ L, t }: { L: StageLayout; t: number }) {
+/** How the end card's two calls to action are drawn: as real links (website), as pictures (export), or not at all
+ *  (when the film has ended and the frame shows them as full-size buttons over the stage). */
+export type EndActions = "links" | "drawn" | "hidden";
+
+/** A link that uses client-side routing inside the website, and a plain link where the film renders on its own. */
+export function FilmLink({ to, className, onClick, children }: { to: string; className: string; onClick?: (e: React.MouseEvent) => void; children: React.ReactNode }) {
+  const routed = useInRouterContext();
+  return routed ? (
+    <RouterLink to={to} className={className} onClick={onClick}>
+      {children}
+    </RouterLink>
+  ) : (
+    <a href={to} className={className} onClick={onClick}>
+      {children}
+    </a>
+  );
+}
+
+const END_PRIMARY = "dome-primary inline-flex h-[64px] items-center gap-2 rounded-full px-9 text-[22px] font-semibold";
+const END_SECONDARY = "inline-flex h-[64px] items-center gap-1.5 rounded-full border border-white/25 px-9 text-[22px] font-semibold text-white";
+
+function EndCard({ L, t, actions }: { L: StageLayout; t: number; actions: EndActions }) {
   const s = stageAt(t);
   if (s.lockup <= 0) return null;
   const { cx, cy, w } = L.lockup;
-  const h = w * (408 / 1345);
+  const h = lockupHeight(L);
+  const rows = endCardRows(L);
+  const vertical = L.name === "vertical";
+  // clicks on the links must not reach the frame, which toggles play/pause
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+  const live = actions === "links" && s.buttons > 0.5;
   return (
-    <div className="absolute inset-0 text-white">
-      <div className="absolute" style={{ left: cx - w / 2, top: cy - h / 2, width: w, opacity: s.lockup, transform: `scale(${lerp(0.9, 1, s.lockup)})`, filter: `drop-shadow(0 0 ${40 * s.lockup}px rgb(66 129 250 / 0.45))` }}>
+    <div className="pointer-events-none absolute inset-0 text-white">
+      <div aria-hidden="true" className="absolute" style={{ left: cx - w / 2, top: cy - h / 2, width: w, opacity: s.lockup, transform: `scale(${lerp(0.9, 1, s.lockup)})`, filter: `drop-shadow(0 0 ${40 * s.lockup}px rgb(66 129 250 / 0.45))` }}>
         <Wordmark title={null} className="h-auto w-full text-white" />
       </div>
-      <p className="absolute w-full text-center text-[52px] font-bold tracking-[-0.03em]" style={{ top: cy + h / 2 + 50, opacity: s.tagline, transform: `translateY(${lerp(14, 0, s.tagline)}px)` }}>
+      <p aria-hidden="true" className="absolute w-full text-center text-[52px] font-bold tracking-[-0.03em]" style={{ top: rows.tagline, opacity: s.tagline, transform: `translateY(${lerp(14, 0, s.tagline)}px)` }}>
         Your PC, in your hand.
       </p>
-      <div className="absolute flex w-full items-center justify-center gap-4" style={{ top: cy + h / 2 + 150, opacity: s.buttons, transform: `translateY(${lerp(14, 0, s.buttons)}px)` }}>
-        <span className="dome-primary inline-flex h-[64px] items-center gap-2 rounded-full px-9 text-[22px] font-semibold">
-          Open the app
-          <Icon name="arrow" size={22} />
-        </span>
-        <span className="inline-flex h-[64px] items-center gap-1.5 rounded-full border border-white/25 px-9 text-[22px] font-semibold">
-          Compare plans
-          <Icon name="chevron" size={20} />
-        </span>
-      </div>
-      <p className="absolute w-full text-center text-[20px] text-[#8f9dc4]" style={{ top: cy + h / 2 + 250, opacity: s.concept }}>
+      {actions === "hidden" ? null : (
+        <div className="absolute flex w-full items-center justify-center gap-4" style={{ top: rows.actions, opacity: s.buttons, transform: `translateY(${lerp(14, 0, s.buttons)}px)` }}>
+          {live ? (
+            <>
+              <FilmLink to="/app" className={`${END_PRIMARY} pointer-events-auto`} onClick={stop}>
+                Open the app
+                <Icon name="arrow" size={22} />
+              </FilmLink>
+              <FilmLink to="/pricing" className={`${END_SECONDARY} pointer-events-auto hover:bg-white/10`} onClick={stop}>
+                Compare plans
+                <Icon name="chevron" size={20} />
+              </FilmLink>
+            </>
+          ) : (
+            <>
+              <span aria-hidden="true" className={END_PRIMARY}>
+                Open the app
+                <Icon name="arrow" size={22} />
+              </span>
+              <span aria-hidden="true" className={END_SECONDARY}>
+                Compare plans
+                <Icon name="chevron" size={20} />
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      <p aria-hidden="true" className={`absolute w-full px-12 text-center leading-[1.45] text-[#8f9dc4] ${vertical ? "text-[28px]" : "text-[20px]"}`} style={{ top: rows.concept, opacity: s.concept }}>
         {CONCEPT_NOTE}
       </p>
     </div>
@@ -283,10 +400,16 @@ function EndCard({ L, t }: { L: StageLayout; t: number }) {
 export interface StageProps {
   t: number;
   layout: StageLayout;
+  /** The end card's calls to action (default: drawn, as the export and stills show them). */
+  endActions?: EndActions;
+  /** Whether the caption region announces changes (off until the visitor starts the film). */
+  announce?: boolean;
+  /** The time the film's clock reads, when the stage shows another moment (the poster); defaults to t. */
+  clock?: number;
 }
 
 /** The stage at time t on a fixed canvas: wrap it in `.film-frame` (film.css) to scale it to any width. */
-export const Stage = memo(function Stage({ t, layout: L }: StageProps) {
+export const Stage = memo(function Stage({ t, layout: L, endActions = "drawn", announce = true, clock }: StageProps) {
   const s = stageAt(t);
   const phone = phoneAt(t);
   const pc = pcAt(t);
@@ -294,27 +417,35 @@ export const Stage = memo(function Stage({ t, layout: L }: StageProps) {
   const rise = lerp(70, 0, phone.entrance);
   // a gentle float once the phone has arrived, so it reads as held rather than pinned
   const float = phone.entrance >= 1 ? Math.sin(t / 1900) * 5 : 0;
+  // the room and the devices fade out under the veil, so nothing of them shows through the plan cards
+  const clear = 1 - s.veil;
   return (
-    <div className="film-canvas dome-dark" style={{ width: L.w, height: L.h, fontSize: 16 }} data-film-time={Math.round(t)}>
-      <div className="absolute inset-0" style={{ opacity: s.room }}>
-        <Room L={L} lamp={s.lamp} screen={pc.on} />
+    <div className="film-canvas dome-dark" style={{ width: L.w, height: L.h, fontSize: 16 }} data-film-time={Math.round(clock ?? t)}>
+      {/* the picture: decorative for assistive technology (the caption region below says what happens) */}
+      <div aria-hidden="true" className="absolute inset-0">
+        {clear > 0 ? (
+          <div className="absolute inset-0" style={{ opacity: s.room * clear }}>
+            <Room L={L} lamp={s.lamp} screen={pc.on} />
+          </div>
+        ) : null}
+        {clear > 0 ? (
+          <div className="absolute inset-0" style={{ opacity: s.devices * clear, transform: `scale(${lerp(0.96, 1, s.devices)})`, transformOrigin: "50% 60%" }}>
+            <Monitor L={L} t={t} />
+            <Link L={L} t={t} />
+            <div className="absolute" style={{ left: L.phone.x, top: L.phone.y, opacity: phone.entrance, transform: `translateY(${rise + float}px) rotate(${lerp(3, 0, phone.entrance)}deg)`, transformOrigin: "50% 100%" }}>
+              <Phone t={t} view={phone} pc={pc} hand={hand} width={L.phone.w} bezel={L.bezel} />
+            </div>
+          </div>
+        ) : null}
+        {s.veil > 0 ? <div className="absolute inset-0 bg-[radial-gradient(70%_50%_at_50%_-10%,rgb(1_66_251/0.5),transparent_70%),linear-gradient(180deg,#02113f,#001441)]" style={{ opacity: s.veil }} /> : null}
+        <PlanCards L={L} t={t} />
+        {/* the DoMe wordmark, quietly, in the corner */}
+        <span className="absolute" style={{ left: 36, top: 30, opacity: s.lockup > 0 ? 0 : 0.8 }}>
+          <Wordmark compact title={null} className="h-[22px] w-auto text-white" />
+        </span>
       </div>
-      <div className="absolute inset-0" style={{ opacity: s.devices, transform: `scale(${lerp(0.96, 1, s.devices)})`, transformOrigin: "50% 60%" }}>
-        <Monitor L={L} t={t} />
-        <Link L={L} t={t} />
-        <div className="absolute" style={{ left: L.phone.x, top: L.phone.y, opacity: phone.entrance, transform: `translateY(${rise + float}px) rotate(${lerp(3, 0, phone.entrance)}deg)`, transformOrigin: "50% 100%" }}>
-          <Phone t={t} view={phone} pc={pc} hand={hand} width={L.phone.w} bezel={L.bezel} />
-        </div>
-      </div>
-      {s.veil > 0 ? <div className="absolute inset-0 bg-[radial-gradient(70%_50%_at_50%_-10%,rgb(1_66_251/0.5),transparent_70%),linear-gradient(180deg,#02113f,#001441)]" style={{ opacity: s.veil }} /> : null}
-      <PlanCards L={L} t={t} />
-      <EndCard L={L} t={t} />
-      <Captions L={L} t={t} />
-      {/* the DoMe mark, quietly, in the corner */}
-      <span className="absolute flex items-center gap-2 text-[15px] font-semibold text-white/55" style={{ left: 36, top: 30, opacity: s.lockup > 0 ? 0 : 1 }}>
-        <FilmIcon name="cast" size={16} />
-        DoMe Remote
-      </span>
+      <EndCard L={L} t={t} actions={endActions} />
+      <Captions L={L} t={t} announce={announce} />
     </div>
   );
 });

@@ -11,6 +11,7 @@ import { refreshApprovedApps, useApprovedApps, useLabels, useMyGrant, useSelecte
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
+import { Icon } from "../../components/icons.tsx";
 import { Button, Card, Chip, inputClass, Notice, PageHeader, SectionLabel, Steps } from "../../components/ui.tsx";
 import { intentContext, previewStep, type LiveView, type PlanRun } from "../../lib/commandPlan.ts";
 import { appCommandText, exampleAppPhrase, MAX_COMMAND_CHARS, parseCommand, type Choice, type PlanStep } from "../../lib/intents.ts";
@@ -130,18 +131,18 @@ export function CommandPage() {
   const lastSucceeded = run ? run.steps.filter((_, i) => run.run.steps[i]?.status === "succeeded").pop() : undefined;
   const showResults = !!lastSearch && lastSucceeded?.action === "youtube.search" && lastSearch.results.length > 0;
   const unknownAt = run ? run.run.steps.findIndex((s) => s.status === "unknown") : -1;
-  // The PC pressed nothing (no F11 full screen in that app, or not allowed for it there): Maximise is offered as a
+  // The PC pressed nothing (no F11 full screen in that app, or not allowed for it there): Maximize is offered as a
   // chip that fills the box, so it is a second command the customer sends, never a silent fallback.
   const failedStep = failedAt !== null ? run?.steps[failedAt] : undefined;
   const insteadAppId = failure?.code === "FULLSCREEN_UNSUPPORTED" && failedStep?.action === "app.set_fullscreen" ? failedStep.target?.app_id : undefined;
   const insteadApp = typeof insteadAppId === "string" ? apps?.find((a) => a.app_id === insteadAppId) : undefined;
-  const insteadChoices: Choice[] = insteadApp && apps ? [{ label: "Maximise instead", text: appCommandText("maximize", insteadApp, apps) }] : [];
+  const insteadChoices: Choice[] = insteadApp && apps ? [{ label: "Maximize instead", text: appCommandText("maximize", insteadApp, apps) }] : [];
   // One of the customer's own approved apps, in words that parse back to it ("Full screen ZStream"), so every example works.
   const appName = exampleAppPhrase(apps);
   const examples: Array<{ title: string; items: string[] }> = [
     { title: "Volume", items: ["Make the volume 100%", "Turn it down a bit", "Mute the PC"] },
     { title: "YouTube", items: ["Pause YouTube", "Skip ahead 30 seconds", "Search YouTube for lofi beats", "Play the second video", "Play lofi beats on YouTube"] },
-    { title: "Apps", items: [`Open ${appName}`, `Bring ${appName} to the front`, `Full screen ${appName}`, `Exit full screen ${appName}`, `Open ${appName} and maximise it`] },
+    { title: "Apps", items: [`Open ${appName}`, `Bring ${appName} to the front`, `Full screen ${appName}`, `Exit full screen ${appName}`, `Open ${appName} and maximize it`] },
     { title: "PC", items: ["Lock my computer", "Put my computer to sleep"] },
   ];
 
@@ -162,9 +163,13 @@ export function CommandPage() {
           </label>
           <input id="command-text" ref={inputRef} className={inputClass} value={text} onChange={(e) => setText(e.currentTarget.value)} placeholder="e.g. make the volume 100%" autoComplete="off" autoCorrect="on" enterKeyHint="send" maxLength={MAX_COMMAND_CHARS} aria-describedby="command-preview" />
           <p className="text-xs text-text-faint">Tip: tap the microphone on your keyboard to dictate. Join up to three steps with “and” or “then”. Typed commands work without any AI service.</p>
-          <div id="command-preview" aria-live="polite" className="min-h-[2.5rem] rounded-control border border-border bg-surface px-3.5 py-3 text-sm">
+          {/* quiet helper text while empty, so it never reads as a second field; a bordered preview once there is something to send */}
+          <div id="command-preview" aria-live="polite" className={text.trim() === "" ? "flex min-h-[2.5rem] items-center gap-2 px-0.5 text-sm" : "min-h-[2.5rem] rounded-control border border-dashed border-border-strong bg-transparent px-3.5 py-3 text-sm"}>
             {text.trim() === "" ? (
-              <span className="text-text-muted">Try one of the examples below.</span>
+              <span className="inline-flex items-center gap-2 text-text-muted">
+                <Icon name="info" size={16} className="shrink-0 text-text-faint" />
+                Try one of the examples below.
+              </span>
             ) : parsed.kind === "plan" ? (
               <div className="space-y-1">
                 {parsed.steps.length === 1 ? (

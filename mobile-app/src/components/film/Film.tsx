@@ -7,7 +7,9 @@
  *   jumps are exact.
  * - Controls: play/pause, scene chips, a thin progress bar, replay; all keyboard operable (the frame itself
  *   takes Space, the arrow keys, Home and 1–6). Captions are a polite aria-live region inside the stage.
- * - Autoplay only while at least half of the frame is on screen; paused while the page is hidden.
+ * - Autoplay only while at least half of the frame is on screen (85 % in the vertical layout, so its caption band
+ *   is in view too); paused while the page is hidden. Before the first play the frame shows scene 1's still as
+ *   its poster. The caption region stays silent until the visitor starts the film or picks a scene.
  * - `prefers-reduced-motion`: a storyboard of still frames with Previous / Next instead of animation.
  * - `exportMode`: no controls or chrome, and `window.__domeFilm` (seek / play / pause) for the export script.
  */
@@ -15,8 +17,8 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 
 import "../../styles/film.css";
 import { Icon } from "../icons.tsx";
-import { layoutFor, VERTICAL_BELOW_PX, type FilmLayout } from "./layout.ts";
-import { Stage } from "./Stage.tsx";
+import { endCardRows, layoutFor, VERTICAL_BELOW_PX, type FilmLayout } from "./layout.ts";
+import { CAPTION_ID, FilmLink, Stage } from "./Stage.tsx";
 import { clamp, SCENES, sceneAt, sceneByNumber, TOTAL_MS } from "./timeline.ts";
 import { useFilmClock } from "./useFilmClock.ts";
 
@@ -101,8 +103,8 @@ function Storyboard({ layout, initial, onAnimate }: { layout: FilmLayout; initia
   const scene = SCENES[i]!;
   return (
     <div className="film-storyboard">
-      <div className="film-frame" data-layout={layout} data-testid="film-frame" role="group" aria-label={`Storyboard, scene ${scene.n} of ${SCENES.length}: ${scene.title}`}>
-        <Stage t={scene.still} layout={layoutFor(layout)} />
+      <div className="film-frame" data-layout={layout} data-testid="film-frame" role="group" aria-label={`Storyboard, scene ${scene.n} of ${SCENES.length}: ${scene.title}`} aria-describedby={CAPTION_ID}>
+        <Stage t={scene.still} layout={layoutFor(layout)} endActions="links" />
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button type="button" className="film-button" onClick={() => setI((k) => Math.max(0, k - 1))} disabled={i === 0} aria-label="Previous scene">
@@ -126,12 +128,36 @@ function Storyboard({ layout, initial, onAnimate }: { layout: FilmLayout; initia
   );
 }
 
+/** Scrolls the chip row (never the page) so `chip` sits in the middle of it. */
+function centreChip(row: HTMLElement, chip: HTMLElement, smooth: boolean) {
+  if (row.scrollWidth <= row.clientWidth) return;
+  const left = chip.offsetLeft - row.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2;
+  const to = Math.max(0, Math.min(left, row.scrollWidth - row.clientWidth));
+  if (typeof row.scrollTo === "function") row.scrollTo({ left: to, behavior: smooth ? "smooth" : "auto" });
+  else row.scrollLeft = to;
+}
+
+function prefersReduced(): boolean {
+  try {
+    return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
 function SceneChips({ current, onPick }: { current: number; onPick: (n: number) => void }) {
+  const row = useRef<HTMLUListElement>(null);
+  // the row follows the film: the current scene's chip is always in view on a phone
+  useEffect(() => {
+    const ul = row.current;
+    const chip = ul?.querySelector<HTMLElement>(`[data-scene="${current}"]`);
+    if (ul && chip) centreChip(ul, chip, !prefersReduced());
+  }, [current]);
   return (
-    <ul className="no-scrollbar -mx-1 mt-3 flex gap-2 overflow-x-auto px-1 py-0.5" aria-label="Scenes">
+    <ul ref={row} className="film-chips no-scrollbar mt-3 flex gap-2 overflow-x-auto py-0.5" aria-label="Scenes">
       {SCENES.map((s) => (
-        <li key={s.n} className="shrink-0">
-          <button type="button" className="film-chip" aria-current={s.n === current ? "true" : undefined} aria-label={`Scene ${s.n}: ${s.title}`} onClick={() => onPick(s.n)}>
+        <li key={s.n} className="shrink-0" data-scene={s.n}>
+          <button type="button" className="film-chip" aria-current={s.n === current ? "true" : undefined} aria-label={`Scene ${s.n}: ${s.title}`} onClick={() => onPick(s.n)} onFocus={(e) => row.current && centreChip(row.current, e.currentTarget.parentElement as HTMLElement, false)}>
             <span className="film-chip-n" aria-hidden="true">
               {s.n}
             </span>
@@ -153,23 +179,27 @@ function Animated({ layout, initialTime, autoplay, exportMode }: { layout: FilmL
   const userPaused = useRef(false);
   const inView = useRef(false);
   const wantsAutoplay = autoplay && !exportMode;
+  // the caption region speaks only once the visitor has started the film, picked a scene or used the keyboard
+  const [engaged, setEngaged] = useState(false);
+  const engage = useCallback(() => setEngaged(true), []);
 
-  // autoplay only while in view; pause while hidden
+  // autoplay only while in view (in the vertical layout, with its caption band in view too); pause while hidden
   useEffect(() => {
     const el = frameRef.current;
     if (!wantsAutoplay || !el || typeof IntersectionObserver === "undefined") return;
+    const need = layout === "vertical" ? 0.85 : 0.5;
     const io = new IntersectionObserver(
       (entries) => {
-        const visible = (entries[0]?.intersectionRatio ?? 0) >= 0.5;
+        const visible = (entries[0]?.intersectionRatio ?? 0) >= need;
         inView.current = visible;
         if (visible && !userPaused.current && document.visibilityState !== "hidden") play();
         else if (!visible) pause();
       },
-      { threshold: [0, 0.5, 1] },
+      { threshold: [0, 0.5, 0.85, 1] },
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [wantsAutoplay, play, pause]);
+  }, [wantsAutoplay, layout, play, pause]);
   useEffect(() => {
     if (exportMode) return;
     const onVisibility = () => {
@@ -199,10 +229,12 @@ function Animated({ layout, initialTime, autoplay, exportMode }: { layout: FilmL
 
   const onToggle = useCallback(() => {
     userPaused.current = playing;
+    setEngaged(true);
     toggle();
   }, [playing, toggle]);
   const jump = useCallback(
     (n: number) => {
+      setEngaged(true);
       seek(sceneByNumber(n).start);
     },
     [seek],
@@ -214,12 +246,15 @@ function Animated({ layout, initialTime, autoplay, exportMode }: { layout: FilmL
       onToggle();
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
+      engage();
       seek(t + 5_000);
     } else if (e.key === "ArrowLeft") {
       e.preventDefault();
+      engage();
       seek(t - 5_000);
     } else if (e.key === "Home") {
       e.preventDefault();
+      engage();
       seek(0);
     } else if (/^[1-6]$/.test(e.key)) {
       e.preventDefault();
@@ -229,35 +264,52 @@ function Animated({ layout, initialTime, autoplay, exportMode }: { layout: FilmL
 
   const scene = sceneAt(t);
   const L = layoutFor(layout);
+  // before the first play the frame shows scene 1's lit room and phone as its poster (the clock still reads 0)
+  const poster = !exportMode && !playing && t === 0;
   return (
     <div data-testid="film">
-      <div ref={frameRef} className="film-frame" data-layout={layout} data-testid="film-frame" role="group" aria-label="DoMe demo film" tabIndex={exportMode ? -1 : 0} onKeyDown={exportMode ? undefined : onKey} onClick={exportMode ? undefined : (e) => (e.target === e.currentTarget || (e.target as HTMLElement).closest(".film-canvas")) && onToggle()}>
-        <Stage t={t} layout={L} />
-        {!exportMode && !playing && t === 0 ? (
+      <div ref={frameRef} className="film-frame" data-layout={layout} data-testid="film-frame" role="group" aria-label="DoMe demo film" aria-describedby={CAPTION_ID} tabIndex={exportMode ? -1 : 0} onKeyDown={exportMode ? undefined : onKey} onClick={exportMode ? undefined : (e) => (e.target === e.currentTarget || (e.target as HTMLElement).closest(".film-canvas")) && onToggle()}>
+        <Stage t={poster ? SCENES[0]!.still : t} clock={t} layout={L} endActions={exportMode ? "drawn" : ended ? "hidden" : "links"} announce={exportMode || engaged} />
+        {poster ? (
           <button type="button" className="film-start dome-press" aria-label="Play the film" data-testid="film-start" onClick={(e) => (e.stopPropagation(), onToggle())}>
             <Icon name="play" size={34} strokeWidth={2} />
           </button>
         ) : null}
         {ended && !exportMode ? (
-          <button type="button" className="film-replay film-button dome-primary is-primary dome-press" onClick={(e) => (e.stopPropagation(), replay())}>
-            <Icon name="play" size={16} />
-            Watch again
-          </button>
+          // the end card's calls to action as full-size controls, next to Watch again
+          <div className="film-end-actions" style={{ top: `${(endCardRows(L).actions / L.h) * 100}%` }} onClick={(e) => e.stopPropagation()}>
+            <FilmLink to="/app" className="film-button dome-primary is-primary dome-press">
+              Open the app
+              <Icon name="arrow" size={16} />
+            </FilmLink>
+            <FilmLink to="/pricing" className="film-button dome-press">
+              Compare plans
+            </FilmLink>
+            <button type="button" className="film-button dome-press" onClick={() => replay()}>
+              <Icon name="play" size={16} />
+              Watch again
+            </button>
+          </div>
         ) : null}
       </div>
       {exportMode ? null : (
         <div className="mt-3">
-          <input type="range" className="film-progress" min={0} max={TOTAL_MS} step={100} value={Math.round(t)} aria-label="Film position" aria-valuetext={`${mmss(t)} of ${mmss(TOTAL_MS)}, scene ${scene.n}: ${scene.title}`} style={{ "--fill": `${(t / TOTAL_MS) * 100}%` } as React.CSSProperties} onChange={(e) => seek(Number(e.currentTarget.value))} />
+          <input type="range" className="film-progress" min={0} max={TOTAL_MS} step={100} value={Math.round(t)} aria-label="Film position" aria-valuetext={`${mmss(t)} of ${mmss(TOTAL_MS)}, scene ${scene.n}: ${scene.title}`} style={{ "--fill": `${(t / TOTAL_MS) * 100}%` } as React.CSSProperties} onChange={(e) => (engage(), seek(Number(e.currentTarget.value)))} />
           <div className="mt-1 flex items-center gap-2">
             <button type="button" className="film-button dome-press" aria-label={ended ? "Replay" : playing ? "Pause" : "Play"} onClick={ended ? replay : onToggle} data-testid="film-play">
               <Icon name={playing ? "pause" : "play"} size={18} />
               <span className="hidden sm:inline">{ended ? "Replay" : playing ? "Pause" : "Play"}</span>
             </button>
-            <span className="text-sm tabular-nums text-text-faint" aria-hidden="true">
+            <span className="text-sm tabular-nums text-text-muted" aria-hidden="true">
               {mmss(t)} / {mmss(TOTAL_MS)}
             </span>
-            <span className="ml-auto hidden text-sm text-text-muted sm:inline">
-              Scene {scene.n} · {scene.title}
+            <span className="ml-auto text-sm text-text-muted" aria-hidden="true">
+              <span className="sm:hidden">
+                Scene {scene.n} of {SCENES.length}
+              </span>
+              <span className="hidden sm:inline">
+                Scene {scene.n} · {scene.title}
+              </span>
             </span>
           </div>
           <SceneChips current={scene.n} onPick={jump} />

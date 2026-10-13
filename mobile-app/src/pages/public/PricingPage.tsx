@@ -10,8 +10,8 @@ import { Link } from "react-router";
 import { PLANS } from "@dome/protocol";
 
 import { Icon } from "../../components/icons.tsx";
-import { AI_RULES, COMING_AT_PAID_LAUNCH, PLAN_CONTENT, SCREEN_VIEW_STATUS, usd, type PlanContent } from "../../content/plans.ts";
-import { INCLUDED, NOT_INCLUDED, pricingGroups } from "../../lib/pricing.ts";
+import { AI_RULES, PLAN_CONTENT, SCREEN_VIEW_STATUS, usd, type PlanContent } from "../../content/plans.ts";
+import { INCLUDED, NOT_INCLUDED, pricingGroups, type Row, type RowGroup } from "../../lib/pricing.ts";
 import { PublicIcon, type PublicIconName } from "./publicIcons.tsx";
 
 const RULES: Array<{ icon: PublicIconName; title: string; text: string }> = [
@@ -52,6 +52,79 @@ function Cell({ value }: { value: string }) {
   return <span className="text-[13px] leading-snug sm:text-[15px]">{value}</span>;
 }
 
+/** A phone-sized value: "Up to 5" → "5", "10 min per 5-hour window" → "10 min / 5 h", "10, once (does not renew)" → "10, once". */
+function phoneValue(v: string): string {
+  return v
+    .replace(/^Up to /, "")
+    .replace(/ min per (\d+)-hour window$/, " min per\u00a0$1\u00a0h")
+    .replace(/ \(does not renew\)$/, "");
+}
+
+const PLAN_NAMES = ["Free", "Pro", "Pro Plus"] as const;
+const isSame = (r: Row) => r.free === r.pro && r.pro === r.proPlus;
+
+/** Phone labels keep "5-hour" together (a non-breaking hyphen), so a label never breaks as "5-" / "hour". */
+const keepTogether = (label: string) => label.replace(/(\d)-hour/g, "$1\u2011hour");
+
+/** One feature on a phone: its label, then the three plans' values under the sticky Free · Pro · Pro Plus header. */
+function PhoneRow({ label, row }: { label: ReactNode; row?: Row }) {
+  const text = typeof label === "string" ? keepTogether(label) : label;
+  if (row && !isSame(row)) {
+    return (
+      <li className="dome-compare-row">
+        <p className="text-[15px] leading-snug text-text-muted">{text}</p>
+        {([row.free, row.pro, row.proPlus] as const).map((v, i) => (
+          <span key={PLAN_NAMES[i]} className="dome-compare-value">
+            <span className="sr-only">{PLAN_NAMES[i]}: </span>
+            <Cell value={phoneValue(v)} />
+          </span>
+        ))}
+      </li>
+    );
+  }
+  // the same on every plan: the label gets the width, one value on the right says so
+  const value = row && row.free !== INCLUDED ? row.free : null;
+  return (
+    <li className="dome-compare-row-all">
+      <p className="text-[15px] leading-snug text-text-muted">{text}</p>
+      <span className="flex flex-col items-end text-right">
+        {value ? (
+          <span className="text-[13px] font-medium leading-snug text-text">{value}</span>
+        ) : (
+          <span className="inline-flex items-center text-success">
+            <Icon name="check" size={20} strokeWidth={2.25} />
+          </span>
+        )}
+        <span className="text-[12px] text-text-muted">Every plan</span>
+      </span>
+    </li>
+  );
+}
+
+/** A group on phones: the rows every plan includes become one line (the group's summary), the rest one row each. */
+function PhoneGroup({ group }: { group: RowGroup }) {
+  const included = group.rows.filter((r) => isSame(r) && r.free === INCLUDED);
+  const rest = group.rows.filter((r) => !(isSame(r) && r.free === INCLUDED));
+  return (
+    <section aria-label={group.title} className="pt-6 first:pt-4">
+      <h3 className="flex items-center gap-2 text-caption font-semibold uppercase tracking-[0.12em] text-text-faint">
+        {group.title}
+        {group.status ? (
+          <span className="normal-case tracking-normal">
+            <Chip tone="quiet">{group.status}</Chip>
+          </span>
+        ) : null}
+      </h3>
+      <ul className="dome-hairlines mt-1">
+        {included.length > 0 ? <PhoneRow label={group.summary ?? included.map((r) => r.label).join("; ")} /> : null}
+        {rest.map((r) => (
+          <PhoneRow key={r.label} label={r.label} row={r} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function PlanCard({ plan }: { plan: PlanContent }) {
   const available = plan.status.kind === "available";
   return (
@@ -64,7 +137,7 @@ function PlanCard({ plan }: { plan: PlanContent }) {
       </div>
       <p className="mt-5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="font-display text-[2.75rem] font-bold leading-none tracking-[-0.04em] md:text-[2.5rem] lg:text-5xl">{plan.price ? usd(plan.price.monthlyCents) : usd(0)}</span>
-        <span className="whitespace-nowrap text-[15px] text-text-muted">{plan.price ? "/ month" : "forever"}</span>
+        {plan.price ? <span className="whitespace-nowrap text-[15px] text-text-muted">/ month</span> : null}
       </p>
       <p className="mt-2 text-sm text-text-muted">{plan.price ? `or ${usd(plan.price.annualCents)} / year` : "No credit card. No ads."}</p>
       <p className="mt-4 text-[15px] text-text-muted">{plan.tagline}</p>
@@ -111,7 +184,7 @@ export function PricingPage() {
       <header className="animate-rise max-w-3xl pb-10 pt-14 sm:pb-14 sm:pt-20">
         <p className="dome-eyebrow">Pricing</p>
         <h1 className="mt-4 text-h1 font-bold">Free for everyday control.</h1>
-        <p className="mt-5 max-w-2xl text-lg text-text-muted sm:text-xl">The remote is free for as long as you like. Pro and Pro Plus add more PCs, unlimited Screen view and a real allowance for the AI butler, when paid plans launch.</p>
+        <p className="mt-5 max-w-2xl text-lg text-text-muted sm:text-xl">The remote is free: no credit card, no ads. Pro and Pro Plus add more PCs and a real AI butler allowance at paid launch, and unlimited Screen view once it ships.</p>
       </header>
 
       <div className="grid gap-4 md:grid-cols-3 lg:gap-5">
@@ -152,8 +225,9 @@ export function PricingPage() {
           <h2 id="compare" className="text-h2 font-bold">
             Compare plans
           </h2>
-          <p className="text-sm text-text-faint">
-            Screen view is <Chip tone="quiet">{SCREEN_VIEW_STATUS}</Chip>; Pro and Pro Plus: {COMING_AT_PAID_LAUNCH.toLowerCase()}.
+          <p className="inline-flex flex-wrap items-center gap-2 text-sm text-text-faint">
+            <Chip tone="quiet">{SCREEN_VIEW_STATUS}</Chip>
+            <span>Screen view · Pro and Pro Plus arrive at paid launch.</span>
           </p>
         </div>
 
@@ -179,7 +253,11 @@ export function PricingPage() {
                   <th scope="colgroup" colSpan={4}>
                     <span className="inline-flex items-center gap-2">
                       {g.title}
-                      {g.status ? <Chip tone="quiet">{g.status}</Chip> : null}
+                      {g.status ? (
+                        <span className="normal-case tracking-normal">
+                          <Chip tone="quiet">{g.status}</Chip>
+                        </span>
+                      ) : null}
                     </span>
                   </th>
                 </tr>
@@ -202,32 +280,17 @@ export function PricingPage() {
           </tbody>
         </table>
 
-        {/* Phones: the same facts, one feature per row with the three plans beneath it. */}
-        <div className="dome-compare-list mt-6 sm:hidden">
+        {/* Phones: one sticky Free · Pro · Pro Plus header and one compact row per feature; what every plan includes is
+            a single line per group. (The table above is display:none here, so nothing is read twice.) */}
+        <div className="dome-compare-list mt-4 sm:hidden">
+          <div className="dome-compare-head" aria-hidden="true">
+            <span />
+            {names.map((n) => (
+              <span key={n}>{n}</span>
+            ))}
+          </div>
           {groups.map((g) => (
-            <section key={g.title} aria-label={g.title} className="pt-7 first:pt-0">
-              <h3 className="flex items-center gap-2 text-caption font-semibold uppercase tracking-[0.12em] text-text-faint">
-                {g.title}
-                {g.status ? <Chip tone="quiet">{g.status}</Chip> : null}
-              </h3>
-              <ul className="dome-hairlines mt-2">
-                {g.rows.map((r) => (
-                  <li key={r.label} className="py-4">
-                    <p className="text-[15px] text-text-muted">{r.label}</p>
-                    <div className="mt-2.5 grid grid-cols-3 gap-2">
-                      {([r.free, r.pro, r.proPlus] as const).map((v, i) => (
-                        <div key={names[i]} className="dome-compare-cell">
-                          <span>{names[i]}</span>
-                          <span className="font-medium">
-                            <Cell value={v} />
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <PhoneGroup key={g.title} group={g} />
           ))}
         </div>
       </section>
@@ -240,7 +303,7 @@ export function PricingPage() {
           <li className="pb-4">Prices are planned, not final, and may change before Pro and Pro Plus can be purchased. Nothing can be bought in this version.</li>
           <li className="py-4">{AI_RULES.billing} You can cancel at any time; access continues until the end of the paid period and your settings are kept.</li>
           <li className="py-4">
-            If Pro ends, you keep every PC, phone and setting and choose which {free.max_enabled_pcs} PC and {free.max_controllers} phones stay enabled (within {PLANS.downgrade_policy.selection_window_days} days; otherwise the most recently used are kept). Revocation and emergency stop always work.
+            If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which {free.max_enabled_pcs} PC and {free.max_controllers} phones stay enabled (within {PLANS.downgrade_policy.selection_window_days} days; otherwise the most recently used are kept). Revocation and emergency stop always work.
           </li>
           <li className="py-4">The AI butler is optional and off until you turn it on. {AI_RULES.privacy}</li>
           <li className="py-4">Screen view is in development. The allowances above describe the plans; the feature is not in the app yet, and nothing is recorded when it arrives.</li>

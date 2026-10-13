@@ -4,7 +4,7 @@
  * Everything is rendered as React text — model replies and choices included — never as HTML or markdown. AI bubbles
  * say whether the turn was counted.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import type { JsonValue } from "@dome/protocol";
@@ -101,8 +101,18 @@ function PlanCard({ item, handlers }: { item: Extract<ChatItem, { kind: "plan" }
   const labels = useLabels(item.pcId);
   const commands = useLiveStore((s) => s.commands);
   const records = (item.run?.steps ?? []).map((s) => (s.commandId ? (commands.find((c) => c.commandId === s.commandId) ?? null) : null));
+  // Run and Cancel disappear once tapped: focus moves to this card instead of falling back to the page
+  const card = useRef<HTMLDivElement>(null);
+  const was = useRef(item.status);
+  useEffect(() => {
+    const before = was.current;
+    was.current = item.status;
+    if (before !== "waiting_run" || item.status === "waiting_run") return;
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) card.current?.focus({ preventScroll: true });
+  }, [item.status]);
   return (
-    <div className="dome-card p-4" data-plan-status={item.status}>
+    <div ref={card} tabIndex={-1} className="dome-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/60" data-plan-status={item.status}>
       <p className="flex items-center gap-1.5 text-caption font-semibold uppercase tracking-[0.1em] text-text-faint">
         <Icon name="pc" size={14} />
         On {item.pcName ?? "your PC"}:
@@ -176,7 +186,8 @@ export function Conversation({ items, handlers, butlerName }: { items: ChatItem[
         if (item.kind === "owner") {
           return (
             <li key={item.id} className="animate-rise flex justify-end">
-              <p className="dome-primary max-w-[82%] rounded-[1.25rem] rounded-br-md px-4 py-2.5 text-[15px] whitespace-pre-wrap break-words">
+              {/* tinted, not solid blue: solid blue stays for the screen's one primary control (the microphone, Run) */}
+              <p className="max-w-[82%] rounded-[1.25rem] rounded-br-md border border-accent/20 bg-accent/12 px-4 py-2.5 text-[15px] text-text whitespace-pre-wrap break-words">
                 <span className="sr-only">You said: </span>
                 {item.text}
               </p>

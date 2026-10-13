@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { handAt, pcAt, phoneAt, stageAt } from "../../src/components/film/script.ts";
-import { CONCEPT_NOTE, EASE, PLAN_FACTS, SCENES, sceneAt, sceneByNumber, seg, TOTAL_MS, typedWords, window as win } from "../../src/components/film/timeline.ts";
+import { beatAt, CONCEPT_NOTE, EASE, PLAN_FACTS, SCENES, sceneAt, sceneByNumber, seg, TOTAL_MS, typedWords, window as win } from "../../src/components/film/timeline.ts";
 
 describe("the scene list", () => {
   it("has the six storyboard beats, numbered 1–6 and contiguous from 0 to the end of the film", () => {
@@ -28,9 +28,11 @@ describe("the scene list", () => {
   it("keeps the storyboard's captions", () => {
     expect(sceneByNumber(1).caption).toBe("Your PC, in your hand.");
     expect(sceneByNumber(2).caption).toMatch(/^Just ask\./);
-    expect(sceneByNumber(2).caption).toMatch(/always shows you first/);
+    // "everyday" is kept for the free, non-AI commands: the butler handles requests in your own words
+    expect(sceneByNumber(2).caption).toMatch(/requests in your own words/);
+    expect(sceneByNumber(2).caption).not.toMatch(/everyday/i);
     expect(sceneByNumber(3).caption).toBe("See your PC. Tap what you see.");
-    expect(sceneByNumber(4).caption).toMatch(/^Point and talk\./);
+    expect(sceneByNumber(4).caption).toMatch(/^Point-and-talk\./);
     expect(sceneByNumber(4).caption).toMatch(/the AI never sees your screen/);
     expect(sceneByNumber(5).caption).toMatch(/^Free to start\./);
     expect(sceneByNumber(6).caption).toBe("Your PC, in your hand.");
@@ -69,11 +71,11 @@ describe("honesty rules (brief §4)", () => {
     expect(sceneByNumber(1).status.tone).toBe("now");
     expect(sceneByNumber(1).status.label).toMatch(/Available now, free/);
     expect(sceneByNumber(2).status.tone).toBe("now");
-    expect(sceneByNumber(2).status.label).toBe("AI butler · Pro and Pro Plus (Free: 10 to try)");
+    expect(sceneByNumber(2).status.label).toBe("AI butler · Available now · Free: 10 to try · more with Pro and Pro Plus");
   });
 
   it("never claims recordings, screenshots or AI vision anywhere in the film's words", () => {
-    const words = [...SCENES.flatMap((s) => [s.caption, s.status.label]), ...PLAN_FACTS.flatMap((p) => [p.status, ...p.lines]), CONCEPT_NOTE].join(" ");
+    const words = [...SCENES.flatMap((s) => [s.caption, s.status.label, ...(s.beats ?? []).map((b) => b.text)]), ...PLAN_FACTS.flatMap((p) => [p.status, ...p.lines.map((l) => l.text)]), CONCEPT_NOTE].join(" ");
     expect(words).not.toMatch(/record(ed|ing)/i);
     expect(words).not.toMatch(/AI (can )?sees?\b(?! your screen)/);
     expect(CONCEPT_NOTE).toBe("Concept preview. Screen view and point-and-talk are in development.");
@@ -81,34 +83,60 @@ describe("honesty rules (brief §4)", () => {
 });
 
 describe("plan facts (brief §5)", () => {
+  const [free, pro, plus] = PLAN_FACTS as [(typeof PLAN_FACTS)[number], (typeof PLAN_FACTS)[number], (typeof PLAN_FACTS)[number]];
+  const texts = (p: (typeof PLAN_FACTS)[number]) => p.lines.map((l) => l.text.replace(/\u00a0/g, " "));
+
   it("shows Free as available and Pro / Pro Plus as coming, with the owner's prices", () => {
-    const [free, pro, plus] = PLAN_FACTS;
     expect(free.name).toBe("Free");
     expect(free.price).toBe("$0");
+    expect(free.per).toBe("");
     expect(free.status).toBe("Available now");
     expect(free.tone).toBe("now");
     expect(pro.name).toBe("Pro");
     expect(pro.price).toBe("$9.99");
-    expect(pro.per).toMatch(/\$99\.99 \/ year/);
+    expect(pro.per).toBe("/ month");
+    expect(pro.sub).toBe("or $99.99 / year");
     expect(pro.status).toBe("Coming at paid launch");
     expect(plus.name).toBe("Pro Plus");
     expect(plus.price).toBe("$24.99");
-    expect(plus.per).toMatch(/\$249\.99 \/ year/);
+    expect(plus.sub).toBe("or $249.99 / year");
     expect(plus.status).toBe("Coming at paid launch");
   });
 
-  it("carries the contents of each plan", () => {
-    const [free, pro, plus] = PLAN_FACTS;
-    expect(free.lines).toContain("1 PC · 2 phones");
-    expect(free.lines).toContain("Screen view: 10 min per 5 h");
-    expect(free.lines).toContain("AI: 10 requests to try, once");
-    expect(pro.lines).toContain("5 PCs · 5 phones");
-    expect(pro.lines).toContain("Screen view: unlimited");
-    expect(pro.lines).toContain("AI: 30 requests per 5 h, 120 a week");
-    expect(pro.lines).toContain("Top-up: 100 requests for $2.99");
-    expect(plus.lines).toContain("AI: 90 requests per 5 h, 300 a week");
-    expect(plus.lines).toContain("Top-up: 100 requests for $2.99");
-    for (const p of PLAN_FACTS) expect(p.lines).toContain("Remote control: all of it");
+  it("carries the contents of each plan, with Screen view marked Coming on every card", () => {
+    expect(texts(free)).toContain("1 PC · 2 phones");
+    expect(texts(free)).toContain("Screen view: 10 min per 5 h");
+    expect(texts(free)).toContain("AI: 10 requests to try, once");
+    expect(texts(pro)).toContain("5 PCs · 5 phones");
+    expect(texts(pro)).toContain("Screen view: unlimited");
+    expect(texts(pro)).toContain("AI: 30 requests per 5 h, up to 120 a week");
+    expect(texts(pro)).toContain("Top-up: 100 requests for $2.99");
+    expect(texts(plus)).toContain("AI: 90 requests per 5 h, up to 300 a week");
+    expect(texts(plus)).toContain("Top-up: 100 requests for $2.99");
+    for (const p of PLAN_FACTS) {
+      expect(texts(p)).toContain("Remote control: all of it");
+      const screen = p.lines.find((l) => l.text.startsWith("Screen view"));
+      expect(screen?.status).toBe("Coming");
+      // the vertical card keeps exactly two lines
+      expect(p.lines.filter((l) => l.key)).toHaveLength(2);
+    }
+  });
+});
+
+describe("beats", () => {
+  it("say what happens in scenes 2–4 without sound, including the spoken words", () => {
+    expect(beatAt(8_500)).toBeNull();
+    expect(beatAt(10_000)?.text).toBe("Put on the next episode and make it full screen");
+    expect(beatAt(10_000)?.speech).toBe(true);
+    expect(beatAt(14_000)?.text).toMatch(/Very good\. Playing the next episode, full screen\./);
+    expect(beatAt(27_000)?.text).toBe("Two fingers to scroll");
+    expect(beatAt(43_000)?.text).toBe("click that");
+    expect(beatAt(44_500)?.text).toMatch(/Clicking Subscribe/);
+    expect(beatAt(56_000)).toBeNull();
+    for (const s of SCENES) for (const b of s.beats ?? []) {
+      expect(b.at).toBeGreaterThanOrEqual(s.start);
+      expect(b.at).toBeLessThan(s.end);
+    }
   });
 });
 

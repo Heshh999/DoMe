@@ -8,7 +8,7 @@ import { useSessionStore } from "../../store/session.ts";
 const GROUPS: Array<Array<{ to: string; title: string; text: string; icon: IconName }>> = [
   [
     { to: "/app/apps", title: "Apps", text: "Open and switch approved apps", icon: "apps" },
-    { to: "/app/assistant", title: "Assistant", text: "Talk, and DoMe works your PC", icon: "ask" },
+    { to: "/app/assistant", title: "Ask", text: "Talk to the AI butler", icon: "ask" },
     { to: "/app/command", title: "Type a command", text: "Commands without any AI", icon: "keyboard" },
   ],
   [
