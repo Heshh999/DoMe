@@ -16,6 +16,7 @@ import { RemotePage } from "../pages/app/RemotePage.tsx";
 import { RoutinesPage } from "../pages/app/RoutinesPage.tsx";
 import { SettingsPage } from "../pages/app/SettingsPage.tsx";
 import { TouchpadPage } from "../pages/app/TouchpadPage.tsx";
+import { DemoPage } from "../pages/public/DemoPage.tsx";
 import { DownloadPage } from "../pages/public/DownloadPage.tsx";
 import { FaqPage } from "../pages/public/FaqPage.tsx";
 import { LandingPage } from "../pages/public/LandingPage.tsx";
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: "/pricing", element: <PricingPage /> },
       { path: "/faq", element: <FaqPage /> },
       { path: "/download", element: <DownloadPage /> },
+      { path: "/demo", element: <DemoPage /> },
       { path: "/support", element: <SupportPage /> },
       { path: "/release-notes", element: <ReleaseNotesPage /> },
       { path: "/privacy", element: <PrivacyPage /> },
