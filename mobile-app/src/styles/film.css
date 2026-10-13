@@ -1,0 +1,241 @@
+/* ──────────────────────────────────────────────────────────────────────────────────────────────
+   The demo film (src/components/film). The stage is drawn on a fixed canvas (1600 × 900 wide, 900 × 1600
+   vertical) and scaled to its frame with one transform, so text, the phone and the PC keep their proportions
+   at every size: on a phone the frame restacks vertically. Colours come from the design tokens; the stage
+   itself is always Navy (it is a `.dome-dark` region), the controls follow the page's theme.
+   ────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.film-root {
+  --film-radius: 1.75rem;
+  /* canvas px → frame px. tan(atan2()) turns the length ratio into a number; Film.tsx also sets it from the
+     measured width, so browsers without the trig functions still scale correctly after the first layout. */
+  --film-scale: tan(atan2(100cqw, 1600px));
+  width: 100%;
+  container-type: inline-size;
+}
+.film-root[data-layout="vertical"] {
+  --film-scale: tan(atan2(100cqw, 900px));
+}
+
+.film-frame {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #001441;
+  border-radius: var(--film-radius);
+  box-shadow: var(--dome-shadow-raised);
+  outline: 0;
+}
+.film-frame[data-layout="vertical"] {
+  aspect-ratio: 9 / 16;
+}
+.film-frame:focus-visible {
+  box-shadow:
+    var(--dome-shadow-raised),
+    0 0 0 3px var(--dome-color-focus);
+}
+
+/* the canvas: scaled so its 1600 (or 900) px fill the frame's width */
+.film-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
+  transform-origin: 0 0;
+  transform: scale(var(--film-scale));
+  font-family: var(--font-sans);
+  color: var(--dome-color-text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* export: the frame fills the viewport, square corners, nothing else on the page */
+.film-export {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #001441;
+}
+.film-export .film-frame {
+  --film-radius: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* the progress bar: a thin track, a thumb that appears on hover and focus */
+.film-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  --fill: 0%;
+  --track: linear-gradient(90deg, var(--dome-color-accent) 0 var(--fill), var(--dome-color-border-strong) var(--fill) 100%);
+}
+.film-progress::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--track);
+}
+.film-progress::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--dome-color-border-strong);
+}
+.film-progress::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--dome-color-accent);
+}
+.film-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--dome-color-accent);
+  border: 3px solid var(--dome-color-bg-elevated);
+  box-shadow: 0 2px 8px rgb(0 20 65 / 0.35);
+  opacity: 0;
+  transition: opacity var(--dome-dur-fast) var(--dome-ease);
+}
+.film-progress::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dome-color-accent);
+  border: 3px solid var(--dome-color-bg-elevated);
+  box-shadow: 0 2px 8px rgb(0 20 65 / 0.35);
+  opacity: 0;
+  transition: opacity var(--dome-dur-fast) var(--dome-ease);
+}
+.film-progress:hover::-webkit-slider-thumb,
+.film-progress:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+}
+.film-progress:hover::-moz-range-thumb,
+.film-progress:focus-visible::-moz-range-thumb {
+  opacity: 1;
+}
+.film-progress:focus-visible {
+  outline: 0;
+}
+.film-progress:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--dome-color-focus);
+}
+
+/* scene chips */
+.film-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 0.9rem 0 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--dome-color-border);
+  background: var(--dome-color-bg-elevated);
+  color: var(--dome-color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color var(--dome-dur-fast) var(--dome-ease),
+    color var(--dome-dur-fast) var(--dome-ease),
+    border-color var(--dome-dur-fast) var(--dome-ease);
+}
+.film-chip:hover {
+  color: var(--dome-color-text);
+  background: var(--dome-color-surface-hover);
+}
+.film-chip[aria-current="true"] {
+  color: var(--dome-color-text);
+  border-color: color-mix(in oklab, var(--dome-color-accent) 45%, transparent);
+  background: color-mix(in oklab, var(--dome-color-accent) 12%, var(--dome-color-bg-elevated));
+}
+.film-chip .film-chip-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--dome-color-surface);
+  color: var(--dome-color-text-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.film-chip[aria-current="true"] .film-chip-n {
+  background: var(--dome-color-primary);
+  color: var(--dome-color-on-primary);
+}
+
+/* the round transport buttons under the frame */
+.film-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 1rem;
+  border-radius: 999px;
+  border: 1px solid var(--dome-color-border-strong);
+  background: var(--dome-color-bg-elevated);
+  color: var(--dome-color-text);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.film-button:hover {
+  background: var(--dome-color-surface-hover);
+}
+.film-button.is-primary {
+  border-color: transparent;
+}
+
+/* the "Play the film" button while the film has not started */
+.film-start {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 5.5rem;
+  height: 5.5rem;
+  margin: -2.75rem 0 0 -2.75rem;
+  padding-left: 0.3rem;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.94);
+  color: #001441;
+  box-shadow:
+    0 0 0 0.75rem rgb(255 255 255 / 0.14),
+    0 24px 60px -20px rgb(0 0 0 / 0.8);
+}
+.film-start:hover {
+  background: #ffffff;
+}
+.film-start:focus-visible {
+  outline: 3px solid #86abff;
+  outline-offset: 4px;
+}
+
+/* the "Watch again" overlay at the end */
+.film-replay {
+  position: absolute;
+  left: 50%;
+  bottom: 6%;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+/* the storyboard (reduced motion): no animation, one still per scene */
+.film-storyboard .film-canvas * {
+  animation: none !important;
+}

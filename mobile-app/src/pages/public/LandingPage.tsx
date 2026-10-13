@@ -2,6 +2,8 @@
 import { Link } from "react-router";
 
 import { Wordmark } from "../../components/brand.tsx";
+import { Film } from "../../components/film/Film.tsx";
+import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 
 const STEPS = [
@@ -10,13 +12,14 @@ const STEPS = [
   { title: "Sit back", text: "Play, pause, skip and set the volume from the couch, or from anywhere with internet." },
 ];
 
-const CAPABILITIES: Array<{ icon: IconName; title: string; text: string }> = [
+const CAPABILITIES: Array<{ icon: IconName; title: string; text: string; status?: string }> = [
   { icon: "youtube", title: "YouTube, the right tab", text: "Play, pause, skip and seek in the PC’s browser, even while another window has focus." },
   { icon: "volume", title: "Media and volume", text: "Pause or skip whatever Windows is playing, and set the exact system volume." },
   { icon: "apps", title: "Your approved apps", text: "Open, bring to front, minimise or close the apps you approved on the PC. Nothing else." },
   { icon: "lock", title: "Lock and power", text: "Lock Windows in one tap. Sleep, restart and shut down always ask you first." },
   { icon: "ask", title: "Just ask", text: "Say or type “skip this video” or “set the volume to 35”. Everyday requests need no AI." },
   { icon: "check", title: "Honest results", text: "Every control shows what the PC actually did. “Sent” is never shown as “done”." },
+  { icon: "pc", title: "Screen view", text: "See your PC’s screen on your phone and tap what you see. In development: Free will get 10 minutes per 5 hours, Pro and Pro Plus unlimited.", status: "Coming" },
 ];
 
 const TRUST: Array<{ title: string; text: React.ReactNode }> = [
@@ -50,10 +53,10 @@ function Orbit() {
   );
 }
 
-/** A picture of the app on a phone (always the dark Midnight look). Decorative: the real app is one tap away. */
+/** A picture of the app on a phone (always the dark Midnight look), described in one sentence for screen readers. */
 function PhonePicture() {
   return (
-    <div aria-hidden="true" className="dome-dark relative mx-auto w-[288px] select-none sm:w-[304px]">
+    <div role="img" aria-label="The DoMe app on an iPhone: Living Room PC online, a YouTube video playing with pause and skip controls, the Windows volume at 40 percent, and quick actions for next video, back 10 seconds, lock and sleep." className="dome-dark relative mx-auto w-[288px] select-none sm:w-[304px]">
       <div className="absolute -inset-x-16 -inset-y-10 -z-10 bg-[radial-gradient(closest-side,rgb(1_66_251/0.4),transparent)]" />
       <div className="rounded-[54px] bg-[linear-gradient(160deg,#25335c,#0a1230_45%,#1b2a52)] p-[9px] shadow-[0_40px_60px_-30px_rgb(0_10_40/0.55),0_0_0_1px_rgb(255_255_255/0.08)_inset]">
         <div className="relative h-[600px] overflow-hidden rounded-[46px] bg-navy sm:h-[624px]">
@@ -148,13 +151,13 @@ function PhonePicture() {
           </div>
         </div>
       </div>
-      <div className="absolute -left-36 top-[58%] hidden items-center gap-2.5 rounded-2xl border border-white/10 bg-[rgb(11_33_86/0.82)] px-3.5 py-2.5 text-[13px] shadow-[0_20px_40px_-16px_rgb(0_0_0/0.6)] backdrop-blur-md lg:flex">
+      <div className="absolute -left-48 bottom-28 hidden items-center gap-2.5 rounded-2xl border border-white/10 bg-[rgb(11_33_86/0.82)] px-3.5 py-2.5 text-[13px] shadow-[0_20px_40px_-16px_rgb(0_0_0/0.6)] backdrop-blur-md lg:flex">
         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-success/20 text-success">
           <Icon name="check" size={14} strokeWidth={2.5} />
         </span>
         <span>
           <span className="block font-semibold">Volume set to 40%</span>
-          <span className="block text-[11px] text-text-muted">Done on Living Room PC</span>
+          <span className="block text-[12px] text-text-muted">Done on Living Room PC</span>
         </span>
       </div>
     </div>
@@ -166,9 +169,9 @@ const SECTION = "mx-auto max-w-6xl px-5 lg:px-8";
 export function LandingPage() {
   return (
     <div>
-      <section className="relative overflow-hidden">
+      <section className="relative overflow-x-clip">
         <Orbit />
-        <div className={`${SECTION} relative grid items-center gap-12 pb-6 pt-14 sm:pb-16 sm:pt-20 lg:grid-cols-[1.1fr_1fr] lg:gap-10 lg:pb-28 lg:pt-24`}>
+        <div className={`${SECTION} relative grid items-center gap-12 pb-20 pt-14 sm:pb-16 sm:pt-20 lg:grid-cols-[1.1fr_1fr] lg:gap-10 lg:pb-12 lg:pt-24`}>
           <div className="animate-rise text-center lg:text-left">
             <p className="inline-flex items-center gap-2 rounded-full border border-border bg-bg-elevated px-3 py-1.5 text-xs font-semibold text-text-muted shadow-[var(--dome-shadow-card)]">
               <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-coral" />
@@ -178,7 +181,7 @@ export function LandingPage() {
               Your PC,
               <span className="block">in your hand.</span>
             </h1>
-            <p className="mx-auto mt-6 max-w-[34rem] text-lg text-text-muted sm:text-xl lg:mx-0">Your iPhone becomes a simple, secure remote for your own Windows PC: YouTube, media, volume and your apps, at home or away. Free to use, no credit card.</p>
+            <p className="mx-auto mt-6 max-w-[34rem] text-lg text-text-muted sm:text-xl lg:mx-0">Your iPhone becomes a simple, secure remote for your Windows PC. Free, no credit card.</p>
             <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center gap-2 rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
                 Open the app
@@ -193,6 +196,25 @@ export function LandingPage() {
           </div>
           <PhonePicture />
         </div>
+      </section>
+
+      <section aria-labelledby="see" className={`${SECTION} pt-[calc(var(--dome-section)*0.55)]`}>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="dome-eyebrow">See it in action</p>
+            <h2 id="see" className="mt-3 max-w-xl text-h2 font-bold">
+              A minute on the couch with DoMe.
+            </h2>
+          </div>
+          <Link to="/demo" className="tap dome-press inline-flex w-fit items-center gap-1.5 rounded-full border border-border-strong bg-bg-elevated px-5 text-[15px] font-semibold hover:bg-surface">
+            Open the full demo
+            <Icon name="arrow" size={16} />
+          </Link>
+        </div>
+        <div className="mt-8">
+          <Film autoplay />
+        </div>
+        <p className="mt-4 text-sm text-text-muted">{CONCEPT_NOTE}</p>
       </section>
 
       <section aria-labelledby="how" className={`${SECTION} py-[var(--dome-section)]`}>
@@ -217,17 +239,40 @@ export function LandingPage() {
           Everything within reach.
         </h2>
         <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {CAPABILITIES.map((c) => (
-            <li key={c.title} className="dome-card flex gap-4 p-5 sm:block sm:p-6">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
-                <Icon name={c.icon} size={22} />
-              </span>
-              <div className="min-w-0">
-                <h3 className="text-lg font-semibold tracking-[-0.01em] sm:mt-5">{c.title}</h3>
-                <p className="mt-1 text-[15px] text-text-muted sm:mt-1.5">{c.text}</p>
-              </div>
-            </li>
-          ))}
+          {CAPABILITIES.map((c) =>
+            c.status ? (
+              // the one that is still being built: a full-width row with its status chip, never dressed as available
+              <li key={c.title} className="dome-card flex gap-4 p-5 sm:col-span-2 sm:items-center sm:p-6 lg:col-span-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+                  <Icon name={c.icon} size={22} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="flex flex-wrap items-center gap-2 text-lg font-semibold tracking-[-0.01em]">
+                    {c.title}
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-0.5 text-xs font-semibold text-text-muted">
+                      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-coral" />
+                      {c.status}
+                    </span>
+                  </h3>
+                  <p className="mt-1 max-w-3xl text-[15px] text-text-muted">{c.text}</p>
+                </div>
+                <Link to="/demo" className="tap dome-press hidden shrink-0 items-center gap-1 rounded-full border border-border-strong px-4 text-sm font-semibold hover:bg-surface sm:inline-flex">
+                  See the preview
+                  <Icon name="chevron" size={14} />
+                </Link>
+              </li>
+            ) : (
+              <li key={c.title} className="dome-card flex gap-4 p-5 sm:block sm:p-6">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+                  <Icon name={c.icon} size={22} />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold tracking-[-0.01em] sm:mt-5">{c.title}</h3>
+                  <p className="mt-1 text-[15px] text-text-muted sm:mt-1.5">{c.text}</p>
+                </div>
+              </li>
+            ),
+          )}
         </ul>
       </section>
 
@@ -258,21 +303,21 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section aria-labelledby="free" className="px-3 pb-16 sm:px-5 lg:px-8 lg:pb-24">
-        <div className="dome-dark relative mx-auto max-w-6xl overflow-hidden rounded-hero bg-navy px-6 py-16 text-center shadow-[0_40px_80px_-40px_rgb(0_20_65/0.55)] ring-1 ring-white/10 sm:px-12 lg:py-24">
+      <section aria-labelledby="free" className="px-3 pb-16 [--closing-fill:var(--dome-navy)] [--closing-glow:0_40px_80px_-40px_rgb(0_20_65/0.55)] sm:px-5 lg:px-8 lg:pb-24 dark:[--closing-fill:#0b2156] dark:[--closing-glow:0_0_0_1px_rgb(255_255_255/0.06),0_40px_120px_-30px_rgb(1_66_251/0.6)]">
+        <div className="dome-dark relative mx-auto max-w-6xl overflow-hidden rounded-hero bg-[var(--closing-fill)] px-6 py-16 text-center shadow-[var(--closing-glow)] ring-1 ring-white/12 sm:px-12 lg:py-24">
           <div aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(50rem_22rem_at_50%_-4rem,rgb(1_66_251/0.55),transparent_70%)]" />
           <div className="relative">
             <Wordmark className="mx-auto h-[72px] w-auto sm:h-[88px]" />
             <h2 id="free" className="mx-auto mt-10 max-w-3xl text-h2 font-bold">
-              Free today. Pro when it is worth it.
+              Free today. Pro and Pro Plus when they’re worth it.
             </h2>
-            <p className="mx-auto mt-4 max-w-xl text-lg text-text-muted">Core remote control stays free. Pro adds more PCs, custom layouts and routines when those features ship.</p>
+            <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">Remote control stays free, with 1 PC and 2 phones. Pro ($9.99 a month) and Pro Plus ($24.99 a month) add up to 5 PCs and 5 phones, unlimited Screen view when it ships, and more AI butler time. Both arrive at paid launch.</p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
                 Open the app
               </Link>
               <Link to="/pricing" className="tap dome-press inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-border-strong px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
-                Compare Free and Pro
+                Compare Free, Pro and Pro Plus
                 <Icon name="chevron" size={16} />
               </Link>
             </div>
