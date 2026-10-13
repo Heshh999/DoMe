@@ -1,6 +1,7 @@
 /**
  * The home page's film section and the content the rollout brief asked for around it: the honest concept line,
- * the link to /demo, Screen view marked "Coming", and a closing teaser that names Free, Pro and Pro Plus.
+ * the link to /demo, Screen view marked "Coming", and a closing teaser that names Free, Pro and Pro Plus and links to
+ * the pricing page as "Compare plans".
  */
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -59,6 +60,7 @@ describe("LandingPage", () => {
     expect(card).toHaveTextContent(/1 PC and 2 phones/);
     expect(card).toHaveTextContent(/5 PCs and 5 phones/);
     expect(card).toHaveTextContent(/arrive at paid launch/);
-    expect(within(card).getByRole("link", { name: /Compare Free, Pro and Pro Plus/ })).toHaveAttribute("href", "/pricing");
+    expect(card).toHaveTextContent(/Pro Plus/);
+    expect(within(card).getByRole("link", { name: /^Compare plans$/ })).toHaveAttribute("href", "/pricing");
   });
 });

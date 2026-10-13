@@ -2,6 +2,48 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-13 — Design A "Midnight Studio" rollout, demo film, Free / Pro / Pro Plus content
+
+Three builders worked in parallel worktrees from `docs`-free briefs (app, public website, film);
+the integrator merged them (one merge commit each, no conflicts: disjoint files) and reconciled copy.
+
+- **App** (`mobile-app/src/styles.css`, `components/ui.tsx`, `icons.tsx`, every `pages/app/**`): the
+  design system's component classes and primitives (wells, segments, list cards, key-value rows,
+  chips, check rows, back links), every app screen restyled in both themes with every behaviour,
+  accessible name, test id and safety confirmation kept; critic fixes (opaque tab bar/dock with a
+  no-backdrop-filter fallback, three-column Ask dock, tinted icon wells so the one solid-blue
+  control per screen is the primary action, drawn icons instead of glyphs); the `<dialog>` sheet now
+  sits at the bottom of a phone screen (pre-existing bug). The dev-only design preview covers every
+  app route plus `?offline=1` and `?confirm=1`.
+- **Website** (`pages/public/**`, `app/PublicLayout.tsx`, `styles/public.css`, `content/plans.ts`,
+  `content/faq.tsx`, `content/nav.ts`, `lib/pricing.ts`): Free / Pro / Pro Plus as static content
+  (Free $0 "Available now"; Pro $9.99 / month or $99.99 / year and Pro Plus $24.99 / $249.99 with the
+  status "Coming at paid launch"; 1 PC + 2 phones vs 5 + 5 read from the plan contract; Screen view
+  10 min per 5-hour window vs unlimited, marked "Coming"; AI butler one-time taste of 10 vs 30 / 120
+  vs 90 / 300 per 5-hour window / week; $2.99 top-up for 100 requests, never automatic); pricing page
+  with three cards and a grouped comparison, FAQ by topic, Download / Support / Release notes / legal /
+  404 restyled (legal body text byte-identical), Demo link first in the nav.
+- **Film** (`components/film/**`, `styles/film.css`, `pages/public/DemoPage.tsx`, `/demo`,
+  `scripts/export-film.mjs`): a 66 s SVG + CSS film on one deterministic clock (every frame a pure
+  function of t) in six scenes with honest chips ("Screen view · Coming", "Point and talk · Planned",
+  "Pro and Pro Plus arrive at paid launch"); controls, keyboard, captions in an aria-live region,
+  autoplay only when in view, a storyboard of stills under `prefers-reduced-motion`, a vertical 9:16
+  restack; the home page gets a "See it in action" section and a three-plan closing teaser
+  ("Compare plans"). The export script steps the clock frame by frame through Playwright and ffmpeg
+  (1920×1080 and 1080×1920 MP4 + WebM, poster); exports are never committed.
+- **Integrator reconciliation**: the in-app Billing page and ProExplanation now read the paid plans'
+  prices and the "coming at paid launch" status from `content/plans.ts` (they said "planned at
+  $5.99"), with a new `test/components/BillingPage.test.tsx` and tightened upgrade-copy guards.
+  `shared/protocol/plans.json → pricing_defaults` (599 / 4999 cents) and `docs/BILLING.md`,
+  `docs/COST_MODEL.md`, `docs/PRODUCT_AND_PLANS.md` still carry the old experiment price: they belong
+  to the metering task that builds the real plans.
+- Runs (Linux, merged tree): mobile-app `pnpm typecheck`, `pnpm lint`, `pnpm test` (66 files,
+  1198 tests passed), `pnpm build` (check-bundle clean); brand `pnpm check`. The film re-exported from
+  the merged build. **Evidence tag: component-tested** for the app and website; **looked at** (phone and
+  desktop screenshots, both themes, and extracted film frames); **not yet verified** on a real iPhone.
+- Next: the real Free / Pro / Pro Plus metering (5-hour and weekly AI windows, top-ups, Stripe prices,
+  `plans.json` limits), then Screen view.
+
 ## 2026-10-11 — Optional AI voice butler, step 1 (Phase E, behind consent and allowances)
 
 The owner asked for a Jarvis-like butler they talk to; they chose a formal British butler, Claude

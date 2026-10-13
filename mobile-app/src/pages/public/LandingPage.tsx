@@ -317,7 +317,7 @@ export function LandingPage() {
                 Open the app
               </Link>
               <Link to="/pricing" className="tap dome-press inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-border-strong px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
-                Compare Free, Pro and Pro Plus
+                Compare plans
                 <Icon name="chevron" size={16} />
               </Link>
             </div>

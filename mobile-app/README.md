@@ -1,7 +1,8 @@
 # mobile-app — DoMe iPhone-first PWA
 
-The customer-facing web app: public website (landing, pricing, FAQ, download, support, release
-notes/known issues, privacy/terms drafts) plus the installable remote (`/app/*`). React 19,
+The customer-facing web app: public website (landing with the demo film, `/demo`, pricing, FAQ,
+download, support, release notes/known issues, privacy/terms drafts) plus the installable remote
+(`/app/*`). React 19,
 TypeScript 5.9, Vite 7, Tailwind CSS 4, React Router 7, zustand, idb, vite-plugin-pwa, Vitest +
 Testing Library. Depends on the shared protocol library `@dome/protocol` (`link:../shared/ts`),
 protocol **1.1** (manual touchpad/keyboard, spec §10A).
@@ -60,17 +61,24 @@ src/
                  brandPaths.ts = the brand/*.svg paths), ThemeSwitch, Sheet, ConfirmationModal, CommandOutcome,
                  VolumeSlider, PcSwitcher, PcStatus, OfflineScreen, TouchpadSurface, KeyboardPanel, GestureGuide,
                  NowPlaying, FailureLinks, ProExplanation, TalkButton, Conversation, AssistantSettingsCard,
-                 AssistantConsentSheet, VoiceNoticeSheet
+                 AssistantConsentSheet, VoiceNoticeSheet; film/ (the 66 s demo film: Film, Stage, Pc, Phone,
+                 timeline, script, layout, useFilmClock, filmIcons — every frame a pure function of the clock)
   dev/           preview.ts — the development-only design preview (never in a production bundle)
   styles.css     the design system: colour roles for light and dark, surfaces, shadows, radii, type, motion
+  styles/        public.css (website pages, every rule scoped to .dome-public), film.css (the demo film)
   pages/app/     Dashboard, Remote, Touchpad, Command, Assistant (Ask), Apps, Health, Routines (Pro preview),
                  Layouts (Pro preview), Devices, Pair, Settings, Billing, Link, More
-  pages/public/  Landing, Pricing, FAQ, Download, Support (+ ticket form), ReleaseNotes, Privacy (DRAFT),
-                 Terms (DRAFT), NotFound
-  content/       release-notes.json (public release history + known issues)
-test/            vitest (jsdom, fake-indexeddb, fake sockets/timers); test/components for UI,
+  pages/public/  Landing, Demo (the film with scene/time/layout/export flags), Pricing, FAQ, Download, Support
+                 (+ ticket form), ReleaseNotes, Privacy (DRAFT), Terms (DRAFT), NotFound, publicIcons
+  content/       release-notes.json (public release history + known issues), plans.ts (Free / Pro / Pro Plus
+                 content: prices, allowances, status labels — read by the pricing page, the FAQ, the in-app
+                 Billing page and ProExplanation so they never disagree), faq.tsx, nav.ts
+test/            vitest (jsdom, fake-indexeddb, fake sockets/timers); test/components for app UI, test/public
+                 for the website, test/film for the demo film,
                  test/helpers/harness.ts (fake socket + Runtime factory shared by component tests)
-scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key material, no design preview in dist/)
+scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key material, no design preview in dist/),
+                 export-film.mjs (the demo film as 1080p + vertical MP4/WebM and a poster, Playwright + ffmpeg;
+                 output goes to a temp folder or --out, never committed)
 ```
 
 ## Behaviour summary

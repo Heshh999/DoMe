@@ -23,7 +23,8 @@ import { useLiveStore } from "../../src/store/live.ts";
 import { CONTROLLER, freshStorage, installDialogPolyfill, makeRuntime, OFFICE_PC, PC, signedIn, TS, type RuntimeHarness } from "../helpers/harness.ts";
 
 installDialogPolyfill();
-const UPGRADE = /upgrade|subscribe|DoMe Pro|checkout|\$5\.99|per month/i;
+// the website's prices ($9.99 / $24.99) and the old planned one ($5.99) must never show up on a Free flow
+const UPGRADE = /upgrade|subscribe|DoMe Pro|checkout|\$5\.99|\$9\.99|\$24\.99|per month|\/ month/i;
 
 let h: RuntimeHarness;
 
@@ -81,6 +82,11 @@ describe("Upgrade experience (spec §12)", () => {
     expect(exp).toHaveTextContent(/One-tap routines is part of DoMe Pro/);
     expect(exp).toHaveTextContent(/stays free/);
     expect(exp.textContent).not.toMatch(/connection|reconnect|compatib/i);
+    // the explanation agrees with the website's plan content: Pro's price, Pro Plus, coming at paid launch, nothing to buy
+    expect(exp).toHaveTextContent(/nothing to buy yet/);
+    expect(exp).toHaveTextContent(/DoMe Pro \(\$9\.99 \/ month or \$99\.99 \/ year\) and DoMe Pro Plus are coming at paid launch/);
+    expect(exp.textContent).not.toMatch(/5\.99|planned pricing|not final/);
+    expect(within(exp).getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/app/billing");
     await userEvent.click(within(exp).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByTestId("pro-explanation")).toBeNull();
     r.unmount();

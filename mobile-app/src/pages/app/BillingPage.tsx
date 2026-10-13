@@ -1,11 +1,13 @@
 /**
- * Billing status without checkout (Phase C adds Stripe Checkout/Portal). Everything shown comes
- * from the backend's session document; "pending" is only displayed when the backend says so.
+ * Billing status without checkout (Phase C adds Stripe Checkout/Portal). Everything shown about the
+ * customer's own plan comes from the backend's session document; "pending" is only displayed when the
+ * backend says so. The coming paid plans and their prices come from the website's plan content
+ * (src/content/plans.ts), so this page and the pricing page never disagree.
  */
 import { PLANS } from "@dome/protocol";
 
 import { Card, IconWell, KeyValue, Notice, PageHeader, Pill, Steps, type Tone } from "../../components/ui.tsx";
-import { money } from "../../lib/format.ts";
+import { COMING_AT_PAID_LAUNCH, planById, usd, type PlanContent } from "../../content/plans.ts";
 import { recoverySteps } from "../../lib/labels.ts";
 import { useSessionStore } from "../../store/session.ts";
 
@@ -18,13 +20,19 @@ const STATE_COPY: Record<string, { label: string; tone: Tone; text: string }> = 
   expired: { label: "Expired", tone: "neutral", text: "Your Pro subscription ended. You are on DoMe Free; your PCs, phones and settings were kept." },
 };
 
+/** "$9.99 / month or $99.99 / year", written the way the website's pricing page writes it; each price stays on one line. */
+function priceLine(plan: PlanContent): string {
+  return plan.price ? `${usd(plan.price.monthlyCents)}\u00a0/\u00a0month or ${usd(plan.price.annualCents)}\u00a0/\u00a0year` : `${usd(0)} forever`;
+}
+
 export function BillingPage() {
   const session = useSessionStore((s) => s.session);
   if (!session) return null;
   const plan = PLANS.plans[session.plan];
   const state = session.entitlement_state ?? (session.plan === "pro" ? "active" : "free");
   const copy = STATE_COPY[state] ?? STATE_COPY.free!;
-  const pricing = PLANS.pricing_defaults;
+  const pro = planById("pro");
+  const proPlus = planById("pro_plus");
   return (
     <div className="space-y-4">
       <PageHeader title="Billing" />
@@ -58,7 +66,7 @@ export function BillingPage() {
       </Card>
       <Notice tone="info" title="Upgrading is not available yet">
         <p>
-          DoMe Pro is planned at {money(pricing.monthly_cents, pricing.currency)} per month or {money(pricing.annual_cents, pricing.currency)} per year (planned pricing, not final). Checkout, invoices and the payment portal arrive with the paid launch; nothing can be charged from this app today.
+          {pro.displayName} will be {priceLine(pro)} and {proPlus.displayName} {priceLine(proPlus)}; both are {COMING_AT_PAID_LAUNCH.toLowerCase()}. Checkout, invoices and the payment portal arrive with them; nothing can be bought or charged from this app today.
         </p>
       </Notice>
       <p className="px-1 text-xs text-text-faint">Security controls — revoking phones, unlinking PCs, emergency stop on the PC — are included on every plan and are never paywalled.</p>
