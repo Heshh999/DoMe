@@ -215,7 +215,7 @@ misconfiguration stops the process with a plain error.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DOME_ENV` | `development` | `development` / `staging` / `production` / `test`. Production requires https origins and a real session secret and enables HSTS. |
-| `DOME_PUBLIC_ORIGIN` | — (required) | Exact origin the PWA is served from. Used for Origin checks, cookies, QR/link URLs and as the OIDC redirect base. |
+| `DOME_PUBLIC_ORIGIN` | — (required) | Exact origin the PWA is served from (production `https://domeremote.com`, staging `https://staging.domeremote.com`; `deploy/README.md` "Domain"). Used for Origin checks, cookies, QR/link URLs and as the OIDC redirect base. Outside `production` every response also carries `X-Robots-Tag: noindex, nofollow`. |
 | `DOME_EXTRA_ORIGINS` | `` | Comma-separated additional exact origins (e.g. the Vite dev server). |
 | `DOME_API_BIND` | `127.0.0.1:8000` | Listen address. |
 | `DOME_TRUSTED_PROXIES` | `` (development/test) | Comma-separated IP addresses or CIDR networks of the reverse proxy whose `X-Forwarded-For` / `X-Forwarded-Proto` are honoured, or `none` when clients reach the process directly. **Required in `staging` and `production`**; `*` is refused. See "Client addresses behind a proxy". |

@@ -1,0 +1,12 @@
+# DoMe Remote — https://domeremote.com
+# The public pages may be indexed. The signed-in app, the device links and the API may not.
+# Non-production environments also send "X-Robots-Tag: noindex" on every response (cloud-api).
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /link
+Disallow: /pair
+Disallow: /v1/
+Disallow: /ws/
+
+Sitemap: https://domeremote.com/sitemap.xml

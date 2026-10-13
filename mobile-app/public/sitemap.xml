@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The public pages of https://domeremote.com (src/app/router.tsx, PublicLayout routes). A test keeps this
+     list and the router in step. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://domeremote.com/</loc></url>
+  <url><loc>https://domeremote.com/demo</loc></url>
+  <url><loc>https://domeremote.com/pricing</loc></url>
+  <url><loc>https://domeremote.com/faq</loc></url>
+  <url><loc>https://domeremote.com/download</loc></url>
+  <url><loc>https://domeremote.com/support</loc></url>
+  <url><loc>https://domeremote.com/release-notes</loc></url>
+  <url><loc>https://domeremote.com/privacy</loc></url>
+  <url><loc>https://domeremote.com/terms</loc></url>
+</urlset>

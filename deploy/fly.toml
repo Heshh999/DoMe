@@ -48,7 +48,10 @@ swap_size_mb = 256
 # and take precedence over [env] values of the same name.
 [env]
   DOME_ENV = "staging"                                      # PLACEHOLDER: "production" for prod
-  DOME_PUBLIC_ORIGIN = "https://dome-api-staging.fly.dev"   # PLACEHOLDER: the exact https origin the PWA is served from
+  # The exact https origin the PWA is served from (deploy/README.md "Domain"): production
+  # "https://domeremote.com"; staging "https://staging.domeremote.com" once its DNS record exists,
+  # the fly.dev address until then. Never domeremote.app or www: those only redirect.
+  DOME_PUBLIC_ORIGIN = "https://dome-api-staging.fly.dev"   # PLACEHOLDER: see the three lines above
   DOME_API_BIND = "0.0.0.0:8080"                            # must match internal_port and the image HEALTHCHECK
   DOME_LOG_LEVEL = "INFO"
   DOME_STATIC_DIR = "/app/static"

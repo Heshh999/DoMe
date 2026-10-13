@@ -25,10 +25,13 @@ def build_csp(issuer_origin: str) -> str:
 
 
 class SecurityHeadersMiddleware:
-    def __init__(self, app: ASGIApp, *, csp: str, hsts: bool) -> None:
+    def __init__(self, app: ASGIApp, *, csp: str, hsts: bool, noindex: bool = False) -> None:
         self.app = app
         self.csp = csp
         self.hsts = hsts
+        # Outside production every response says "do not index", so a staging site never shows up in
+        # search results next to the real one (robots.txt is the same file in every environment).
+        self.noindex = noindex
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -54,6 +57,8 @@ class SecurityHeadersMiddleware:
                 }
                 if self.hsts:
                     extra[b"strict-transport-security"] = b"max-age=31536000; includeSubDomains"
+                if self.noindex:
+                    extra[b"x-robots-tag"] = b"noindex, nofollow"
                 if private:
                     extra[b"cache-control"] = b"no-store"
                     extra[b"pragma"] = b"no-cache"

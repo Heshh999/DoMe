@@ -117,8 +117,10 @@ async def test_security_headers_and_no_store(env: Env) -> None:
     assert r.headers["referrer-policy"] == "same-origin" and r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["cache-control"] == "no-store"
     assert "strict-transport-security" not in r.headers  # not production
+    assert r.headers["x-robots-tag"] == "noindex, nofollow"  # not production: never in search results
     r = await env.http.get("/")
     assert r.status_code == 200 and "content-security-policy" in r.headers
+    assert r.headers["x-robots-tag"] == "noindex, nofollow"
     r = await env.http.get("/v1/does-not-exist")
     assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
     r = await env.http.put("/v1/plans")

@@ -13,6 +13,17 @@
     <meta name="apple-mobile-web-app-title" content="DoMe" />
     <meta name="description" content="DoMe Remote — your iPhone becomes a simple, secure remote for your own Windows PC." />
     <meta name="referrer" content="same-origin" />
+    <!-- Link previews (iMessage, WhatsApp, social sites): crawlers need absolute URLs on the one canonical
+         origin, https://domeremote.com (domeremote.app redirects there; see deploy/README.md "Domain"). -->
+    <meta property="og:site_name" content="DoMe Remote" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="DoMe Remote — your PC, in your hand" />
+    <meta property="og:description" content="Your iPhone becomes a simple, secure remote for your own Windows PC. Free to start." />
+    <meta property="og:image" content="https://domeremote.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The DoMe Remote logo on navy: Your PC, in your hand." />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/icons/favicon-32.png" type="image/png" sizes="32x32" />
     <link rel="icon" href="/icons/favicon-16.png" type="image/png" sizes="16x16" />

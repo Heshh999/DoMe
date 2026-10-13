@@ -18,6 +18,8 @@ describe("manifest.json (spec §9/§15, design)", () => {
     // and reads only YouTube tabs' URLs, which the host permission already covers (DECISIONS D27).
     expect([...(manifest.permissions as string[])].sort()).toEqual(["alarms", "nativeMessaging", "scripting", "storage"]);
     expect(manifest.host_permissions).toEqual(["https://www.youtube.com/*"]);
+    // A plain link shown on the extension's store and details pages; it grants nothing.
+    expect(manifest.homepage_url).toBe("https://domeremote.com");
     expect(manifest.optional_permissions).toBeUndefined();
     expect(manifest.optional_host_permissions).toBeUndefined();
     for (const forbidden of ["tabs", "history", "cookies", "debugger", "webRequest", "<all_urls>"]) {

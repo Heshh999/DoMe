@@ -95,8 +95,9 @@ of the first deployment.
 3. **Secrets.** Set the variables from §1 as Fly secrets; mount or write the entitlement PEM to the
    path in `DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH` (a Fly secret written to a file by the entry point
    is acceptable; the file must be 0600).
-4. **Identity provider.** Register `https://<DOME_PUBLIC_ORIGIN>/v1/auth/callback` as the redirect
-   URI at Auth0/Keycloak; set `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`, `DOME_OIDC_CLIENT_SECRET`.
+4. **Identity provider.** Register `<DOME_PUBLIC_ORIGIN>/v1/auth/callback` as the redirect URI at
+   Auth0/Keycloak (production: `https://domeremote.com/v1/auth/callback`; staging:
+   `https://staging.domeremote.com/v1/auth/callback`; see `deploy/README.md` "Domain"); set `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`, `DOME_OIDC_CLIENT_SECRET`.
    `tools/dev-idp` is never used here. Only `tools/dev-idp` has been exercised so far
    (`docs/HANDOFF.md` §4).
 5. **Trusted proxies.** Before the first start with `DOME_ENV=staging|production`, find the address

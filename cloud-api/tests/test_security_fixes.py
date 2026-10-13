@@ -14,7 +14,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 
 from dome_api.plans import plan_for
-from dome_api.security.headers import loggable_path
+from dome_api.security.headers import SecurityHeadersMiddleware, loggable_path
 from dome_api.security.proxy import TrustedProxyMiddleware
 from dome_api.security.ratelimit import SlidingWindowLimiter, TokenBucketLimiter
 from dome_api.settings import Settings
@@ -256,6 +256,30 @@ def test_request_log_masks_link_codes() -> None:
         loggable_path("/v1/pcs/0f3f6b1a-0000-4000-8000-000000000000") == "/v1/pcs/0f3f6b1a-0000-4000-8000-000000000000"
     )
     assert len(loggable_path("/x" * 1000)) == 256
+
+
+async def test_only_production_responses_are_indexable() -> None:
+    async def page(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def headers_for(*, production: bool) -> dict[bytes, bytes]:
+        sent: list[Any] = []
+
+        async def send(message: Any) -> None:
+            sent.append(message)
+
+        middleware = SecurityHeadersMiddleware(page, csp="default-src 'self'", hsts=production, noindex=not production)
+        await middleware({"type": "http", "path": "/pricing"}, receive, send)
+        return dict(sent[0]["headers"])
+
+    staging = await headers_for(production=False)
+    assert staging[b"x-robots-tag"] == b"noindex, nofollow" and b"strict-transport-security" not in staging
+    production = await headers_for(production=True)
+    assert b"x-robots-tag" not in production and b"strict-transport-security" in production
 
 
 # ----- finding 6: command ids are looked up within the account only --------------------------------------

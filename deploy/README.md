@@ -89,7 +89,7 @@ Nothing is shared between them; a secret that exists in two environments is a mi
 | Where | developer machine (Makefile) or Compose | Fly app `dome-api-staging` (placeholder name) | Fly app `dome-api-prod` (placeholder name) |
 | `DOME_ENV` | `development` | `staging` | `production` |
 | Identity provider | `tools/dev-idp` (never deployed) | the real provider, a **separate** application/client ("DoMe staging") | the real provider, production client |
-| Origin | `http://localhost:5173` (Vite) or `:8080` | `https://<app>.fly.dev`, later `https://staging.<domain>` | `https://<domain>` |
+| Origin | `http://localhost:5173` (Vite) or `:8080` | `https://<app>.fly.dev`, later `https://staging.domeremote.com` | `https://domeremote.com` |
 | TLS / HSTS | plain http | Fly-terminated TLS | Fly-terminated TLS; `production` enables HSTS |
 | `DOME_TRUSTED_PROXIES` | unset (TCP peer is the client) | **required**: the Fly proxy's source range, verified on the machine | same, verified separately |
 | Entitlement key | generated locally (`make`/entrypoint) | generated once, stored only in Fly secrets | generated once, stored only in Fly secrets; never the staging key |
@@ -103,9 +103,10 @@ explicit `DOME_TRUSTED_PROXIES`; outside production every REST response is also 
 
 ## What the founder must set up (blocked on accounts, not on code)
 
-1. **Domain.** A domain for the product origin (for example `app.<domain>` for the PWA/API and the
-   same host for `wss://`), DNS at a registrar, and `fly certs add <host>` once the app exists.
-   Until then the `*.fly.dev` origin works for staging.
+1. **Domain — done for the registration; DNS waits for the Fly apps.** The founder registered
+   `domeremote.com` and `domeremote.app` on 2026-10-13 with Cloudflare Registrar, in the founder's own
+   Cloudflare account (auto-renew on). See "Domain" below for how they are used; until the DNS records
+   exist the `*.fly.dev` origin works for staging.
 2. **OpenID Connect provider** (ADR-0001 D3: Auth0 or Keycloak; any compliant issuer). Create one
    application per environment with: Authorization Code flow with PKCE, client secret enabled
    (the backend is a confidential client), allowed callback URL exactly
@@ -128,6 +129,44 @@ explicit `DOME_TRUSTED_PROXIES`; outside production every REST response is also 
    test mode first, live mode only after a deliberate go-live.
 6. **Windows code signing, Chrome Web Store, support mailbox** are release prerequisites outside
    this directory (`docs/SECURITY.md` T12, `docs/HANDOFF.md`).
+
+## Domain
+
+Registered 2026-10-13 by the founder (Cloudflare Registrar, founder's account): `domeremote.com` and
+`domeremote.app`. **Nothing below is configured yet**; it is the plan for when the Fly apps exist.
+Cloudflare's dashboard changes over time, so compare these steps with its current documentation.
+
+- **One origin per environment.** Production is `https://domeremote.com`: the website, the PWA, the REST
+  API and both WebSockets on that one host (ADR-0001 D3). Staging is `https://staging.domeremote.com`.
+  `domeremote.app` and `www.domeremote.com` only **redirect** there; they are never served and never go in
+  `DOME_EXTRA_ORIGINS`. The reason is not cosmetic: the session cookie, the Origin check and the phone's
+  signing key (stored per origin in the browser) all belong to one origin, so a phone that opened the app
+  on a second origin would be signed out and look like a new, unpaired phone.
+- **Records for the apps** (Cloudflare → `domeremote.com` → DNS), after `fly certs add domeremote.com --app
+  dome-api-prod` and `fly certs add staging.domeremote.com --app dome-api-staging`: create exactly the
+  records `fly certs show <host>` asks for (for the bare `domeremote.com`, A and AAAA records to the app's
+  Fly addresses; for `staging`, a CNAME to the app's `fly.dev` name). Set them to **DNS only** (grey cloud):
+  Fly terminates TLS and the WebSockets, and the Cloudflare proxy in front would change the chain of client
+  addresses that `DOME_TRUSTED_PROXIES` was verified against.
+- **Redirects** (Cloudflare → Rules → Redirect Rules), for `domeremote.app` (both `@` and `www`) and for
+  `www.domeremote.com`: a **proxied** (orange cloud) placeholder record such as `AAAA @ 100::`, then a single
+  redirect for all incoming requests to the dynamic target `concat("https://domeremote.com",
+  http.request.uri.path)`, status 301, query string kept. `.app` is on the browsers' HTTPS-only (HSTS
+  preload) list, so the redirect is only reachable over https; the proxied record gets Cloudflare's edge
+  certificate automatically.
+- **DNSSEC**: Cloudflare → each domain → DNS → Settings → Enable DNSSEC (Cloudflare Registrar publishes the
+  DS record itself).
+- **Identity provider** callback URLs: `https://domeremote.com/v1/auth/callback` (production) and
+  `https://staging.domeremote.com/v1/auth/callback` (staging), with return URLs `https://domeremote.com/`
+  and `https://staging.domeremote.com/`.
+- **Windows app**: the agent has no built-in server address. The installer (not built yet) sets
+  `DOME_AGENT_API_URL=https://domeremote.com`; the testkit keeps setting its own tunnel address.
+- **Search engines**: `mobile-app/public/robots.txt` and `sitemap.xml` name `https://domeremote.com`;
+  outside production every response carries `X-Robots-Tag: noindex, nofollow`, so staging never appears
+  in search results. Link previews use `https://domeremote.com/og-image.png` (`mobile-app/index.html`).
+- The JSON Schema `$id`s under `https://dome.app/…` in `shared/protocol` are opaque identifiers that are
+  never fetched (and `dome.app` is not ours); they are unrelated to the product domain and stay as they
+  are, since changing them regenerates every validator.
 
 ## Secrets and configuration (names only — values never enter this repository)
 

@@ -173,7 +173,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Pure-ASGI middleware wraps everything (static files and WebSocket upgrades included).
     app.add_middleware(
-        SecurityHeadersMiddleware, csp=build_csp(settings.issuer_origin), hsts=settings.env == "production"
+        SecurityHeadersMiddleware,
+        csp=build_csp(settings.issuer_origin),
+        hsts=settings.env == "production",
+        noindex=settings.env != "production",
     )
     app.add_middleware(RequestLogMiddleware)
     # Outermost: the client address every limiter and ip_hash sees is resolved exactly once, and only

@@ -67,8 +67,18 @@ export default defineConfig({
         // Precache the built application shell only. Nothing under /v1 or /ws is ever cached, and
         // the deep links that carry one-time material (/link, /pair) always go to the network.
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
+        // The link-preview image is for crawlers, not the app: no reason to store it on every phone.
+        globIgnores: ["og-image.png"],
         navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/v1\//, /^\/ws\//, /^\/link/, /^\/pair/, /^\/\.well-known\//, /^\/healthz/],
+        navigateFallbackDenylist: [
+          /^\/v1\//,
+          /^\/ws\//,
+          /^\/link/,
+          /^\/pair/,
+          /^\/\.well-known\//,
+          /^\/healthz/,
+          /^\/(robots\.txt|sitemap\.xml|og-image\.png)$/,
+        ],
         runtimeCaching: [],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
