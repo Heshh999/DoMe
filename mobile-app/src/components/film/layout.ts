@@ -58,6 +58,8 @@ export const WIDE: StageLayout = {
  * 9:16: the monitor at the top, the phone large in the foreground (its top overlaps the monitor's stand, as a phone
  * held in front of the PC would), and a tall caption band under it. On a 390 px phone the canvas is scaled to about
  * 0.4, so everything that must be read lives in the caption band: the caption, the beat line and the status chip.
+ * The band ends at 1544, leaving 56 canvas units (about 22 CSS px on a phone) under a chip that wraps to two lines;
+ * its fullest moment (scene 2: three caption lines, a two-line beat, a two-line chip) still starts below the phone.
  */
 export const VERTICAL: StageLayout = {
   name: "vertical",
@@ -65,7 +67,7 @@ export const VERTICAL: StageLayout = {
   h: 1600,
   pc: { x: 80, y: 60, w: 740, h: 416.25 },
   ...phoneBody(270, 440, 360, 10),
-  caption: { x: 40, y: 1206, w: 820, h: 380, size: 40, align: "center" },
+  caption: { x: 40, y: 1184, w: 820, h: 360, size: 40, align: "center" },
   cards: [
     { x: 70, y: 150, w: 760, h: 300 },
     { x: 70, y: 480, w: 760, h: 300 },

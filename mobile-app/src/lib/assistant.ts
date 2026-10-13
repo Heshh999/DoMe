@@ -177,8 +177,13 @@ export function unavailableText(status: rest.AssistantStatusResponse): string | 
   }
 }
 
-/** "5 of 300 used this month · renews 1 November". */
-export function allowanceLine(a: rest.AssistantAllowance): string {
+/**
+ * "5 of 300 used this month · renews 1 November"; on Free, "4 of 10 AI requests to try used": the website sells
+ * Free's AI as a one-time taste, so the line never promises that it renews. Until the metering task (#51) replaces
+ * the monthly allowance, paid plans keep the monthly wording.
+ */
+export function allowanceLine(a: rest.AssistantAllowance, plan?: rest.PlanId | null): string {
+  if (plan === "free") return `${a.used} of ${a.limit} AI requests to try used`;
   return `${a.used} of ${a.limit} used this month · renews ${renewalDate(a.period_end)}`;
 }
 

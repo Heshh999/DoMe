@@ -20,7 +20,7 @@ const Room = memo(function Room({ L, lamp: lit, screen }: { L: StageLayout; lamp
   const wide = L.name === "wide";
   const floorY = wide ? 660 : 600;
   const win = { x: 1170, y: 60, w: 400, h: 430 };
-  const lamp = wide ? { x: 72, y: 268 } : { x: 60, y: 60 };
+  const lamp = { x: 72, y: 268 };
   const plant = wide ? { x: 1085, y: 600 } : { x: 790, y: 600 };
   return (
     <svg viewBox={`0 0 ${L.w} ${L.h}`} className="absolute inset-0 h-full w-full" aria-hidden="true" focusable="false">
@@ -80,10 +80,11 @@ const Room = memo(function Room({ L, lamp: lit, screen }: { L: StageLayout; lamp
       ) : null}
       <rect x="0" y={floorY} width={L.w} height={L.h - floorY} fill="url(#fl-floor)" />
       <rect x="0" y={floorY - 1} width={L.w} height="2" fill="#1c2756" />
-      {/* the reading lamp: its pool of light comes on first */}
-      <circle cx={lamp.x} cy={lamp.y} r={wide ? 300 : 260} fill="url(#fl-lamp)" style={{ opacity: lit }} />
+      {/* the reading lamp: its pool of light comes on first (wide only: the vertical frame has no room for the
+          lamp, and a glow with no lamp under it reads as a stain in the corner) */}
       {wide ? (
         <g>
+          <circle cx={lamp.x} cy={lamp.y} r="300" fill="url(#fl-lamp)" style={{ opacity: lit }} />
           <rect x={lamp.x - 3} y={lamp.y + 30} width="6" height={floorY - lamp.y - 30} fill="#1c2756" />
           <path d={`M${lamp.x - 44} ${lamp.y + 34} L${lamp.x - 28} ${lamp.y - 30} L${lamp.x + 28} ${lamp.y - 30} L${lamp.x + 44} ${lamp.y + 34} Z`} fill="#3a3f78" />
           <ellipse cx={lamp.x} cy={lamp.y + 34} rx="44" ry="7" fill="#ffd9a0" style={{ opacity: 0.25 + 0.6 * lit }} />
@@ -198,13 +199,13 @@ function Captions({ L, t, announce }: { L: StageLayout; t: number; announce: boo
       {/* the live region keeps the words even while the band is visually faded; it stays silent until the visitor
           has started the film themselves, so an autoplaying film never talks over the page */}
       <div id={CAPTION_ID} className="film-caption" role="status" aria-live={announce ? "polite" : "off"} aria-atomic="false" style={{ opacity: visible, transform: `translateY(${lerp(14, 0, visible)}px)`, fontSize: c.size }}>
-        <p className="font-semibold leading-[1.2] tracking-[-0.015em] text-white [text-wrap:balance]">{scene.caption}</p>
+        <p className={`font-semibold tracking-[-0.015em] text-white [text-wrap:balance] ${vertical ? "leading-[1.15]" : "leading-[1.2]"}`}>{scene.caption}</p>
         {beat ? (
           <p className={`mt-[0.4em] font-medium leading-[1.3] text-[#c9d4f0] [text-wrap:balance] ${vertical ? "text-[0.78em]" : "text-[0.62em]"}`} style={{ opacity: beatIn }} data-film-beat="">
             {beat.speech ? `“${beat.text}”` : beat.text}
           </p>
         ) : null}
-        <p className={`mt-[0.55em] inline-flex items-center gap-[0.45em] rounded-[1em] border border-white/14 bg-white/[0.08] px-[0.9em] py-[0.42em] font-semibold leading-[1.25] text-[#dfe6f8] ${vertical ? "max-w-full text-[0.72em]" : "text-[0.5em]"}`}>
+        <p className={`inline-flex items-center gap-[0.45em] rounded-[1em] border border-white/14 bg-white/[0.08] px-[0.9em] font-semibold leading-[1.25] text-[#dfe6f8] ${vertical ? "mt-[0.45em] max-w-full py-[0.36em] text-[0.72em]" : "mt-[0.55em] py-[0.42em] text-[0.5em]"}`}>
           <span className={`h-[0.55em] w-[0.55em] shrink-0 rounded-full ${TONE_DOT[scene.status.tone]}`} />
           <span>{scene.status.label}</span>
         </p>

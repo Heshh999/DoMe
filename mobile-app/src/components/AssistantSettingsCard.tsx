@@ -1,8 +1,9 @@
 /**
  * Settings → Assistant (docs/design/assistant.md §4.11): whether the AI assistant is available on this account and
- * why not, consent (given and withdrawn on the server, for every phone of the account), the month's allowance, and
- * this phone's preferences — the Ask tab, using AI here, the butler's name and form of address, asking before every
- * action, reading replies aloud, the voice and its rate. Nothing typed or said is ever stored.
+ * why not, consent (given and withdrawn on the server, for every phone of the account), the allowance (on Free, the
+ * one-time taste, with no renewal), and this phone's preferences — the Ask tab, using AI here, the butler's name and
+ * form of address, asking before every action, reading replies aloud, the voice and its rate. Nothing typed or said
+ * is ever stored.
  */
 import { useEffect, useId, useState } from "react";
 
@@ -13,6 +14,7 @@ import { BUTLER_NAME, DEFAULT_BUTLER_NAME, FORM_OF_ADDRESS } from "../lib/assist
 import { errorMessage } from "../lib/labels.ts";
 import { isDeniedVoice, MAX_RATE, MIN_RATE, type VoiceLike } from "../lib/speech.ts";
 import { useAssistantStore } from "../store/assistant.ts";
+import { useSessionStore } from "../store/session.ts";
 import { AssistantConsentSheet, CONSENT_VERSION } from "./AssistantConsentSheet.tsx";
 import { Icon } from "./icons.tsx";
 import { Button, Card, IconWell, inputClass, Notice, Toggle } from "./ui.tsx";
@@ -38,6 +40,7 @@ export function AssistantSettingsCard() {
   const status = useAssistantStore((s) => s.status);
   const statusError = useAssistantStore((s) => s.statusError);
   const allowance = useAssistantStore((s) => s.allowance);
+  const plan = useSessionStore((s) => s.session?.plan ?? null);
   const prefs = useAssistantStore((s) => s.prefs);
   const setPrefs = useAssistantStore((s) => s.setPrefs);
   const [sheet, setSheet] = useState(false);
@@ -126,7 +129,7 @@ export function AssistantSettingsCard() {
           </p>
         ) : null}
         {outdated ? <Notice tone="warning">The terms changed; read and turn on again.</Notice> : null}
-        {allowance && status && status.unavailable_reason !== "not_configured" && status.unavailable_reason !== "not_in_plan" ? <p className="text-sm text-text-muted">{allowanceLine(allowance)}</p> : null}
+        {allowance && status && status.unavailable_reason !== "not_configured" && status.unavailable_reason !== "not_in_plan" ? <p className="text-sm text-text-muted">{allowanceLine(allowance, plan)}</p> : null}
         {error ? <Notice tone="danger">{error}</Notice> : null}
       </div>
 

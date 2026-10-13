@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ERRORS, type rest } from "@dome/protocol";
 
 import { ApiError } from "../src/lib/api.ts";
-import { aiUsable, createAssistantController, limitExplanation, renewalDate, type AssistantController, type PcAccess, type TurnSource } from "../src/lib/assistant.ts";
+import { aiUsable, allowanceLine, createAssistantController, limitExplanation, renewalDate, type AssistantController, type PcAccess, type TurnSource } from "../src/lib/assistant.ts";
 import { HELP_SCREEN, HELP_VOICE, SWITCHED_PC, TAP_YOUR_CHOICE } from "../src/lib/butlerSpeech.ts";
 import { intentContext, previewStep, type PlanRun, type StepRun } from "../src/lib/commandPlan.ts";
 import type { CommandRecord } from "../src/lib/commands.ts";
@@ -525,6 +525,12 @@ describe("AI errors fall back to the phone's own answer", () => {
     expect(lastButler().text).toContain("This month's AI requests needed more processing than your plan includes.");
     expect(limitExplanation("requests", ALLOWANCE)).toMatch(/^You've used this month's 300 AI requests\. Renews /);
     expect(limitExplanation("failures", ALLOWANCE)).toMatch(/^Too many AI requests failed this month/);
+  });
+
+  it("the allowance line: Free's one-time taste never promises a renewal; other plans keep the monthly wording", () => {
+    expect(allowanceLine({ ...ALLOWANCE, limit: 10, used: 4 }, "free")).toBe("4 of 10 AI requests to try used");
+    expect(allowanceLine(ALLOWANCE, "pro")).toBe(`${ALLOWANCE.used} of 300 used this month · renews ${renewalDate(ALLOWANCE.period_end)}`);
+    expect(allowanceLine(ALLOWANCE)).toMatch(/ used this month · renews /);
   });
 
   it("AI_DECLINED speaks its message", async () => {

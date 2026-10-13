@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 
 import { Film } from "../../src/components/film/Film.tsx";
+import { VERTICAL } from "../../src/components/film/layout.ts";
 import { SCENES, TOTAL_MS } from "../../src/components/film/timeline.ts";
 
 afterEach(() => {
@@ -178,5 +179,23 @@ describe("Film", () => {
   it("restacks to the vertical layout when asked", () => {
     render(<Film reducedMotion={false} layout="vertical" />);
     expect(screen.getByRole("group", { name: "DoMe demo film" })).toHaveAttribute("data-layout", "vertical");
+  });
+
+  it("draws the reading lamp's glow only where the lamp itself is drawn (wide): vertical has no glow without a source", () => {
+    const lampGlow = () => document.querySelectorAll('[fill="url(#fl-lamp)"]').length;
+    const wide = render(<Film exportMode reducedMotion={false} layout="wide" />);
+    expect(lampGlow()).toBe(1);
+    wide.unmount();
+    render(<Film exportMode reducedMotion={false} layout="vertical" />);
+    expect(lampGlow()).toBe(0);
+  });
+
+  it("vertical: the caption band ends at least 50 canvas units above the stage's bottom edge, with room under the phone", () => {
+    const c = VERTICAL.caption;
+    const bandEnd = c.y + c.h;
+    expect(VERTICAL.h - bandEnd).toBeGreaterThanOrEqual(50);
+    // the fullest moment (scene 2: three caption lines, a two-line beat, a two-line chip) measured 339 canvas units
+    // in Chromium; the band is bottom-aligned, so that much must fit between the phone's bottom and the band's end
+    expect(bandEnd - (VERTICAL.phone.y + VERTICAL.phone.h)).toBeGreaterThanOrEqual(340);
   });
 });

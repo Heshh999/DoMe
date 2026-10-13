@@ -94,7 +94,7 @@ export function HealthPage() {
   const problems = layers.filter((l) => l.status === "problem");
   const last = lastVerifiedResult(commands, pcId);
   const retriesLeft = MAX_RETRIES - retries;
-  const overall: { tone: Tone; well: WellTone; label: string } = problems.length === 0 ? (layers.some((l) => l.status === "waiting" || l.status === "unknown") ? { tone: "info", well: "accent", label: "No known problem" } : { tone: "success", well: "accent", label: "No known problem" }) : { tone: "warning", well: "warning", label: `${problems.length} item${problems.length === 1 ? "" : "s"} need attention` };
+  const overall: { tone: Tone; well: WellTone; label: string } = problems.length === 0 ? (layers.some((l) => l.status === "waiting" || l.status === "unknown") ? { tone: "info", well: "accent", label: "No known problem" } : { tone: "success", well: "accent", label: "No known problem" }) : { tone: "warning", well: "warning", label: problems.length === 1 ? "1 item needs attention" : `${problems.length} items need attention` };
 
   // A retry re-checks the connection only. It never resends a command: an uncertain PC action stays
   // uncertain until the PC reports (spec §11A "a connection retry must not retry an uncertain PC action").

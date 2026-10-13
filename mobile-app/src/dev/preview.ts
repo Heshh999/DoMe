@@ -19,7 +19,8 @@
  *   /preview/link?user_code=ABCD-EFGH   Link a PC (the agent-link preview answers; approve is not in the preview)
  * Flags (on any route): `?offline=1` shows the offline screen; `?confirm=1` has the PC ask this phone
  * to confirm closing Edge, which opens the global confirmation modal; `?pc=offline` has the PC offline
- * since 3 hours ago (its last report still known).
+ * since 3 hours ago (its last report still known): nothing is sent at start, and a command fails with PC_OFFLINE
+ * as the relay answers it.
  *
  * This tab then runs the REAL app — real pages, stores, runtime, relay client, command signing and the butler —
  * against a fake account and a fake PC living in this module, instead of cloud-api:
@@ -33,7 +34,7 @@
  *     and a short conversation typed in through the real Assistant controller once the PC is ready.
  * Nothing here talks to a network. `/preview/off` leaves preview mode (it lasts for this tab only).
  */
-import type { JsonValue, rest } from "@dome/protocol";
+import { ERRORS, type JsonValue, type rest } from "@dome/protocol";
 
 import { Runtime, setRuntimeForTests } from "../app/runtime.ts";
 import { getAssistant, setVoiceForTests } from "../app/voice.ts";
@@ -71,7 +72,7 @@ export const PREVIEW_ROUTES: ReadonlyArray<{ preview: string; app: string; note:
 export const PREVIEW_FLAGS: ReadonlyArray<{ flag: string; note: string }> = [
   { flag: "offline=1", note: "the offline screen (navigator.onLine reads false)" },
   { flag: "confirm=1", note: "the PC asks this phone to confirm closing Edge: the global confirmation modal" },
-  { flag: "pc=offline", note: "the PC went offline 3 hours ago: Home and Remote say what to do" },
+  { flag: "pc=offline", note: "the PC went offline 3 hours ago: Home and Remote say what to do; nothing runs, a command fails with PC_OFFLINE" },
 ];
 
 /** The app route a preview path opens (`/preview/link` is the only one outside `/app`). */
@@ -125,8 +126,9 @@ function assistantStatus(): rest.AssistantStatusResponse {
     turn_deadline_seconds: 30,
     consent_version: "2026-10-11",
     consent: { version: "2026-10-11", given_at: CREATED },
-    // Free's one-time taste (10 requests, 4 used → "6 AI requests left"), as the website sells it; the monthly
-    // period fields stay until the metering task (#51) replaces the allowance copy in lib/assistant.ts
+    // Free's one-time taste (10 requests, 4 used → "6 AI requests left" on Ask, "4 of 10 AI requests to try used"
+    // in Settings), as the website sells it; the period fields are required by the contract until the metering
+    // task (#51) replaces them, and allowanceLine() shows no renewal on Free
     allowance: { limit: 10, used: 4, period_start: start.toISOString(), period_end: end.toISOString(), exhausted: null },
   };
 }
@@ -197,7 +199,8 @@ const INPUT_SESSION = "cHJldmlldy1pbnB1dC1zZQ";
 
 type Reply = (f: Record<string, unknown>, delay?: number) => void;
 
-class PreviewPc {
+/** Exported for the tests only (the preview PC's answers); nothing outside this module uses it. */
+export class PreviewPc {
   /** `?pc=offline`: the PC went offline 3 hours ago (its last report is still known). */
   offline = false;
   private video = 0;
@@ -280,6 +283,11 @@ class PreviewPc {
       case "command": {
         const env = frame.envelope as { payload: string };
         const cmd = JSON.parse(env.payload) as { command_id: string; action: string; params?: Record<string, unknown>; target?: Record<string, unknown> | null };
+        if (this.offline) {
+          // as the relay does (routing step 8): an offline PC gets nothing queued, the command fails at once
+          reply({ type: "result", command_id: cmd.command_id, origin: "relay", state: "failed", at: now(), duration_ms: 0, error: { code: "PC_OFFLINE", message: ERRORS.PC_OFFLINE?.user_message ?? "The PC is offline.", retryable: true } }, 60);
+          return;
+        }
         reply({ type: "ack", command_id: cmd.command_id, state: "executing", at: now() }, 40);
         if (this.needsConfirmation(cmd.action)) {
           // the PC answers with a challenge; the result follows this phone's Approve / Decline
@@ -569,10 +577,12 @@ export async function startPreviewIfAsked(): Promise<void> {
   setRuntimeForTests(runtime);
   // the Ask tab, AI on and the one-time voice notice seen — for this tab only (not saved to the phone's preferences)
   useAssistantStore.setState((s) => ({ prefs: { ...s.prefs, showAssistant: true, useAi: true, voiceNoticeSeen: true } }));
-  // the approved apps are asked for with the first state (as the Apps page would); the butler's conversation follows
+  // the approved apps are asked for with the first state (as the Apps page would); the butler's conversation follows.
+  // With the PC offline nothing is sent: Home's "Last command" must not show a command that ran on an offline PC.
   const unsubscribe = useLiveStore.subscribe((s) => {
     if (!s.pcs[PC]?.state) return;
     unsubscribe();
+    if (pc.offline) return;
     void runtime.send({ pcId: PC, action: "app.list", source: "system" }).catch(() => undefined);
     if (flags.get("confirm") === "1") void askToConfirm(runtime);
     else void converse();

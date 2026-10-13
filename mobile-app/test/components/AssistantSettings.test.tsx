@@ -20,6 +20,7 @@ import type { Speaker, VoiceLike } from "../../src/lib/speech.ts";
 import { MorePage } from "../../src/pages/app/MorePage.tsx";
 import { DEFAULT_ASSISTANT_PREFS, PREFS_KEY, useAssistantStore } from "../../src/store/assistant.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
+import { useSessionStore } from "../../src/store/session.ts";
 import { freshStorage, installDialogPolyfill, jsonResponse, makeRuntime, OFFICE_PC, PC, signedIn, TS, type RuntimeHarness } from "../helpers/harness.ts";
 
 installDialogPolyfill();
@@ -105,6 +106,12 @@ describe("status and consent", () => {
     if (reason !== "spend_limit") expect(screen.queryByRole("button", { name: "Turn on the AI butler…" })).toBeNull();
   });
 
+  it("a paid plan keeps the monthly allowance line with its renewal date", async () => {
+    useSessionStore.setState((st) => ({ session: st.session ? { ...st.session, plan: "pro" } : st.session }));
+    card();
+    expect(await screen.findByText(/^5 of 300 used this month · renews /)).toBeInTheDocument();
+  });
+
   it("allowance exhausted names the limit", async () => {
     status = { ...NO_CONSENT, available: false, unavailable_reason: "allowance_exhausted", allowance: { ...ALLOWANCE, used: 300, exhausted: "requests" } };
     card();
@@ -113,7 +120,9 @@ describe("status and consent", () => {
 
   it("Turn on: the consent text, then POST with the pinned version and CSRF; this phone uses AI and shows the Ask tab", async () => {
     card();
-    expect(await screen.findByText(/5 of 300 used this month · renews/)).toBeInTheDocument();
+    // the harness session is on Free, whose AI is a one-time taste: the line never promises a renewal
+    expect(await screen.findByText("5 of 300 AI requests to try used")).toBeInTheDocument();
+    expect(screen.queryByText(/renews/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Turn on the AI butler…" }));
     const sheet = screen.getByRole("dialog", { name: "Turn on the AI butler?" });
     expect(sheet).toHaveTextContent("Claude, an AI model made by Anthropic");
