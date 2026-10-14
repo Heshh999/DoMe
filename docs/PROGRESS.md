@@ -2,6 +2,27 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-14 — First Windows installer build: green
+
+- **What ran**: `.github/workflows/windows-installer.yml` on the push of a686dda (run 38488799434,
+  windows-latest). Job "pc-agent tests (Windows)": mypy on the Windows code paths and the Windows pytest
+  set (`tests/windows_suite.txt`), green. Job "Build and smoke-test DoMe-Setup": the PyInstaller folder
+  (`DoMe.exe`, `dome-native-host.exe`), `DoMe-Setup-0.1.0.exe` (Inno Setup 6, development build), then
+  `smoke_test.py` through 13 phases (install with and without start at login and a development extension
+  id, files and shortcut, uninstall entry, server address, HKCU native-host keys and manifest, the frozen
+  command line and a native-messaging round trip, the tray as a process and `DoMe.exe quit`, upgrades,
+  downgrade refusal, a staging address kept across an upgrade, uninstall with and without `/REMOVEDATA`,
+  install and uninstall without ever starting DoMe): **all 157 checks passed**, first attempt. Artifacts:
+  `DoMe-Setup-0.1.0+a686dda` (Setup, SHA256SUMS, BUILD-INFO.txt) and `installer-smoke-logs`, kept 30 days.
+  `ci.yml` run 38488799569 on the same commit: green.
+- **Docs**: WINDOWS_INSTALL, HANDOFF, PRODUCT_AND_PLANS and ACCEPTANCE now record this run instead of
+  "has not run yet".
+- **Evidence**: integration-tested on the windows-latest CI runner (Windows Server, administrator, UAC
+  off). **Not Windows-device-tested**: no Windows 10/11 PC, no standard user, no UAC prompt, the tray icon
+  and its menu not seen, Smart App Control / SmartScreen behaviour for the unsigned build not observed.
+- **Next**: the founder installs the build on his Windows 11 PC as a standard user; production extension
+  id and signing before a release build; hosting at domeremote.com (`deploy/README.md` "Domain").
+
 ## 2026-10-14 — Windows installer: review fixes
 
 Follows the entry below; a review of the installer commit found no blocker and these issues.

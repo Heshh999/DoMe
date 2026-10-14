@@ -34,9 +34,10 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
 - **Domain** (2026-10-13): see the next subsection.
 - **Windows installer** (2026-10-13/14, §7 item 4, pulled forward): an unsigned per-user development
   installer, `DoMe-Setup-<version>.exe` (Inno Setup), and `.github/workflows/windows-installer.yml`,
-  which is to build it and smoke-test it on a GitHub Windows Server runner. **That workflow has not run
-  yet**; nothing of the installer has run on Windows. The founder's guide is `docs/WINDOWS_INSTALL.md`
-  "The installer"; until the first green run, he keeps using the test kit.
+  which is to build it and smoke-test it on a GitHub Windows Server runner. Its first run was green on 2026-10-14 (run 38488799434: Windows unit tests, the build and 157
+  smoke-test checks on the runner; not yet on a Windows 10/11 PC). The founder's guide is
+  `docs/WINDOWS_INSTALL.md` "The installer"; until he has installed it on his own PC, the test kit stays
+  the fallback.
 
 ### Domain
 
@@ -64,7 +65,7 @@ Test counts in this table are from 2026-10-09 unless dated; §2 has the latest r
 | `tests/` | Cross-component suite: the real `dome-agent` process (fake platform, headless) + the real relay + real PostgreSQL + real OIDC login + an ES256-signing controller simulator + a fake extension; now also the manual-input scenarios (grant_update, ordering, replay/stale rejections reaching the phone, lease expiry releasing a held button, takeover, revocation, keyboard-only grant, no typed text on disk). | integration-tested (Linux): 23 passed in 227 s (incl. 3 manual-input tests and the load smoke: 400 commands in 10.18 s = 39 cmd/s, p50 986 ms, p95 1199 ms, RSS 208 → 212 MiB) |
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. Optional passphrase gate (`DEV_IDP_PASSPHRASE`) for the test kit: the right passphrase always works, wrong ones never lock anyone out; readable refusal page for browsers. | unit-tested: 14 tests (run in CI) |
 | `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. Since then run by the owner on Windows 11 with quick tunnels and an iPhone (§0, §4) |
-| `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension, tray, both Windows programs, Setup and the Start menu shortcut use the exports (the last three since 2026-10-13, awaiting the first Windows build). | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
+| `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension, tray, both Windows programs, Setup and the Start menu shortcut use the exports (the last three since 2026-10-13, built by the first green Windows run on 2026-10-14). | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
 | `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | CI runs on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green; the Windows job runs the pipe, native-host, tray and adapter tests); `windows-installer.yml` (2026-10-13) awaits its first run; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed (no Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
@@ -216,8 +217,8 @@ unless stated.
   the Routines page is an explicitly labelled preview.
 - **Operator tooling**: `OperatorUser`/`OperatorAudit` tables exist, nothing is served.
 - **CI**: `.github/workflows/ci.yml` runs on GitHub Actions (since 2026-10-11; 13 runs by 2026-10-13,
-  12 green, the one failure fixed by afdc130). `.github/workflows/windows-installer.yml` (the installer
-  build and smoke test) has not run yet.
+  12 green, the one failure fixed by afdc130). `.github/workflows/windows-installer.yml` (the installer build and smoke test) first ran green on
+  2026-10-14 (run 38488799434).
 
 ## 5. Failures and quirks met during development (so you do not re-discover them)
 
@@ -312,11 +313,9 @@ Finish polish round 2 of the redesign first (checkpoint 6d76945); then:
    upgrade that asks DoMe to quit and changes nothing when it does not, downgrade refusal, uninstall
    cleanup that keeps the settings unless asked), `DoMe.exe quit` / `start-at-login`, and
    `.github/workflows/windows-installer.yml`, which is to build it and smoke-test install, the tray
-   process, upgrades and uninstalls on windows-latest (`docs/WINDOWS_INSTALL.md` "The installer"; it has
-   not run yet). Before a release build: the production extension id (`build_installer.py --release`
+   process, upgrades and uninstalls on windows-latest (`docs/WINDOWS_INSTALL.md` "The installer"; first green run 2026-10-14, run 38488799434). Before a release build: the production extension id (`build_installer.py --release`
    refuses to build without it), signing, and replacing the test-version wizard text, which is compiled
-   only into development builds (`DoMe.iss` `#ifdef DevParams`). Next: the first green
-   `windows-installer.yml` run (fix what it reports); the founder installs it on his Windows 11 PC as a
+   only into development builds (`DoMe.iss` `#ifdef DevParams`). Next: the founder installs it on his Windows 11 PC as a
    standard user; a tray "Link this PC…" item; a Chrome Web Store / Edge Add-ons listing, then the
    production extension id in the release build; Authenticode signing (most likely Azure Trusted
    Signing) in a separate protected job; an Inno Setup commercial licence before paid launch; an updater
@@ -326,7 +325,7 @@ Finish polish round 2 of the redesign first (checkpoint 6d76945); then:
    records for Fly, redirect rules for `.app` and `www`, DNSSEC, identity-provider callbacks) and the
    staging steps there: PostgreSQL, Auth0 or Keycloak, `DOME_TRUSTED_PROXIES`, the entitlement signing
    key. (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
-   `windows-installer.yml` runs when PC code changes and has not run yet.)
+   `windows-installer.yml` runs when PC code changes; first green run 2026-10-14.)
 6. **Device evidence**: record the owner's Windows 11 + iPhone results in `docs/ACCEPTANCE.md` with build
    and iOS versions; still to report: sleep, restart, shut down, and the redesign and film on the iPhone
    (`mobile-app/README.md` checklist). The manual checklists in `pc-agent/README.md`,

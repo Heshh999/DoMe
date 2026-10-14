@@ -6,8 +6,10 @@ APIs and unit-tested on Linux behind an explicit fake platform (`DOME_AGENT_PLAT
 has run the agent from source on his Windows 11 PC through the test kit (`docs/HANDOFF.md` §4). A
 per-user installer, `DoMe-Setup-<version>.exe`, now exists (next section). A GitHub Actions workflow
 (`windows-installer.yml`) is set up to build it on a Windows Server runner and smoke-test install,
-upgrade and uninstall there; **it has not run yet**. Installer evidence: **not yet verified — awaiting
-the first `windows-installer.yml` run** (a runner, not a PC). This document describes what the agent
+upgrade and uninstall there; its first run was green on 2026-10-14 (run 38488799434: the Windows unit tests, the
+build and all 157 smoke-test checks passed). Installer evidence: **integration-tested on the windows-latest
+CI runner (Windows Server, administrator, UAC off); not Windows-device-tested** (no Windows 10/11 PC and
+no standard user yet). This document describes what the agent
 does and the install, run and uninstall steps **as the code implements them today**; the last section
 lists what is still blocked. Evidence tags follow `docs/spec/MASTER_PROMPT.md` §17.
 
@@ -20,8 +22,8 @@ This is the normal way to put DoMe on a Windows PC. It needs no administrator ri
 only for the Windows account that runs it.
 
 **Getting it.** Once the team sends the PC code to GitHub, GitHub builds the installer and tests it on
-a Windows machine. That first build and test **has not run yet**; the team will tell you when there is a
-green one. Then, to download it:
+a Windows machine. The first build and test passed on 2026-10-14 (a GitHub test machine, not a
+home PC). To download it:
 
 1. Open the repository on GitHub (signed in), click **Actions**, then **Windows installer** on the left.
 2. Above the list, set **Branch** to the branch the team names (`main` once the work is merged) and
@@ -113,14 +115,12 @@ and `/REMOVEDATA` (also delete the settings).
 **What the installer does not do yet**: it is not signed (Authenticode); it has no automatic updates;
 the YouTube add-on is not in the stores, so there is no production add-on id (and `--release` refuses to
 build without one); DoMe's menu has no "Link this PC" item; test builds of the same version are not
-ordered (see "Updating"); it will first be tested on GitHub's Windows Server machine (an administrator
-account with UAC off), and it has not yet been tested on any Windows 10 or 11 PC, nor by a standard
-user; that test checks the tray only as a process (DoMe.exe keeps running, a second launch is refused,
+ordered (see "Updating"); it has been tested only on GitHub's Windows Server machine (an administrator
+account with UAC off), not yet on any Windows 10 or 11 PC, nor by a standard user; that test checks the tray only as a process (DoMe.exe keeps running, a second launch is refused,
 `DoMe.exe quit` ends it): the icon, its menu and **Quit DoMe** from the menu are not verified (the
 runner may have no visible notification area); and Inno Setup's makers ask commercial users to buy a
-licence, which DoMe needs before it is sold. Evidence: **not yet verified** until the first green
-`windows-installer.yml` run; after that, "integration-tested on the windows-latest CI runner
-(administrator, UAC off); not Windows-device-tested".
+licence, which DoMe needs before it is sold. Evidence: **integration-tested on the windows-latest CI runner (administrator, UAC off)** —
+first green `windows-installer.yml` run on 2026-10-14 (run 38488799434, 157 checks); **not Windows-device-tested**.
 
 How it is built (developers): `pc-agent/packaging/installer/build_installer.py` runs PyInstaller on
 `pc-agent/packaging/dome-agent.spec` (one folder with `DoMe.exe`, `dome-native-host.exe` and
@@ -220,8 +220,8 @@ console window) and the `_internal\` runtime they share; `install-native-host` f
 is bundled as `dome_protocol/_contract` (without the test fixtures and their test key; the script checks
 that). Without `--pyinstaller-only` the same script also compiles the installer into
 `dist\installer\`. Evidence: the folder was built and run on Linux (`DoMe version`, the native host,
-a `bridge_hello` round trip, `DoMe quit`); the Windows build: **not yet verified — awaiting the first
-`windows-installer.yml` run**.
+a `bridge_hello` round trip, `DoMe quit`); the Windows build: **integration-tested on the windows-latest CI runner** (first green
+`windows-installer.yml` run, 2026-10-14, run 38488799434).
 
 Alternative without PyInstaller (developer PC): `uv sync --extra dev` and use
 `.venv\Scripts\dome-agent.exe` / `.venv\Scripts\dome-native-host.exe` in place of the two executables.
