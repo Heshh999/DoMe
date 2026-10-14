@@ -8,9 +8,9 @@ GitHub called **Deploy**.
 > against stand-ins, but **have never run against the real Fly.io, Neon, Auth0 or Cloudflare**. Your
 > first staging run is the real test. Each run ends with a plain-English summary that says what happened
 > and what to click next. The vendor screens below come from each vendor's documentation, read on
-> 2026-10-13 (Neon's on 2026-10-14). They are marked *(per vendor docs, not yet exercised)* because
-> nobody has clicked through them for DoMe yet, and dashboards change. If a button has moved, look for
-> the same words nearby.
+> 2026-10-13 (Neon's from its documentation as shown in search results on 2026-10-14). They are marked
+> *(per vendor docs, not yet exercised)* because nobody has clicked through them for DoMe yet, and
+> dashboards change. If a button has moved, look for the same words nearby.
 
 Order: **staging first, then production.** Staging is a full copy at https://staging.domeremote.com,
 where you can try things safely. Production only accepts the exact version that already runs well on
@@ -45,7 +45,7 @@ fly.io/docs/about/pricing); Neon's free plan as of October 2026 (check neon.com/
 | Item | Staging | Production |
 | --- | --- | --- |
 | The database | Neon, free plan: $0 | Fly Managed Postgres, Basic plan: $38 |
-| Database storage | included (free plan: 0.5 GB) | 10 GB at $0.28/GB: about $3 |
+| Database storage | included (free plan: 1 GB per project; Neon raised it from 0.5 GB on 2026-10-02) | 10 GB at $0.28/GB: about $3 |
 | One app machine (shared-cpu-1x, 512 MB) | at most $3.69; it sleeps when nobody uses it | $3.69, always on |
 | Internet addresses (shared IPv4 + IPv6) and the first 10 certificates | free | free |
 | Data sent to users in North America | $0.02 per GB | $0.02 per GB |
@@ -178,14 +178,19 @@ Secrets. The Deploy button refuses a Client ID that looks like a secret.
 Staging keeps its data in a free database at Neon, not at Fly. Production gets its own Fly database
 later (section 11). Neon's free plan, as of October 2026 (check https://neon.com/pricing):
 
-- 0.5 GB of storage: plenty for testing.
+- 1 GB of storage per project (Neon raised it from 0.5 GB on 2026-10-02; some of Neon's pages may still
+  say 0.5 GB). Either is plenty for testing.
 - 100 compute-hours a month. Neon counts size times time; at the smallest size (0.25) that is about
   400 hours awake, a little over half a month.
 - The database sleeps after about 5 minutes without use and wakes on the next visit.
 - A 6-hour restore window: Neon can rewind the database to any moment in the last 6 hours, no further.
 - If the month's compute-hours run out, Neon pauses the database until the next month. Staging then
-  stops working; production is not affected. So **do not leave a test PC linked to staging around the
-  clock**: while it is connected, staging and its database stay awake.
+  stops working. Production keeps running, but you cannot deploy a new version to production until
+  staging works again, because production only accepts a version that runs healthily on staging. You can
+  then wait for the next month, or ask an engineer about switching Neon to a paid plan for the rest of the
+  month (Neon bills by use, with no monthly minimum). So **do not leave a test PC linked to staging around
+  the clock**: while it is connected, staging and its database stay awake, and that uses up the month's
+  hours in about 17 days.
 
 1. Go to https://console.neon.tech and sign up, either with **GitHub** (your `Heshh999` account) or
    with your email. Stay on the **Free** plan; do not upgrade.
@@ -198,21 +203,24 @@ later (section 11). Neon's free plan, as of October 2026 (check https://neon.com
 3. On the project's dashboard, click **Connect**. In the window that opens:
    - Turn **Connection pooling** **off**. DoMe needs the direct address, and the Deploy button refuses
      the pooled one (its host name contains `-pooler`).
-   - Leave the branch, database and role as Neon shows them. If Neon offers several formats, choose
-     the plain connection string.
+   - The branch menu shows `production`. That is only Neon's name for its main branch; it is still
+     staging's database. Keep it, and do not choose `development`.
+   - Leave the database and role as Neon shows them. If Neon offers several formats, choose the plain
+     connection string.
    - Click the **copy** button. What you copied starts with `postgresql://`, contains the database
-     password, has **no** `-pooler` in it, and ends with `?sslmode=require&channel_binding=require`
-     (or just `?sslmode=require`).
+     password, has **no** `-pooler` in it, and ends with `?sslmode=require&channel_binding=require`.
+     The Deploy button refuses it without `channel_binding=require`.
 4. Right away, open GitHub > Settings > Environments > **staging** > **Environment secrets** > **Add
    environment secret**. Name: `DATABASE_URL`. Value: paste. Click **Add secret**. Only staging needs
-   it; production does not.
+   it; production does not. Never add this Neon address to the production environment; the Deploy
+   button refuses it there.
 
 That address contains the database password: treat it like a token (section 1). If it ever leaks, or
-you just want a new password: in Neon open the project > **Branches** > the default branch > **Roles &
-Databases**, open the menu next to the role (normally `neondb_owner`) and choose **Reset password**.
-Copy the connection string again (step 3), paste it over the staging secret `DATABASE_URL` (in GitHub,
-click the pencil next to it, paste, **Update secret**), and run Deploy for staging. Every staging deploy stores the address from
-GitHub in Fly again, so nothing else is needed.
+you just want a new password: in Neon open the project > **Branches** > `production` (marked
+**Default**) > **Roles & Databases**, open the menu next to the role (normally `neondb_owner`) and choose
+**Reset password**. Copy the connection string again (step 3), paste it over the staging secret
+`DATABASE_URL` (in GitHub, click the pencil next to it, paste, **Update secret**), and run Deploy for
+staging. Every staging deploy stores the address from GitHub in Fly again, so nothing else is needed.
 
 ## 7. First staging deploy
 
@@ -282,7 +290,9 @@ Same as section 5, with these differences:
 1. Open https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml > **Run workflow**:
    **environment: production**, **action: deploy**, tick **create the database** (about $41 a month
    for the database and its storage; about $45 a month for the whole of production). Production does
-   not use Neon and needs no `DATABASE_URL` secret.
+   not use Neon and needs no `DATABASE_URL` secret. If you ever added `DATABASE_URL` to the production
+   environment, delete it first (GitHub > Settings > Environments > **production** > **Environment
+   secrets** > the bin icon next to it): the Deploy button refuses a Neon address there.
 2. The first job checks that staging already runs this exact version and is healthy. If not, it
    stops before asking you for anything and tells you to deploy staging first.
 3. When asked: **Review deployments** > tick **production** > **Approve and deploy**.
@@ -349,19 +359,22 @@ yourself even when the headline says "needs an engineer".
 | The summary says | What to do |
 | --- | --- |
 | "Some values this deploy needs are missing or not usable" | Add exactly the names listed, on the tab it names. Check they are under Settings > **Environments** > the right environment, on the right tab (**secrets** vs **variables**). |
-| "... exist as repository secrets" | Delete them under Settings > **Secrets and variables** > **Actions** > **Repository secrets**. For `FLY_API_TOKEN`: revoke that token on the Fly Tokens page, create a new one, and paste it only as an **Environment secret** (section 4). For `DOME_OIDC_CLIENT_SECRET`: rotate it in Auth0 and paste the new one as an Environment secret. Run Deploy again. |
+| "... exist as repository secrets" | Delete them under Settings > **Secrets and variables** > **Actions** > **Repository secrets**. For `FLY_API_TOKEN`: revoke that token on the Fly Tokens page, create a new one, and paste it only as an **Environment secret** (section 4). For `DOME_OIDC_CLIENT_SECRET`: rotate it in Auth0 and paste the new one as an Environment secret. For `DATABASE_URL`: reset the password in Neon (section 6) and paste the new address only as the **staging** Environment secret. Run Deploy again. |
 | "The GitHub Environment ... does not exist yet" or "... is not protected yet" | Set that environment up exactly as in section 3; the summary lists which setting is wrong. Run Deploy again. |
 | "Staging keeps its data in a free Neon database, and its address ... is missing" | Do section 6, steps 3 and 4, then run Deploy for staging again. |
-| "... is Neon's pooled address", "... is not a database connection string", "... does not include `sslmode=require`" or "... has stars where the password should be" | In Neon > **Connect**, turn **Connection pooling** off, copy with the **copy** button, and paste it over the staging secret `DATABASE_URL` (section 6, steps 3 and 4). Run Deploy again. |
-| "Production has no database yet ... about $41 a month" | If you agree, run Deploy for production again with **create the database** ticked. |
+| "... is Neon's pooled address", "... is not a database connection string", "... does not include `sslmode=require`", "... does not include `channel_binding=require`", "... has stars where the password should be", "... contains a space, a quote or #", "... has an unreadable port number" or "... is missing its user name, password, host or database name" | In Neon > **Connect**, turn **Connection pooling** off, copy with the **copy** button, and paste it over the staging secret `DATABASE_URL` (section 6, steps 3 and 4). Run Deploy again. |
+| "The production Environment secret `DATABASE_URL` is a Neon address" | Delete `DATABASE_URL` from GitHub > Settings > Environments > **production** > **Environment secrets** (the bin icon next to it). Production keeps its data in Fly's database (section 11); the Neon address belongs only to staging. Run Deploy again. |
+| "Staging and production would both use the Fly app ..." | GitHub > Settings > **Secrets and variables** > **Actions** > **Variables** tab: correct `FLY_STAGING_APP` or `FLY_PRODUCTION_APP` so that the two names differ (without these variables, staging is `domeremote-staging` and production is `domeremote-production`). Run Deploy again. Nothing was changed. |
+| "Production has no database yet ... about $41 a month" | If you agree, run Deploy for production again with **create the database** ticked. If the summary also says the production secret `DATABASE_URL` was not used, you can delete that secret. If it lists other Fly databases by name, do not tick: ask an engineer first. |
 | "The **create the database** tick is for production only" | Nothing to do: staging uses its Neon database and nothing was created. |
-| "Staging is deployed but not healthy (HTTP 503)", or a staging deploy says `/healthz` is HTTP 503 | Open https://console.neon.tech. If the project says this month's compute-hours are used up, staging waits until next month (section 6). If you reset the Neon password, paste the new address into GitHub and run Deploy. Otherwise share the run link with an engineer. |
+| "Staging is deployed but not healthy (HTTP 503)", "Staging's database at Neon is not answering", or a staging deploy says `/healthz` is HTTP 503 | Open https://console.neon.tech first. If the project says this month's compute-hours are used up, staging is down until the next month, and no new version can reach production until then (production itself keeps running). Either wait for the next month, or ask an engineer about switching Neon to a paid plan for the rest of the month (Neon bills by use with no monthly minimum; `docs/COST_MODEL.md` section 2). If you reset the Neon password, paste the new address into GitHub and run Deploy. Otherwise share the run link with an engineer. |
+| "Fly did not finish the deploy" (staging) | If the log says the database could not be reached, check Neon as in the row above: staging's migrations cannot run while its Neon database is paused. Otherwise share the run link with an engineer. |
 | "Could not read the apps of organization ..." or "Fly refused this token" | Copy the token again from Fly (whole value, with `FlyV1 `) into `FLY_API_TOKEN`. If you use another Fly organization, check the variable `FLY_ORG`. |
 | "personal sign-in token (it starts with fo1_)" | Create an **organization** token on the Fly Tokens page (section 4) and paste it over the old one. |
 | "The Fly app name ... belongs to someone else" | GitHub > Settings > **Secrets and variables** > **Actions** > **Variables** tab > **New repository variable**: `FLY_STAGING_APP` (or `FLY_PRODUCTION_APP`) = another name, for example `domeremote-staging-2`. Run Deploy again. |
 | "Fly is still preparing the database" | Nothing is broken. Run Deploy again in about 10 minutes. |
 | "Fly would not let this token create or list Managed Postgres databases" | Follow the dashboard steps in the summary: create the database on fly.io (name, region, plan, storage 10 GB and PostgreSQL 16 are listed; about $41 a month), then run Deploy again. |
-| "Production only receives a commit that staging already runs" | Run Deploy for **staging** again, wait for it to finish green, then run production right away. If anyone changed the code in between, staging must be deployed again first. |
+| "Production only receives a commit that staging already runs" | If the staging check in that summary shows `HTTP 503` or `database unavailable`, open https://console.neon.tech first (the HTTP 503 row above): a staging deploy cannot finish while Neon's compute-hours are used up. Otherwise run Deploy for **staging** again, wait for it to finish green, then run production right away. If anyone changed the code in between, staging must be deployed again first. |
 | "The sign-in provider ... could not be reached" or "names a different issuer" | Check `DOME_OIDC_ISSUER` is the Auth0 **Domain** of the right tenant. |
 | "looks like the Client Secret, not the Client ID" | Rotate the secret in Auth0 (Credentials), put the new secret under **Secrets** and the Client ID under **Variables**. |
 | "... sign-in request carries a different client id" or "... sends visitors to ... instead of the sign-in provider" | Check that `DOME_OIDC_ISSUER` and `DOME_OIDC_CLIENT_ID` both come from the same Auth0 application of the right tenant. If they do, share the run link with an engineer. |
@@ -383,7 +396,7 @@ yourself even when the headline says "needs an engineer".
 | `FLY_API_TOKEN` | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret) | Fly > organization > Tokens (one per environment) |
 | `DOME_OIDC_CLIENT_SECRET` | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret) | Auth0 > Application > Settings > Client Secret |
 | `DATABASE_URL` (staging) | **yes** | GitHub > Environments > **staging** > Environment **secrets** (required; never a repository secret) | Neon > project `domeremote-staging` > **Connect**, Connection pooling off (the direct connection string, section 6) |
-| `DATABASE_URL` (production) | **yes** | Only if a production summary asks: GitHub > Environments > **production** > Environment **secrets** | Fly > Managed Postgres > cluster > Connect (the pooled URL) |
+| `DATABASE_URL` (production) | **yes** | Only if a production summary asks: GitHub > Environments > **production** > Environment **secrets** | Fly > Managed Postgres > cluster > Connect (the pooled URL); never the Neon address (the Deploy button refuses it) |
 | `DOME_OIDC_ISSUER` | no | GitHub > Environments > ... > Environment **variables** | Auth0 > Application > Settings > Domain |
 | `DOME_OIDC_CLIENT_ID` | no | GitHub > Environments > ... > Environment **variables** | Auth0 > Application > Settings > Client ID |
 | `VITE_DOME_SUPPORT_URL` (optional) | no (public) | GitHub > Environments > ... > Environment **variables** | your support mailbox |

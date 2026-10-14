@@ -167,12 +167,18 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
    engineer instead of getting a new one (that would sign everyone out or invalidate every linked PC).
 5. Database decision, by `database_mode`. **Staging (`external`)**: no `mpg` command ever runs. The GitHub
    Environment secret `DATABASE_URL` is required and checked in step 1 without ever being printed (a
-   `postgres(ql)://` URL with user, password, host and database; no `-pooler` host; `sslmode=require`,
-   `verify-ca` or `verify-full`; no stars for a password); missing or unusable stops with "needs you" and
-   the Neon steps. A staging app with its own `DOME_DATABASE_URL` Fly secret (it would override
-   `DATABASE_URL`) stops for an engineer. **Production (`fly-managed`)**: already attached / the cluster
-   exists / create it (only with the checkbox) / the GitHub fallback secret `DATABASE_URL`. None of these:
-   stop, "about $41 a month", nothing changed.
+   `postgres(ql)://` URL with user, password, host and database; no `-pooler` host; `sslmode=require` or
+   `verify-ca` with `channel_binding=require`, or `sslmode=verify-full`; no stars for a password); missing or
+   unusable stops with "needs you" and the Neon steps. A staging app with its own `DOME_DATABASE_URL` Fly
+   secret (it would override `DATABASE_URL`) stops for an engineer. **Production (`fly-managed`)**: already
+   attached / the cluster exists / create it (only with the checkbox). The GitHub secret `DATABASE_URL` is a
+   fallback only when Fly will not list the clusters (the token cannot manage Managed Postgres) or the attach
+   sets no address; when Fly lists them and production's is missing, the run stops for the cost consent
+   ("about $41 a month", nothing changed) even with that secret set, and names any other clusters so a
+   misnamed hand-made one is not bought twice. A production `DATABASE_URL` whose host is `*.neon.tech` is
+   refused in step 1 (it would put production on staging's free database).
+   Before step 1's inputs, staging and production must resolve to two different Fly apps (`FLY_STAGING_APP` /
+   `FLY_PRODUCTION_APP`); the `gate` and `status` jobs check this too, before any request.
 6. Create the app if missing (a name owned by someone else stops with "set the repository variable
    `FLY_STAGING_APP`/`FLY_PRODUCTION_APP`"); allocate a dedicated IPv6 and the **free shared** IPv4
    (never a dedicated IPv4).
@@ -350,8 +356,9 @@ it on a command line), and deploy a copy of `fly.toml` with `auto_stop_machines 
 
 ### Staging database (Neon)
 
-Staging's database is Neon's free plan (decision of 2026-10-14, `docs/COST_MODEL.md` §2A): 0.5 GB, 100
-CU-hours a month, the compute sleeps after 5 idle minutes, a 6-hour restore window (as of October 2026).
+Staging's database is Neon's free plan (decision of 2026-10-14, `docs/COST_MODEL.md` §2A): 1 GB per project
+(Neon raised it from 0.5 GB on 2026-10-02), 100 CU-hours a month, the compute sleeps after 5 idle minutes, a
+6-hour restore window (as of October 2026; check neon.com/pricing).
 What the code relies on, and why:
 
 - **The direct connection string, not the pooler.** Neon's `-pooler` host is PgBouncer in transaction mode.
@@ -363,7 +370,9 @@ What the code relies on, and why:
   (pool 10 + overflow 20, `cloud-api/dome_api/db/engine.py`) plus one for migrations; Neon's smallest
   compute (0.25 CU) allows about 105 direct connections (Neon docs: 112, 7 reserved). The Deploy button
   refuses a `-pooler` host.
-- **TLS and channel binding.** Neon's string ends `?sslmode=require&channel_binding=require`. The entrypoint
+- **TLS and channel binding.** Neon's string ends `?sslmode=require&channel_binding=require`, and the Deploy
+  button refuses one without `channel_binding=require` (`sslmode=require` alone encrypts but does not check
+  the server's certificate; only `sslmode=verify-full` may go without channel binding). The entrypoint
   changes only the scheme; SQLAlchemy passes both to psycopg; the libpq bundled with psycopg-binary (18.x)
   enforces both: no TLS, refused; a server that authenticates without SCRAM channel binding, refused
   (`cloud-api/tests/test_database_url.py`, against a stand-in server; nothing here has connected to Neon).

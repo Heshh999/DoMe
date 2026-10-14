@@ -2,6 +2,52 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-14 — Neon launch review fixes: one app per environment, no Neon in production, channel binding, a paused Neon (not run against Fly.io or Neon)
+
+A review of the Neon change (entry below) found that one wrong repository variable could deploy staging into
+the production app, that production could quietly run on staging's free Neon database, and that a month's
+used-up Neon hours would also block every production deploy without the summary or the guide saying so.
+
+- **Staging and production must be two different Fly apps.** `check_distinct_apps` stops the `gate`,
+  `deploy` and `status` runs before any request or `flyctl` call when `FLY_STAGING_APP` / `FLY_PRODUCTION_APP`
+  make both resolve to one app (either token reaches every app of the organization). Before, a staging run
+  with `FLY_STAGING_APP=domeremote-production` overwrote production's Managed Postgres `DATABASE_URL` with the
+  Neon address and deployed staging's settings and sleeping machine into production.
+- **No Neon in production.** A production `DATABASE_URL` whose host is `*.neon.tech` stops the run in the
+  input check, with the step to delete it from the production environment. The GitHub `DATABASE_URL` is now
+  used for production only when Fly will not list the clusters or the attach sets no address; when Fly lists
+  them and production's is missing, the run stops for the $41 consent even with that secret set, and names
+  any other clusters ("do not tick: ask an engineer first"). Docstrings, `deploy.yml` comments and
+  `deploy/README.md` now say exactly that.
+- **Channel binding required.** Staging's address must carry `channel_binding=require` with `sslmode=require`
+  or `verify-ca` (`sslmode=require` alone encrypts but does not check the server's certificate); only
+  `sslmode=verify-full` may go without it. The "or just `?sslmode=require`" wording is gone everywhere.
+- **A paused Neon database is named.** When staging's `/healthz` answers 503 or its database is not ok, the
+  production gate (both jobs), `status` (staging, and a note on production's) and a failed staging smoke check
+  tell the founder to look at https://console.neon.tech for used-up compute-hours; a staging `flyctl deploy`
+  that fails says the same for a database the migrations could not reach. `LAUNCH_SETUP.md` section 6 no
+  longer says "production is not affected": production keeps running, but no new version reaches it until
+  staging works again (wait for the next month, or ask an engineer about Neon's paid plan).
+- **Docs.** Neon's default branch is called `production` (with a `development` child) in new projects,
+  according to Neon's docs as shown in search results (changelog 2025-04-18): the guide says to keep
+  `production` in the Connect window and names it in the password reset, as do the program's repository-secret
+  message and `OPERATIONS.md`. Neon's Free storage is 1 GB per project since 2026-10-02 (Neon's changelog and
+  blog as shown in search results; its FAQ page still showed 0.5 GB): `LAUNCH_SETUP.md`, `COST_MODEL.md` and
+  `deploy/README.md` updated, still "as of October 2026". The guide's status note says Neon's screens come from
+  search results. Section 14 now has a row for every new message (the three `DATABASE_URL` messages that had
+  none, channel binding, the Neon address in production, one app for both, the consent with other clusters,
+  Neon not answering, a failed staging deploy) and the Neon password reset for a repository copy of
+  `DATABASE_URL`; section 11 says to delete a production `DATABASE_URL`. `deploy.yml`'s status line names
+  Neon. `SECURITY.md`, `OPERATIONS.md`, `DATA_RETENTION.md`, `HANDOFF.md`.
+- **What ran here**: `deploy/launch` ruff, format check, mypy strict, pytest 205 passed (was 180; the new
+  tests use the fake flyctl, and each new check was removed once to see its test fail); cloud-api (unchanged)
+  ruff, format check, mypy strict, full suite 340 passed, 1 skipped against the local PostgreSQL 16;
+  actionlint 1.7.12 with shellcheck 0.11.0 on all workflows, shellcheck on `entrypoint.sh`: clean; YAML and
+  TOML parse.
+- **Not run**: anything against Fly.io, Neon, Auth0 or Cloudflare. Nothing is live. neon.com could not be
+  fetched from this environment (DNS); the Neon facts above are from search results.
+- **Evidence**: written and statically checked; unit- and integration-tested against fakes.
+
 ## 2026-10-14 — About $50 a month: staging on Neon's free plan and asleep when idle, production unchanged (not run against Fly.io or Neon)
 
 The founder chose a budget of about $50 a month. Production keeps Fly Managed Postgres exactly as built (Basic,
@@ -34,7 +80,8 @@ machine that sleeps when nobody uses it (about $4 a month at most). Before: abou
 - **Docs**: `LAUNCH_SETUP.md` gains section 6 (Neon: account, project `domeremote-staging`, PostgreSQL 16,
   AWS `us-east-1`, Connect with pooling off, paste as staging `DATABASE_URL`, password reset) and renumbers
   the later sections; the staging run no longer ticks the database; costs are staging ≈ $4, production ≈ $45,
-  total ≈ $50; troubleshooting rows for every new message. `COST_MODEL.md` §2 Neon row (Free: 0.5 GB, 100
+  total ≈ $50; troubleshooting rows for the new messages (three `DATABASE_URL` messages and the Neon
+  password reset for a repository copy were missing; added by the review fixes above). `COST_MODEL.md` §2 Neon row (Free: 0.5 GB, 100
   CU-hours, scale to zero after 5 minutes, 6-hour restore window, as of October 2026, sources linked) and §2A
   rewritten. `deploy/README.md` ("Staging database (Neon)"), `OPERATIONS.md` (Neon's restore window is
   staging's only backup; rotating the Neon password; the restore rehearsal needs a temporary Managed Postgres

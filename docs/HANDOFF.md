@@ -47,7 +47,9 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   Fly Managed Postgres (about $45 a month with its always-on machine); staging uses a free Neon database
   (project `domeremote-staging`, AWS `us-east-1`) whose direct connection string is the staging Environment
   secret `DATABASE_URL`, copied to Fly on every deploy, and staging's machine sleeps when idle (about $4 a
-  month). Staging never runs `flyctl mpg`. **Written and statically checked only: never run against
+  month). Staging never runs `flyctl mpg`; production refuses a Neon `DATABASE_URL` and uses its GitHub
+  `DATABASE_URL` only when Fly will not list or attach the cluster; every run refuses staging and production
+  on one Fly app. **Written and statically checked only: never run against
   Fly.io, Neon, Auth0 or Cloudflare**; the founder's first staging run is the test.
 - **Windows installer** (2026-10-13/14, §7 item 4, pulled forward): an unsigned per-user development
   installer, `DoMe-Setup-<version>.exe` (Inno Setup), and `.github/workflows/windows-installer.yml`,
@@ -318,7 +320,9 @@ founder-driven; then:
    the first staging run's log and summary and fixes whatever the real Fly.io or Neon answers differently
    from what was read; in particular, confirm staging's machine stops when idle, the first request after a
    nap succeeds within the deploy's wake-up tries, and Neon's monthly compute hours hold up (a test PC
-   left linked to staging keeps it awake). Before production is called ready: restore rehearsal,
+   left linked to staging keeps it awake; when they run out, staging is down and the production gate
+   refuses every production deploy until the next month or a paid Neon plan, while production keeps
+   running). Before production is called ready: restore rehearsal,
    failed-deploy rehearsal, external `/healthz` monitor, backup retention recorded, support URL, Auth0
    email provider and Google keys (`docs/OPERATIONS.md` §12). Follow-ups: branch protection with
    required review on the default branch (the founder's approval otherwise authorizes unreviewed code;

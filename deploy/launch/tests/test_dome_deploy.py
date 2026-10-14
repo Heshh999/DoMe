@@ -1191,6 +1191,7 @@ NEON_NO_PASSWORD = f"postgresql://neondb_owner@{NEON_HOST}/neondb?sslmode=requir
         (NEON_DB.split("?")[0], "does not include `sslmode=require`"),
         (NEON_DB.replace("sslmode=require", "sslmode=disable"), "does not include `sslmode=require`"),
         (NEON_DB.replace("sslmode=require", "sslmode=prefer"), "does not include `sslmode=require`"),
+        (NEON_DB.replace("&channel_binding=require", ""), "does not include `channel_binding=require`"),
         (NEON_DB.replace(NEON_PASSWORD, "************"), "has stars where the password should be"),
         (NEON_NO_PASSWORD, "is missing its user name, password, host or database name"),
         (NEON_DB.replace(NEON_HOST, NEON_HOST + ":port"), "unreadable port number"),
@@ -1309,3 +1310,197 @@ def test_staging_that_stays_unreachable_is_asked_a_bounded_number_of_times(world
     run = world.run("gate", DEPLOY_ENVIRONMENT="production")
     assert run.code == 1 and "not reachable" in run.summary
     assert world.clock.sleeps.count(dome_deploy.SMOKE_INTERVAL) == dome_deploy.WAKE_ATTEMPTS - 1
+
+
+# ======================================================================================================
+# review findings, 2026-10-14 (second round): one app for both environments, Neon in production, channel
+# binding, a suspended Neon database
+# ======================================================================================================
+
+
+def deployed_production(world: World) -> dict[str, Any]:
+    """A production app as a first deploy leaves it: Managed Postgres attached, always-on config. Returns a copy."""
+    production_world(world)
+    assert world.run("deploy", DEPLOY_ENVIRONMENT="production").code == 0
+    app = world.state()["apps"]["domeremote-production"]
+    assert app["secrets"]["DATABASE_URL"].startswith("postgresql://fly-user:")  # from `mpg attach`
+    assert app["deployed_config"] == expected_fly_config("production")
+    world.reset_log()
+    world.web.requests.clear()
+    return copy.deepcopy(app)
+
+
+@pytest.mark.parametrize(
+    ("environment", "variables"),
+    [
+        ("staging", {"FLY_STAGING_APP": "domeremote-production"}),
+        ("production", {"FLY_PRODUCTION_APP": "domeremote-staging"}),
+        ("staging", {"FLY_STAGING_APP": "dome-shared", "FLY_PRODUCTION_APP": "dome-shared"}),
+    ],
+)
+def test_staging_and_production_on_one_fly_app_stop_before_anything(
+    world: World, environment: str, variables: dict[str, str]
+) -> None:
+    before = deployed_production(world)
+    for command in ("gate", "deploy", "status"):
+        run = world.run(command, DEPLOY_ENVIRONMENT=environment, CREATE_DATABASE="true", **variables)
+        assert run.code == 1, (command, run.summary)
+        assert "Stopped: needs you" in run.summary
+        assert "Staging and production would both use the Fly app" in run.summary
+        assert "`FLY_STAGING_APP` and `FLY_PRODUCTION_APP`" in run.summary
+        assert "https://github.com/Heshh999/DoMe/settings/variables/actions" in run.summary
+        assert "Nothing was created or changed" in run.summary
+        assert world.calls() == [], command  # not one flyctl command
+        assert world.web.requests == [], command  # not even GitHub, Auth0 or the apps were asked
+        assert_hygiene(world, run)
+    # production's database address (Managed Postgres) and its always-on configuration are untouched
+    assert world.state()["apps"]["domeremote-production"] == before
+
+
+@pytest.mark.parametrize("setup", ["no cluster", "no cluster, ticked", "cluster exists", "app has its database"])
+def test_production_refuses_a_neon_address_before_any_command(world: World, setup: str) -> None:
+    production_world(world) if setup == "cluster exists" else world.production_ready_web()
+    if setup == "app has its database":
+        world.add_app("domeremote-production", secrets={"DATABASE_URL": FALLBACK_DB})
+    before = world.state()
+    tick = "true" if setup == "no cluster, ticked" else "false"
+    run = world.run("deploy", DEPLOY_ENVIRONMENT="production", DEPLOY_DATABASE_URL=NEON_DB, CREATE_DATABASE=tick)
+    assert run.code == 1
+    assert world.calls() == [] and mutating_calls(world) == []
+    assert world.state() == before
+    assert "Stopped: needs you" in run.summary
+    assert "The production Environment secret `DATABASE_URL` is a Neon address (staging's database)" in run.summary
+    assert "delete `DATABASE_URL` from the production environment (docs/LAUNCH_SETUP.md section 11)" in run.summary
+    assert "under **Environment secrets** delete `DATABASE_URL`" in run.summary
+    assert "Never paste the Neon address into this environment" in run.summary
+    assert "Nothing was created or changed" in run.summary
+    assert_hygiene(world, run)
+
+
+def test_production_with_a_database_url_but_no_cluster_still_asks_for_the_cost_consent(world: World) -> None:
+    world.production_ready_web()
+    run = world.run("deploy", DEPLOY_DATABASE_URL=FALLBACK_DB, **PRODUCTION)
+    assert run.code == 1
+    assert mutating_calls(world) == [] and "flyctl mpg list" in world.commands()
+    assert "Production has no database yet" in run.summary and "about $41 a month" in run.summary
+    assert "The production Environment secret `DATABASE_URL` was not used" in run.summary
+    assert "create the database" in run.summary
+    assert_hygiene(world, run)
+
+
+def test_the_cost_consent_names_other_clusters_so_a_second_one_is_not_bought_by_mistake(world: World) -> None:
+    world.production_ready_web()
+    world.add_cluster("my-hand-made-db")
+    run = world.run("deploy", **PRODUCTION)
+    assert run.code == 1 and mutating_calls(world) == []
+    assert "Fly lists other Managed Postgres databases in organization personal (`my-hand-made-db`)" in run.summary
+    assert "none named `domeremote-production-db`" in run.summary
+    assert "do not tick: ask an engineer first" in run.summary
+
+
+def test_the_github_database_url_is_used_when_fly_will_not_list_the_clusters(world: World) -> None:
+    world.production_ready_web()
+    world.update(lambda s: s["fail"].update({"mpg list": {"exit": 1, "stderr": "Error: unauthorized\n"}}))
+    run = world.run("deploy", DEPLOY_DATABASE_URL=FALLBACK_DB, **PRODUCTION)
+    assert run.code == 0, run.summary
+    assert "flyctl mpg create" not in world.commands() and "flyctl mpg attach" not in world.commands()
+    [staged] = imports(world)
+    assert staged["DATABASE_URL"] == FALLBACK_DB
+    assert "address taken from the GitHub secret DATABASE_URL" in run.summary
+    assert_hygiene(world, run)
+
+
+@pytest.mark.parametrize(
+    ("query", "problem"),
+    [
+        ("sslmode=require&channel_binding=require", ""),
+        ("sslmode=verify-full", ""),  # the certificate and host name are checked: binding is not needed
+        ("sslmode=verify-full&channel_binding=require", ""),
+        ("sslmode=require", "does not include `channel_binding=require`"),
+        ("sslmode=verify-ca", "does not include `channel_binding=require`"),
+        ("sslmode=require&channel_binding=prefer", "does not include `channel_binding=require`"),
+        ("sslmode=require&channel_binding=disable", "does not include `channel_binding=require`"),
+        ("channel_binding=require", "does not include `sslmode=require`"),
+    ],
+)
+def test_external_database_needs_tls_and_channel_binding(query: str, problem: str) -> None:
+    url = f"postgresql://neondb_owner:{NEON_PASSWORD}@{NEON_HOST}/neondb?{query}"
+    found = dome_deploy.external_database_problem(url)
+    assert (problem in found) if problem else found == ""
+    assert NEON_PASSWORD not in found
+
+
+def test_staging_without_channel_binding_stops_before_any_command(world: World) -> None:
+    world.staging_ready_web()
+    run = world.run("deploy", DEPLOY_DATABASE_URL=NEON_DB.replace("&channel_binding=require", ""))
+    assert run.code == 1 and world.calls() == []
+    assert "does not include `channel_binding=require`" in run.summary
+    assert "ends with `?sslmode=require&channel_binding=require`" in run.summary
+    assert "or just `?sslmode=require`" not in run.summary
+    assert_hygiene(world, run)
+
+
+NEON_DOWN = "Staging's database at Neon is not answering. In https://console.neon.tech check whether this month's free compute-hours are used up (docs/LAUNCH_SETUP.md section 6)."
+
+
+def neon_suspended(world: World) -> None:
+    """What staging's /healthz answers while its Neon database is suspended (cloud-api routes/health.py)."""
+    world.web.json(
+        "https://domeremote-staging.fly.dev/healthz",
+        {"status": "degraded", "commit": SHA, "database": "unavailable", "forwarded_client": "ok"},
+        503,
+    )
+
+
+def test_a_suspended_neon_database_is_named_by_the_production_gate_and_deploy(world: World) -> None:
+    production_world(world)
+    neon_suspended(world)
+    for command in ("gate", "deploy"):
+        run = world.run(command, DEPLOY_ENVIRONMENT="production")
+        assert run.code == 1 and "Stopped: needs you" in run.summary
+        assert "Production only receives a commit that staging already runs" in run.summary
+        assert NEON_DOWN in run.summary
+        assert "no new version reaches production until staging works again" in run.summary
+        assert world.calls() == []
+
+
+def test_a_staging_that_is_merely_behind_does_not_blame_neon(world: World) -> None:
+    production_world(world)
+    world.web.healthz("https://domeremote-staging.fly.dev", commit=OTHER_SHA)
+    gate = world.run("gate", DEPLOY_ENVIRONMENT="production")
+    assert gate.code == 1 and "Neon" not in gate.summary
+
+
+def test_status_names_a_suspended_neon_database(world: World) -> None:
+    neon_suspended(world)
+    run = world.run("status")
+    assert run.code == 1 and "Staging is deployed but not healthy (HTTP 503)" in run.summary
+    assert NEON_DOWN in run.summary and "no new version can reach production" in run.summary
+    assert world.calls() == []
+    production_world(world)
+    neon_suspended(world)
+    run = world.run("status", DEPLOY_ENVIRONMENT="production")
+    assert NEON_DOWN in run.summary and "Production keeps running" in run.summary
+
+
+def test_a_staging_deploy_whose_database_does_not_answer_points_at_neon(world: World) -> None:
+    world.staging_ready_web()
+    neon_suspended(world)
+    run = world.run("deploy")
+    assert run.code == 1 and "Failed: needs an engineer" in run.summary
+    assert NEON_DOWN in run.summary
+    world.staging_ready_web()
+    world.reset_log()
+    world.update(lambda s: s["fail"].update({"deploy --config": {"exit": 1, "stderr": "Error: release failed\n"}}))
+    run = world.run("deploy")
+    assert run.code == 1 and "Fly did not finish the deploy" in run.summary
+    assert "If the log above says the database could not be reached, open https://console.neon.tech" in run.summary
+    production_world(world)
+    production = world.run("deploy", DEPLOY_ENVIRONMENT="production")  # production's database is Fly's, not Neon
+    assert production.code == 1 and "Fly did not finish the deploy" in production.summary
+    assert "console.neon.tech" not in production.summary
+
+
+def test_the_repository_copy_message_names_neons_production_branch(world: World) -> None:
+    run = world.run("gate", REPO_LEVEL_SECRETS="DATABASE_URL")
+    assert "**Branches** > `production` (Neon's name for its main branch, marked Default" in run.summary

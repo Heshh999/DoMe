@@ -262,8 +262,13 @@ Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet*
   URLs, Fly tokens, private-key blocks); child processes do not inherit the OIDC client secret or the
   database URL from GitHub (`DATABASE_URL`: staging's Neon address, required there; production's fallback),
   and the password inside that URL is masked on its own, since GitHub masks only the whole stored value.
-  Staging's Neon address must be the direct, TLS-only connection string (`sslmode=require`, normally with
-  `channel_binding=require`, which libpq enforces); the deploy refuses one without it. `flyctl mpg create` and `flyctl mpg attach` print the database password in clear
+  Staging's Neon address must be the direct, TLS-only connection string with SCRAM channel binding
+  (`sslmode=require&channel_binding=require`, both enforced by libpq; `sslmode=require` alone encrypts but does
+  not check the server's certificate); the deploy refuses one without either (only `sslmode=verify-full` may
+  go without channel binding). A Neon address in production's `DATABASE_URL` is refused, and a run stops
+  before any request when staging and production resolve to the same Fly app: either token reaches both
+  apps, so one wrong repository variable would otherwise deploy staging's settings and database address into
+  production. `flyctl mpg create` and `flyctl mpg attach` print the database password in clear
   text (flyctl v0.4.110 source), so their output is never shown, and `flyctl mpg status` (which returns
   the credentials) is never called. Each comma-separated part of the Fly token is masked as well, because
   GitHub masks only the exact stored string. The repository is public, so Actions logs are public.

@@ -28,7 +28,9 @@ Secret rules enforced here (tested in tests/test_dome_deploy.py):
 
 Databases (``database_mode`` in environments.toml): staging uses an EXTERNAL database (Neon's free plan) whose address
 is the required GitHub Environment secret DATABASE_URL, stored in Fly again on every deploy; it never touches Fly
-Managed Postgres. Production uses Fly Managed Postgres ("fly-managed"), created only with the founder's tick. Each
+Managed Postgres. Production uses Fly Managed Postgres ("fly-managed"), created only with the founder's tick; its
+DATABASE_URL secret is used only when Fly will not list or attach the cluster, and a Neon address there is refused.
+Staging and production must resolve to two different Fly apps (checked before any flyctl call). Each
 deploy writes a temporary per-environment copy of deploy/fly.toml with that environment's machine-sleep settings
 (staging sleeps when idle, production never does) and deletes it afterwards.
 
@@ -753,6 +755,40 @@ def app_name_for(cfg: EnvConfig, env: Mapping[str, str]) -> str:
     return name
 
 
+def check_distinct_apps(env: Mapping[str, str], envs: Mapping[str, EnvConfig]) -> None:
+    """Staging and production must be two different Fly apps. Either Fly token reaches every app of the organization
+    (docs/SECURITY.md section 6), so one wrong repository variable would otherwise send a staging deploy into the
+    production app (staging's Neon address over production's database, DOME_ENV=staging, a machine that sleeps), or
+    let production's checks look at production itself instead of staging. Runs before any flyctl call."""
+    staging = app_name_for(envs["staging"], env)
+    production = app_name_for(envs["production"], env)
+    if staging != production:
+        return
+    raise Stop(
+        "you",
+        f"Staging and production would both use the Fly app {staging}. They must be two different apps, or a "
+        "deploy of one would overwrite the other's settings and database address. Check the repository variables "
+        "`FLY_STAGING_APP` and `FLY_PRODUCTION_APP`. Nothing was created or changed.",
+        next_steps=[
+            f"Open {variables_page(env)} (Variables tab) and correct `FLY_STAGING_APP` or `FLY_PRODUCTION_APP` so the "
+            f"two names differ. Without these variables, staging is {envs['staging'].fly_app} and production is "
+            f"{envs['production'].fly_app}.",
+            "Run Deploy again.",
+        ],
+    )
+
+
+def database_host(url: str) -> str:
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def is_neon_host(host: str) -> bool:
+    return host == "neon.tech" or host.endswith(".neon.tech")
+
+
 @dataclass
 class Inputs:
     cfg: EnvConfig
@@ -763,7 +799,8 @@ class Inputs:
     client_id: str
     client_secret: str
     # The GitHub Environment secret DATABASE_URL (env DEPLOY_DATABASE_URL): required for an external database
-    # (staging's Neon), only a fallback for Fly Managed Postgres (production).
+    # (staging's Neon). For Fly Managed Postgres (production) only a fallback when Fly will not list or attach the
+    # cluster, and never a Neon address.
     database_url: str
     create_database: bool
     support_url: str
@@ -810,10 +847,19 @@ def external_database_problem(url: str) -> str:
             f"{name} is Neon's pooled address (its host name contains `-pooler`). DoMe needs the direct one: in "
             "Neon's **Connect** window turn **Connection pooling** off, then copy it again."
         )
-    if parse_qs(parts.query).get("sslmode", [""])[-1] not in ("require", "verify-ca", "verify-full"):
+    query = parse_qs(parts.query)
+    sslmode = query.get("sslmode", [""])[-1]
+    if sslmode not in ("require", "verify-ca", "verify-full"):
         return (
             f"{name} does not include `sslmode=require`, so the connection might not be encrypted. Copy it again "
             "exactly as Neon shows it."
+        )
+    # sslmode=require encrypts but does not check the server's certificate; SCRAM channel binding (enforced by the
+    # bundled libpq, cloud-api/tests/test_database_url.py) stops a relayed login. Only verify-full may go without it.
+    if sslmode != "verify-full" and query.get("channel_binding", [""])[-1] != "require":
+        return (
+            f"{name} does not include `channel_binding=require`. Copy it again exactly as Neon shows it (it ends with "
+            "`?sslmode=require&channel_binding=require`)."
         )
     return ""
 
@@ -823,8 +869,8 @@ def external_database_steps(env: Mapping[str, str], cfg: EnvConfig) -> list[str]
     return [
         f"In Neon ({NEON_CONSOLE}), open the project **{cfg.external_database_project}** and click **Connect**. Turn "
         "**Connection pooling** off, then copy the connection string with the copy button. It starts with "
-        "`postgresql://`, ends with `?sslmode=require&channel_binding=require` (or just `?sslmode=require`), and "
-        "its host name has no `-pooler`. Do not paste it anywhere else.",
+        "`postgresql://`, ends with `?sslmode=require&channel_binding=require`, and its host name has no `-pooler`. "
+        "Do not paste it anywhere else.",
         f"Open {environments_page(env)}, choose **{cfg.name}**, and under **Environment secrets** add (or update) "
         "`DATABASE_URL` with that value (docs/LAUNCH_SETUP.md section 6).",
     ]
@@ -867,9 +913,10 @@ def check_no_repository_secrets(env: Mapping[str, str]) -> None:
     if "DATABASE_URL" in found:
         steps.append(
             "Change the database password, because every run could read it: for staging, in Neon open the project > "
-            "**Branches** > the default branch > **Roles & Databases**, choose **Reset password** in the role's menu, "
-            "and paste the new connection string only as the staging Environment secret `DATABASE_URL` "
-            "(docs/LAUNCH_SETUP.md section 6). For production, tell an engineer."
+            "**Branches** > `production` (Neon's name for its main branch, marked Default; it is still staging's "
+            "database) > **Roles & Databases**, choose **Reset password** in the role's menu, and paste the new "
+            "connection string only as the staging Environment secret `DATABASE_URL` (docs/LAUNCH_SETUP.md section "
+            "6). For production, tell an engineer."
         )
     steps.append("Run Deploy again.")
     raise Stop(
@@ -999,6 +1046,7 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
 
     database_url = env.get("DEPLOY_DATABASE_URL", "").strip()
     database_problem = ""
+    neon_in_fly_managed = False
     if database_url:
         book.add(database_url, mask=False)  # a stored GitHub secret: GitHub masks the whole value itself
         password = url_password(database_url)
@@ -1019,6 +1067,15 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
             "The DATABASE_URL secret does not look like a database address (it should start with "
             "postgresql:// and have no spaces). Copy the pooled URL again from Fly > Managed Postgres > "
             "your cluster > Connect."
+        )
+    elif database_url and is_neon_host(database_host(database_url)):
+        # Fly Managed Postgres only: a Neon address here is staging's free database (6-hour restore window, monthly
+        # compute-hours shared with staging), never production's.
+        neon_in_fly_managed = True
+        problems.append(
+            f"The {cfg.name} Environment secret `DATABASE_URL` is a Neon address (staging's database). {cfg.title} "
+            f"must not use it: delete `DATABASE_URL` from the {cfg.name} environment (docs/LAUNCH_SETUP.md section "
+            "11) and run Deploy again."
         )
 
     issuer = ""
@@ -1071,6 +1128,12 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
         )
     if cfg.external_database and (not database_url or database_problem):
         next_steps += external_database_steps(env, cfg)
+    if neon_in_fly_managed:
+        next_steps.append(
+            f"Open {page}, choose **{cfg.name}**, and under **Environment secrets** delete `DATABASE_URL` (the bin "
+            f"icon next to it). {cfg.title} keeps its data in Fly Managed Postgres: on its first deploy, tick **create "
+            "the database**. Never paste the Neon address into this environment."
+        )
     if missing_secrets or missing_vars or problems:
         next_steps.append("Run Deploy again. Nothing was created or changed by this run.")
         raise Stop(
@@ -1205,6 +1268,24 @@ def describe_health(health: Health, sha: str) -> str:
     return ", ".join(parts)
 
 
+def external_database_down(cfg: EnvConfig, health: Health) -> bool:
+    """True when an environment on an external database (staging's Neon) answers, but without its database: /healthz
+    answers 503 (cloud-api routes/health.py) or reports a database that is not ok. With Neon's free plan the usual
+    cause is a month's compute-hours used up, which suspends the database until the next month."""
+    return (
+        cfg.external_database
+        and health.reachable
+        and (health.status_code == 503 or health.body.get("database") not in (None, "ok"))
+    )
+
+
+def external_database_down_step(cfg: EnvConfig) -> str:
+    return (
+        f"{cfg.title}'s database at Neon is not answering. In {NEON_CONSOLE} check whether this month's free "
+        "compute-hours are used up (docs/LAUNCH_SETUP.md section 6)."
+    )
+
+
 def production_gate(env: Mapping[str, str], envs: Mapping[str, EnvConfig], sha: str, summary: Summary) -> None:
     staging = envs["staging"]
     staging_app = app_name_for(staging, env)
@@ -1220,14 +1301,23 @@ def production_gate(env: Mapping[str, str], envs: Mapping[str, EnvConfig], sha: 
             "everyone as one visitor. Production is not deployed until an engineer fixes this "
             "(deploy/README.md 'Client addresses').",
         )
+    steps = [
+        "Run Deploy with environment **staging** for this same commit and wait for it to finish green.",
+        "Then run Deploy with environment **production** again.",
+    ]
+    if external_database_down(staging, health):
+        # A staging deploy cannot finish either while Neon is suspended (its migrations need the database).
+        steps = [
+            external_database_down_step(staging)
+            + " If they are, production keeps running, but no new version reaches production until staging works "
+            "again: wait for the next month, or ask an engineer about Neon's paid plan for the rest of this month.",
+            *steps,
+        ]
     raise Stop(
         "you",
         f"Production only receives a commit that staging already runs and that is healthy there. Staging "
         f"({base}) is {describe_health(health, sha)}; this run is commit {sha[:12]}.",
-        next_steps=[
-            "Run Deploy with environment **staging** for this same commit and wait for it to finish green.",
-            "Then run Deploy with environment **production** again.",
-        ],
+        next_steps=steps,
     )
 
 
@@ -1404,6 +1494,7 @@ class Deployer:
             check_ref(self.env)
             cfg = read_environment_choice(self.env, self.envs)
             self.summary.title = f"{cfg.title} deploy"
+            check_distinct_apps(self.env, self.envs)  # before anything reads or changes an app
             inputs = read_inputs(self.env, cfg, self.book, self.summary)
             self.summary.step("Inputs", "all present")
             self.deploy(inputs)
@@ -1539,36 +1630,51 @@ class Deployer:
         return parse_list(result.stdout, empty_markers=("No managed postgres clusters found",))
 
     def choose_database(self, inp: Inputs) -> tuple[dict[str, Any] | None, str]:
+        """The GitHub secret DATABASE_URL is used only when Fly would not list the clusters (the token cannot manage
+        Managed Postgres, so the founder made the database on the dashboard). When Fly lists them and production's
+        is not there, the run stops for the founder's cost consent even with that secret set."""
         clusters = self.list_clusters(inp)
-        if clusters is not None:
-            for c in clusters:
-                if field_of(c, "name") == inp.cfg.database_cluster:
-                    return c, "attach"
-            if inp.create_database:
-                return None, "create"
-        if inp.database_url:
-            return None, "fallback"
         if clusters is None:
+            if inp.database_url:
+                return None, "fallback"
             raise Stop(
                 "you",
                 f"{inp.cfg.title} has no database yet, and Fly would not let this token create or list Managed "
                 "Postgres databases. Nothing was created or changed.",
                 next_steps=dashboard_database_steps(inp),
             )
-        raise Stop(
-            "you",
+        for c in clusters:
+            if field_of(c, "name") == inp.cfg.database_cluster:
+                return c, "attach"
+        if inp.create_database:
+            return None, "create"
+        message = (
             f"{inp.cfg.title} has no database yet. Fly charges about $41 a month for one: Managed Postgres Basic "
             f"($38) plus about $3 for its {inp.cfg.database_volume_gb} GB of storage. With the app machine, "
-            f"{inp.cfg.name} costs about $45 a month (docs/LAUNCH_SETUP.md section 0). Nothing was created or "
-            "changed.",
-            next_steps=[
-                "If you agree to that cost, run Deploy again with **create the database** ticked.",
-            ],
+            f"{inp.cfg.name} costs about $45 a month (docs/LAUNCH_SETUP.md section 0)."
         )
+        steps = ["If you agree to that cost, run Deploy again with **create the database** ticked."]
+        others = [n for n in (str(field_of(c, "name") or "") for c in clusters) if re.fullmatch(r"[A-Za-z0-9._-]+", n)]
+        if others:
+            message += (
+                f" Fly lists other Managed Postgres databases in organization {inp.org} ("
+                + ", ".join(f"`{n}`" for n in others[:5])
+                + f"), but none named `{inp.cfg.database_cluster}`."
+            )
+            steps.insert(
+                0, f"If one of those is meant to be {inp.cfg.name}'s database, do not tick: ask an engineer first."
+            )
+        if inp.database_url:
+            message += (
+                f" The {inp.cfg.name} Environment secret `DATABASE_URL` was not used: it is only for when Fly cannot "
+                f"list or connect {inp.cfg.name}'s own Managed Postgres database."
+            )
+        raise Stop("you", message + " Nothing was created or changed.", next_steps=steps)
 
     def ensure_database(self, inp: Inputs, cluster: dict[str, Any] | None, plan: str) -> str:
         """Fly Managed Postgres only (never for an external database). Returns the plan that ended up applying:
-        "existing", "attached" or "fallback" (stage the GitHub secret)."""
+        "existing", "attached" or "fallback" (stage the GitHub secret: Fly would not list the clusters, or the
+        attach did not set the address)."""
         cfg, app = inp.cfg, inp.app
         if plan == "existing":
             self.summary.step("Database", "already connected, unchanged")
@@ -1814,6 +1920,14 @@ class Deployer:
                 "engineer",
                 "Fly did not finish the deploy (see the log above: a failing database migration or a start-up "
                 "configuration error are the usual causes). The previous version, if any, keeps running.",
+                next_steps=[
+                    # the migrations run first and need the database: a suspended Neon database fails them
+                    f"If the log above says the database could not be reached, open {NEON_CONSOLE} and check whether "
+                    "this month's free compute-hours are used up (docs/LAUNCH_SETUP.md section 6).",
+                    "Otherwise share the run link with an engineer.",
+                ]
+                if cfg.external_database
+                else (),
             )
         self.summary.step("Deploy", f"done ({app}, migrations ran first)")
         if cfg.sleeps_when_idle:
@@ -1922,6 +2036,7 @@ class Deployer:
                 "engineer",
                 "The new version is deployed but does not pass its checks: "
                 + " ".join(p if p.endswith(".") else p + "." for p in problems),
+                next_steps=[external_database_down_step(cfg)] if external_database_down(cfg, health) else (),
             )
 
         report = check_custom_host(cfg.hostname, addresses, inp.sha, production=cfg.dome_env == "production")
@@ -2079,6 +2194,7 @@ def run_gate(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig])
         summary.title = f"{cfg.title} deploy: checks before approval"
         sha = read_sha(env)
         app_name_for(cfg, env)
+        check_distinct_apps(env, envs)
         check_no_repository_secrets(env)
         summary.step("Repository secrets", "none of the deploy secrets is a repository secret")
         default_branch = env.get("DEFAULT_BRANCH", "").strip()
@@ -2110,6 +2226,7 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
         cfg = read_environment_choice(env, envs)
         summary.title = f"{cfg.title} status"
         app = app_name_for(cfg, env)
+        check_distinct_apps(env, envs)
         sha = env.get("GITHUB_SHA", "").strip().lower()
         base = f"https://{app}.fly.dev"
         health = wake_health(base)  # a sleeping staging machine starts on this request
@@ -2133,6 +2250,12 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
             return 1
         if health.status_code != 200 or health.body.get("status") != "ok":
             summary.headline = f"{cfg.title} is deployed but not healthy ({describe_health(health, sha)})"
+            if external_database_down(cfg, health):
+                summary.next_steps.append(
+                    external_database_down_step(cfg)
+                    + " If they are, staging works again next month (sooner only on Neon's paid plan: ask an "
+                    "engineer), and until then no new version can reach production (production itself keeps running)."
+                )
             summary.next_steps.append(
                 "Run Deploy with action **status** again in a few minutes; if it stays like this, ask an engineer "
                 "(Fly dashboard > the app > Monitoring shows its log)."
@@ -2144,6 +2267,11 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
             staging = get_health(f"https://{staging_app}.fly.dev")
             summary.step("Staging commit", (staging.commit or "unknown")[:12])
             summary.step("Production commit", (health.commit or "unknown")[:12])
+            if external_database_down(envs["staging"], staging):
+                summary.notes.append(
+                    external_database_down_step(envs["staging"])
+                    + " Production keeps running, but no new version reaches it until staging works again."
+                )
         try:
             app_addresses = set(resolve(f"{app}.fly.dev"))
         except OSError:

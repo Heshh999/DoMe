@@ -7,7 +7,7 @@
 # Step by step, in plain English: docs/LAUNCH_SETUP.md. What each step does: deploy/README.md.
 #
 # STATUS (2026-10-14): written and statically checked (actionlint, tests in deploy/launch/tests). It has
-# NEVER run against Fly.io, Auth0 or Cloudflare; the first staging run is the real test.
+# NEVER run against Fly.io, Neon, Auth0 or Cloudflare; the first staging run is the real test.
 #
 # Shape and safety rules (enforced by deploy/launch/tests/test_workflow_policy.py):
 # * workflow_dispatch only. Never push, pull_request or pull_request_target: the repository is public,
@@ -22,9 +22,12 @@
 #   healthily. Only then does GitHub ask for approval.
 # * Job "deploy" is the only job with secret values. It uses the GitHub Environment named by the input,
 #   which holds FLY_API_TOKEN, DOME_OIDC_CLIENT_SECRET and DATABASE_URL (staging: required, its Neon
-#   database's direct address; production: only a fallback if Fly cannot attach its database). No job
-#   receives a Fly token without an approval from the founder's GitHub account; that approval authorizes
-#   whatever is on the default branch at that commit (docs/SECURITY.md section 6).
+#   database's direct address; production: only a fallback when Fly will not list or attach its Managed
+#   Postgres, never a Neon address). No job receives a Fly token without an approval from the founder's
+#   GitHub account; that approval authorizes whatever is on the default branch at that commit
+#   (docs/SECURITY.md section 6).
+# * Jobs "gate", "deploy" and "status" all refuse, before any request, when staging and production resolve
+#   to the same Fly app (repository variables FLY_STAGING_APP / FLY_PRODUCTION_APP).
 # * Job "status" has no environment and no secrets and never runs flyctl: it cannot change anything.
 # * Secrets appear only in the deploy step's env block. Values generated during the run are masked with
 #   ::add-mask:: before use and reach Fly only on stdin (`flyctl secrets import`).
@@ -131,7 +134,8 @@ jobs:
           # Secrets: only here. Environment secrets of the chosen GitHub Environment.
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           DOME_OIDC_CLIENT_SECRET: ${{ secrets.DOME_OIDC_CLIENT_SECRET }}
-          # staging: required (its free Neon database); production: only a fallback for Fly Managed Postgres
+          # staging: required (its free Neon database); production: only a fallback when Fly will not list or
+          # attach its Managed Postgres (a Neon address is refused there)
           DEPLOY_DATABASE_URL: ${{ secrets.DATABASE_URL }}
           # Not secret: environment variables (or repository variables for the app-name overrides).
           DOME_OIDC_ISSUER: ${{ vars.DOME_OIDC_ISSUER }}
