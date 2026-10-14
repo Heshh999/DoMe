@@ -2,6 +2,57 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-14 — About $50 a month: staging on Neon's free plan and asleep when idle, production unchanged (not run against Fly.io or Neon)
+
+The founder chose a budget of about $50 a month. Production keeps Fly Managed Postgres exactly as built (Basic,
+`iad`, about $41 a month plus about $4 for its always-on machine). Staging moves to a free Neon database and a
+machine that sleeps when nobody uses it (about $4 a month at most). Before: about $90 a month for both.
+
+- **Per-environment database mode** (`deploy/launch/environments.toml`, `dome_deploy.py`). Staging is
+  `external`: the Deploy button never lists, creates or attaches Fly Managed Postgres for it and never shows
+  the database cost consent. It requires the GitHub Environment secret `DATABASE_URL` (Neon's direct
+  connection string), checks it without printing it (a `postgres(ql)://` URL with user, password, host and
+  database; no `-pooler` host; `sslmode=require`/`verify-ca`/`verify-full`; no stars for a password), stops
+  with a "needs you" summary naming the Neon screen and the GitHub field when it is missing or unusable, and
+  stores it in Fly on every deploy, so a Neon password reset is "paste in GitHub, press Deploy". Its password
+  is masked on its own. A staging app with its own `DOME_DATABASE_URL` Fly secret stops for an engineer.
+  Production is `fly-managed`, unchanged, with the GitHub secret still only a fallback. The workflow's env
+  name is now `DEPLOY_DATABASE_URL` (was `DOME_FALLBACK_DATABASE_URL`), and the checkbox reads "Production
+  only"; `environments.toml` is validated on load (production must stay on).
+- **Staging sleeps.** Each deploy writes `deploy/fly.<environment>.generated.toml`: `deploy/fly.toml` with only
+  `auto_stop_machines`, `auto_start_machines` and `min_machines_running` changed (staging `"stop"`, `true`, `0`;
+  production `"off"`, `false`, `1`, the base file's own values). It refuses to deploy unless the copy parses to
+  exactly that, and deletes it afterwards, also on failure (git ignores it). flyctl v0.4.110's `deploy` has no
+  flag for these (its `deploy.go` and `flag.go` were read). The production gate and `status` ask a sleeping
+  staging up to 4 times, 10 s apart.
+- **Neon-safe connections** (cloud-api; behaviour unchanged, now proven): the entrypoint keeps the URL query,
+  SQLAlchemy hands `sslmode` and `channel_binding` to psycopg, and libpq 18 (psycopg-binary) enforces both
+  against a stand-in server; `pool_pre_ping` (already on, with `pool_recycle=600`) replaces a pooled
+  connection whose backend was ended, and a control shows the same request fails without it. The direct host
+  is used, not Neon's PgBouncer `-pooler` (transaction mode; psycopg prepares statements server-side after 5
+  runs; Neon's support for protocol-level prepared statements there was not confirmed). `DECISIONS.md` 68.
+- **Docs**: `LAUNCH_SETUP.md` gains section 6 (Neon: account, project `domeremote-staging`, PostgreSQL 16,
+  AWS `us-east-1`, Connect with pooling off, paste as staging `DATABASE_URL`, password reset) and renumbers
+  the later sections; the staging run no longer ticks the database; costs are staging ≈ $4, production ≈ $45,
+  total ≈ $50; troubleshooting rows for every new message. `COST_MODEL.md` §2 Neon row (Free: 0.5 GB, 100
+  CU-hours, scale to zero after 5 minutes, 6-hour restore window, as of October 2026, sources linked) and §2A
+  rewritten. `deploy/README.md` ("Staging database (Neon)"), `OPERATIONS.md` (Neon's restore window is
+  staging's only backup; rotating the Neon password; the restore rehearsal needs a temporary Managed Postgres
+  cluster now; DB pool row corrected to 600 s), `SECURITY.md`, `DATA_RETENTION.md`, `HANDOFF.md`.
+- **Neon facts**: neon.com could not be fetched from this environment; the Free-plan figures and console
+  words come from Neon's own pages as shown in search results on 2026-10-14 and are marked "as of October
+  2026" and *(per vendor docs, not yet exercised)*.
+- **What ran here**: `deploy/launch` ruff, format check, mypy strict, pytest 180 passed (was 136); cloud-api
+  ruff, format check, mypy strict (`dome_api tests`), `tests/test_database_url.py` (11) with the settings and
+  OIDC tests (61 passed together) against the local PostgreSQL 16, and the full cloud-api suite: 340
+  passed, 1 skipped; actionlint 1.7.12 with shellcheck 0.11.0 on all workflows and shellcheck on `entrypoint.sh`:
+  clean; YAML and TOML parse.
+- **Not run**: anything against Fly.io, Neon, Auth0 or Cloudflare. Nothing is live. Unverified until the
+  first staging run: Neon's real connection string and channel binding, Fly stopping the idle machine (and
+  its health checks not keeping it awake), the cold start after a nap, Neon's monthly hours in practice.
+- **Evidence**: written and statically checked; unit- and integration-tested against fakes and a local
+  PostgreSQL.
+
 ## 2026-10-14 — Launch review fixes: gate checks GitHub's own controls, stricter checks, founder guide (not run against Fly.io)
 
 A review of the one-button launch found ways the founder's approval could be bypassed or misdirected,

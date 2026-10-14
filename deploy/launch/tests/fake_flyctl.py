@@ -7,9 +7,12 @@ Output shapes follow the flyctl v0.4.110 source (read 2026-10-14, see deploy/REA
 * ``mpg create`` and ``mpg attach`` print the database password in clear text (the real ones do too).
 * ``ips list --json`` uses ``Address``/``Type`` (``v6``, ``shared_v4``); ``secrets list --json`` uses
   ``name``/``digest``/``status``; ``certs`` use json tags (``hostname``, ``dns_requirements``).
+* ``deploy --config <file>`` reads that file when it runs (it is the per-environment copy dome_deploy.py writes and
+  deletes afterwards); the fake keeps what it parsed in the app's ``deployed_config`` and the path in
+  ``deployed_config_path``. A file that is missing or not TOML fails the deploy.
 
 Every call is appended to the log file as ``{"tool", "argv", "stdin", "env_has_client_secret",
-"env_has_fallback_db", "env_has_fly_token", "env_has_gh_token"}``. Failures are injected through
+"env_has_database_url", "env_has_fly_token", "env_has_gh_token"}``. Failures are injected through
 ``state["fail"]``, keyed by the first two arguments (``"secrets list"``) with ``{"exit": n, "stdout": "...",
 "stderr": "..."}``.
 """
@@ -21,6 +24,7 @@ import json
 import os
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +180,14 @@ def flyctl(argv: list[str], stdin: str, state: dict[str, Any]) -> int:
         return 0
     if key.startswith("deploy"):
         assert app is not None
+        config_path = _opt(argv, "--config", "-c")
+        try:
+            config = tomllib.loads(Path(str(config_path)).read_text(encoding="utf-8"))  # relative to the cwd, as flyctl
+        except (OSError, ValueError) as exc:
+            _err(f"Error: failed loading app config from {config_path}: {exc}\n")
+            return 1
+        app["deployed_config"] = config
+        app["deployed_config_path"] = config_path
         for needed in ("DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64", "DOME_SESSION_SECRET", "DOME_OIDC_CLIENT_SECRET"):
             if needed not in app["secrets"]:
                 _out(f"Running release_command\nentrypoint: no entitlement signing key ({needed} missing)\n")
@@ -251,7 +263,7 @@ def main() -> int:
                     "argv": argv,
                     "stdin": stdin,
                     "env_has_client_secret": "DOME_OIDC_CLIENT_SECRET" in os.environ,
-                    "env_has_fallback_db": "DOME_FALLBACK_DATABASE_URL" in os.environ,
+                    "env_has_database_url": "DEPLOY_DATABASE_URL" in os.environ,
                     "env_has_fly_token": "FLY_API_TOKEN" in os.environ,
                     "env_has_gh_token": "GH_TOKEN" in os.environ,
                 }

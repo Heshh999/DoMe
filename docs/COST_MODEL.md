@@ -42,7 +42,7 @@ figure on the vendor page before relying on it; prices change.
 | Fly.io outbound data | $0.02 per GB (North America / Europe) | [fly.io/docs/about/pricing](https://fly.io/docs/about/pricing/) via [withorb.com](https://www.withorb.com/blog/flyio-pricing) | One summary claims the first 100 GB/month is free; not relied on |
 | Fly.io Managed Postgres | Basic $38/mo (shared-2x, 1 GB), Starter $72/mo (shared-2x, 2 GB), Launch $282/mo, Scale $962/mo; storage $0.30 per provisioned GB-month per node; HA, backups and pooling included | [fly.io/docs/mpg](https://fly.io/docs/mpg) | A third party quoted $0.28/GB; the official $0.30 is used |
 | Fly.io volume snapshots (unmanaged Postgres only) | $0.08 per GB-month (reported from Jan 2026) | [sota.io comparison](https://sota.io/blog/railway-vs-render-vs-fly-pricing-2026) | Third-party report; not used in the base case (managed Postgres includes backups) |
-| Neon (alternative DB) | Free: 100 CU-hours/project; Launch $0.106 per CU-hour, Scale $0.222 per CU-hour; storage $0.35 per GB-month; no monthly minimum | [neon.com/pricing](https://neon.com/pricing) | Aggregators showed older rates ($0.14 / $0.26, storage $1.50–1.75); official figures used |
+| Neon (staging's database since 2026-10-14, §2A) | Free: 0.5 GB storage per project, 100 CU-hours per project per month, scale to zero after 5 min idle (cannot be turned off on Free), 6-hour restore window (limited to 1 GB of change history), 5 GB public network transfer; when the CU-hours are used up the compute is suspended until the next month. Launch $0.106 per CU-hour, Scale $0.222 per CU-hour; storage $0.35 per GB-month; no monthly minimum | [neon.com/pricing](https://neon.com/pricing), [neon.com/docs/introduction/plans](https://neon.com/docs/introduction/plans), [neon.com/faqs/free-plan-limits-and-quotas](https://neon.com/faqs/free-plan-limits-and-quotas) (Free-plan figures looked up 2026-10-14, through search results: the pages could not be fetched from the build environment) | Aggregators showed older rates ($0.14 / $0.26, storage $1.50–1.75) and older Free-plan limits (191.9 compute hours, a 1-day restore window, 50 CU-hours); Neon's own current pages used. "As of October 2026" |
 | Supabase (alternative DB) | Free (500 MB, pauses after 7 idle days); Pro $25/mo incl. $10 compute credit (Micro, 1 GB RAM); Small ≈ $15, Medium ≈ $60 compute | [supabase.com/pricing](https://supabase.com/pricing) via [jetadmin guide](https://www.jetadmin.io/blog/supabase-pricing-2026-guide-to-plans-limits-and-real-world-costs/) | Pro is per organisation, compute per project |
 | Auth0 | Free up to 25,000 MAU; B2C Essentials $35/mo; overage ≈ $0.07/MAU | [auth0.com/pricing](https://auth0.com/pricing) via [costbench](https://costbench.com/software/identity-access-management/auth0/) and [capterra](https://www.capterra.com/p/154900/Auth0/pricing/) | Sources conflict on MAU included with Essentials (500 vs 7,500). **High-sensitivity input, see §8** |
 | Keycloak, managed | Skycloak Developer $29/mo (1 cluster, unlimited users, no per-MAU charge); Phase Two prices not published in results | [skycloak.io/pricing](https://skycloak.io/pricing/) | A GetApp listing said $25; vendor page used |
@@ -60,30 +60,42 @@ figure on the vendor page before relying on it; prices change.
 | Apple | Not applicable: the phone client is a PWA, no App Store membership | — | A native app later would need the developer programme |
 | Domain + DNS | $15/yr ≈ $1.25/mo; DNS at a free tier | assumption | — |
 
-### 2A. Launch decision: hosting per environment (2026-10-14)
+### 2A. Launch decision: hosting per environment (2026-10-14, revised the same day for a ≈ $50/month budget)
 
-What the Deploy workflow (`deploy/launch/environments.toml`, `docs/LAUNCH_SETUP.md`) creates, priced from
-Fly.io's documentation source read on 2026-10-13 (superfly/docs; `fly.io/docs/about/pricing`,
-`fly.io/docs/mpg`). These figures replace the 2026-10-08 inputs above where they differ: the 512 MB
-machine is now listed at $3.69 (was $3.32) and Managed Postgres storage at $0.28 per GB-month (the
-2026-10-08 row used $0.30).
+What the Deploy workflow (`deploy/launch/environments.toml`, `docs/LAUNCH_SETUP.md`) creates. Fly.io figures
+come from Fly.io's documentation source read on 2026-10-13 (superfly/docs; `fly.io/docs/about/pricing`,
+`fly.io/docs/mpg`); they replace the 2026-10-08 inputs above where they differ (the 512 MB machine is now
+listed at $3.69, was $3.32; Managed Postgres storage at $0.28 per GB-month, the 2026-10-08 row used $0.30).
+Neon figures: the §2 row, as of October 2026.
+
+The founder chose a budget of about $50 a month. Production keeps Fly Managed Postgres exactly as designed;
+staging uses Neon's free plan outside Fly, and staging's machine stops when idle so that its database can
+sleep too (`database_mode = "external"` and the machine-sleep keys in `environments.toml`).
 
 | Item | Staging | Production | Notes |
 | --- | --- | --- | --- |
-| Fly Managed Postgres, Basic (shared-2x, 1 GB), PostgreSQL 16, region `iad` | $38 | $38 | one cluster per environment, nothing shared; created only when the founder ticks the checkbox |
-| Storage, 10 GB initial | ≈ $2.80 | ≈ $2.80 | billed on use, up to 1 TB |
-| One always-on Machine, shared-cpu-1x 512 MB (`deploy/fly.toml`) | $3.69 | $3.69 | exactly one machine (in-memory relay); `--ha=false` |
+| Fly Managed Postgres, Basic (shared-2x, 1 GB), PostgreSQL 16, region `iad` | — | $38 | production only; created only when the founder ticks the checkbox |
+| Storage, 10 GB initial | — | ≈ $2.80 | billed on use, up to 1 TB |
+| Neon Free plan, PostgreSQL 16, AWS `us-east-1` (project `domeremote-staging`) | $0 | — | 0.5 GB storage, 100 CU-hours a month (≈ 400 h awake at 0.25 CU), sleeps after 5 idle minutes, 6-hour restore window; if the CU-hours run out the database is suspended until the next month and staging is down. Source: §2 Neon row |
+| One Machine, shared-cpu-1x 512 MB (`deploy/fly.toml`) | ≤ $3.69 | $3.69 | exactly one machine (in-memory relay), `--ha=false`. Staging: `auto_stop_machines = "stop"`, `auto_start_machines = true`, `min_machines_running = 0`, billed per second only while running (Fly may bill a stopped machine's root filesystem at a small per-GB rate; check the pricing page). Production: always on |
 | Shared IPv4 + dedicated IPv6 | $0 | $0 | a dedicated IPv4 ($2/mo) is never allocated |
 | TLS certificates (first 10 hostnames) | $0 | $0 | |
-| Outbound data, North America | $0.02/GB | $0.02/GB | traffic inside `iad` (app ↔ database) is free |
-| **Per environment** | **≈ $45** | **≈ $45** | **≈ $90/month for both** |
+| Outbound data, North America | $0.02/GB | $0.02/GB | production's app ↔ database traffic stays inside `iad` and is free; staging ↔ Neon crosses the internet (tiny at test volumes; Neon Free includes 5 GB of public transfer a month) |
+| **Per environment** | **≈ $4** | **≈ $45** | **≈ $50/month for both** (was ≈ $90 with Managed Postgres in both) |
 
-Region `iad` (Ashburn, Virginia) for both the app and the database: `ewr` (Secaucus, NJ) has no Managed
-Postgres, and since February 2026 cross-region database traffic is billed. Fly has **no spending cap and
-no billing alerts**; deleting an app does not delete its Managed Postgres cluster. Not included: Auth0
-(Free plan up to 25,000 MAU, §8 notes conflicting figures), Cloudflare (free plan: DNS, DNSSEC, 10 redirect
-rules per zone) and GitHub Actions (free on a public repository). The §4 tiers below assume a 2 GB
-machine and are the planning model for growth, not the launch configuration.
+What staging's savings cost: Neon's 6-hour restore window instead of Managed Postgres backups (staging data
+is throwaway); a cold start of a few seconds after a nap (machine start plus database wake); and a hard
+monthly compute allowance. Fly's health check reads the database every 15 s while the machine runs, so
+staging's database is awake whenever the machine is: a PC linked to staging and left connected around the
+clock would use the 100 CU-hours in about 17 days at 0.25 CU. Not yet observed on live machines.
+
+Region `iad` (Ashburn, Virginia) for the apps and production's database: `ewr` (Secaucus, NJ) has no Managed
+Postgres, and since February 2026 cross-region database traffic is billed. Neon's `us-east-1` (northern
+Virginia) is its region nearest to `iad`. Fly has **no spending cap and no billing alerts**; deleting an app
+does not delete its Managed Postgres cluster. Not included: Auth0 (Free plan up to 25,000 MAU, §8 notes
+conflicting figures), Cloudflare (free plan: DNS, DNSSEC, 10 redirect rules per zone) and GitHub Actions
+(free on a public repository). The §4 tiers below (a 2 GB machine, a 1 GB always-on staging machine at
+$5.92, Managed Postgres) are the planning model for growth, not the launch configuration.
 
 ## 3. Product and behaviour assumptions
 
@@ -271,7 +283,8 @@ responsiveness is never a paid lever, so touchpad traffic is a Free-account cost
   database. The relay rate limits bound the worst case per phone, not the number of phones.
 - **Hosting alternative.** Neon Launch at an average 0.25 CU (≈ $19/month + $0.35/GB) or Supabase Pro
   ($25/month, Micro compute) would replace the $41 Postgres line at small scale; Fly Managed Postgres is
-  kept in the base case because it stays inside the relay's private network and includes HA.
+  kept in the base case because it stays inside the relay's private network and includes HA. Staging
+  already runs on Neon's free plan (§2A); if staging outgrows it, Neon Launch is the next step.
 
 ## 9. Calculator
 

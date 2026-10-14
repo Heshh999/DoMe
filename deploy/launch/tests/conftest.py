@@ -31,6 +31,12 @@ FLY_TOKEN_PARTS = (FM + "lJPECAAAAAAAAMfakeTokenPartOne1234567890", FM + "lJPETo
 FLY_TOKEN = "Fly" + "V1 " + ",".join(FLY_TOKEN_PARTS)
 CLIENT_SECRET = "auth0-client-secret_ABCdef0123456789-xyzXYZ0123456789abcdefABCDEF01"
 FALLBACK_DB = "postgresql://fly-user:FallbackPassw0rd987@pgbouncer.fallback.flympg.net/fly-db"
+# Staging's Neon database: the DIRECT connection string as Neon's Connect window shows it (fake values).
+NEON_HOST = "ep-quiet-sky-a1b2c3d4.us-east-1.aws.neon.tech"
+NEON_PASSWORD = "npg_" + "FakeNeonPassw0rd42"
+NEON_DB = f"postgresql://neondb_owner:{NEON_PASSWORD}@{NEON_HOST}/neondb?sslmode=require&channel_binding=require"
+NEON_PASSWORD_ROTATED = "npg_" + "RotatedNeonPassw0rd77"
+NEON_DB_ROTATED = NEON_DB.replace(NEON_PASSWORD, NEON_PASSWORD_ROTATED)
 ISSUER_HOST = "domeremote-staging.us.auth0.com"
 CLIENT_ID = "AbCdEf0123456789AbCdEf0123456789"
 GH_TOKEN = "ghs_" + "FakeJobToken0123456789abcdefABCDEF"
@@ -281,11 +287,15 @@ class World:
 
     # ----- running --------------------------------------------------------------------------------
     def run(self, command: str, **env: str) -> Run:
+        """``env`` overrides; ``"<unset>"`` removes a variable. Like the real GitHub Environments, only staging holds
+        the secret DATABASE_URL (Neon) unless a test passes DEPLOY_DATABASE_URL itself."""
         out = io.StringIO()
         summary_path = self.tmp / "summary.md"
         if summary_path.exists():
             summary_path.unlink()
         full_env = {**self.env, "GITHUB_STEP_SUMMARY": str(summary_path), **env}
+        if "DEPLOY_DATABASE_URL" not in env:
+            full_env["DEPLOY_DATABASE_URL"] = NEON_DB if full_env.get("DEPLOY_ENVIRONMENT") == "staging" else ""
         full_env = {k: v for k, v in full_env.items() if v != "<unset>"}
         code = dome_deploy.main([command], full_env, out)
         summary = summary_path.read_text() if summary_path.exists() else ""
@@ -297,6 +307,14 @@ class World:
         self.web.page(f"https://{app}.fly.dev")
         self.web.login(f"https://{app}.fly.dev", "https://staging.domeremote.com/v1/auth/callback")
         self.web.websockets[f"{app}.fly.dev"] = 401
+
+    def production_ready_web(self) -> None:
+        """Staging healthy with this commit (production's precondition) and a healthy production fly.dev."""
+        self.staging_ready_web(commit=SHA)
+        self.web.healthz("https://domeremote-production.fly.dev")
+        self.web.page("https://domeremote-production.fly.dev", robots=True, hsts=True)
+        self.web.login("https://domeremote-production.fly.dev", "https://domeremote.com/v1/auth/callback")
+        self.web.websockets["domeremote-production.fly.dev"] = 401
 
 
 def _install(bin_dir: Path, name: str) -> None:
@@ -328,7 +346,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         "CREATE_DATABASE": "false",
         "FLY_API_TOKEN": FLY_TOKEN,
         "DOME_OIDC_CLIENT_SECRET": CLIENT_SECRET,
-        "DOME_FALLBACK_DATABASE_URL": "",
+        "DEPLOY_DATABASE_URL": "",  # World.run fills it per environment
         "DOME_OIDC_ISSUER": ISSUER_HOST,
         "DOME_OIDC_CLIENT_ID": CLIENT_ID,
         "FLY_ORG": "",

@@ -233,7 +233,7 @@ Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet*
   the founder's GitHub account**. That approval authorizes whatever is on the default branch at that
   commit, and anything authorized to act as that account can give it. A review request from a run a
   collaborator or an AI session (with a run-workflow tool) started looks the same as his own, so
-  `docs/LAUNCH_SETUP.md` (sections 3, 6, 10) tells him to approve only a run he started himself in the
+  `docs/LAUNCH_SETUP.md` (sections 3, 7, 11) tells him to approve only a run he started himself in the
   last few minutes and to reject any other. AI sessions in this setup push to the default branch, and no
   one reviews that code before his click: **branch protection with required review on the default
   branch** is the follow-up control (§9).
@@ -260,7 +260,10 @@ Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet*
   use, live in memory only, and reach Fly only on `flyctl secrets import` stdin. Every command line is
   checked for known secret values before it runs; child output is redacted (known values, credentials in
   URLs, Fly tokens, private-key blocks); child processes do not inherit the OIDC client secret or the
-  fallback database URL. `flyctl mpg create` and `flyctl mpg attach` print the database password in clear
+  database URL from GitHub (`DATABASE_URL`: staging's Neon address, required there; production's fallback),
+  and the password inside that URL is masked on its own, since GitHub masks only the whole stored value.
+  Staging's Neon address must be the direct, TLS-only connection string (`sslmode=require`, normally with
+  `channel_binding=require`, which libpq enforces); the deploy refuses one without it. `flyctl mpg create` and `flyctl mpg attach` print the database password in clear
   text (flyctl v0.4.110 source), so their output is never shown, and `flyctl mpg status` (which returns
   the credentials) is never called. Each comma-separated part of the Fly token is masked as well, because
   GitHub masks only the exact stored string. The repository is public, so Actions logs are public.

@@ -5,6 +5,7 @@ line, the log or the summary."""
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import io
 import os
@@ -13,6 +14,7 @@ import socket
 import ssl
 import sys
 import threading
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -30,6 +32,11 @@ from conftest import (
     FM,
     GH_TOKEN,
     ISSUER_HOST,
+    NEON_DB,
+    NEON_DB_ROTATED,
+    NEON_HOST,
+    NEON_PASSWORD,
+    NEON_PASSWORD_ROTATED,
     OTHER_SHA,
     SHA,
     Run,
@@ -38,7 +45,10 @@ from conftest import (
 from fake_flyctl import FLY_DB_PASSWORD, V4, V6
 
 import dome_deploy
-from dome_deploy import HttpFailure, SecretBook, normalize_issuer, parse_list
+from dome_deploy import HttpFailure, HttpResult, SecretBook, normalize_issuer, parse_list
+
+ROOT = Path(__file__).resolve().parents[3]
+BASE_FLY_CONFIG = tomllib.loads((ROOT / "deploy" / "fly.toml").read_text(encoding="utf-8"))
 
 MUTATING = (
     "flyctl apps create",
@@ -70,8 +80,16 @@ def deploy_argv(world: World) -> list[str]:
     return list(call["argv"])
 
 
+def expected_fly_config(environment: str) -> dict[str, Any]:
+    """deploy/fly.toml with only that environment's machine-sleep values in [http_service]."""
+    expected = copy.deepcopy(BASE_FLY_CONFIG)
+    expected["http_service"].update(dome_deploy.load_environments()[environment].machine_sleep)
+    return expected
+
+
 def all_secret_values(world: World) -> list[str]:
     values = [FLY_TOKEN, CLIENT_SECRET, FALLBACK_DB, FLY_DB_PASSWORD]
+    values += [NEON_DB, NEON_PASSWORD, NEON_DB_ROTATED, NEON_PASSWORD_ROTATED]
     values += list(FLY_TOKEN_PARTS)
     for app in world.state()["apps"].values():
         for name, value in app["secrets"].items():
@@ -89,7 +107,7 @@ def assert_hygiene(world: World, run: Run) -> None:
         for arg in call["argv"]:
             for value in values:
                 assert value not in arg, (call["argv"][:2], "argv carries a secret")
-        assert not call["env_has_client_secret"] and not call["env_has_fallback_db"] and not call["env_has_gh_token"]
+        assert not call["env_has_client_secret"] and not call["env_has_database_url"] and not call["env_has_gh_token"]
     output = "\n".join(line for line in run.stdout.splitlines() if not line.startswith("::add-mask::"))
     for value in values:
         assert value not in output, "a secret value reached the log"
@@ -108,7 +126,79 @@ def masked(run: Run) -> set[str]:
 
 def test_first_staging_run_sets_up_everything_in_order(world: World) -> None:
     world.staging_ready_web()
-    run = world.run("deploy", CREATE_DATABASE="true")
+    run = world.run("deploy")
+    assert run.code == 0, run.summary
+    # staging's database is Neon (the GitHub secret DATABASE_URL): no Fly Managed Postgres command at all
+    assert world.commands() == [
+        "flyctl apps list",
+        "flyctl apps create",
+        "flyctl ips list",
+        "flyctl ips allocate-v6",
+        "flyctl ips allocate-v4",
+        "flyctl ips list",
+        "flyctl secrets import",
+        "docker build",
+        "flyctl deploy",
+        "flyctl machine list",
+        "flyctl certs list",
+        "flyctl certs add",
+        "flyctl certs check",
+    ]
+    calls = {" ".join(c["argv"][:2]): c["argv"] for c in world.calls("flyctl")}
+    assert calls["apps create"] == ["apps", "create", "domeremote-staging", "--org", "personal"]
+    assert calls["ips allocate-v4"] == ["ips", "allocate-v4", "--shared", "-a", "domeremote-staging", "--yes"]
+    assert deploy_argv(world) == [
+        "deploy", "--config", "deploy/fly.staging.generated.toml", "--app", "domeremote-staging",
+        "--image", f"dome-launch:git-{SHA[:12]}", "--local-only", "--builder-pool=false", "--depot=false",
+        "--image-label", f"git-{SHA[:12]}",
+        "--primary-region", "iad", "--ha=false", "--no-public-ips", "--yes",
+        "-e", "DOME_ENV=staging", "-e", "DOME_PUBLIC_ORIGIN=https://staging.domeremote.com",
+        "-e", f"DOME_OIDC_ISSUER=https://{ISSUER_HOST}", "-e", f"DOME_OIDC_CLIENT_ID={CLIENT_ID}",
+    ]  # fmt: skip
+    [docker] = world.calls("docker")
+    assert docker["argv"] == [
+        "build", "--file", "deploy/Dockerfile", "--platform", "linux/amd64", "--tag", f"dome-launch:git-{SHA[:12]}",
+        "--build-arg", "VITE_DOME_RELEASE_CHANNEL=staging",
+        "--build-arg", "VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com",
+        "--build-arg", f"DOME_BUILD_COMMIT={SHA}", ".",
+    ]  # fmt: skip
+    # one staged import before the deploy: the generated values, the client secret and the Neon address
+    [staged] = imports(world)
+    assert set(staged) == {
+        "DOME_SESSION_SECRET",
+        "DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64",
+        "DOME_OIDC_CLIENT_SECRET",
+        "DATABASE_URL",
+    }
+    assert staged["DOME_OIDC_CLIENT_SECRET"] == CLIENT_SECRET
+    assert staged["DATABASE_URL"] == NEON_DB
+    assert NEON_PASSWORD in masked(run)  # GitHub masks only the whole stored secret, so its password is masked too
+    assert re.fullmatch(r"[0-9a-f]{64}", staged["DOME_SESSION_SECRET"])
+    pem = base64.b64decode(staged["DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64"], validate=True).decode()
+    assert pem.startswith("-----BEGIN PRIVATE KEY-----") and pem.rstrip().endswith("-----END PRIVATE KEY-----")
+    # generated values are masked before use
+    assert staged["DOME_SESSION_SECRET"] in masked(run)
+    assert staged["DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64"] in masked(run)
+    # the summary: honest wording, the DNS record to add, the callback to check
+    assert "Staging deploy finished: running at https://domeremote-staging.fly.dev; no DNS record yet" in run.summary
+    assert "Type **CNAME**, Name **staging**, Target **domeremote-staging.fly.dev**" in run.summary
+    assert "DNS only" in run.summary and "https://staging.domeremote.com/v1/auth/callback" in run.summary
+    assert "live at" not in run.summary and "verified" not in run.summary.lower()
+    assert "outside Fly (domeremote-staging on Neon)" in run.summary
+    assert "Managed Postgres" not in run.summary and "$41" not in run.summary
+    assert "sleeps when nobody uses it" in run.summary
+    # the sign-in start and the relay's WebSocket were checked through Fly's proxy, without following the redirect
+    assert world.web.no_redirect_requests == ["https://domeremote-staging.fly.dev/v1/auth/login"]
+    assert world.web.websocket_requests == [("domeremote-staging.fly.dev", "/ws/agent")]
+    assert "sends visitors to the sign-in provider with this client id and callback" in run.summary
+    assert "sign-in itself not tested" in run.summary
+    assert "the upgrade reaches the app through Fly's proxy" in run.summary
+    assert_hygiene(world, run)
+
+
+def test_first_production_run_creates_and_attaches_its_managed_database(world: World) -> None:
+    world.production_ready_web()
+    run = world.run("deploy", DEPLOY_ENVIRONMENT="production", CREATE_DATABASE="true")
     assert run.code == 0, run.summary
     assert world.commands() == [
         "flyctl apps list",
@@ -131,63 +221,40 @@ def test_first_staging_run_sets_up_everything_in_order(world: World) -> None:
         "flyctl certs check",
     ]
     calls = {" ".join(c["argv"][:2]): c["argv"] for c in world.calls("flyctl")}
-    assert calls["apps create"] == ["apps", "create", "domeremote-staging", "--org", "personal"]
-    assert calls["ips allocate-v4"] == ["ips", "allocate-v4", "--shared", "-a", "domeremote-staging", "--yes"]
     assert calls["mpg create"] == [
-        "mpg", "create", "--name", "domeremote-staging-db", "--org", "personal", "--region", "iad",
+        "mpg", "create", "--name", "domeremote-production-db", "--org", "personal", "--region", "iad",
         "--plan", "Basic", "--volume-size", "10", "--pg-major-version", "16",
     ]  # fmt: skip
-    assert deploy_argv(world) == [
-        "deploy", "--config", "deploy/fly.toml", "--app", "domeremote-staging",
-        "--image", f"dome-launch:git-{SHA[:12]}", "--local-only", "--builder-pool=false", "--depot=false",
-        "--image-label", f"git-{SHA[:12]}",
-        "--primary-region", "iad", "--ha=false", "--no-public-ips", "--yes",
-        "-e", "DOME_ENV=staging", "-e", "DOME_PUBLIC_ORIGIN=https://staging.domeremote.com",
-        "-e", f"DOME_OIDC_ISSUER=https://{ISSUER_HOST}", "-e", f"DOME_OIDC_CLIENT_ID={CLIENT_ID}",
-    ]  # fmt: skip
-    [docker] = world.calls("docker")
-    assert docker["argv"] == [
-        "build", "--file", "deploy/Dockerfile", "--platform", "linux/amd64", "--tag", f"dome-launch:git-{SHA[:12]}",
-        "--build-arg", "VITE_DOME_RELEASE_CHANNEL=staging",
-        "--build-arg", "VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com",
-        "--build-arg", f"DOME_BUILD_COMMIT={SHA}", ".",
-    ]  # fmt: skip
-    # one staged import before the deploy, with the generated values and the client secret
+    argv = deploy_argv(world)
+    assert argv[argv.index("--config") + 1] == "deploy/fly.production.generated.toml"
+    # Fly sets DATABASE_URL itself (mpg attach); the import holds only the generated values and the client secret
     [staged] = imports(world)
     assert set(staged) == {"DOME_SESSION_SECRET", "DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64", "DOME_OIDC_CLIENT_SECRET"}
-    assert staged["DOME_OIDC_CLIENT_SECRET"] == CLIENT_SECRET
-    assert re.fullmatch(r"[0-9a-f]{64}", staged["DOME_SESSION_SECRET"])
-    pem = base64.b64decode(staged["DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64"], validate=True).decode()
-    assert pem.startswith("-----BEGIN PRIVATE KEY-----") and pem.rstrip().endswith("-----END PRIVATE KEY-----")
-    # generated values are masked before use
-    assert staged["DOME_SESSION_SECRET"] in masked(run)
-    assert staged["DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64"] in masked(run)
-    # the summary: honest wording, the DNS record to add, the callback to check
-    assert "Staging deploy finished: running at https://domeremote-staging.fly.dev; no DNS record yet" in run.summary
-    assert "Type **CNAME**, Name **staging**, Target **domeremote-staging.fly.dev**" in run.summary
-    assert "DNS only" in run.summary and "https://staging.domeremote.com/v1/auth/callback" in run.summary
-    assert "live at" not in run.summary and "verified" not in run.summary.lower()
     assert "created (Managed Postgres Basic, iad)" in run.summary
-    # the sign-in start and the relay's WebSocket were checked through Fly's proxy, without following the redirect
-    assert world.web.no_redirect_requests == ["https://domeremote-staging.fly.dev/v1/auth/login"]
-    assert world.web.websocket_requests == [("domeremote-staging.fly.dev", "/ws/agent")]
-    assert "sends visitors to the sign-in provider with this client id and callback" in run.summary
-    assert "sign-in itself not tested" in run.summary
-    assert "the upgrade reaches the app through Fly's proxy" in run.summary
+    assert "always on" in run.summary
     assert_hygiene(world, run)
 
 
-def test_rerun_creates_nothing_and_only_refreshes_the_client_secret(world: World) -> None:
-    world.staging_ready_web()
-    assert world.run("deploy", CREATE_DATABASE="true").code == 0
-    first = world.state()["apps"]["domeremote-staging"]["secrets"]
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_rerun_creates_nothing_and_only_refreshes_what_comes_from_github(world: World, environment: str) -> None:
+    if environment == "staging":
+        world.staging_ready_web()
+    else:
+        world.production_ready_web()
+    assert world.run("deploy", DEPLOY_ENVIRONMENT=environment, CREATE_DATABASE="true").code == 0
+    app = f"domeremote-{environment}"
+    first = world.state()["apps"][app]["secrets"]
     world.reset_log()
-    run = world.run("deploy", CREATE_DATABASE="true")
+    run = world.run("deploy", DEPLOY_ENVIRONMENT=environment, CREATE_DATABASE="true")
     assert run.code == 0, run.summary
     assert mutating_calls(world) == ["flyctl secrets import", "flyctl deploy"]
     [staged] = imports(world)
-    assert staged == {"DOME_OIDC_CLIENT_SECRET": CLIENT_SECRET}
-    after = world.state()["apps"]["domeremote-staging"]["secrets"]
+    if environment == "staging":
+        # the Neon address is stored again on every deploy, so a password rotated in GitHub reaches Fly
+        assert staged == {"DOME_OIDC_CLIENT_SECRET": CLIENT_SECRET, "DATABASE_URL": NEON_DB}
+    else:
+        assert staged == {"DOME_OIDC_CLIENT_SECRET": CLIENT_SECRET}
+    after = world.state()["apps"][app]["secrets"]
     for name in ("DOME_SESSION_SECRET", "DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64", "DATABASE_URL"):
         assert after[name] == first[name]
     assert "already there, unchanged" in run.summary
@@ -200,10 +267,11 @@ def test_rerun_creates_nothing_and_only_refreshes_the_client_secret(world: World
 
 
 def test_no_database_and_no_consent_stops_without_changes(world: World) -> None:
-    world.staging_ready_web()
-    run = world.run("deploy")
+    world.production_ready_web()
+    run = world.run("deploy", DEPLOY_ENVIRONMENT="production")
     assert run.code == 1
     assert mutating_calls(world) == []
+    assert "Production has no database yet" in run.summary
     assert "Stopped: needs you" in run.summary and "about $41 a month" in run.summary
     assert "about $45 a month" in run.summary and "$38 a month" not in run.summary
     assert "Nothing was created or changed" in run.summary
@@ -222,7 +290,10 @@ def test_no_database_and_no_consent_stops_without_changes(world: World) -> None:
         ({"DOME_OIDC_CLIENT_SECRET": "abcdef#ghijkl0123"}, "contains a space, a quote or #"),
         ({"FLY_API_TOKEN": "fo1_personalTokenValue0123456789"}, "personal sign-in token"),
         ({"DOME_OIDC_CLIENT_ID": CLIENT_SECRET}, "looks like the Client Secret"),
-        ({"DOME_FALLBACK_DATABASE_URL": "mysql://x:y@z/db"}, "does not look like a database address"),
+        (
+            {"DEPLOY_ENVIRONMENT": "production", "DEPLOY_DATABASE_URL": "mysql://x:y@z/db"},
+            "does not look like a database address",
+        ),
         ({"FLY_STAGING_APP": "Bad_Name"}, "not a valid Fly app name"),
         ({"VITE_DOME_SUPPORT_URL": "javascript:alert(1)"}, "must start with mailto: or https://"),
     ],
@@ -283,26 +354,28 @@ def test_production_app_with_machines_but_no_generated_secrets_is_left_alone(wor
 
 
 # ======================================================================================================
-# database paths
+# database paths: production (Fly Managed Postgres)
 # ======================================================================================================
+
+PRODUCTION = {"DEPLOY_ENVIRONMENT": "production"}
 
 
 def test_existing_cluster_is_waited_for_then_attached(world: World) -> None:
-    world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db", status="provisioning", ready_after_polls=2)
-    run = world.run("deploy")
+    world.production_ready_web()
+    world.add_cluster("domeremote-production-db", status="provisioning", ready_after_polls=2)
+    run = world.run("deploy", **PRODUCTION)
     assert run.code == 0, run.summary
     assert "flyctl mpg create" not in world.commands() and "flyctl mpg attach" in world.commands()
     assert world.clock.sleeps.count(dome_deploy.MPG_POLL_INTERVAL) >= 2
-    assert "DATABASE_URL" in world.state()["apps"]["domeremote-staging"]["secrets"]
+    assert "DATABASE_URL" in world.state()["apps"]["domeremote-production"]["secrets"]
     assert_hygiene(world, run)
 
 
 def test_attach_failure_falls_back_to_the_github_secret(world: World) -> None:
-    world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
+    world.production_ready_web()
+    world.add_cluster("domeremote-production-db")
     world.update(lambda s: s.update({"attach_fails": True}))
-    run = world.run("deploy", DOME_FALLBACK_DATABASE_URL=FALLBACK_DB)
+    run = world.run("deploy", DEPLOY_DATABASE_URL=FALLBACK_DB, **PRODUCTION)
     assert run.code == 0, run.summary
     [staged] = imports(world)
     assert staged["DATABASE_URL"] == FALLBACK_DB
@@ -311,10 +384,10 @@ def test_attach_failure_falls_back_to_the_github_secret(world: World) -> None:
 
 
 def test_attach_failure_without_fallback_explains_the_dashboard_path(world: World) -> None:
-    world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
+    world.production_ready_web()
+    world.add_cluster("domeremote-production-db")
     world.update(lambda s: s.update({"attach_fails": True}))
-    run = world.run("deploy")
+    run = world.run("deploy", **PRODUCTION)
     assert run.code == 1
     assert "flyctl deploy" not in world.commands()
     assert "Set secret and deploy" in run.summary and "Managed Postgres" in run.summary
@@ -324,9 +397,9 @@ def test_attach_failure_without_fallback_explains_the_dashboard_path(world: Worl
 
 
 def test_no_cluster_listing_permission_without_fallback_gives_dashboard_steps(world: World) -> None:
-    world.staging_ready_web()
+    world.production_ready_web()
     world.update(lambda s: s["fail"].update({"mpg list": {"exit": 1, "stderr": "Error: unauthorized\n"}}))
-    run = world.run("deploy", CREATE_DATABASE="true")
+    run = world.run("deploy", CREATE_DATABASE="true", **PRODUCTION)
     assert run.code == 1 and mutating_calls(world) == []
     assert "Create new cluster" in run.summary and "Fly refused this token" in run.summary
     assert "storage **10 GB**, PostgreSQL **16**" in run.summary and "about $41 a month" in run.summary
@@ -335,10 +408,10 @@ def test_no_cluster_listing_permission_without_fallback_gives_dashboard_steps(wo
 def test_cluster_creation_that_outlasts_its_budget_still_writes_a_summary(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    world.staging_ready_web()
+    world.production_ready_web()
     world.update(lambda s: s.update({"create_hang": True}))
     monkeypatch.setattr(dome_deploy, "MPG_CREATE_TIMEOUT", 1.0)
-    run = world.run("deploy", CREATE_DATABASE="true")
+    run = world.run("deploy", CREATE_DATABASE="true", **PRODUCTION)
     assert run.code == 1
     assert "still preparing the database" in run.summary and "Run Deploy again in about 10 minutes" in run.summary
     assert "flyctl mpg attach" not in world.commands()
@@ -348,10 +421,10 @@ def test_a_run_low_on_time_stops_before_building_and_keeps_its_work(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(dome_deploy, "MPG_POLL_INTERVAL", 300.0)  # fewer fake polls, same budget logic
-    world.staging_ready_web()
+    world.production_ready_web()
     # the cluster takes long enough that the run's own budget, not GitHub's job limit, ends it
-    world.add_cluster("domeremote-staging-db", status="provisioning", ready_after_polls=10_000)
-    run = world.run("deploy")
+    world.add_cluster("domeremote-production-db", status="provisioning", ready_after_polls=10_000)
+    run = world.run("deploy", **PRODUCTION)
     assert run.code == 1
     assert "docker build" not in world.commands() and "flyctl mpg attach" not in world.commands()
     assert "still preparing the database" in run.summary
@@ -362,9 +435,9 @@ def test_a_run_low_on_time_stops_before_building_and_keeps_its_work(
 
 
 def test_existing_database_secret_makes_the_github_copy_unused(world: World) -> None:
-    world.staging_ready_web()
-    world.add_app("domeremote-staging", secrets={"DATABASE_URL": "postgresql://u:p4ssw0rd123@h/d"})
-    run = world.run("deploy", DOME_FALLBACK_DATABASE_URL=FALLBACK_DB)
+    world.production_ready_web()
+    world.add_app("domeremote-production", secrets={"DATABASE_URL": "postgresql://u:p4ssw0rd123@h/d"})
+    run = world.run("deploy", DEPLOY_DATABASE_URL=FALLBACK_DB, **PRODUCTION)
     assert run.code == 0, run.summary
     assert "flyctl mpg list" not in world.commands()
     assert "DATABASE_URL" not in imports(world)[0]
@@ -379,7 +452,6 @@ def test_existing_database_secret_makes_the_github_copy_unused(world: World) -> 
 def test_taken_app_name_points_at_the_override_variable(world: World) -> None:
     world.staging_ready_web()
     world.update(lambda s: s.update({"taken_apps": ["domeremote-staging"]}))
-    world.add_cluster("domeremote-staging-db")
     run = world.run("deploy")
     assert run.code == 1
     assert "belongs to someone else" in run.summary and "FLY_STAGING_APP" in run.summary
@@ -392,7 +464,6 @@ def test_taken_app_name_points_at_the_override_variable(world: World) -> None:
 
 def test_two_machines_after_deploy_are_scaled_to_one(world: World) -> None:
     world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
     world.update(lambda s: s.update({"machines_after_deploy": 2}))
     run = world.run("deploy")
     assert run.code == 0, run.summary
@@ -405,7 +476,6 @@ def test_two_machines_after_deploy_are_scaled_to_one(world: World) -> None:
 
 def test_build_failure_stops_before_deploying(world: World) -> None:
     world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
     world.update(lambda s: s.update({"docker_fails": True}))
     run = world.run("deploy")
     assert run.code == 1 and "flyctl deploy" not in world.commands()
@@ -415,7 +485,6 @@ def test_build_failure_stops_before_deploying(world: World) -> None:
 def test_client_address_check_failure_after_deploy_needs_an_engineer(world: World) -> None:
     world.staging_ready_web()
     world.web.healthz("https://domeremote-staging.fly.dev", forwarded="unresolved_private")
-    world.add_cluster("domeremote-staging-db")
     run = world.run("deploy")
     assert run.code == 1
     assert "Failed: needs an engineer" in run.summary and "DOME_TRUSTED_PROXIES" in run.summary
@@ -423,7 +492,6 @@ def test_client_address_check_failure_after_deploy_needs_an_engineer(world: Worl
 
 def test_old_commit_still_answering_is_retried_then_reported(world: World) -> None:
     world.staging_ready_web(commit=OTHER_SHA)
-    world.add_cluster("domeremote-staging-db")
     run = world.run("deploy")
     assert run.code == 1
     assert world.clock.sleeps.count(dome_deploy.SMOKE_INTERVAL) >= dome_deploy.SMOKE_WAIT // dome_deploy.SMOKE_INTERVAL
@@ -437,7 +505,6 @@ def test_old_commit_still_answering_is_retried_then_reported(world: World) -> No
 
 def test_proxied_cloudflare_record_is_detected(world: World) -> None:
     world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
     world.dns["staging.domeremote.com"] = ["104.21.5.9", "2606:4700:3030::6815:509"]
     run = world.run("deploy")
     assert run.code == 0, run.summary
@@ -446,7 +513,6 @@ def test_proxied_cloudflare_record_is_detected(world: World) -> None:
 
 def test_correct_dns_but_no_certificate_yet(world: World) -> None:
     world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
     world.dns["staging.domeremote.com"] = [V4, V6]
     world.web.routes["https://staging.domeremote.com/healthz"] = HttpFailure("tls", "certificate verify failed")
     run = world.run("deploy")
@@ -457,7 +523,6 @@ def test_correct_dns_but_no_certificate_yet(world: World) -> None:
 
 def test_staging_live_on_its_own_name(world: World) -> None:
     world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
     world.dns["staging.domeremote.com"] = [V4, V6]
     world.web.healthz("https://staging.domeremote.com")
     run = world.run("deploy")
@@ -472,11 +537,7 @@ def test_staging_live_on_its_own_name(world: World) -> None:
 
 
 def production_world(world: World) -> None:
-    world.staging_ready_web(commit=SHA)
-    world.web.healthz("https://domeremote-production.fly.dev")
-    world.web.page("https://domeremote-production.fly.dev", robots=True, hsts=True)
-    world.web.login("https://domeremote-production.fly.dev", "https://domeremote.com/v1/auth/callback")
-    world.web.websockets["domeremote-production.fly.dev"] = 401
+    world.production_ready_web()
     world.add_cluster("domeremote-production-db")
 
 
@@ -566,7 +627,7 @@ def test_gate_passes_for_staging_and_for_production_when_staging_matches(world: 
 def test_status_never_runs_flyctl_and_needs_no_secrets(world: World) -> None:
     world.staging_ready_web()
     world.dns["domeremote-staging.fly.dev"] = [V4, V6]
-    no_secrets = {k: "<unset>" for k in ("FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DOME_FALLBACK_DATABASE_URL")}
+    no_secrets = {k: "<unset>" for k in ("FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DEPLOY_DATABASE_URL")}
     run = world.run("status", **no_secrets)
     assert run.code == 0
     assert world.calls() == []
@@ -636,18 +697,21 @@ def test_redaction_catches_values_it_was_never_told_about() -> None:
     assert "postgresql://fly-user:***@pgbouncer.abc.flympg.net/fly-db" in text
 
 
-def test_child_processes_do_not_get_the_client_secret(world: World) -> None:
-    world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
-    world.run("deploy", DOME_FALLBACK_DATABASE_URL=FALLBACK_DB)
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_child_processes_do_not_get_the_client_secret_or_the_database_address(world: World, environment: str) -> None:
+    world.production_ready_web()
+    world.add_cluster("domeremote-production-db")
+    database_url = NEON_DB if environment == "staging" else FALLBACK_DB
+    run = world.run("deploy", DEPLOY_ENVIRONMENT=environment, DEPLOY_DATABASE_URL=database_url)
+    assert run.code == 0, run.summary
     calls = world.calls()
-    assert calls and all(not c["env_has_client_secret"] and not c["env_has_fallback_db"] for c in calls)
+    assert calls and all(not c["env_has_client_secret"] and not c["env_has_database_url"] for c in calls)
     assert all(c["env_has_fly_token"] for c in calls if c["tool"] == "flyctl")
 
 
 def test_mpg_create_and_attach_output_is_never_shown(world: World) -> None:
-    world.staging_ready_web()
-    run = world.run("deploy", CREATE_DATABASE="true")
+    world.production_ready_web()
+    run = world.run("deploy", CREATE_DATABASE="true", **PRODUCTION)
     assert run.code == 0
     assert FLY_DB_PASSWORD not in run.stdout and FLY_DB_PASSWORD not in run.summary
     assert "Connection string" not in run.stdout and "The following secret was added" not in run.stdout
@@ -812,8 +876,7 @@ def test_gate_when_github_does_not_answer(world: World) -> None:
 
 
 def staging_with_database(world: World) -> None:
-    world.staging_ready_web()
-    world.add_cluster("domeremote-staging-db")
+    world.staging_ready_web()  # its database is Neon: the secret DATABASE_URL that World.run gives staging
 
 
 @pytest.mark.parametrize(
@@ -889,7 +952,6 @@ def test_wrong_commit_on_the_apex_fails_production_but_not_staging(world: World)
     )
     run = world.run("deploy", DEPLOY_ENVIRONMENT="production")
     assert run.code == 1 and "answers with a different build" in run.summary
-    world.add_cluster("domeremote-staging-db")
     world.dns["staging.domeremote.com"] = [V4, V6]
     world.web.healthz("https://staging.domeremote.com", commit=OTHER_SHA)
     staging = world.run("deploy")
@@ -1080,3 +1142,170 @@ def test_websocket_handshake_failures_are_classified(monkeypatch: pytest.MonkeyP
     with pytest.raises(HttpFailure) as caught:
         dome_deploy.websocket_status("domeremote-staging.fly.dev", "/ws/agent")
     assert caught.value.kind == "connect"
+
+
+# ======================================================================================================
+# staging's external (Neon) database: never Fly Managed Postgres, the GitHub secret is required (2026-10-14)
+# ======================================================================================================
+
+
+def test_staging_never_lists_creates_or_attaches_managed_postgres(world: World) -> None:
+    world.staging_ready_web()
+    world.add_cluster("domeremote-staging-db")  # even a cluster with staging's old name is never looked at
+    run = world.run("deploy", CREATE_DATABASE="true")
+    assert run.code == 0, run.summary
+    assert not [c for c in world.commands() if c.startswith("flyctl mpg")]
+    # the tick is explained, and no database cost or consent text appears for staging
+    assert "The **create the database** tick is for production only" in run.summary
+    assert "$41" not in run.summary and "$45" not in run.summary and "Managed Postgres" not in run.summary
+    assert world.state()["apps"]["domeremote-staging"]["secrets"]["DATABASE_URL"] == NEON_DB
+    assert_hygiene(world, run)
+
+
+def test_a_rotated_neon_password_reaches_fly_with_the_next_deploy(world: World) -> None:
+    world.staging_ready_web()
+    assert world.run("deploy").code == 0
+    world.reset_log()
+    run = world.run("deploy", DEPLOY_DATABASE_URL=NEON_DB_ROTATED)
+    assert run.code == 0, run.summary
+    [staged] = imports(world)
+    assert staged["DATABASE_URL"] == NEON_DB_ROTATED
+    assert world.state()["apps"]["domeremote-staging"]["secrets"]["DATABASE_URL"] == NEON_DB_ROTATED
+    assert NEON_PASSWORD_ROTATED in masked(run)
+    assert_hygiene(world, run)
+
+
+NEON_NO_PASSWORD = f"postgresql://neondb_owner@{NEON_HOST}/neondb?sslmode=require"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", "its address, the Environment secret `DATABASE_URL`, is missing"),
+        ("<unset>", "its address, the Environment secret `DATABASE_URL`, is missing"),
+        (f"psql '{NEON_DB}'", "is not a database connection string"),
+        (f"DATABASE_URL={NEON_DB}", "is not a database connection string"),
+        ("mysql://user:Passw0rd1234@db.example.com/app", "is not a database connection string"),
+        ("https://console.neon.tech/app/projects/abc", "is not a database connection string"),
+        (NEON_DB.replace("ep-quiet-sky-a1b2c3d4", "ep-quiet-sky-a1b2c3d4-pooler"), "Neon's pooled address"),
+        (NEON_DB.split("?")[0], "does not include `sslmode=require`"),
+        (NEON_DB.replace("sslmode=require", "sslmode=disable"), "does not include `sslmode=require`"),
+        (NEON_DB.replace("sslmode=require", "sslmode=prefer"), "does not include `sslmode=require`"),
+        (NEON_DB.replace(NEON_PASSWORD, "************"), "has stars where the password should be"),
+        (NEON_NO_PASSWORD, "is missing its user name, password, host or database name"),
+        (NEON_DB.replace(NEON_HOST, NEON_HOST + ":port"), "unreadable port number"),
+        (NEON_DB.replace(NEON_PASSWORD, "pass#word12345"), "contains a space, a quote or #"),
+    ],
+)
+def test_staging_without_a_usable_database_address_stops_before_any_command(
+    world: World, value: str, expected: str
+) -> None:
+    world.staging_ready_web()
+    run = world.run("deploy", DEPLOY_DATABASE_URL=value, CREATE_DATABASE="true")
+    assert run.code == 1
+    assert world.calls() == [] and world.web.requests == []
+    assert "Stopped: needs you" in run.summary and expected in run.summary
+    assert "Nothing was created or changed" in run.summary
+    # the exact next step: where to copy it in Neon, and where to paste it
+    assert "https://console.neon.tech" in run.summary and "**domeremote-staging**" in run.summary
+    assert "**Connection pooling** off" in run.summary and "`-pooler`" in run.summary
+    assert "https://github.com/Heshh999/DoMe/settings/environments" in run.summary
+    assert "under **Environment secrets** add (or update) `DATABASE_URL`" in run.summary
+    assert "$41" not in run.summary and "create the database" not in run.summary
+    output = "\n".join(line for line in run.stdout.splitlines() if not line.startswith("::add-mask::"))
+    if len(value) >= 8 and value != "<unset>":
+        assert value not in output and value not in run.summary, "the address itself is never shown"
+    assert_hygiene(world, run)
+
+
+def test_production_without_the_github_secret_is_unchanged(world: World) -> None:
+    # production never needs DATABASE_URL in GitHub: Fly attaches its Managed Postgres
+    production_world(world)
+    run = world.run("deploy", DEPLOY_DATABASE_URL="", **PRODUCTION)
+    assert run.code == 0, run.summary
+    assert "flyctl mpg attach" in world.commands()
+    assert "DATABASE_URL" not in imports(world)[0]
+
+
+def test_a_staging_app_with_its_own_dome_database_url_stops_for_an_engineer(world: World) -> None:
+    world.staging_ready_web()
+    world.add_app("domeremote-staging", secrets={"DOME_DATABASE_URL": "postgresql+psycopg://u:p4ssw0rd123@h/d"})
+    run = world.run("deploy")
+    assert run.code == 1 and mutating_calls(world) == []
+    assert "Failed: needs an engineer" in run.summary and "takes precedence over DATABASE_URL" in run.summary
+    assert "Nothing was changed" in run.summary
+
+
+def test_a_repository_copy_of_database_url_explains_the_neon_password_reset(world: World) -> None:
+    run = world.run("gate", REPO_LEVEL_SECRETS="DATABASE_URL")
+    assert run.code == 1
+    assert "**Roles & Databases**" in run.summary and "**Reset password**" in run.summary
+    assert "For production, tell an engineer" in run.summary
+
+
+# ======================================================================================================
+# per-environment fly.toml: staging sleeps when idle, production never does (2026-10-14)
+# ======================================================================================================
+
+
+@pytest.mark.parametrize(
+    ("environment", "sleep"),
+    [("staging", ("stop", True, 0)), ("production", ("off", False, 1))],
+)
+def test_deploy_gets_its_environments_copy_of_fly_toml(
+    world: World, environment: str, sleep: tuple[str, bool, int]
+) -> None:
+    if environment == "staging":
+        world.staging_ready_web()
+    else:
+        production_world(world)
+    run = world.run("deploy", DEPLOY_ENVIRONMENT=environment)
+    assert run.code == 0, run.summary
+    app = world.state()["apps"][f"domeremote-{environment}"]
+    path = f"deploy/fly.{environment}.generated.toml"
+    assert app["deployed_config_path"] == path
+    # exactly deploy/fly.toml, except the three machine-sleep keys
+    assert app["deployed_config"] == expected_fly_config(environment)
+    service = app["deployed_config"]["http_service"]
+    assert (service["auto_stop_machines"], service["auto_start_machines"], service["min_machines_running"]) == sleep
+    assert not (ROOT / path).exists(), "the copy is deleted after the deploy"
+    assert ("sleeps when nobody uses it" in run.summary) == (environment == "staging")
+    assert ("always on" in run.summary) == (environment == "production")
+
+
+def test_the_generated_copy_is_deleted_when_the_deploy_fails(world: World) -> None:
+    world.staging_ready_web()
+    world.update(lambda s: s["fail"].update({"deploy --config": {"exit": 1, "stderr": "Error: release failed\n"}}))
+    run = world.run("deploy")
+    assert run.code == 1 and "Fly did not finish the deploy" in run.summary
+    assert not (ROOT / "deploy" / "fly.staging.generated.toml").exists()
+
+
+def test_a_sleeping_staging_is_woken_by_status_and_by_the_production_gate(world: World) -> None:
+    world.production_ready_web()
+    world.dns["domeremote-staging.fly.dev"] = [V4, V6]
+    url = "https://domeremote-staging.fly.dev/healthz"
+    healthy = world.web.routes[url]
+
+    def waking() -> Callable[[], Any]:
+        answers: list[Any] = [HttpFailure("timeout", "machine starting"), HttpResult(502, {}, b"")]
+        return lambda: answers.pop(0) if answers else healthy
+
+    world.web.routes[url] = waking()
+    run = world.run("status")
+    assert run.code == 0, run.summary
+    assert world.clock.sleeps.count(dome_deploy.SMOKE_INTERVAL) == 2
+    assert "Staging sleeps when nobody uses it; this check may have woken it" in run.summary
+    world.web.routes[url] = waking()
+    gate = world.run("gate", DEPLOY_ENVIRONMENT="production")
+    assert gate.code == 0, gate.summary
+    # production never sleeps, so its status says nothing about naps
+    assert "sleeps" not in world.run("status", DEPLOY_ENVIRONMENT="production").summary
+
+
+def test_staging_that_stays_unreachable_is_asked_a_bounded_number_of_times(world: World) -> None:
+    world.production_ready_web()
+    world.web.routes["https://domeremote-staging.fly.dev/healthz"] = HttpFailure("connect", "refused")
+    run = world.run("gate", DEPLOY_ENVIRONMENT="production")
+    assert run.code == 1 and "not reachable" in run.summary
+    assert world.clock.sleeps.count(dome_deploy.SMOKE_INTERVAL) == dome_deploy.WAKE_ATTEMPTS - 1

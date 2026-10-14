@@ -324,3 +324,9 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     an explicit default port, is indexable. A missing or repeated `Host` header counts as non-canonical.
 67. **The database pool recycles connections after 600 s** (was 1800), per Fly Managed Postgres guidance (the
     proxy drains connections after 10 minutes); `pool_pre_ping` stays on.
+68. **Staging's Neon database is reached by its direct connection string, and its query is passed through.**
+    deploy/entrypoint.sh only swaps the scheme, so `sslmode=require&channel_binding=require` reach psycopg and
+    libpq enforces both (`tests/test_database_url.py`, against a stand-in server). The `-pooler` host is not
+    used: it is PgBouncer in transaction mode, and psycopg 3 prepares statements server-side after 5 runs on
+    a connection; the Deploy button refuses that host. `pool_pre_ping` is required, not optional: Neon closes
+    every connection when its compute suspends after about 5 idle minutes.

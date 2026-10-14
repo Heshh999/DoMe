@@ -19,11 +19,18 @@ Secret rules enforced here (tested in tests/test_dome_deploy.py):
 * Child output is redacted: known values, credentials in URLs, Fly tokens and private-key blocks.
   ``flyctl mpg create`` and ``flyctl mpg attach`` print the database password, so their output is never
   shown at all; only a fixed line and the exit code are.
-* Child processes do not inherit DOME_OIDC_CLIENT_SECRET, DOME_FALLBACK_DATABASE_URL or GH_TOKEN; flyctl gets
-  FLY_API_TOKEN because it needs it.
+* Child processes do not inherit DOME_OIDC_CLIENT_SECRET, DEPLOY_DATABASE_URL (the GitHub secret DATABASE_URL) or
+  GH_TOKEN; flyctl gets FLY_API_TOKEN because it needs it. The database password inside DATABASE_URL is masked on its
+  own too (GitHub masks only the whole stored value).
 * The summary (``$GITHUB_STEP_SUMMARY``) names secrets and says what happened to them; it never holds a value.
 * The gate job never sees a secret value: GitHub evaluates ``secrets.X != ''`` and hands over only the NAMES of
   deploy secrets that exist at repository level (REPO_LEVEL_SECRETS); its GH_TOKEN is the job's read-only token.
+
+Databases (``database_mode`` in environments.toml): staging uses an EXTERNAL database (Neon's free plan) whose address
+is the required GitHub Environment secret DATABASE_URL, stored in Fly again on every deploy; it never touches Fly
+Managed Postgres. Production uses Fly Managed Postgres ("fly-managed"), created only with the founder's tick. Each
+deploy writes a temporary per-environment copy of deploy/fly.toml with that environment's machine-sleep settings
+(staging sleeps when idle, production never does) and deletes it afterwards.
 
 Nothing in this program has run against a live Fly.io account yet. flyctl output shapes were read from the
 flyctl v0.4.110 source and are parsed leniently; anything unexpected stops the run with a plain message
@@ -33,6 +40,7 @@ before it can change something it does not understand.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import ipaddress
 import json
@@ -61,11 +69,15 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
 ENVIRONMENTS_FILE = HERE / "environments.toml"
 FLY_CONFIG = "deploy/fly.toml"
+# The per-environment copy handed to `flyctl deploy --config`. It sits next to deploy/fly.toml so every path in it
+# means the same thing; it is deleted after the deploy and ignored by git (.gitignore).
+GENERATED_FLY_CONFIG = "deploy/fly.{name}.generated.toml"
 DOCKERFILE = "deploy/Dockerfile"
+NEON_CONSOLE = "https://console.neon.tech"
 
 ENVIRONMENTS = ("staging", "production")
 # Environment variables a child process never receives (flyctl reads FLY_API_TOKEN itself and keeps it).
-CHILD_ENV_DROP = frozenset({"DOME_OIDC_CLIENT_SECRET", "DOME_FALLBACK_DATABASE_URL", "GH_TOKEN"})
+CHILD_ENV_DROP = frozenset({"DOME_OIDC_CLIENT_SECRET", "DEPLOY_DATABASE_URL", "GH_TOKEN"})
 # The deploy secrets that must exist only as GitHub ENVIRONMENT secrets. The gate job (no environment) receives
 # the names of any that exist at repository or organization level in REPO_LEVEL_SECRETS (deploy.yml), never values.
 DEPLOY_SECRET_NAMES = ("FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DATABASE_URL")
@@ -73,6 +85,10 @@ GITHUB_API = "https://api.github.com"
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455 section 1.3
 GENERATED_SECRETS = ("DOME_SESSION_SECRET", "DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64")
 DATABASE_SECRET_NAMES = ("DATABASE_URL", "DOME_DATABASE_URL")
+DATABASE_MODES = ("external", "fly-managed")
+AUTO_STOP_VALUES = ("off", "stop", "suspend")
+# The three [http_service] keys that differ per environment (environments.toml -> the generated fly.toml copy).
+MACHINE_SLEEP_KEYS = ("auto_stop_machines", "auto_start_machines", "min_machines_running")
 # Cloudflare's published edge ranges (cloudflare.com/ips): a record pointing here is proxied (orange cloud).
 CLOUDFLARE_NETWORKS = tuple(
     ipaddress.ip_network(n)
@@ -114,6 +130,7 @@ BUILD_TIMEOUT = 40 * 60.0
 DEPLOY_TIMEOUT = 30 * 60.0
 SMOKE_WAIT = 180.0
 SMOKE_INTERVAL = 10.0
+WAKE_ATTEMPTS = 4  # a sleeping staging machine (and its database) needs a few seconds to answer the first request
 HTTP_TIMEOUT = 15.0
 
 sleep: Callable[[float], None] = time.sleep
@@ -157,11 +174,18 @@ class EnvConfig:
     dns_zone: str
     dns_name: str
     release_channel: str
-    database_cluster: str
-    database_plan: str
-    database_volume_gb: int
+    database_mode: str  # "external" (the GitHub secret DATABASE_URL) or "fly-managed" (Fly Managed Postgres)
     pg_major_version: int
     requires_staging_commit: bool
+    auto_stop_machines: str
+    auto_start_machines: bool
+    min_machines_running: int
+    # fly-managed only
+    database_cluster: str = ""
+    database_plan: str = ""
+    database_volume_gb: int = 0
+    # external only: the database provider's project name the founder's guide uses (shown in "needs you" steps)
+    external_database_project: str = ""
 
     @property
     def title(self) -> str:
@@ -171,14 +195,95 @@ class EnvConfig:
     def callback_url(self) -> str:
         return self.public_origin + "/v1/auth/callback"
 
+    @property
+    def external_database(self) -> bool:
+        return self.database_mode == "external"
+
+    @property
+    def sleeps_when_idle(self) -> bool:
+        return self.auto_stop_machines != "off"
+
+    @property
+    def machine_sleep(self) -> dict[str, str | bool | int]:
+        return {
+            "auto_stop_machines": self.auto_stop_machines,
+            "auto_start_machines": self.auto_start_machines,
+            "min_machines_running": self.min_machines_running,
+        }
+
+
+def environment_problems(cfg: EnvConfig) -> list[str]:
+    """What is inconsistent in one environments.toml section (empty when it is usable)."""
+    problems = []
+    if cfg.database_mode not in DATABASE_MODES:
+        problems.append(f"database_mode must be one of {', '.join(DATABASE_MODES)}")
+    if cfg.database_mode == "fly-managed" and not (
+        cfg.database_cluster and cfg.database_plan and cfg.database_volume_gb > 0
+    ):
+        problems.append("a fly-managed database needs database_cluster, database_plan and database_volume_gb")
+    if cfg.database_mode == "external" and (cfg.database_cluster or cfg.database_plan or cfg.database_volume_gb):
+        problems.append("an external database has no Fly cluster: remove database_cluster, _plan and _volume_gb")
+    if cfg.database_mode == "external" and not cfg.external_database_project:
+        problems.append("an external database needs external_database_project (named in the founder's steps)")
+    if cfg.auto_stop_machines not in AUTO_STOP_VALUES:
+        problems.append(f"auto_stop_machines must be one of {', '.join(AUTO_STOP_VALUES)}")
+    if not isinstance(cfg.auto_start_machines, bool):
+        problems.append("auto_start_machines must be true or false")
+    if not isinstance(cfg.min_machines_running, int) or isinstance(cfg.min_machines_running, bool):
+        problems.append("min_machines_running must be a whole number")
+    elif cfg.min_machines_running not in (0, 1):
+        problems.append("min_machines_running must be 0 or 1 (the relay runs on exactly one machine)")
+    if cfg.sleeps_when_idle and cfg.auto_start_machines is not True:
+        problems.append("a machine that stops when idle must start again on the next request (auto_start_machines)")
+    if cfg.dome_env == "production" and (cfg.sleeps_when_idle or cfg.min_machines_running != 1):
+        problems.append("production must stay on (every linked PC holds a WebSocket): auto_stop off, 1 machine")
+    return problems
+
 
 def load_environments(path: Path = ENVIRONMENTS_FILE) -> dict[str, EnvConfig]:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     out: dict[str, EnvConfig] = {}
     for name in ENVIRONMENTS:
         section = data[name]
-        out[name] = EnvConfig(name=name, **section)
+        cfg = EnvConfig(name=name, **section)
+        problems = environment_problems(cfg)
+        if problems:
+            raise ValueError(f"{path.name} [{name}]: " + "; ".join(problems))
+        out[name] = cfg
     return out
+
+
+def toml_literal(value: str | bool | int) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return json.dumps(value)  # a TOML basic string for the plain ASCII values used here
+
+
+def render_fly_config(cfg: EnvConfig, base_text: str) -> str:
+    """deploy/fly.toml with this environment's machine-sleep settings in [http_service]. The copy must parse to
+    exactly the base configuration with only those three keys changed, or nothing is deployed."""
+    text = base_text
+    for key, value in cfg.machine_sleep.items():
+        pattern = re.compile(rf"^([ \t]*){key}[ \t]*=[^\n]*$", re.MULTILINE)
+        if len(pattern.findall(text)) != 1:
+            raise Stop("engineer", f"{FLY_CONFIG} must set {key} on exactly one line; nothing was deployed.")
+        line = f"{key} = {toml_literal(value)}"
+        text = pattern.sub(lambda m: m.group(1) + line, text)  # noqa: B023 - used immediately, inside this iteration
+    base = tomllib.loads(base_text)
+    expected = copy.deepcopy(base)
+    service = expected.get("http_service")
+    if not isinstance(service, dict):
+        raise Stop("engineer", f"{FLY_CONFIG} has no [http_service] section; nothing was deployed.")
+    service.update(cfg.machine_sleep)
+    if tomllib.loads(text) != expected:
+        raise Stop("engineer", f"The {cfg.name} copy of {FLY_CONFIG} would change more than machine sleep.")
+    header = (
+        f"# GENERATED by deploy/launch/dome_deploy.py for {cfg.name} from {FLY_CONFIG} (machine sleep from "
+        "deploy/launch/environments.toml).\n# Deleted after the deploy; never edit or commit it.\n"
+    )
+    return header + text
 
 
 @dataclass
@@ -657,10 +762,72 @@ class Inputs:
     issuer: str
     client_id: str
     client_secret: str
-    fallback_database_url: str
+    # The GitHub Environment secret DATABASE_URL (env DEPLOY_DATABASE_URL): required for an external database
+    # (staging's Neon), only a fallback for Fly Managed Postgres (production).
+    database_url: str
     create_database: bool
     support_url: str
     support_expectation: str
+
+
+def url_password(url: str) -> str:
+    try:
+        return urlsplit(url).password or ""
+    except ValueError:
+        return ""
+
+
+def external_database_problem(url: str) -> str:
+    """Why ``url`` is not a usable DIRECT, TLS-only PostgreSQL connection string ("" when it is). Never quotes it.
+
+    Neon's pooled host ("-pooler") is refused: it is PgBouncer in transaction mode, where psycopg's server-side
+    prepared statements and other session state are not guaranteed (deploy/README.md "Staging database")."""
+    name = "The Environment secret `DATABASE_URL`"
+    if not url.startswith(("postgresql://", "postgres://")):
+        return (
+            f"{name} is not a database connection string. It must be the address itself, starting with "
+            "`postgresql://` (not a `psql` command and not a line such as `DATABASE_URL=...`)."
+        )
+    if not importable(url):
+        return f"{name} contains a space, a quote or #. Copy it again with Neon's copy button."
+    parts = urlsplit(url)
+    try:
+        parts.port  # noqa: B018 - raises ValueError for a port that is not a number
+    except ValueError:
+        return f"{name} has an unreadable port number. Copy it again with Neon's copy button."
+    if not (parts.hostname and parts.username and parts.password and parts.path.strip("/")):
+        return (
+            f"{name} is missing its user name, password, host or database name. Copy the whole connection string "
+            "again with Neon's copy button."
+        )
+    if set(parts.password) == {"*"}:
+        return (
+            f"{name} has stars where the password should be (the hidden form Neon shows on screen). Copy it again "
+            "with Neon's copy button, which copies the real password."
+        )
+    if "-pooler" in parts.hostname:
+        return (
+            f"{name} is Neon's pooled address (its host name contains `-pooler`). DoMe needs the direct one: in "
+            "Neon's **Connect** window turn **Connection pooling** off, then copy it again."
+        )
+    if parse_qs(parts.query).get("sslmode", [""])[-1] not in ("require", "verify-ca", "verify-full"):
+        return (
+            f"{name} does not include `sslmode=require`, so the connection might not be encrypted. Copy it again "
+            "exactly as Neon shows it."
+        )
+    return ""
+
+
+def external_database_steps(env: Mapping[str, str], cfg: EnvConfig) -> list[str]:
+    """Where the founder copies the external (Neon) database address and where it goes."""
+    return [
+        f"In Neon ({NEON_CONSOLE}), open the project **{cfg.external_database_project}** and click **Connect**. Turn "
+        "**Connection pooling** off, then copy the connection string with the copy button. It starts with "
+        "`postgresql://`, ends with `?sslmode=require&channel_binding=require` (or just `?sslmode=require`), and "
+        "its host name has no `-pooler`. Do not paste it anywhere else.",
+        f"Open {environments_page(env)}, choose **{cfg.name}**, and under **Environment secrets** add (or update) "
+        "`DATABASE_URL` with that value (docs/LAUNCH_SETUP.md section 6).",
+    ]
 
 
 def check_ref(env: Mapping[str, str]) -> None:
@@ -699,7 +866,10 @@ def check_no_repository_secrets(env: Mapping[str, str]) -> None:
         )
     if "DATABASE_URL" in found:
         steps.append(
-            "Tell an engineer that the database address was a repository secret, so its password can be changed."
+            "Change the database password, because every run could read it: for staging, in Neon open the project > "
+            "**Branches** > the default branch > **Roles & Databases**, choose **Reset password** in the role's menu, "
+            "and paste the new connection string only as the staging Environment secret `DATABASE_URL` "
+            "(docs/LAUNCH_SETUP.md section 6). For production, tell an engineer."
         )
     steps.append("Run Deploy again.")
     raise Stop(
@@ -827,15 +997,29 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
                 "Client Secret, using the copy button) and paste it over the old one."
             )
 
-    fallback_db = env.get("DOME_FALLBACK_DATABASE_URL", "").strip()
-    if fallback_db:
-        book.add(fallback_db, mask=False)
-        if not fallback_db.startswith(("postgres://", "postgresql://")) or not importable(fallback_db):
+    database_url = env.get("DEPLOY_DATABASE_URL", "").strip()
+    database_problem = ""
+    if database_url:
+        book.add(database_url, mask=False)  # a stored GitHub secret: GitHub masks the whole value itself
+        password = url_password(database_url)
+        if password:
+            book.add(password, mask=True)  # ... but not the password on its own
+    if cfg.external_database:
+        if not database_url:  # its own steps below say where to copy it from, so not in missing_secrets
             problems.append(
-                "The DATABASE_URL secret does not look like a database address (it should start with "
-                "postgresql:// and have no spaces). Copy the pooled URL again from Fly > Managed Postgres > "
-                "your cluster > Connect."
+                f"{cfg.title} keeps its data in a free Neon database, and its address, the Environment secret "
+                "`DATABASE_URL`, is missing."
             )
+        else:
+            database_problem = external_database_problem(database_url)
+            if database_problem:
+                problems.append(database_problem)
+    elif database_url and not (database_url.startswith(("postgres://", "postgresql://")) and importable(database_url)):
+        problems.append(
+            "The DATABASE_URL secret does not look like a database address (it should start with "
+            "postgresql:// and have no spaces). Copy the pooled URL again from Fly > Managed Postgres > "
+            "your cluster > Connect."
+        )
 
     issuer = ""
     raw_issuer = env.get("DOME_OIDC_ISSUER", "")
@@ -885,6 +1069,8 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
             + ", ".join(f"`{n}`" for n in missing_vars)
             + "."
         )
+    if cfg.external_database and (not database_url or database_problem):
+        next_steps += external_database_steps(env, cfg)
     if missing_secrets or missing_vars or problems:
         next_steps.append("Run Deploy again. Nothing was created or changed by this run.")
         raise Stop(
@@ -901,7 +1087,7 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
         issuer=issuer,
         client_id=client_id,
         client_secret=client_secret,
-        fallback_database_url=fallback_db,
+        database_url=database_url,
         create_database=env.get("CREATE_DATABASE", "").strip().lower() == "true",
         support_url=support_url,
         support_expectation=expectation,
@@ -979,6 +1165,21 @@ def get_health(base: str) -> Health:
     return Health(True, result.status, body if isinstance(body, dict) else {}, headers=result.headers)
 
 
+def wake_health(base: str) -> Health:
+    """/healthz, asked again (up to WAKE_ATTEMPTS) while the app does not answer or answers 502-504: a staging machine
+    that stopped while idle starts on this first request, and its Neon database wakes with it. A name that does not
+    resolve is not retried (that app does not exist)."""
+    health = get_health(base)
+    attempts = 1
+    while attempts < WAKE_ATTEMPTS and (
+        (not health.reachable and health.error != "dns") or health.status_code in (502, 503, 504)
+    ):
+        sleep(SMOKE_INTERVAL)
+        health = get_health(base)
+        attempts += 1
+    return health
+
+
 def wait_for_health(base: str, sha: str) -> Health:
     """Poll until healthy with this commit, or until SMOKE_WAIT (a rolling deploy can answer with the old one)."""
     deadline = monotonic() + SMOKE_WAIT
@@ -1008,12 +1209,7 @@ def production_gate(env: Mapping[str, str], envs: Mapping[str, EnvConfig], sha: 
     staging = envs["staging"]
     staging_app = app_name_for(staging, env)
     base = f"https://{staging_app}.fly.dev"
-    health = get_health(base)
-    attempts = 1
-    while not health.reachable and attempts < 3:
-        sleep(SMOKE_INTERVAL)
-        health = get_health(base)
-        attempts += 1
+    health = wake_health(base)  # staging may be asleep
     summary.step("Staging runs this commit", describe_health(health, sha))
     if health.healthy_for(sha):
         return
@@ -1249,7 +1445,6 @@ class Deployer:
         )
         app_exists = any(field_of(a, "name") == app for a in apps)
         names = self.secret_names(app) if app_exists else set()
-        has_database = bool(names & set(DATABASE_SECRET_NAMES))
         missing_generated = [n for n in GENERATED_SECRETS if n not in names]
 
         if app_exists and missing_generated and cfg.dome_env == "production":
@@ -1269,14 +1464,32 @@ class Deployer:
             )
 
         cluster: dict[str, Any] | None = None
-        database_plan = "existing"
-        if not has_database:
-            cluster, database_plan = self.choose_database(inp)
-        if has_database and inp.fallback_database_url:
-            self.summary.notes.append(
-                "The app already has its database address, so the GitHub secret DATABASE_URL was not used. "
-                "You can delete that GitHub secret (one copy of a password fewer)."
-            )
+        if cfg.external_database:
+            # Never Fly Managed Postgres: the address is the GitHub secret, stored in Fly again below on every deploy.
+            database_plan = "external"
+            if "DOME_DATABASE_URL" in names:
+                raise Stop(
+                    "engineer",
+                    f"The app {app} has a Fly secret DOME_DATABASE_URL. It takes precedence over DATABASE_URL "
+                    "(deploy/entrypoint.sh), so the address from GitHub would never be used. An engineer must check "
+                    f"where it points and remove it (`flyctl secrets unset DOME_DATABASE_URL -a {app}`). Nothing was "
+                    "changed.",
+                )
+            if inp.create_database:
+                self.summary.notes.append(
+                    f"The **create the database** tick is for production only. {cfg.title} keeps its data in its "
+                    "free Neon database, so this run created no database."
+                )
+        else:
+            has_database = bool(names & set(DATABASE_SECRET_NAMES))
+            database_plan = "existing"
+            if not has_database:
+                cluster, database_plan = self.choose_database(inp)
+            if has_database and inp.database_url:
+                self.summary.notes.append(
+                    "The app already has its database address, so the GitHub secret DATABASE_URL was not used. "
+                    "You can delete that GitHub secret (one copy of a password fewer)."
+                )
 
         # ---- changes ------------------------------------------------------------------------------
         if app_exists:
@@ -1284,7 +1497,14 @@ class Deployer:
         else:
             self.create_app(inp)
         addresses = self.ensure_ips(app)
-        database_plan = self.ensure_database(inp, cluster, database_plan)
+        if cfg.external_database:
+            self.summary.step(
+                "Database",
+                f"outside Fly ({cfg.external_database_project} on Neon): address from the GitHub secret "
+                "DATABASE_URL, stored in Fly again with this deploy",
+            )
+        else:
+            database_plan = self.ensure_database(inp, cluster, database_plan)
 
         staged: list[tuple[str, str]] = []
         for name in GENERATED_SECRETS:
@@ -1295,8 +1515,8 @@ class Deployer:
             staged.append((name, value))
             self.summary.step(name, "created (generated inside this run, stored only in Fly)")
         staged.append(("DOME_OIDC_CLIENT_SECRET", inp.client_secret))
-        if database_plan == "fallback":
-            staged.append(("DATABASE_URL", inp.fallback_database_url))
+        if database_plan in ("fallback", "external"):
+            staged.append(("DATABASE_URL", inp.database_url))
         self.log("Storing secrets in Fly (staged; they reach the app with this deploy)")
         self.stage(app, staged)
         self.summary.step("DOME_OIDC_CLIENT_SECRET", "updated from GitHub")
@@ -1326,27 +1546,29 @@ class Deployer:
                     return c, "attach"
             if inp.create_database:
                 return None, "create"
-        if inp.fallback_database_url:
+        if inp.database_url:
             return None, "fallback"
         if clusters is None:
             raise Stop(
                 "you",
-                "This environment has no database yet, and Fly would not let this token create or list Managed "
+                f"{inp.cfg.title} has no database yet, and Fly would not let this token create or list Managed "
                 "Postgres databases. Nothing was created or changed.",
                 next_steps=dashboard_database_steps(inp),
             )
         raise Stop(
             "you",
-            "This environment has no database yet. Fly charges about $41 a month for one: Managed Postgres Basic "
-            f"($38) plus about $3 for its {inp.cfg.database_volume_gb} GB of storage. With the app machine, this "
-            "environment costs about $45 a month (docs/LAUNCH_SETUP.md section 0). Nothing was created or changed.",
+            f"{inp.cfg.title} has no database yet. Fly charges about $41 a month for one: Managed Postgres Basic "
+            f"($38) plus about $3 for its {inp.cfg.database_volume_gb} GB of storage. With the app machine, "
+            f"{inp.cfg.name} costs about $45 a month (docs/LAUNCH_SETUP.md section 0). Nothing was created or "
+            "changed.",
             next_steps=[
                 "If you agree to that cost, run Deploy again with **create the database** ticked.",
             ],
         )
 
     def ensure_database(self, inp: Inputs, cluster: dict[str, Any] | None, plan: str) -> str:
-        """Returns the plan that ended up applying: "existing", "attached" or "fallback" (stage the GitHub secret)."""
+        """Fly Managed Postgres only (never for an external database). Returns the plan that ended up applying:
+        "existing", "attached" or "fallback" (stage the GitHub secret)."""
         cfg, app = inp.cfg, inp.app
         if plan == "existing":
             self.summary.step("Database", "already connected, unchanged")
@@ -1408,7 +1630,7 @@ class Deployer:
         if names & set(DATABASE_SECRET_NAMES):
             self.summary.step("Database", f"connected to {app} (DATABASE_URL set by Fly)")
             return "attached"
-        if inp.fallback_database_url:
+        if inp.database_url:
             self.summary.step("Database", "Fly could not connect it; address taken from the GitHub secret DATABASE_URL")
             return "fallback"
         hint = permission_hint(attach)
@@ -1555,11 +1777,12 @@ class Deployer:
         ]
         if inp.support_expectation:
             env_args.append(f"DOME_SUPPORT_RESPONSE_EXPECTATION={inp.support_expectation}")
+        config = self.write_fly_config(cfg)
         argv = [
             "flyctl",
             "deploy",
             "--config",
-            FLY_CONFIG,
+            config,
             "--app",
             app,
             "--image",
@@ -1581,7 +1804,10 @@ class Deployer:
         for item in env_args:
             argv += ["-e", item]
         self.log(f"Deploying to {app} (runs the database migrations first)")
-        deployed = self.runner.stream(argv, timeout=min(DEPLOY_TIMEOUT, self.remaining() - 4 * 60.0))
+        try:
+            deployed = self.runner.stream(argv, timeout=min(DEPLOY_TIMEOUT, self.remaining() - 4 * 60.0))
+        finally:
+            (REPO_ROOT / config).unlink(missing_ok=True)
         self.mutated = True
         if not deployed.ok:
             raise Stop(
@@ -1590,6 +1816,24 @@ class Deployer:
                 "configuration error are the usual causes). The previous version, if any, keeps running.",
             )
         self.summary.step("Deploy", f"done ({app}, migrations ran first)")
+        if cfg.sleeps_when_idle:
+            self.summary.step(
+                "Machine sleep",
+                "sleeps when nobody uses it and starts again on the next visit, which then takes a few seconds "
+                "(a connected PC keeps it awake)",
+            )
+        else:
+            self.summary.step("Machine sleep", "always on: never stopped, because PCs keep a connection open")
+
+    def write_fly_config(self, cfg: EnvConfig) -> str:
+        """Writes this environment's copy of deploy/fly.toml next to it; returns its path relative to the repository
+        (the caller deletes it after `flyctl deploy`)."""
+        text = render_fly_config(cfg, (REPO_ROOT / FLY_CONFIG).read_text(encoding="utf-8"))
+        relative = GENERATED_FLY_CONFIG.format(name=cfg.name)
+        (REPO_ROOT / relative).write_text(text, encoding="utf-8")
+        sleep_text = ", ".join(f"{k}={toml_literal(v)}" for k, v in cfg.machine_sleep.items())
+        self.log(f"Wrote {relative} from {FLY_CONFIG} with {sleep_text}")
+        return relative
 
     def ensure_one_machine(self, app: str) -> None:
         machines = self.fly_list(f"the machines of {app}", "machine", "list", "-a", app, "--json")
@@ -1780,6 +2024,7 @@ def permission_hint(result: Result) -> str:
 
 
 def dashboard_database_steps(inp: Inputs) -> list[str]:
+    """Fly Managed Postgres by hand (fly-managed environments only)."""
     cfg = inp.cfg
     return [
         f"On fly.io, open the dashboard (https://fly.io/dashboard), then **Managed Postgres** > **Create new "
@@ -1867,8 +2112,12 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
         app = app_name_for(cfg, env)
         sha = env.get("GITHUB_SHA", "").strip().lower()
         base = f"https://{app}.fly.dev"
-        health = get_health(base)
+        health = wake_health(base)  # a sleeping staging machine starts on this request
         summary.step(f"{app}.fly.dev /healthz", describe_health(health, sha))
+        if cfg.sleeps_when_idle:
+            summary.notes.append(
+                f"{cfg.title} sleeps when nobody uses it; this check may have woken it, which takes a few seconds."
+            )
         if (not health.reachable and health.error == "dns") or health.status_code == 404:
             summary.headline = f"{cfg.title} is not deployed yet"
             summary.next_steps.append(f"Run Deploy with environment **{cfg.name}** and action **deploy**.")

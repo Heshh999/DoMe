@@ -27,6 +27,8 @@ test-results/
 !shared/protocol/fixtures/*.pem
 pc-agent/.dome-dev-state/
 cloud-api/.dome-dev-state/
+# per-environment copies dome_deploy.py writes for `flyctl deploy` and deletes afterwards
+deploy/fly.*.generated.toml
 /tmp/
 
 # OS / editors

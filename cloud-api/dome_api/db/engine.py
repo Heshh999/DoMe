@@ -11,9 +11,12 @@ def make_engine(database_url: str, *, pool_size: int = 10, max_overflow: int = 2
         database_url,
         pool_size=pool_size,
         max_overflow=max_overflow,
+        # Each pooled connection is tested (one round-trip) before it is handed out, and replaced if the server
+        # closed it meanwhile: production's Fly proxy drains connections after 10 minutes, and staging's Neon
+        # database closes every connection when its compute suspends after about 5 idle minutes. Without it, the
+        # first request after a nap would fail (tests/test_database_url.py shows both).
         pool_pre_ping=True,
-        # Fly.io Managed Postgres guidance: recycle client connections every 600 s; the Fly proxy drains a
-        # connection after 10 minutes, and pre-ping catches one that was closed in between.
+        # Fly.io Managed Postgres guidance: recycle client connections every 600 s.
         pool_recycle=600,
     )
 

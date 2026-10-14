@@ -9,7 +9,9 @@
 #   DOME_ENV, DOME_PUBLIC_ORIGIN, DOME_OIDC_ISSUER, DOME_OIDC_CLIENT_ID (and the optional
 #   DOME_SUPPORT_RESPONSE_EXPECTATION); the public, build-time VITE_ values are docker build arguments.
 # Fixed per-environment facts live in deploy/launch/environments.toml; the founder's guide is
-# docs/LAUNCH_SETUP.md. There is deliberately NO public origin, issuer or client id here: a manual
+# docs/LAUNCH_SETUP.md. The workflow deploys a temporary copy of this file, deploy/fly.<environment>.generated.toml,
+# identical except for machine sleep in [http_service] (staging: stop when idle, start on the next request, 0
+# machines minimum; production: exactly as below), and deletes it afterwards. There is deliberately NO public origin, issuer or client id here: a manual
 # `fly deploy` without them refuses to start (exit 2) instead of running with made-up values.
 # No secret belongs in this file; see deploy/README.md "Secrets".
 
@@ -76,7 +78,10 @@ swap_size_mb = 256
 [http_service]
   internal_port = 8080
   force_https = true
-  # Long-lived WebSockets from every PC agent: machines must never be stopped by the proxy.
+  # Long-lived WebSockets from every PC agent: production's machine must never be stopped by the proxy.
+  # These three lines are production's values and the safe default for a manual `fly deploy`; staging's copy
+  # (written by dome_deploy.py from environments.toml) says "stop", true and 0, so staging and its free Neon
+  # database sleep while nobody uses them. A PC linked to staging keeps it awake while connected.
   auto_stop_machines = "off"
   auto_start_machines = false
   min_machines_running = 1

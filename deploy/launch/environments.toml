@@ -6,8 +6,20 @@
 # global across Fly.io; if one is taken, the founder can paste a different name into the repository
 # variable FLY_STAGING_APP or FLY_PRODUCTION_APP instead of changing this file.
 #
-# Region: iad (Ashburn, Virginia) for the app AND its database. ewr (Secaucus, NJ) has no Fly Managed
-# Postgres; keeping both in one region keeps their private traffic free and fast (fly.io/docs/mpg).
+# Region: iad (Ashburn, Virginia) for the app. ewr (Secaucus, NJ) has no Fly Managed Postgres; keeping
+# production's app and database in one region keeps their private traffic free and fast (fly.io/docs/mpg).
+# Staging's Neon database lives in AWS us-east-1 (northern Virginia), the Neon region nearest to iad.
+#
+# database_mode (the founder's ~$50/month budget, 2026-10-14):
+#   "external"     the database lives outside Fly (staging: Neon's free plan). The Deploy button never lists,
+#                  creates or attaches Fly Managed Postgres for it; it requires the GitHub Environment secret
+#                  DATABASE_URL (Neon's DIRECT connection string) and stores it in Fly again on every deploy.
+#   "fly-managed"  Fly Managed Postgres, created only when the founder ticks "create the database"
+#                  (production: Basic, 10 GB, about $41 a month).
+#
+# Machine sleep ([http_service] of the per-environment copy of deploy/fly.toml that the Deploy button writes):
+#   staging sleeps when nobody uses it, so its free database can sleep too; production is always on, because
+#   every linked PC holds a WebSocket to it.
 
 [staging]
 dome_env = "staging"
@@ -18,11 +30,13 @@ hostname = "staging.domeremote.com"
 dns_zone = "domeremote.com"
 dns_name = "staging"
 release_channel = "staging"
-database_cluster = "domeremote-staging-db"
-database_plan = "Basic"
-database_volume_gb = 10
+database_mode = "external"
+external_database_project = "domeremote-staging"   # the Neon project name docs/LAUNCH_SETUP.md tells the founder to use
 pg_major_version = 16
 requires_staging_commit = false
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
 
 [production]
 dome_env = "production"
@@ -33,8 +47,12 @@ hostname = "domeremote.com"
 dns_zone = "domeremote.com"
 dns_name = "@"
 release_channel = "production"
+database_mode = "fly-managed"
 database_cluster = "domeremote-production-db"
 database_plan = "Basic"
 database_volume_gb = 10
 pg_major_version = 16
 requires_staging_commit = true
+auto_stop_machines = "off"
+auto_start_machines = false
+min_machines_running = 1

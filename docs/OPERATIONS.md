@@ -1,7 +1,7 @@
 # DoMe operations
 
 Status: written on 2026-10-09 from the code in this repository; updated 2026-10-14 for the Deploy
-workflow. **No DoMe deployment exists yet.** The image (`deploy/Dockerfile`) is built by CI on every push;
+workflow and, the same day, for staging on Neon's free plan with a machine that sleeps when idle. **No DoMe deployment exists yet.** The image (`deploy/Dockerfile`) is built by CI on every push;
 `deploy/fly.toml`, the Deploy workflow (`.github/workflows/deploy.yml`) and its program
 (`deploy/launch/dome_deploy.py`) exist and are tested against a fake `flyctl`, but have never run against
 Fly.io. The founder's guide is `docs/LAUNCH_SETUP.md`. Everything below is one of two kinds, and each
@@ -81,15 +81,23 @@ the code is Fly-specific and Render/Railway are equivalents. The founder deploys
 **Deploy** (`docs/LAUNCH_SETUP.md`); every step is listed in `deploy/README.md` "The Deploy button". What
 it guarantees, in operator terms:
 
-1. **Database.** Fly Managed Postgres, Basic plan, PostgreSQL 16, region `iad`, one cluster per
-   environment, created only when the founder ticks the checkbox; `flyctl mpg attach` sets the pooled
-   `DATABASE_URL` (PgBouncer, session mode). Encryption at rest and backup retention are to be confirmed
-   on Fly's page and recorded (`docs/DATA_RETENTION.md` §1, **not yet verified**).
+1. **Database.** Production: Fly Managed Postgres, Basic plan, PostgreSQL 16, region `iad`, created only
+   when the founder ticks the checkbox; `flyctl mpg attach` sets the pooled `DATABASE_URL` (PgBouncer,
+   session mode). Encryption at rest and backup retention are to be confirmed on Fly's page and recorded
+   (`docs/DATA_RETENTION.md` §1, **not yet verified**). Staging: Neon's free plan (project
+   `domeremote-staging`, PostgreSQL 16, AWS `us-east-1`), outside Fly; the job never runs `flyctl mpg` for
+   it and requires the GitHub Environment secret `DATABASE_URL`, Neon's **direct** connection string
+   (no `-pooler` host, `sslmode=require`), which it copies to Fly on every deploy (`deploy/README.md`
+   "Staging database (Neon)").
 2. **App.** One machine (`--ha=false`, scaled to 1 if Fly made more), no autoscaling, health check on
-   `GET /healthz`, `kill_timeout` 30 s (uvicorn's graceful shutdown is 20 s).
+   `GET /healthz`, `kill_timeout` 30 s (uvicorn's graceful shutdown is 20 s). Production's machine is
+   always on. Staging's stops when idle and starts on the next request (`auto_stop_machines = "stop"`,
+   `auto_start_machines = true`, `min_machines_running = 0`, in the per-environment copy of `fly.toml`
+   the job writes): the first request after a nap takes a few seconds (machine start plus Neon wake), and
+   a PC linked to staging keeps it awake while connected.
 3. **Secrets.** `DOME_SESSION_SECRET` and the entitlement key are generated inside the job only when
-   absent and go to Fly on stdin; `DOME_OIDC_CLIENT_SECRET` is copied from the GitHub Environment on
-   every deploy; the entrypoint writes the key file 0600.
+   absent and go to Fly on stdin; `DOME_OIDC_CLIENT_SECRET` (and staging's `DATABASE_URL`) are copied from
+   the GitHub Environment on every deploy; the entrypoint writes the key file 0600.
 4. **Identity provider.** Callback `https://domeremote.com/v1/auth/callback` (production) and
    `https://staging.domeremote.com/v1/auth/callback` (staging). The job checks the issuer's discovery
    document and that it accepts `client_secret_post`. Only `tools/dev-idp` has been signed in against so
@@ -157,7 +165,11 @@ loses *who is linked and paired to what*; it cannot leak command content or let 
 
 **Backups.**
 
-1. Managed snapshots from the provider (retention per plan — confirm and record it).
+0. **Staging (Neon free plan): only Neon's restore window, 6 hours** (as of October 2026; limited to 1 GB
+   of change history). Neon can restore the branch to any moment in the last 6 hours, nothing older, and
+   there is no other copy. Staging data is throwaway by design; never keep anything there that matters.
+   The restore rehearsal below is about production.
+1. Production: managed snapshots from the provider (retention per plan — confirm and record it).
 2. In addition, a nightly logical dump to object storage in another provider or region:
    `pg_dump --format=custom --no-owner --no-privileges "$DOME_DATABASE_URL_SYNC" > dome-$(date -u +%F).dump`,
    encrypted at rest, retained 30 days (proposal; `docs/DATA_RETENTION.md` server-log and backup
@@ -167,7 +179,9 @@ loses *who is linked and paired to what*; it cannot leak command content or let 
    assertions cannot be issued until a new key is deployed (§7); without the session secret everyone
    is signed out.
 
-**Restore procedure** (to be rehearsed on staging before any release, spec §15):
+**Restore procedure** (to be rehearsed before any release, spec §15). Staging's database is Neon, so it
+cannot rehearse a Fly Managed Postgres restore: restore a production backup into a **temporary** cluster
+and a throwaway app, time it, and delete both the same day (Fly bills the cluster while it exists):
 
 1. Stop the API machine (or scale to 0) so no writes race the restore. Customers see *Offline* on the
    phone; agents retry with backoff; nothing is queued anywhere (`rules.terminal_result`,
@@ -214,7 +228,8 @@ consistent snapshot".
 | `DOME_SESSION_SECRET` | Replace it in place, on stdin: `printf 'DOME_SESSION_SECRET=%s\n' "$(openssl rand -hex 32)" \| fly secrets import -a <app>` (Fly restarts the machine with the new value; `printf` is a shell builtin, so the value never appears on a process command line). **Never `fly secrets unset` it**: the app cannot start without it, and the Deploy button refuses to generate a new one for a production app that already has machines, so production would stay down until someone sets it by hand. Alternatively add `--stage` to the import and press Deploy. A rotate action is a follow-up. | Every web session is invalid: all phones and browsers sign in again (`UNAUTHENTICATED` / close 4008); controller keys and pairings are unaffected. Stored `ip_hash` values no longer match new ones (they are keyed by this secret), which only affects correlating old security events by IP. |
 | Entitlement signing key (Ed25519) | Replace it in place, on stdin: `printf 'DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64=%s\n' "$(openssl genpkey -algorithm ed25519 \| base64 -w0)" \| fly secrets import -a <app>` (never `unset` it, same reason as above). The JWKS at `/.well-known/dome-jwks.json` serves the current public key; agents fetch the JWKS and refresh their assertion on every connect and at 80 % of the 1 h lifetime (`rules.token_and_entitlement_refresh`, **unit-tested** `pc-agent/tests/test_entitlement.py::test_refresh_against_fake_api`) | Free accounts: none (their assertion is null). Pro (Phase C): an assertion signed by the old key fails verification at the next refresh and the agent treats the account as Free until it obtains a new one — within an hour, immediately on reconnect. The 72 h grace applies only to network errors/5xx, never to a verification failure, so there is no window in which a revoked key keeps Pro alive. Serve both keys during a transition is **not** implemented (single key, single `kid`). |
 | OIDC client secret | Rotate at the provider, paste the new value into the GitHub Environment secret `DOME_OIDC_CLIENT_SECRET`, press Deploy | Logins fail between the two steps (`oidc.token_exchange_failed`, HTTP 503 to the customer); existing sessions keep working. |
-| Database password | Rotate at the provider, set `DOME_DATABASE_URL`, restart | Brief downtime; `pool_pre_ping` discards dead connections. |
+| Database password, staging (Neon) | In Neon: project `domeremote-staging` > **Branches** > the default branch > **Roles & Databases** > the role's menu (normally `neondb_owner`) > **Reset password**. Neon shows the new password once and drops existing connections. Then **Connect** (Connection pooling off) > copy the connection string > GitHub > Settings > Environments > **staging** > Environment secret `DATABASE_URL` > **Update** > run Deploy for staging, which copies it into Fly (every staging deploy does). The founder can do all of it (`docs/LAUNCH_SETUP.md` section 6). | Staging cannot reach its database between the reset and the deploy (`/healthz` 503); pre-ping replaces the dropped connections once the new address is in place. |
+| Database password, production (Fly Managed Postgres) | Rotate at the provider, set `DOME_DATABASE_URL`, restart | Brief downtime; `pool_pre_ping` discards dead connections. |
 | PC credential (per PC) | Customer: Devices → Unlink, then `DoMe.exe link` again; or operator sets `pc_credentials.revoked_at` | The agent gets 401 on `/v1/agent/token`, stops and asks for a re-link; pairings are not inherited (`cloud-api/DECISIONS.md` #2). |
 | PC access tokens | Automatic: 1 h lifetime (`DOME_PC_ACCESS_TOKEN_SECONDS`), refreshed by the agent before reconnecting when < 5 min remain; open sockets are never closed for token expiry | none |
 | Controller key (per phone) | Customer: revoke under Devices and pair again; or "Forget this installation" on the phone | That phone must pair again. |
@@ -302,7 +317,7 @@ twice in 10 minutes; any unhandled exception; `oidc.*` failures above 5 per minu
 | Sweeper | every 5 s (`DOME_RELAY_SWEEP_INTERVAL_SECONDS`); deadline = `max(expires_at, received_at + timeout_ms) [+ 60 s for challenge actions] + 10 s`; armed power countdowns exempt until `fires_at + timeout_ms` | `lifecycle.py`, `manager.py` | integration-tested `test_in_flight_deadline_sweeper`, `test_power_countdown_is_exempt_from_deadline_until_fires_at` |
 | Graceful shutdown | uvicorn `timeout_graceful_shutdown=20`; lifespan stops the sweeper, closes the OIDC client, disposes the pool | `cli.py`, `main.py` | code; shutdown under load **not yet verified** |
 | Start-up sweep | rows in `created/accepted/executing/awaiting_confirmation` from a previous process → `outcome_unknown` (executing) or `expired`; logged as `startup_sweep` | `manager.py::startup_sweep` | integration-tested `test_startup_sweep_closes_rows_from_a_previous_process` |
-| DB pool | 10 + 20 overflow, pre-ping, recycle 1800 s | `db/engine.py` | code |
+| DB pool | 10 + 20 overflow, pre-ping (replaces a connection the server closed, e.g. when staging's Neon compute suspends), recycle 600 s | `db/engine.py` | unit- and integration-tested `cloud-api/tests/test_database_url.py` (a backend ended under a pooled connection is replaced; without pre-ping the same request fails) |
 
 **What a restart or deploy means for customers.** Every socket drops. Commands that had an
 `executing` ack are reported to the phone as `outcome_unknown` (by the dying process if it gets to
@@ -383,7 +398,7 @@ scenario to this table.
 - [ ] Container image and `fly.toml` written, built and deployed to **staging** (§2–§3); `DOME_TRUSTED_PROXIES` verified with `ss -tn`
 - [ ] Production OIDC application registered; sign-in tested from an iPhone over the real origin
 - [ ] Encryption at rest and backup retention confirmed on the database vendor's page and recorded in `docs/DATA_RETENTION.md`
-- [ ] Nightly logical dump to a second location configured; **restore rehearsed** on staging and timed (§5)
+- [ ] Nightly logical dump to a second location configured; **restore rehearsed** into a temporary cluster and timed (§5; staging's Neon database cannot stand in for it)
 - [ ] **Failed-deployment recovery rehearsed** on staging (§6)
 - [ ] Secret rotation rehearsed for the session secret and the entitlement key (§7)
 - [ ] External `/healthz` monitor and the first alerts from §8 configured; log shipping with a retention of 30 days or the documented alternative

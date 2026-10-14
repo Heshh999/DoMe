@@ -9,8 +9,10 @@
 #    DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH with mode 0600. In DOME_ENV=development only, a missing
 #    key is generated with the repository's own `dome-api-gen-entitlement-key`; staging/production
 #    refuse to invent a signing key.
-# 2. DATABASE_URL (postgres:// or postgresql://, the form `fly postgres attach` injects) is
-#    translated to DOME_DATABASE_URL (postgresql+psycopg://) when DOME_DATABASE_URL is not set.
+# 2. DATABASE_URL (postgres:// or postgresql://: what `fly mpg attach` sets for production, and staging's
+#    Neon connection string) is translated to DOME_DATABASE_URL (postgresql+psycopg://) when
+#    DOME_DATABASE_URL is not set. Only the scheme changes: the query (Neon's ?sslmode=require&
+#    channel_binding=require) is kept and psycopg/libpq enforce it (cloud-api/tests/test_database_url.py).
 #
 # Nothing here is a login path, a default secret or a fallback that hides a misconfiguration:
 # every other setting is still validated by dome_api/settings.py, which stops the process.

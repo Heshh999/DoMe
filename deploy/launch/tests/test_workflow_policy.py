@@ -75,6 +75,8 @@ def test_inputs_are_exactly_the_three_buttons(wf: dict[str, Any]) -> None:
     create = inputs["create_database_if_missing"]
     assert create["type"] == "boolean" and create["default"] is False
     assert "about $41 a month" in create["description"] and "about $45 a month" in create["description"]
+    # the cost consent is production's only: staging's database is a free Neon database, never created by Deploy
+    assert create["description"].startswith("Production only") and "Staging ignores this" in create["description"]
 
 
 def test_read_only_token_and_three_jobs(wf: dict[str, Any]) -> None:
@@ -159,9 +161,11 @@ def test_secrets_only_in_the_deploy_step_env(wf: dict[str, Any]) -> None:
     assert {k for k, v in env.items() if "secrets." in v} == {
         "FLY_API_TOKEN",
         "DOME_OIDC_CLIENT_SECRET",
-        "DOME_FALLBACK_DATABASE_URL",
+        "DEPLOY_DATABASE_URL",
     }
-    assert env["DOME_FALLBACK_DATABASE_URL"] == "${{ secrets.DATABASE_URL }}"
+    assert env["DEPLOY_DATABASE_URL"] == "${{ secrets.DATABASE_URL }}"
+    # the program drops it (and the client secret) from every child process's environment
+    assert {"DEPLOY_DATABASE_URL", "DOME_OIDC_CLIENT_SECRET"} <= dome_deploy.CHILD_ENV_DROP
 
 
 def test_gate_and_status_have_no_environment_and_no_secret_values(wf: dict[str, Any]) -> None:

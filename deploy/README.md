@@ -8,8 +8,9 @@ secret rotation, incident basics). ADR-0001 D1/D2 are the decisions behind it.
 > **Status (2026-10-14): nothing has been deployed to Fly.io yet.** The image is built by CI on every
 > push since 2026-10-11 and was run in the test-kit rehearsal (Linux). The Deploy workflow and its
 > program (`launch/dome_deploy.py`) are written and tested against a fake `flyctl`
-> (`launch/tests/`), but have **never run against Fly.io, Auth0 or Cloudflare**: the founder's first
-> staging run is the real test. What was verified is listed in
+> (`launch/tests/`), but have **never run against Fly.io, Neon, Auth0 or Cloudflare**: the founder's
+> first staging run is the real test. Since 2026-10-14 (budget about $50 a month) staging's database is
+> Neon's free plan and staging's machine sleeps when idle; production is unchanged. What was verified is listed in
 > [What was actually verified](#what-was-actually-verified).
 >
 > **Founder: start with [`docs/LAUNCH_SETUP.md`](../docs/LAUNCH_SETUP.md)**, the click-by-click guide.
@@ -20,8 +21,8 @@ secret rotation, incident basics). ADR-0001 D1/D2 are the decisions behind it.
 | `Dockerfile` | Multi-stage image: build the PWA with pnpm, install cloud-api with `uv`, run `dome-api` (uvicorn) as a non-root user with `DOME_STATIC_DIR` pointing at the built PWA; HEALTHCHECK on `/healthz`. Build context is the **repository root**. |
 | `Dockerfile.dockerignore` | Keeps `.git`, `node_modules`, `.venv`, `.env*`, keys and the components the image does not need out of the context. |
 | `entrypoint.sh` | Turns the hosting platform's environment-only secrets into what the API wants: writes the Ed25519 signing key from `DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64` to a 0600 file; derives `DOME_DATABASE_URL` from a `DATABASE_URL`. Generates a key **only** in `DOME_ENV=development`. |
-| `fly.toml` | Fly.io app configuration shared by both environments (persistent-WebSocket friendly: machines never auto-stop, connection-based concurrency, 30 s drain, `/healthz` check, release command for migrations, the Fly client-address settings). No secrets and no per-environment values: the Deploy workflow passes those. |
-| `launch/environments.toml` | The fixed, public facts per environment: Fly app and database names, region `iad`, origin, host name, release channel. |
+| `fly.toml` | Fly.io app configuration shared by both environments (persistent-WebSocket friendly: production's machine never auto-stops, connection-based concurrency, 30 s drain, `/healthz` check, release command for migrations, the Fly client-address settings). No secrets and no per-environment values: the Deploy workflow passes those, and deploys a temporary copy, `fly.<environment>.generated.toml`, that differs only in machine sleep (staging stops when idle). |
+| `launch/environments.toml` | The fixed, public facts per environment: Fly app name, region `iad`, origin, host name, release channel, database mode (staging `external` = Neon, production `fly-managed` with its cluster name, plan and size) and machine sleep. |
 | `launch/dome_deploy.py` | Everything the Deploy button does (`gate`, `deploy`, `status`); standard library only. |
 | `launch/tests/` | Its tests: a fake `flyctl` with Fly-shaped output, the workflow's safety rules, `fly.toml` consistency. |
 | `docker-compose.dev.yml` | PostgreSQL 16 + `tools/dev-idp` + the API image for machines that have Docker. |
@@ -106,10 +107,11 @@ Nothing is shared between them; a secret that exists in two environments is a mi
 | Origin | `http://localhost:5173` (Vite) or `:8080` | `https://staging.domeremote.com` from the first deploy (`<app>.fly.dev` serves `/healthz` until DNS exists; sign-in waits for DNS) | `https://domeremote.com` |
 | TLS / HSTS | plain http | Fly-terminated TLS | Fly-terminated TLS; `production` enables HSTS |
 | `DOME_TRUSTED_PROXIES` | unset (TCP peer is the client) | private IPv4 ranges + `DOME_CLIENT_IP_HEADER=fly-client-ip` (`fly.toml`); checked by `/healthz` on every deploy | same |
-| Database | local PostgreSQL | Fly Managed Postgres Basic, `domeremote-staging-db`, `iad` | Fly Managed Postgres Basic, `domeremote-production-db`, `iad` |
+| Database | local PostgreSQL | Neon free plan, project `domeremote-staging`, AWS `us-east-1`, outside Fly; its direct address is the GitHub Environment secret `DATABASE_URL` ([Staging database](#staging-database-neon)) | Fly Managed Postgres Basic, `domeremote-production-db`, `iad` |
+| Machine | — | one, sleeps when idle (`auto_stop_machines = "stop"`, `auto_start_machines = true`, `min_machines_running = 0`); the first request after a nap takes a few seconds | one, always on (`"off"`, `false`, `1`): PCs hold WebSockets |
 | Entitlement key | generated locally (`make`/entrypoint) | generated once, stored only in Fly secrets | generated once, stored only in Fly secrets; never the staging key |
 | Stripe | none (Phase C not implemented) | test-mode keys only, when Phase C exists | live keys only after the founder's go-live decision |
-| Data | throwaway | throwaway; may be reset | retained per `docs/DATA_RETENTION.md` |
+| Data | throwaway | throwaway; may be reset; Neon's 6-hour restore window is the only backup | retained per `docs/DATA_RETENTION.md` |
 
 Code paths that differ by `DOME_ENV` are in `cloud-api/dome_api/settings.py`: production requires
 https origins and issuer and a non-placeholder session secret; staging and production require an
@@ -122,7 +124,9 @@ Accounts and pasted values only; [`docs/LAUNCH_SETUP.md`](../docs/LAUNCH_SETUP.m
 guide. In short:
 
 1. **Fly.io** account with a card on file (the trial stops machines after 5 minutes), one organization
-   token per GitHub Environment.
+   token per GitHub Environment. **Neon** free account with the project `domeremote-staging` (PostgreSQL
+   16, AWS `us-east-1`); its direct connection string (Connection pooling off) is the staging Environment
+   secret `DATABASE_URL`.
 2. **GitHub Environments** `staging` and `production` on this repository, each limited to the default
    branch with the founder as **required reviewer** and no administrator bypass (the `gate` job checks
    this), approving only runs he started himself, holding the secrets and variables in
@@ -140,8 +144,9 @@ guide. In short:
 ## The Deploy button (`.github/workflows/deploy.yml`)
 
 GitHub > Actions > **Deploy** > Run workflow; inputs `environment` (staging | production), `action`
-(deploy | status) and `create_database_if_missing` (the founder's consent to about $41 a month for the
-database and its 10 GB; about $45 a month for the whole environment).
+(deploy | status) and `create_database_if_missing` (production only: the founder's consent to about $41 a
+month for production's database and its 10 GB; about $45 a month for the whole of production; a staging run
+ignores it and says so).
 The file must be on the default branch or GitHub shows no button. Three jobs:
 
 | Job | Secrets | What it does |
@@ -156,27 +161,40 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
    (`x.us.auth0.com`, `https://x.us.auth0.com` and `https://x.us.auth0.com/` are all accepted).
 2. OIDC discovery from the runner: the issuer answers, names itself, and accepts `client_secret_post`.
 3. Production only: the staging check of the `gate` job again.
-4. `flyctl apps list`, `secrets list` (names and digests only), `mpg list`. A generated secret counts as
-   missing only when `secrets list` succeeded and parsed; any other answer stops the run. A production
-   app that already has machines but lacks a generated secret stops for an engineer instead of getting a
-   new one (that would sign everyone out or invalidate every linked PC).
-5. Database decision: already attached / the cluster exists / create it (only with the checkbox) / the
-   GitHub fallback secret `DATABASE_URL`. None of these: stop, "about $41 a month", nothing changed.
+4. `flyctl apps list`, `secrets list` (names and digests only), and for production `mpg list`. A
+   generated secret counts as missing only when `secrets list` succeeded and parsed; any other answer
+   stops the run. A production app that already has machines but lacks a generated secret stops for an
+   engineer instead of getting a new one (that would sign everyone out or invalidate every linked PC).
+5. Database decision, by `database_mode`. **Staging (`external`)**: no `mpg` command ever runs. The GitHub
+   Environment secret `DATABASE_URL` is required and checked in step 1 without ever being printed (a
+   `postgres(ql)://` URL with user, password, host and database; no `-pooler` host; `sslmode=require`,
+   `verify-ca` or `verify-full`; no stars for a password); missing or unusable stops with "needs you" and
+   the Neon steps. A staging app with its own `DOME_DATABASE_URL` Fly secret (it would override
+   `DATABASE_URL`) stops for an engineer. **Production (`fly-managed`)**: already attached / the cluster
+   exists / create it (only with the checkbox) / the GitHub fallback secret `DATABASE_URL`. None of these:
+   stop, "about $41 a month", nothing changed.
 6. Create the app if missing (a name owned by someone else stops with "set the repository variable
    `FLY_STAGING_APP`/`FLY_PRODUCTION_APP`"); allocate a dedicated IPv6 and the **free shared** IPv4
    (never a dedicated IPv4).
-7. `flyctl mpg create` (Basic, `iad`, 10 GB, PostgreSQL 16) when consented, wait until `ready`, then
-   `flyctl mpg attach` (sets the pooled `DATABASE_URL`). Both commands print the database password, so
+7. Production only: `flyctl mpg create` (Basic, `iad`, 10 GB, PostgreSQL 16) when consented, wait until
+   `ready`, then `flyctl mpg attach` (sets the pooled `DATABASE_URL`). Both commands print the database password, so
    their output is never shown; only the exit code is.
 8. Generate `DOME_SESSION_SECRET` (`secrets.token_hex(32)`) and `DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64`
    (base64 of `openssl genpkey -algorithm ed25519`, in memory only) **only if absent**; mask them; stage
-   them plus `DOME_OIDC_CLIENT_SECRET` (always re-copied from GitHub) with `flyctl secrets import --stage`
-   on stdin.
+   them plus `DOME_OIDC_CLIENT_SECRET` (always re-copied from GitHub) and, for staging, `DATABASE_URL`
+   (always re-copied from GitHub, so a Neon password reset is: paste in GitHub, press Deploy) with
+   `flyctl secrets import --stage` on stdin. The password inside `DATABASE_URL` is masked on its own.
 9. `docker build` exactly as CI does, with the channel, support URL and commit build arguments, then
-   `flyctl deploy --image <that image> --local-only --builder-pool=false --depot=false --ha=false
-   --no-public-ips` with `-e DOME_ENV`,
-   `DOME_PUBLIC_ORIGIN`, `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`. Fly's release command runs the
-   migrations first; a failure leaves the previous version running.
+   `flyctl deploy --config deploy/fly.<environment>.generated.toml --image <that image> --local-only
+   --builder-pool=false --depot=false --ha=false --no-public-ips` with `-e DOME_ENV`,
+   `DOME_PUBLIC_ORIGIN`, `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`. The config is a copy of `fly.toml`
+   written next to it just before the deploy, with `environments.toml`'s machine sleep in
+   `[http_service]`; the program refuses to deploy unless the copy parses to exactly `fly.toml` with only
+   those three keys changed, and deletes it afterwards, failure or not (git ignores
+   `deploy/fly.*.generated.toml`). `flyctl deploy` v0.4.110 has no flag for autostop, autostart or minimum
+   machines (checked in its `internal/command/deploy/deploy.go` and `internal/flag/flag.go` on 2026-10-14),
+   so a file is used. Fly's release command runs the migrations first; a failure leaves the previous version
+   running.
 10. Scale to exactly one machine if Fly created more (the relay is in memory).
 11. `flyctl certs add <host>` if missing, `certs check`; the DNS records to add come from Fly's answer.
 12. Checks on `https://<app>.fly.dev`: `/healthz` with this commit, `database ok` and
@@ -191,7 +209,9 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
     production another commit (red: fly.dev just passed, so it is a real misconfiguration) / **live**.
     "Live" is said only when `https://<host>/healthz` answered with this commit during this run; sign-in
     is never claimed. `status` runs are red for the same states and for a `forwarded_client` that is not
-    ok, green for "not deployed yet" and DNS or certificate pending.
+    ok, green for "not deployed yet" and DNS or certificate pending. Production's staging check (gate and
+    deploy) and `status` ask `/healthz` up to 4 times, 10 s apart, while the app does not answer or answers
+    502-504: that is a sleeping staging machine starting and its Neon database waking.
 13. The run summary (Actions > the run > Summary): what was created, what was already there, the next
     click with exact Cloudflare records, and for production the list of what is still not done.
 
@@ -261,7 +281,7 @@ Founder-pasted values are **GitHub Environment** secrets and variables (Settings
 | --- | --- | --- | --- | --- |
 | `FLY_API_TOKEN` | GitHub Environment secret (never a repository secret: the gate refuses while one exists) | founder (Fly dashboard > Tokens, organization token) | `flyctl` in the deploy job only | revoke on the Fly Tokens page, paste a new one |
 | `DOME_OIDC_CLIENT_SECRET` | GitHub Environment secret → Fly secret | founder (Auth0 > Application > Settings); re-copied to Fly on every deploy | the relying-party credential | rotate in Auth0 (Credentials > Rotate), paste in GitHub, press Deploy |
-| `DATABASE_URL` | Fly secret | `flyctl mpg attach` in the deploy job (pooled PgBouncer URL); fallback: founder pastes it as a GitHub Environment secret, or uses the cluster's Connect tab > Set secret | PostgreSQL connection; the entrypoint converts it to `postgresql+psycopg://` | rotate the database user's password, then the secret, then deploy |
+| `DATABASE_URL` | Fly secret | **staging**: the GitHub Environment secret `DATABASE_URL` (Neon's direct connection string), required and copied to Fly on every deploy; **production**: `flyctl mpg attach` in the deploy job (pooled PgBouncer URL), fallback: founder pastes it as a GitHub Environment secret, or uses the cluster's Connect tab > Set secret | PostgreSQL connection; the entrypoint converts it to `postgresql+psycopg://`, keeping its query (`sslmode`, `channel_binding`) | staging: Neon > Reset password, paste the new string in GitHub, press Deploy; production: rotate the database user's password, then the secret, then deploy (`docs/OPERATIONS.md` §7) |
 | `DOME_SESSION_SECRET` | Fly secret | generated in the deploy job (`secrets.token_hex(32)`) only when absent | HMAC key for session-cookie ids and `ip_hash` values | every web session is signed out; the PWA redirects to sign-in |
 | `DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64` | Fly secret | generated in the deploy job (base64 of an Ed25519 PKCS8 PEM) only when absent; one per environment | written to `DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH` at start | agents re-fetch the JWKS on their next connect; Pro-only gates fall back to Free until then |
 | `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID` | GitHub Environment variables | founder (Auth0 Domain and Client ID) | passed with `flyctl deploy -e` | change and press Deploy (the issuer change re-keys accounts: `accounts` are keyed by issuer + subject) |
@@ -301,27 +321,61 @@ minute) and the `ip_hash` of security events need the real client address. On Fl
 ## Engineer-only: the same steps with `flyctl`
 
 For debugging, never needed by the founder. Managed Postgres (`fly mpg`), not the legacy unmanaged
-`fly postgres`, which Fly Support does not support. Use an app name from `launch/environments.toml`.
+`fly postgres`, which Fly Support does not support; it is production's database only. Use an app name from
+`launch/environments.toml`.
 
 ```sh
-fly apps create domeremote-staging --org personal
-fly ips allocate-v6 -a domeremote-staging && fly ips allocate-v4 --shared -a domeremote-staging --yes
-fly mpg create --name domeremote-staging-db --org personal --region iad --plan Basic --volume-size 10
+fly apps create domeremote-production --org personal
+fly ips allocate-v6 -a domeremote-production && fly ips allocate-v4 --shared -a domeremote-production --yes
+fly mpg create --name domeremote-production-db --org personal --region iad --plan Basic --volume-size 10
 fly mpg list -o personal                         # wait for Status "ready"; note the ID
-fly mpg attach <ID> -a domeremote-staging        # prints the password: do not paste the output anywhere
+fly mpg attach <ID> -a domeremote-production     # prints the password: do not paste the output anywhere
 # generated secrets, on stdin only (never on the command line or in shell history):
 { printf 'DOME_SESSION_SECRET=%s\n' "$(openssl rand -hex 32)"
   printf 'DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64=%s\n' "$(openssl genpkey -algorithm ed25519 | base64 -w0)"
-} | fly secrets import --stage -a domeremote-staging
-docker build -f deploy/Dockerfile --build-arg DOME_BUILD_COMMIT="$(git rev-parse HEAD)" -t dome-launch:manual .
-fly deploy --config deploy/fly.toml -a domeremote-staging --image dome-launch:manual --local-only \
+} | fly secrets import --stage -a domeremote-production
+docker build -f deploy/Dockerfile --build-arg VITE_DOME_RELEASE_CHANNEL=production \
+  --build-arg DOME_BUILD_COMMIT="$(git rev-parse HEAD)" -t dome-launch:manual .
+fly deploy --config deploy/fly.toml -a domeremote-production --image dome-launch:manual --local-only \
   --builder-pool=false --depot=false --ha=false \
-  -e DOME_ENV=staging -e DOME_PUBLIC_ORIGIN=https://staging.domeremote.com \
+  -e DOME_ENV=production -e DOME_PUBLIC_ORIGIN=https://domeremote.com \
   -e DOME_OIDC_ISSUER=https://<tenant>.us.auth0.com -e DOME_OIDC_CLIENT_ID=<client id>
-fly certs add staging.domeremote.com -a domeremote-staging
+fly certs add domeremote.com -a domeremote-production
 ```
 
-(`DOME_OIDC_CLIENT_SECRET` too must arrive on stdin via `fly secrets import`.)
+(`DOME_OIDC_CLIENT_SECRET` too must arrive on stdin via `fly secrets import`.) **Staging** by hand: no `mpg`
+lines; put `DATABASE_URL=<Neon direct string>` on the same stdin import (read it with `read -rs`, never type
+it on a command line), and deploy a copy of `fly.toml` with `auto_stop_machines = "stop"`,
+`auto_start_machines = true` and `min_machines_running = 0` (`fly.toml` itself is production's shape).
+
+### Staging database (Neon)
+
+Staging's database is Neon's free plan (decision of 2026-10-14, `docs/COST_MODEL.md` §2A): 0.5 GB, 100
+CU-hours a month, the compute sleeps after 5 idle minutes, a 6-hour restore window (as of October 2026).
+What the code relies on, and why:
+
+- **The direct connection string, not the pooler.** Neon's `-pooler` host is PgBouncer in transaction mode.
+  psycopg 3 prepares a statement on the server after it has run 5 times on one connection
+  (`prepare_threshold`), and in transaction mode the next transaction may land on another server
+  connection; Neon's docs also list session state (`SET`, `LISTEN`, SQL `PREPARE`, advisory locks) as
+  unsupported there. Whether Neon's PgBouncer tracks protocol-level prepared statements was not confirmed,
+  so DoMe does not depend on it: the direct host needs no such analysis. DoMe opens at most 30 connections
+  (pool 10 + overflow 20, `cloud-api/dome_api/db/engine.py`) plus one for migrations; Neon's smallest
+  compute (0.25 CU) allows about 105 direct connections (Neon docs: 112, 7 reserved). The Deploy button
+  refuses a `-pooler` host.
+- **TLS and channel binding.** Neon's string ends `?sslmode=require&channel_binding=require`. The entrypoint
+  changes only the scheme; SQLAlchemy passes both to psycopg; the libpq bundled with psycopg-binary (18.x)
+  enforces both: no TLS, refused; a server that authenticates without SCRAM channel binding, refused
+  (`cloud-api/tests/test_database_url.py`, against a stand-in server; nothing here has connected to Neon).
+- **Naps.** Neon closes every connection when its compute suspends. The pool pre-pings each connection
+  before use (`pool_pre_ping=True`, plus `pool_recycle=600`), so the first request after a nap reconnects
+  instead of failing (tested by ending the server backend under a pooled connection). Fly's health check
+  reads `/healthz` (one database round trip) every 15 s while the machine runs, so the database is awake
+  whenever staging's machine is; the machine stops after a few idle minutes (Fly's proxy decides), and the
+  database 5 minutes later. A linked PC holds a WebSocket and keeps both awake: around the clock, that uses
+  the free 100 CU-hours in about 17 days at 0.25 CU, after which Neon suspends the database until the next
+  month.
+- **Region.** AWS `us-east-1` (northern Virginia), Neon's nearest to Fly `iad`.
 
 ### Deployment-time facts still to confirm on the first machine
 
@@ -333,6 +387,9 @@ fly certs add staging.domeremote.com -a domeremote-staging
 - Memory: 512 MB is a cost-model assumption; watch RSS under real agents.
 - The pooled `DATABASE_URL` from `mpg attach` goes through PgBouncer in **session** mode (Fly's default),
   where psycopg's prepared statements work. Switching the pool to transaction mode would break them.
+- Staging: the machine stops when idle and starts on the next request (and Fly's health checks do not keep
+  it awake); the cold start (machine + Neon wake) stays within the deploy's 15 s HTTP timeout and 4 tries;
+  Neon accepts psycopg's channel binding; the Neon connection string's exact shape.
 
 ## Operations
 
@@ -365,7 +422,8 @@ across statements that PostgreSQL cannot run in a transaction.
 
 ### Backup and restore
 
-- Backups are Fly Managed Postgres's automated backups (included in every plan; retention to be
+- Staging (Neon free plan) has only Neon's 6-hour restore window; its data is throwaway.
+- Production backups are Fly Managed Postgres's automated backups (included in every plan; retention to be
   recorded in `docs/OPERATIONS.md`), plus, later, a scheduled logical dump (`pg_dump` through `fly mpg
   proxy`) to an object store the founder controls. Retention follows `docs/DATA_RETENTION.md`; backups contain only what the
   database contains (hashed credentials and session ids, no payloads, no challenge text, no titles).
@@ -434,9 +492,9 @@ Six jobs, no secrets, SHA-pinned actions (tag in the trailing comment). Green on
 | Item | Evidence | Tag |
 | --- | --- | --- |
 | Image | built by CI's `container` job on every push since 2026-10-11; run in the test-kit rehearsal (Linux) | built, not run on Fly.io |
-| `entrypoint.sh` | `sh -n`; all four paths exercised locally (staging without key → exit 2; development → generated 0600 PEM; `_B64` → identical PEM and `DATABASE_URL` translated; existing key untouched); shellcheck 0.11.0 clean | unit-tested (shell, locally) |
+| `entrypoint.sh` | `sh -n`; all four paths exercised locally (staging without key → exit 2; development → generated 0600 PEM; `_B64` → identical PEM and `DATABASE_URL` translated; existing key untouched); shellcheck 0.11.0 clean; a Neon-style `DATABASE_URL` keeps `?sslmode=require&channel_binding=require` (`cloud-api/tests/test_database_url.py`, 2026-10-14) | unit-tested (shell, locally) |
 | `fly.toml` | parses; `launch/tests/test_fly_config.py` (no secrets or placeholders, ports, release command, region, trusted ranges); flags and merge rules checked in the flyctl v0.4.110 source | not yet verified on Fly.io |
-| Deploy workflow + `dome_deploy.py` | `launch/tests/` (136 tests: order of operations, re-runs, stops before changes, database paths, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Auth0, Cloudflare or GitHub's environments API** |
+| Deploy workflow + `dome_deploy.py` | `launch/tests/` (180 tests: order of operations, re-runs, stops before changes, database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Neon, Auth0, Cloudflare or GitHub's environments API** |
 | `docker-compose.dev.yml` | `docker compose config --quiet` (Compose v5.6.0) | not brought up |
 | `ci.yml` | green on GitHub Actions since 2026-10-11 | CI-tested |
 

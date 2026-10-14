@@ -349,7 +349,9 @@ frame against `relay-frames.schema.json`.
   on Fly.io the `release_command` applies them and the process starts with `--skip-migrations`.
 - `GET /healthz` (no auth, `no-store`): `status` (`ok`/`degraded`, 200/503), `version`, `commit` (the build
   commit or null), `database`, `forwarded_client` (above) and the relay counts. The database pool recycles
-  connections after 600 s and pre-pings (Fly Managed Postgres guidance).
+  connections after 600 s and pre-pings (Fly Managed Postgres guidance; staging's Neon database closes every
+  connection when its compute suspends, and pre-ping replaces them: `tests/test_database_url.py`). A
+  `DATABASE_URL` query such as Neon's `?sslmode=require&channel_binding=require` reaches libpq unchanged.
 - Request log lines carry the matched route template and a masked path: a device-link `user_code`
   never appears (`/v1/agent-link/{user_code}/approve`); query strings are never logged.
 - Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: same-origin`,

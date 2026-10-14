@@ -1,8 +1,9 @@
 # Deploy: the founder's one button. GitHub > Actions > "Deploy" > Run workflow, then choose
 #   environment  staging | production
 #   action       deploy (set up what is missing, deploy, check) | status (look only, change nothing)
-#   create the database (first run only; Fly Managed Postgres Basic with 10 GB, about $41 a month per
-#                        environment; with the app machine an environment costs about $45 a month)
+#   create the database (production only, first run: Fly Managed Postgres Basic with 10 GB, about $41 a
+#                        month; with the app machine production costs about $45 a month. Staging ignores it:
+#                        its database is a free Neon database whose address is the secret DATABASE_URL)
 # Step by step, in plain English: docs/LAUNCH_SETUP.md. What each step does: deploy/README.md.
 #
 # STATUS (2026-10-14): written and statically checked (actionlint, tests in deploy/launch/tests). It has
@@ -20,7 +21,8 @@
 #   with the job's own read-only token); and for production, any commit staging does not already run
 #   healthily. Only then does GitHub ask for approval.
 # * Job "deploy" is the only job with secret values. It uses the GitHub Environment named by the input,
-#   which holds FLY_API_TOKEN and DOME_OIDC_CLIENT_SECRET (and, only as a fallback, DATABASE_URL). No job
+#   which holds FLY_API_TOKEN, DOME_OIDC_CLIENT_SECRET and DATABASE_URL (staging: required, its Neon
+#   database's direct address; production: only a fallback if Fly cannot attach its database). No job
 #   receives a Fly token without an approval from the founder's GitHub account; that approval authorizes
 #   whatever is on the default branch at that commit (docs/SECURITY.md section 6).
 # * Job "status" has no environment and no secrets and never runs flyctl: it cannot change anything.
@@ -57,7 +59,7 @@ on:
         default: deploy
         required: true
       create_database_if_missing:
-        description: "First run only: create this environment's Fly Managed Postgres database if it does not exist yet (Basic plan with 10 GB storage, about $41 a month; with the app machine this environment costs about $45 a month)"
+        description: "Production only, first run: create production's Fly Managed Postgres database if it does not exist yet (Basic plan with 10 GB storage, about $41 a month; with the app machine production costs about $45 a month). Staging ignores this: it uses its free Neon database"
         type: boolean
         default: false
 
@@ -129,7 +131,8 @@ jobs:
           # Secrets: only here. Environment secrets of the chosen GitHub Environment.
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           DOME_OIDC_CLIENT_SECRET: ${{ secrets.DOME_OIDC_CLIENT_SECRET }}
-          DOME_FALLBACK_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # staging: required (its free Neon database); production: only a fallback for Fly Managed Postgres
+          DEPLOY_DATABASE_URL: ${{ secrets.DATABASE_URL }}
           # Not secret: environment variables (or repository variables for the app-name overrides).
           DOME_OIDC_ISSUER: ${{ vars.DOME_OIDC_ISSUER }}
           DOME_OIDC_CLIENT_ID: ${{ vars.DOME_OIDC_CLIENT_ID }}

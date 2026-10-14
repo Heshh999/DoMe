@@ -36,7 +36,9 @@ audited by the hosting provider's own access logs.
 
 Encryption at rest: the managed PostgreSQL on the chosen host (Fly.io Managed Postgres in ADR-0001 D2)
 is expected to encrypt volumes and backups at rest; this must be confirmed on the vendor page before
-launch (**not yet verified**). Application-level column encryption is not used; secrets are stored
+launch (**not yet verified**). Staging's database is Neon's free plan (since 2026-10-14): test data only,
+reached over TLS (`sslmode=require`), kept recoverable for 6 hours by Neon's restore window and nothing
+else; Neon's encryption at rest is likewise **not yet verified**. Application-level column encryption is not used; secrets are stored
 only as hashes.
 
 | Record class (table) | Purpose | Contents | Retention | Deletion trigger | Encryption at rest | Who can access |

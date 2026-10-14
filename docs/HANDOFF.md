@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated 2026-10-13 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
+Last updated 2026-10-14 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
 continuing the work. `docs/PROGRESS.md` is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix;
 each component keeps its own `README.md`, `DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
 
@@ -33,8 +33,8 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   second is saved as a checkpoint (6d76945) and still in progress. mobile-app: 68 files, 1218 tests pass.
 - **Domain** (2026-10-13): see the next subsection.
 - **One-button launch tooling** (2026-10-14, §7 item 0): GitHub > Actions > **Deploy** (staging or
-  production; deploy or status) sets up the Fly app, its Managed Postgres database, the generated secrets,
-  the deploy and the certificate, and ends with a plain-English summary of the next click
+  production; deploy or status) sets up the Fly app, production's Managed Postgres database, the generated
+  secrets, the deploy and the certificate, and ends with a plain-English summary of the next click
   (`.github/workflows/deploy.yml`, `deploy/launch/dome_deploy.py`; the founder's guide is
   `docs/LAUNCH_SETUP.md`). Production is refused unless staging runs the same commit, healthy; both
   environments need the founder's approval, and the gate refuses to run while a deploy secret is a
@@ -43,8 +43,12 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   against the discovery document exactly (Auth0's trailing slash would otherwise reject every sign-in),
   the token request uses `client_secret_post`, `/healthz` reports the build `commit` and a
   `forwarded_client` self-check, Fly's client address comes from `Fly-Client-IP` behind the private-range
-  trust (`DOME_CLIENT_IP_HEADER`). **Written and statically checked only: never run against Fly.io,
-  Auth0 or Cloudflare**; the founder's first staging run is the test.
+  trust (`DOME_CLIENT_IP_HEADER`). **Budget (founder, 2026-10-14): about $50 a month.** Production keeps
+  Fly Managed Postgres (about $45 a month with its always-on machine); staging uses a free Neon database
+  (project `domeremote-staging`, AWS `us-east-1`) whose direct connection string is the staging Environment
+  secret `DATABASE_URL`, copied to Fly on every deploy, and staging's machine sleeps when idle (about $4 a
+  month). Staging never runs `flyctl mpg`. **Written and statically checked only: never run against
+  Fly.io, Neon, Auth0 or Cloudflare**; the founder's first staging run is the test.
 - **Windows installer** (2026-10-13/14, §7 item 4, pulled forward): an unsigned per-user development
   installer, `DoMe-Setup-<version>.exe` (Inno Setup), and `.github/workflows/windows-installer.yml`,
   which is to build it and smoke-test it on a GitHub Windows Server runner. Its first run was green on 2026-10-14 (run 38488799434: Windows unit tests, the build and 157
@@ -219,9 +223,11 @@ unless stated.
   (`cloud-api/tests/test_oidc_issuer.py`), but no sign-in against a real Auth0 tenant has happened.
 - **Hosting**: nothing is deployed. The Deploy workflow and `deploy/launch/dome_deploy.py` are tested
   against a fake `flyctl` only; flyctl output shapes were read from its v0.4.110 source. Unverified until
-  the first staging run: `flyctl mpg create`/`attach` with an organization token, the client-address
-  self-check (`forwarded_client: ok`) on a live machine, Fly's `release_command` with this image, the
-  certificate and DNS steps. The domain is registered but no DNS record, redirect or certificate exists
+  the first staging run: the client-address self-check (`forwarded_client: ok`) on a live machine, Fly's
+  `release_command` with this image, the certificate and DNS steps, and on staging the Neon connection
+  (direct string, TLS and channel binding against the real Neon; only a stand-in server was used), the
+  machine stopping when idle and the cold start after a nap. Unverified until the first production run:
+  `flyctl mpg create`/`attach` with an organization token. The domain is registered but no DNS record, redirect or certificate exists
   yet (§0 "Domain").
 - **Billing and plans**: no Stripe code exists. `cloud-api` only reports `billing_enabled` from the
   presence of a Stripe key, and the PWA shows plan state without any checkout. `docs/BILLING.md` is a
@@ -305,10 +311,14 @@ founder-driven; then:
 0. **Launch setup (founder-driven, `docs/LAUNCH_SETUP.md`)**: the founder creates the Fly.io account
    (card on file), the GitHub Environments `staging` and `production` (default branch only, himself as
    required reviewer on **both**), one Fly organization token per environment, two Auth0 tenants with a
-   Regular Web Application each (Client Secret (Post)), pastes the values, and runs Deploy for staging
-   (ticking the database), then the Cloudflare record, `status`, a real sign-in, then production. An
-   engineer reads the first staging run's log and summary and fixes whatever the real Fly.io answers
-   differently from the flyctl source. Before production is called ready: restore rehearsal,
+   Regular Web Application each (Client Secret (Post)), a free Neon account with the project
+   `domeremote-staging` (its direct connection string as the staging Environment secret `DATABASE_URL`),
+   pastes the values, and runs Deploy for staging (no database tick), then the Cloudflare record,
+   `status`, a real sign-in, then production (ticking the database: about $41 a month). An engineer reads
+   the first staging run's log and summary and fixes whatever the real Fly.io or Neon answers differently
+   from what was read; in particular, confirm staging's machine stops when idle, the first request after a
+   nap succeeds within the deploy's wake-up tries, and Neon's monthly compute hours hold up (a test PC
+   left linked to staging keeps it awake). Before production is called ready: restore rehearsal,
    failed-deploy rehearsal, external `/healthz` monitor, backup retention recorded, support URL, Auth0
    email provider and Google keys (`docs/OPERATIONS.md` §12). Follow-ups: branch protection with
    required review on the default branch (the founder's approval otherwise authorizes unreviewed code;
