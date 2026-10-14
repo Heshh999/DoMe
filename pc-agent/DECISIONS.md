@@ -325,8 +325,9 @@
     `chrome-extension://<32 a-p>/` origin is trusted; it is the user's own file, so this adds no trust. A
     build with production ids never reads it.
 54. **The server address comes from `dome-server.json`, not an environment variable.** Setup writes
-    `{"api_url": "https://domeremote.com"}` (or a development build's `/ApiUrl=`, remembered for upgrades)
-    next to `DoMe.exe`; only `link` reads it (`settings.installed_api_url`, frozen builds only, https
+    `{"api_url": "https://domeremote.com"}` (or a development build's `/ApiUrl=`, remembered for that
+    build's upgrades; a release build always writes the default, whatever an earlier install used) next to
+    `DoMe.exe`; only `link` reads it (`settings.installed_api_url`, frozen builds only, https
     origins only), after `--api-url` and `DOME_AGENT_API_URL`. A persistent `DOME_AGENT_API_URL` would
     override the addresses the service returned at link time for every later run (`agent.py`), so a PC
     linked through the test kit would send its test credential to production, get a 401 and discard it.
@@ -337,14 +338,34 @@
     touchpad/keyboard grants, the approved apps and the logs only when the user answers Yes (default No)
     or a silent uninstall passes `/REMOVEDATA`. Deleting them is irreversible (the PC must be linked and
     every phone paired again) and the same folder holds the test kit's link; a reinstall should just
-    work. The final message tells the user to remove the PC in the phone app (the agent cannot unlink
-    itself on the service) and the browser add-on. Kept data is still protected by DPAPI (current user).
+    work. The final message tells the user who removed the settings, or will not use DoMe on this PC
+    again, to remove the PC in the phone app (the agent cannot unlink itself on the service), and to
+    remove the browser add-on. Kept data is still protected by DPAPI (current user).
     Empty `logs`/`secrets`/`diagnostics` folders and an empty `%LOCALAPPDATA%\DoMe` are removed.
 56. **A crash in a frozen program never shows the bootloader's modal box.** Both entry scripts run through
     `crashguard.run_guarded`: an exception ends in `<state dir>/logs/crash.log` (and stderr when there is
     one) and exit code 70; `SystemExit` (argparse) passes through. Setup waits for its DoMe.exe commands
     and the browser starts the host in the background: a box nobody sees would block them. Only the tray
-    (`run` without `--headless`) shows a short plain-English message with the file's path. A frozen
-    `DOME_AGENT_PLATFORM=fake` (excluded `dome_agent.testing`) now ends this way too, and Setup clears
-    that variable anyway. `cli._flush_stdout` makes `link` and `pair` work without a stdout (a windowed
-    `DoMe.exe` started from the Start menu has none).
+    (`run` without `--headless`) shows a short plain-English message with the file's path. The entry is
+    masked with the same two patterns as every other log (bearer tokens, long token-like strings; copied,
+    because crashguard imports nothing of DoMe) but is not a reviewed support bundle: the message asks the
+    user to describe the problem in a support request and keep the file, never to send it unread
+    (`docs/SUPPORT.md` §6.3). A frozen `DOME_AGENT_PLATFORM=fake` (excluded `dome_agent.testing`) now ends
+    this way too, and Setup clears that variable anyway. `cli._flush_stdout` makes `link` and `pair` work
+    without a stdout (a windowed `DoMe.exe` started from the Start menu has none).
+57. **Setup never runs DoMe.exe with administrator rights; a release Setup inherits nothing from a test
+    install.** `%LOCALAPPDATA%\Programs\DoMe` is writable by every program of the user, so a `DoMe.exe` or
+    DLL planted there would run elevated if an elevated Setup started it (a UAC bypass). Setup reads its
+    token's elevation type: *full* (elevated through UAC: "Run as administrator", or a standard user who
+    typed an administrator's password) stops Setup before it changes anything, with a plain message to
+    start it again normally; the uninstaller in that state runs no `DoMe.exe` command and removes the
+    host keys and the Run value itself. *Default* (UAC off, or the built-in Administrator: every program of
+    that account has full rights anyway, which is how the CI runner installs) keeps the existing question
+    about the account. Each command's output file is in Inno's private `{tmp}` folder, not a predictable
+    `%TEMP%` name. A release build (no `DevParams`) always writes `https://domeremote.com`, deletes
+    `com.dome.agent.json` before `install-native-host` (so a development extension left by a test install
+    is not registered again by `resolve_origins`, D53), compiles neutral wizard text instead of the
+    test-version wording, and `build_installer.py --release` refuses to build while
+    `PRODUCTION_EXTENSION_IDS` is empty. The uninstaller also removes the empty `NativeMessagingHosts`,
+    `Chrome`, `Google` and `Edge` keys that `install-native-host` created (`RegDeleteKeyIfEmpty` never
+    touches a key with any value or subkey).

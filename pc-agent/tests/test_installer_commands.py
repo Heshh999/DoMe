@@ -470,6 +470,32 @@ def test_run_guarded_turns_an_exception_into_exit_70_and_a_crash_log(tmp_path: P
     assert log_file.read_text(encoding="utf-8").count("RuntimeError: something broke") == 2
 
 
+def test_crash_log_is_redacted_like_every_other_log(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    token = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0"  # 40 token-like characters
+
+    def boom() -> int:
+        raise RuntimeError(f"relay refused: Authorization: Bearer {token}")
+
+    argv = ["--state-dir", str(tmp_path / "st"), "run", f"--token={token}x"]
+    assert crashguard.run_guarded(boom, program="DoMe", argv=argv) == 70
+    text = (tmp_path / "st" / "logs" / "crash.log").read_text(encoding="utf-8")
+    assert token not in text and "Bearer [redacted]" in text and "[redacted]" in text
+    assert "RuntimeError: relay refused" in text  # the useful part stays
+    assert token not in capsys.readouterr().err  # stderr gets the same masked entry
+    # the same patterns as the structured logs (crashguard copies them to stay standard-library only)
+    from dome_agent import logsetup
+
+    assert crashguard._BEARER_RE.pattern == logsetup._BEARER_RE.pattern
+    assert crashguard._LONG_TOKEN_RE.pattern == logsetup._LONG_TOKEN_RE.pattern
+    assert crashguard.REDACTED == logsetup.REDACTED
+
+
+def test_crash_message_asks_for_nothing_the_user_cannot_do() -> None:
+    text = crashguard.CRASH_MESSAGE.format(path=r"C:\Users\x\AppData\Local\DoMe\logs\crash.log")
+    assert "support request" in text and "after you have read them" in text
+    assert "send that file" not in text.lower()
+
+
 def test_run_guarded_passes_exit_codes_and_system_exit(tmp_path: Path) -> None:
     assert crashguard.run_guarded(lambda: 3, program="DoMe") == 3
 

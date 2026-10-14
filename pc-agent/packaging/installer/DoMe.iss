@@ -9,23 +9,31 @@
 ; signs DoMe.exe, dome-native-host.exe, Setup and the uninstaller (not wired into CI yet).
 ;
 ; What it does, all per user and without elevation (HKCU and %LOCALAPPDATA% only):
+;   * refuses to run elevated through UAC ("Run as administrator"): it would start DoMe.exe, a file in a
+;     folder the user's normal programs can change, with administrator rights. The uninstaller, when
+;     elevated that way, runs no DoMe.exe at all and uses its registry fallbacks. With UAC off (or the
+;     built-in Administrator) every program of the account runs with full rights anyway; Setup then only
+;     asks whether this is the right account (that is how the GitHub Actions runner installs it);
 ;   * installs the PyInstaller folder (DoMe.exe, dome-native-host.exe, _internal\) into
 ;     %LOCALAPPDATA%\Programs\DoMe and a Start menu shortcut;
-;   * writes the DoMe server address into {app}\dome-server.json (https://domeremote.com, or the address
-;     of the previous installation, or a development build's /ApiUrl=https://...). Only `DoMe.exe link`
-;     reads it, as its last fallback; no environment variable is set, because one would override the
-;     addresses stored when the PC was linked (pc-agent/dome_agent/settings.py);
+;   * writes the DoMe server address into {app}\dome-server.json: https://domeremote.com, or in a
+;     development build only /ApiUrl=https://... or the address of the previous installation (a release
+;     build always writes https://domeremote.com). Only `DoMe.exe link` reads it, as its last fallback;
+;     no environment variable is set, because one would override the addresses stored when the PC was
+;     linked (pc-agent/dome_agent/settings.py);
 ;   * registers the browser bridge with DoMe.exe's own `install-native-host` (needs an extension id: a
-;     production id baked into the build, a development build's /ExtensionId=<32 a-p>, or the one already
-;     registered on this PC); without one it skips that part and says so;
+;     production id baked into the build, a development build's /ExtensionId=<32 a-p>, or in a development
+;     build the one already registered on this PC; a release build deletes that old manifest first, and
+;     build_installer.py refuses --release while there is no production id); without one it skips that
+;     part and says so;
 ;   * "Start DoMe when I sign in" (opt-in, unticked) runs DoMe.exe's own `start-at-login on`;
 ;   * on upgrade and uninstall it first runs `uninstall-native-host` and `quit` (the tray's Quit DoMe) so
 ;     no file is in use. It never terminates DoMe: if DoMe does not quit, Setup stops before changing
 ;     anything and asks the user to quit it from its icon. Every DoMe.exe it runs has 60 seconds; only
 ;     that DoMe.exe (the command Setup itself started) is stopped after that.
-; Uninstall removes the program, the shortcut, dome-server.json, the native-host registration and start
-; at login; it keeps %LOCALAPPDATA%\DoMe (link, paired phones, logs) unless the user answers Yes to the
-; question or passes /REMOVEDATA to a silent uninstall.
+; Uninstall removes the program, the shortcut, dome-server.json, the native-host registration (and the
+; empty browser keys it created) and start at login; it keeps %LOCALAPPDATA%\DoMe (link, paired phones,
+; logs) unless the user answers Yes to the question or passes /REMOVEDATA to a silent uninstall.
 ;
 ; This script uses 32-bit Win32 record layouts in [Code] (Setup and the uninstaller of Inno Setup 6 are
 ; 32-bit programs). Do not build it with an Inno Setup 7 SetupArchitecture=x64 setting.
@@ -99,8 +107,12 @@ SignedUninstaller=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-FinishedLabel=Setup has finished installing DoMe on this PC.%n%nDoMe runs in the notification area, next to the clock.%n%nThis test version of DoMe cannot connect to your DoMe account by itself yet. The DoMe team will tell you when linking is ready.
-UninstalledAll=DoMe was removed from this PC.%n%nIf you linked this PC to your DoMe account, remove it in the DoMe app on your phone (Devices). If you added the DoMe add-on to Chrome or Edge, remove it there too.
+#ifdef DevParams
+FinishedLabel=Setup has finished installing DoMe on this PC.%n%nWhen DoMe is running, its icon is in the notification area, next to the clock. If you do not see it there, open DoMe from the Start menu.%n%nThis test version of DoMe cannot connect to your DoMe account by itself yet. The DoMe team will tell you when linking is ready.
+#else
+FinishedLabel=Setup has finished installing DoMe on this PC.%n%nWhen DoMe is running, its icon is in the notification area, next to the clock. If you do not see it there, open DoMe from the Start menu.
+#endif
+UninstalledAll=DoMe was removed from this PC.%n%nIf you also removed DoMe's settings, or you will not use DoMe on this PC again, remove this PC in the DoMe app on your phone too (Devices). If you added the DoMe add-on to Chrome or Edge, remove it there too.
 
 [CustomMessages]
 english.OptionsGroup=Options:
@@ -108,11 +120,16 @@ english.StartAtLogin=Start DoMe when I sign in to Windows
 english.LaunchDoMe=Start DoMe now
 english.BrowserPageCaption=YouTube control
 english.BrowserPageDescription=One part of DoMe is not set up yet
+#ifdef DevParams
 english.BrowserPageText=Controlling YouTube in Chrome or Edge needs the DoMe browser add-on. The add-on is not in the Chrome or Edge store yet, so Setup could not connect it.%n%nThe rest of DoMe was installed. A later version of DoMe will set this part up.
-english.RemoveDataQuestion=Do you also want to remove DoMe's settings from this PC?%n%nYes removes this PC's link to your DoMe account, the phones you allowed, the apps you approved and DoMe's logs.%n%nNo keeps them, so DoMe works again straight away if you install it again.
+#else
+english.BrowserPageText=Controlling YouTube in Chrome or Edge needs the DoMe browser add-on, and Setup could not connect it.%n%nThe rest of DoMe was installed. To try again, run this Setup again.
+#endif
+english.RemoveDataQuestion=Do you also want to remove DoMe's settings from this PC?%n%nYes removes this PC's link to your DoMe account, the phones you allowed, the apps you approved and DoMe's logs.%n%nNo keeps them: if you install DoMe again, this PC is still linked and your phones are still allowed.
 english.NewerInstalled=A newer version of DoMe (%1) is already installed, so this older version (%2) was not installed.%n%nTo go back to an older version, uninstall DoMe first (Settings > Apps), then run this Setup again.
 english.BadApiUrl=Setup was started with an /ApiUrl= value that is not a plain https:// address (like https://domeremote.com), so nothing was installed.
 english.BadExtensionId=Setup was started with an /ExtensionId= value that is not a browser add-on id (32 letters from a to p), so nothing was installed.
+english.ElevatedRefused=Setup was started with "Run as administrator", so nothing was installed.%n%nDoMe is installed for your own Windows account and needs no administrator rights. Close this message, then double-click DoMe-Setup again, without "Run as administrator".
 english.ElevatedQuestion=Setup is running as an administrator.%n%nDoMe will be installed only for the Windows account "%1". If that is not the account you use every day, click No, then run Setup again normally: double-click it, without "Run as administrator".%n%nInstall DoMe for "%1"?
 english.StillRunning=DoMe is still running and did not close, so Setup changed nothing.%n%nRight-click the DoMe icon next to the clock, choose Quit DoMe, then run Setup again.
 english.StillRunningUninstall=DoMe is still running and did not close.%n%nRight-click the DoMe icon next to the clock, choose Quit DoMe, then click OK.%n%nClick Cancel to stop uninstalling.
@@ -166,6 +183,10 @@ const
   FileShareRead = 1;
   CreateAlways = 2;
   FileAttributeNormal = $80;
+  TokenQuery = $0008;
+  TokenElevationTypeClass = 18;  { TOKEN_INFORMATION_CLASS TokenElevationType }
+  TokenElevationTypeFull = 2;    { elevated through UAC; 1 = default (UAC off, built-in Administrator), 3 = limited }
+  NotRunElevated = -3;           { RunDoMe: not run, because this program runs elevated through UAC }
 
 type
   { Win32 structures, 32-bit layout (see the note at the top of this file). }
@@ -217,6 +238,7 @@ var
   HostUnregistered: Boolean;
   InstallDone: Boolean;
   RemoveData: Boolean;
+  UacElevated: Boolean;
   BrowserPage: TOutputMsgWizardPage;
 
 function DmSetEnvironmentVariable(lpName, lpValue: String): Integer;
@@ -257,6 +279,13 @@ function DmDispatchMessage(var lpMsg: TDmMsg): Integer;
   external 'DispatchMessageW@user32.dll stdcall';
 procedure DmPostQuitMessage(nExitCode: Integer);
   external 'PostQuitMessage@user32.dll stdcall';
+function DmGetCurrentProcess: Integer;
+  external 'GetCurrentProcess@kernel32.dll stdcall';
+function DmOpenProcessToken(ProcessHandle, DesiredAccess: Integer; var TokenHandle: Integer): Integer;
+  external 'OpenProcessToken@advapi32.dll stdcall';
+function DmGetTokenInformation(TokenHandle, TokenInformationClass: Integer; var TokenInformation: Integer;
+  TokenInformationLength: Integer; var ReturnLength: Integer): Integer;
+  external 'GetTokenInformation@advapi32.dll stdcall';
 
 function HasParam(const Name: String): Boolean;
 var
@@ -268,6 +297,32 @@ begin
       Result := True;
       Exit;
     end;
+end;
+
+{ Was this program elevated through UAC ("Run as administrator", or a standard user typing an
+  administrator's password)? Then its token is TokenElevationTypeFull, and every DoMe.exe it started would
+  run with administrator rights from a folder the user's normal programs can change. With UAC off, or as
+  the built-in Administrator, the type is "default": every program of that account has full rights anyway.
+  When the type cannot be read, an administrator counts as elevated through UAC (the safe answer). }
+function ElevatedThroughUac: Boolean;
+var
+  Token, ElevationType, Size: Integer;
+begin
+  Result := IsAdmin;
+  Token := 0;
+  if DmOpenProcessToken(DmGetCurrentProcess, TokenQuery, Token) = 0 then begin
+    Log('Could not open this process''s token: ' + SysErrorMessage(DLLGetLastError));
+    Exit;
+  end;
+  ElevationType := 0;
+  Size := 0;
+  if DmGetTokenInformation(Token, TokenElevationTypeClass, ElevationType, 4, Size) <> 0 then
+    Result := ElevationType = TokenElevationTypeFull
+  else
+    Log('Could not read the elevation type: ' + SysErrorMessage(DLLGetLastError));
+  DmCloseHandle(Token);
+  Log('Administrator: ' + IntToStr(Ord(IsAdmin)) + '; elevation type: ' + IntToStr(ElevationType) +
+    '; elevated through UAC: ' + IntToStr(Ord(Result)));
 end;
 
 { Trimmed, without trailing slashes. }
@@ -374,7 +429,9 @@ end;
 
 { Runs the installed DoMe.exe with its output in Setup's or the uninstaller's log. Returns its exit code, -1 when
   it could not be started, -2 when it did not finish within CommandTimeout ms (then that one DoMe.exe,
-  which Setup itself started, is stopped; nothing else ever is). }
+  which Setup itself started, is stopped; nothing else ever is), NotRunElevated (-3) when this program
+  runs elevated through UAC: DoMe.exe is never started with administrator rights. Its output goes to a
+  file in Inno's private temporary folder (the tmp constant), which Setup and the uninstaller both have. }
 function RunDoMe(const Params: String): Integer;
 var
   Exe, CmdLine, WorkDir, OutFile: String;
@@ -385,13 +442,18 @@ var
   Lines: TArrayOfString;
 begin
   Result := -1;
+  if UacElevated then begin
+    Log('DoMe.exe ' + Params + ' was not run: this program runs elevated (Run as administrator), and DoMe must never run with administrator rights.');
+    Result := NotRunElevated;
+    Exit;
+  end;
   Exe := ExpandConstant('{app}\DoMe.exe');
   if not FileExists(Exe) then begin
     Log('DoMe.exe not found at ' + Exe + '; skipped: ' + Params);
     Exit;
   end;
   WorkDir := ExpandConstant('{app}');
-  OutFile := GetTempDir + 'dome-setup-' + IntToStr(DmGetCurrentProcessId) + '.txt';
+  OutFile := ExpandConstant('{tmp}\dome-out.txt');
   Sa.nLength := 12;
   Sa.lpSecurityDescriptor := 0;
   Sa.bInheritHandle := 1;
@@ -462,13 +524,27 @@ end;
 
 function InitializeSetup(): Boolean;
 var
-  Installed, Previous, Given: String;
+#ifdef DevParams
+  Previous: String;
+#endif
+  Installed, Given: String;
   InstalledValue, ThisValue: Int64;
 begin
   Result := True;
   Log('DoMe Setup {#BuildTag}');
-  { The server address: the default, or the one the previous installation used ... }
+  UacElevated := ElevatedThroughUac;
+  if UacElevated then begin
+    Log('Stopped: Setup was started with "Run as administrator" (elevated through UAC); DoMe must never run elevated.');
+    SuppressibleMsgBox(CustomMessage('ElevatedRefused'), mbCriticalError, MB_OK, IDOK);
+    Result := False;
+    Exit;
+  end;
+  { The server address: https://domeremote.com; a release build never uses anything else. }
   ApiUrl := DefaultApiUrl;
+  Given := NormaliseUrl(ExpandConstant('{param:ApiUrl|}'));
+  ExtensionId := Trim(ExpandConstant('{param:ExtensionId|}'));
+#ifdef DevParams
+  { A development build: the address the previous installation used (a staging server) ... }
   Previous := NormaliseUrl(GetPreviousData('ApiUrl', ''));
   if Previous <> '' then begin
     if IsHttpsOrigin(Previous) then
@@ -476,10 +552,7 @@ begin
     else
       Log('Ignored the server address of the previous installation: ' + Previous);
   end;
-  Given := NormaliseUrl(ExpandConstant('{param:ApiUrl|}'));
-  ExtensionId := Trim(ExpandConstant('{param:ExtensionId|}'));
-#ifdef DevParams
-  { ... or, in a development build only, /ApiUrl= (a staging server) and /ExtensionId= (a development add-on). }
+  { ... or /ApiUrl= (a staging server), and /ExtensionId= (a development add-on). }
   if Given <> '' then begin
     if not IsHttpsOrigin(Given) then begin
       Log('Refused /ApiUrl=' + Given + ': not a plain https:// address.');
@@ -496,6 +569,9 @@ begin
     Exit;
   end;
 #else
+  if (GetPreviousData('ApiUrl', '') <> '') and (NormaliseUrl(GetPreviousData('ApiUrl', '')) <> DefaultApiUrl) then
+    Log('A release build always uses ' + DefaultApiUrl + ' (the previous installation used "' +
+      GetPreviousData('ApiUrl', '') + '").');
   if Given <> '' then
     Log('Ignored /ApiUrl=: this Setup is a release build and does not accept it.');
   if ExtensionId <> '' then
@@ -514,7 +590,8 @@ begin
       Log('Installed version "' + Installed + '" could not be compared; continuing.');
   end;
   if IsAdmin then begin
-    { "Run as administrator": everything DoMe keeps belongs to the account Setup runs as. }
+    { An administrator with UAC off (or the built-in Administrator): everything DoMe keeps belongs to the
+      account Setup runs as. }
     Log('Setup runs with administrator rights as ' + GetUserNameString + '.');
     if SuppressibleMsgBox(FmtMessage(CustomMessage('ElevatedQuestion'), [GetUserNameString]), mbConfirmation, MB_YESNO, IDYES) <> IDYES then begin
       Log('Stopped: the user chose not to install DoMe for this administrator account.');
@@ -578,6 +655,12 @@ begin
       Log('Wrote ' + ServerFile + ' (' + ApiUrl + ')')
     else
       Log('Could not write ' + ServerFile);
+#ifndef DevParams
+    { A release build registers only the production add-on, never a development one that an earlier test
+      installation left in the manifest (install-native-host would otherwise keep its origins). }
+    if DeleteFile(ExpandConstant('{localappdata}\DoMe\com.dome.agent.json')) then
+      Log('Removed the browser bridge manifest of an earlier installation.');
+#endif
     NativeHostRegistered := RunDoMe('install-native-host') = 0;
     if not NativeHostRegistered then
       Log('Browser bridge not registered (no extension id available, or install-native-host failed).');
@@ -599,6 +682,8 @@ end;
 function InitializeUninstall(): Boolean;
 begin
   CleanEnvironment;
+  { Elevated through UAC: no DoMe.exe is run; the registry fallbacks below do the cleanup. }
+  UacElevated := ElevatedThroughUac;
   Result := True;
 end;
 
@@ -638,6 +723,13 @@ begin
     RegDeleteKeyIncludingSubkeys(HKCU, ChromeHostKey);
     RegDeleteKeyIncludingSubkeys(HKCU, EdgeHostKey);
   end;
+  { install-native-host created any missing parent key; remove each one that is now empty, deepest first.
+    A key with any value or subkey (a browser's own settings) is never touched. }
+  RegDeleteKeyIfEmpty(HKCU, 'Software\Google\Chrome\NativeMessagingHosts');
+  RegDeleteKeyIfEmpty(HKCU, 'Software\Google\Chrome');
+  RegDeleteKeyIfEmpty(HKCU, 'Software\Google');
+  RegDeleteKeyIfEmpty(HKCU, 'Software\Microsoft\Edge\NativeMessagingHosts');
+  RegDeleteKeyIfEmpty(HKCU, 'Software\Microsoft\Edge');
   DeleteFile(ExpandConstant('{localappdata}\DoMe\com.dome.agent.json'));
   { Start at login: DoMe's own Run entry, and Windows' record of it from Task Manager. }
   if RunDoMe('start-at-login off') <> 0 then

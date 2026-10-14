@@ -2,6 +2,49 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-14 — Windows installer: review fixes
+
+Follows the entry below; a review of the installer commit found no blocker and these issues.
+
+- **Setup never runs DoMe.exe with administrator rights** (`pc-agent/DECISIONS.md` 57): a Setup elevated
+  through UAC ("Run as administrator") installs nothing and says so in plain English; an uninstaller in
+  that state runs no `DoMe.exe` command and uses its registry fallbacks. With UAC off (the CI runner)
+  Setup keeps asking whether it is the right account. Each command's output file moved to Inno's private
+  `{tmp}` folder.
+- **A release build inherits nothing from a test install**: it always writes `https://domeremote.com`,
+  deletes the old `com.dome.agent.json` before `install-native-host`, carries neutral wizard text (the
+  test-version wording is compiled only into development builds), and `build_installer.py --release`
+  refuses while `PRODUCTION_EXTENSION_IDS` is empty.
+- **Uninstall** also removes the empty browser keys `install-native-host` created; its last message tells
+  only someone who removed the settings, or will not use DoMe on this PC again, to remove the PC on the
+  phone.
+- **crash.log** is masked like every other log (bearer tokens, long token-like strings); the crash
+  message no longer asks people to send the file (it cannot be attached and is not a reviewed bundle).
+- **CI**: the installer artifact is not uploaded for a pull request from a fork; `BUILD-INFO.txt` names
+  the branch commit of a pull request (and GitHub's test merge), the event and the branch. The smoke test
+  fails when the process list cannot be read, asserts the exit codes of the `DoMe.exe` commands Setup
+  and the uninstaller run (so their registry fallbacks cannot hide a broken command), the re-registration
+  after a stopped upgrade, the reason the bridge was skipped, that the empty browser keys are gone, that
+  Setup did not count as elevated, and that no `crash.log` was written.
+- **Docs** made honest: the workflow has not run yet (WINDOWS_INSTALL, HANDOFF, ACCEPTANCE,
+  PRODUCT_AND_PLANS); downgrade refusal is per X.Y.Z, and every test build is 0.1.0; the tray is checked
+  only as a process; the founder downloads only push builds of the branch the team names; Smart App
+  Control; testers re-add `/ExtensionId=` after a reinstall; DATA_RETENTION §2 now says what uninstall
+  keeps by default and lists `crash.log` and `dome-server.json`; SUPPORT §6.3 and TROUBLESHOOTING §21 on
+  `crash.log`; SECURITY T12; the test kit README on sharing a PC with the installed DoMe.
+- **Run here**: pc-agent ruff, ruff format, mypy (both configs) and pytest (634 passed, 3 skipped); the
+  installer scripts pass ruff and `mypy --strict` for Linux and Windows; actionlint clean. The spec built
+  again with PyInstaller 6.22.3 on Linux, `smoke_test.py bridge` passed (10 checks) and a frozen crash
+  ended in `crash.log` with exit 70. `DoMe.iss` compiled (development and release) with Inno Setup 6.7.1
+  under wine and passed 80 scenario checks there with a stand-in `DoMe.exe`, including an elevated Setup
+  that installs nothing and an elevated uninstall that runs no `DoMe.exe`. Under wine an administrator's
+  token always reads as "elevated through UAC", so the other scenarios ran from a scratch copy of
+  `DoMe.iss` that differs only in that constant.
+- **Evidence**: **not yet verified** on Windows — still awaiting the first `windows-installer.yml` run.
+  If its phase 1 check "Setup does not count as elevated through UAC here" fails, the runner's token is
+  not what GitHub documents (UAC off), and the elevation rule needs revisiting before anything else.
+- **Next**: unchanged (the first CI run and its fixes; the founder's Windows 11 install).
+
 ## 2026-10-13 — Windows installer (development build) and its CI
 
 HANDOFF §7 item 4, pulled forward ahead of items 1–3 (which keep their order).
@@ -35,8 +78,8 @@ HANDOFF §7 item 4, pulled forward ahead of items 1–3 (which keep their order)
   `DoMe-Setup-<version>.exe` with `SHA256SUMS` and `BUILD-INFO.txt` after a passing smoke test, logs
   always; no secrets). The Windows test list moved to `pc-agent/tests/windows_suite.txt`, used by both
   workflows; `ci.yml`'s header no longer claims it never ran.
-- **Run here**: pc-agent ruff, ruff format, mypy (both configs) and pytest (the new
-  `tests/test_installer_commands.py` included) all pass; the packaging scripts pass ruff and
+- **Run here**: pc-agent ruff, ruff format, mypy (both configs) and pytest (632 passed, 3 skipped; the
+  new `tests/test_installer_commands.py` included) all pass; the packaging scripts pass ruff and
   `mypy --strict` for Linux and Windows; the spec built with PyInstaller 6.22.3 on Linux and
   `smoke_test.py bridge` passed against it (`DoMe version`, `AGENT_NOT_RUNNING` from the host alone,
   `run --headless`, a `bridge_hello` round trip, `DoMe quit`); a frozen crash ended in `crash.log` and

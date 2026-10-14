@@ -163,6 +163,15 @@ What is included and could still be identifying: the browser user-agent string, 
 action names, timestamps and the customer's own message. That is the necessary minimum for diagnosis;
 the customer sees it before sending.
 
+**`crash.log` is different.** After an unexpected error, `DoMe.exe` or `dome-native-host.exe` writes
+`%LOCALAPPDATA%\DoMe\logs\crash.log` (`pc-agent/DECISIONS.md` 56): the program's command line and a
+Python traceback with the exception message. Bearer tokens and long token-like strings are masked as in
+the agent's log, but it gets none of the review or redaction above, so it can hold file paths, addresses
+or other text, and the Support form cannot attach it. The crash message tells the person to describe
+what they were doing in a support request and to keep the file. Support staff may ask them to open it,
+read it and copy only its last lines into a reply; never ask for the whole file unread, and treat what
+arrives like any other customer text (§7).
+
 ## 7. Support staff boundaries
 
 - No support route can execute, queue or forward anything to a PC (`routes/support.py`), and support

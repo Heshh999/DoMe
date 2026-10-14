@@ -16,7 +16,13 @@ upgrade over the running tray; an upgrade while DoMe will not quit (Setup must s
 a refused downgrade; a refused ``/ApiUrl=http://``; an uninstall over the running tray that keeps the
 data; an install with a staging address and no extension id, an upgrade that keeps that address; an
 uninstall with ``/REMOVEDATA``; and an install plus uninstall that must leave no empty state folder.
-After every Setup or uninstaller run no process may be left running from the install folder.
+After every Setup or uninstaller run no process may be left running from the install folder (the process
+list itself must be readable and hold this script, or the test fails); after every phase no DoMe program
+may have written ``logs\\crash.log``; and the DoMe.exe commands Setup and the uninstaller run must show
+their expected exit codes in the logs, because Setup's own fallbacks (deleting the registry keys itself)
+would otherwise hide a broken ``uninstall-native-host`` or ``start-at-login off``. The tray check covers
+the process only (it keeps running, a second launch is refused, ``DoMe.exe quit`` ends it); the icon, its
+menu and the menu's Quit DoMe are not exercised (the runner may have no visible notification area).
 
 Both modes run DoMe.exe and Setup with every ``DOME_AGENT_*`` variable removed, never kill anything but
 the processes they started themselves, and write ``smoke-test.log`` plus every Setup, uninstaller and
@@ -50,6 +56,9 @@ APP_ID = "{FD238776-147F-4CCF-B2CA-4AC5F30A07FF}"
 UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_ID}_is1"
 CHROME_KEY = r"Software\Google\Chrome\NativeMessagingHosts\com.dome.agent"
 EDGE_KEY = r"Software\Microsoft\Edge\NativeMessagingHosts\com.dome.agent"
+# Parents that `install-native-host` creates when missing (winreg.CreateKeyEx); the uninstaller removes them
+# again when they are empty.
+HOST_PARENT_KEYS = (r"Software\Google\Chrome\NativeMessagingHosts", r"Software\Microsoft\Edge\NativeMessagingHosts")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 TEST_ID = "abcdefghijklmnopabcdefghijklmnop"
@@ -254,6 +263,12 @@ def bridge(app: Path, version: str, report: Report, allow_this_pc: bool) -> None
         report.check("DoMe quit", out.returncode == 0, out.stdout + out.stderr)
         report.check("the agent exited 0", agent.wait(timeout=30) == 0)
         report.check("status: not running", status_json(dome, env, workdir).get("agent_running") is False)
+        crash = workdir / "state" / "logs" / "crash.log"
+        report.check(
+            "bridge: no crash.log",
+            not crash.exists(),
+            crash.read_text(errors="replace")[-2000:] if crash.exists() else "",
+        )
     finally:
         stop_own(hosted, report, "the native host")
         stop_own(agent, report, "DoMe run --headless")
@@ -320,8 +335,8 @@ def reg_set(key: str, name: str, value: str | bytes) -> None:
             winreg.SetValueEx(handle, name, 0, winreg.REG_SZ, value)
 
 
-def powershell(command: str) -> str:
-    out = subprocess.run(
+def powershell(command: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],  # noqa: S607 - on every Windows 10/11
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -329,15 +344,27 @@ def powershell(command: str) -> str:
         errors="replace",
         timeout=120,
     )
-    return out.stdout.strip()
 
 
 def processes() -> list[dict[str, Any]]:
-    raw = powershell(
+    """Every process on the runner. Raises SmokeError when the list cannot be trusted (PowerShell failed, or
+    the list does not even hold this script), so a check built on it can never pass by seeing nothing."""
+    out = powershell(
         "Get-CimInstance Win32_Process | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress"
     )
-    parsed = json.loads(raw) if raw else []
-    return [parsed] if isinstance(parsed, dict) else list(parsed)
+    detail = f"exit code {out.returncode}; stderr: {out.stderr.strip()[:500]}"
+    if out.returncode != 0:
+        raise SmokeError(f"the process list could not be read ({detail})")
+    try:
+        parsed = json.loads(out.stdout.strip() or "[]")
+    except ValueError as exc:
+        raise SmokeError(f"the process list is not JSON ({exc}; {detail})") from None
+    found = [parsed] if isinstance(parsed, dict) else list(parsed) if isinstance(parsed, list) else []
+    if not any(isinstance(p, dict) and p.get("ProcessId") == os.getpid() for p in found):
+        raise SmokeError(
+            f"the process list ({len(found)} entries) does not hold this script (pid {os.getpid()}); {detail}"
+        )
+    return [p for p in found if isinstance(p, dict)]
 
 
 def under(path: str | None, folder: Path) -> bool:
@@ -346,7 +373,7 @@ def under(path: str | None, folder: Path) -> bool:
 
 def shortcut_target(lnk: Path) -> str:
     escaped = str(lnk).replace("'", "''")
-    return powershell(f"(New-Object -ComObject WScript.Shell).CreateShortcut('{escaped}').TargetPath")
+    return powershell(f"(New-Object -ComObject WScript.Shell).CreateShortcut('{escaped}').TargetPath").stdout.strip()
 
 
 def agent_mutex_name() -> str:
@@ -425,6 +452,7 @@ class Machine:
         self.report = report
         self.env = clean_env()
         self.own: list[subprocess.Popen[Any]] = []
+        self.parents_before: dict[str, bool] = {}
 
     @property
     def dome(self) -> Path:
@@ -459,11 +487,8 @@ class Machine:
         text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
         self.report.line(f"Setup exit code {rc}")
         time.sleep(2)
-        self.report.check(
-            f"{name}: no process left running from the install folder",
-            not self.stray_processes(),
-            "; ".join(self.stray_processes()),
-        )
+        stray = self.stray_processes()
+        self.report.check(f"{name}: no process left running from the install folder", not stray, "; ".join(stray))
         return rc, text
 
     def run_uninstall(self, name: str, *args: str) -> tuple[int, str]:
@@ -479,11 +504,8 @@ class Machine:
             gone = wait_until(lambda: not self.app.exists(), 120)
             self.report.check(f"{name}: the install folder disappears", gone, str(list(self.app.rglob("*"))[:20]))
         text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-        self.report.check(
-            f"{name}: no process left running from the install folder",
-            not self.stray_processes(),
-            "; ".join(self.stray_processes()),
-        )
+        stray = self.stray_processes()
+        self.report.check(f"{name}: no process left running from the install folder", not stray, "; ".join(stray))
         return rc, text
 
     def start_tray(self, label: str) -> subprocess.Popen[bytes]:
@@ -593,6 +615,24 @@ class Machine:
         )
         r.check("removed: Start menu shortcut", not self.lnk.exists())
         r.check("removed: native host manifest", not (self.state / "com.dome.agent.json").exists())
+        for key in HOST_PARENT_KEYS:
+            if not self.parents_before.get(key, True):
+                r.check(f"removed: the empty HKCU\\{key} that the install created", not reg_key_exists(key))
+
+    def check_no_crash(self, label: str) -> None:
+        """No DoMe program crashed so far: Setup's fallbacks (deleting registry keys itself) would hide a
+        crashing ``uninstall-native-host`` or ``start-at-login off`` everywhere else."""
+        crash = self.state / "logs" / "crash.log"
+        detail = crash.read_text(encoding="utf-8", errors="replace")[-2000:] if crash.exists() else ""
+        self.report.check(f"{label}: no crash.log", not crash.exists(), detail)
+
+    def check_uninstall_commands(self, name: str, log: str) -> None:
+        """The uninstaller's own DoMe.exe commands worked (not only its registry fallbacks)."""
+        for command in ("uninstall-native-host", "start-at-login off"):
+            self.report.check(
+                f"{name}: DoMe.exe {command} exited with code 0",
+                f"DoMe.exe {command} exited with code 0" in log,
+            )
 
     def wer_reports(self, pid: int) -> list[str]:
         return [
@@ -621,16 +661,29 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("no browser bridge keys", not reg_key_exists(CHROME_KEY) and not reg_key_exists(EDGE_KEY))
     report.check("no start at login", not reg_has_value(RUN_KEY, "DoMe"))
     report.check("no state folder", not m.state.exists())
+    m.parents_before = {key: reg_key_exists(key) for key in HOST_PARENT_KEYS}
+    for key, existed in m.parents_before.items():
+        if existed:
+            report.note(f"HKCU\\{key} exists before the test: the empty-parent check is skipped for it")
     explorer = any(str(p.get("Name", "")).lower() == "explorer.exe" for p in processes())
     report.note(
         f"notification area (explorer.exe running): {'yes' if explorer else 'NO - the tray icon cannot be seen here'}"
     )
 
     report.phase("1 install: start at login, development extension id")
-    rc, _log = m.run_setup("1-install", "/MERGETASKS=startatlogin", f"/ExtensionId={TEST_ID}")
+    rc, log = m.run_setup("1-install", "/MERGETASKS=startatlogin", f"/ExtensionId={TEST_ID}")
+    # The runner has UAC off, so Setup's token is not "elevated through UAC" and Setup may run DoMe.exe;
+    # if this ever fails, Setup refused to install (DoMe.iss ElevatedThroughUac) and nothing below can pass.
+    elevation = re.search(r"Administrator: \d; elevation type: \d+; elevated through UAC: \d", log)
+    report.check(
+        "Setup does not count as elevated through UAC here",
+        elevation is not None and elevation.group(0).endswith(": 0"),
+        elevation.group(0) if elevation else "no elevation line in the Setup log",
+    )
     report.check("Setup exit code 0", rc == 0, str(rc))
     m.check_installed(host=True, run=True, api=DEFAULT_API)
     m.check_icons()
+    m.check_no_crash("1")
 
     report.phase("2 the installed command line")
     out = run_cli(m.dome, ["version"], m.env)
@@ -648,6 +701,7 @@ def _full_phases(m: Machine, report: Report) -> None:
         json.dumps(status)[:500],
     )
     report.check("state.sqlite3 created", (m.state / "state.sqlite3").exists())
+    m.check_no_crash("2")
 
     bridge(m.app, version, report, allow_this_pc=False)
 
@@ -659,6 +713,7 @@ def _full_phases(m: Machine, report: Report) -> None:
         out.returncode == 0 and "already running" in out.stdout,
         out.stdout + out.stderr,
     )
+    m.check_no_crash("4")
 
     report.phase("5 upgrade over the running tray")
     m.marker.write_text("installed by phase 1", encoding="ascii")
@@ -677,6 +732,7 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("the old runtime folder was replaced", not m.marker.exists())
     m.check_installed(host=True, run=True, api=DEFAULT_API)
     report.check("state.sqlite3 kept", (m.state / "state.sqlite3").exists())
+    m.check_no_crash("5")
 
     report.phase("6 upgrade while DoMe does not quit: Setup must change nothing")
     m.marker.write_text("installed by phase 5", encoding="ascii")
@@ -685,7 +741,18 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("Setup stops (exit code 7)", rc == 7, str(rc))
     report.check("the log says DoMe is still running", "DoMe is still running in this session" in log)
     report.check("the installation is unchanged", m.marker.exists() and m.dome.exists())
+    # The keys alone prove nothing: if `uninstall-native-host` had failed they would never have gone away.
+    report.check(
+        "Setup unregistered the browser bridge first (DoMe.exe uninstall-native-host exited with code 0)",
+        "DoMe.exe uninstall-native-host exited with code 0" in log,
+    )
+    again = log.find("registering the browser bridge of the installed DoMe again")
+    report.check(
+        "Setup registered the browser bridge again (then DoMe.exe install-native-host exited with code 0)",
+        again >= 0 and log.find("DoMe.exe install-native-host exited with code 0", again) > again,
+    )
     report.check("browser bridge registered again", reg_key_exists(CHROME_KEY) and reg_key_exists(EDGE_KEY))
+    m.check_no_crash("6")
 
     report.phase("7 downgrade refused")
     reg_set(UNINSTALL_KEY, "DisplayVersion", "99.0.0")
@@ -695,17 +762,21 @@ def _full_phases(m: Machine, report: Report) -> None:
         reg_set(UNINSTALL_KEY, "DisplayVersion", version)
     report.check("Setup refuses", rc != 0 and "Refusing to downgrade" in log, str(rc))
     report.check("the installation is unchanged", m.marker.exists())
+    m.check_no_crash("7")
 
     report.phase("8 /ApiUrl=http:// refused")
     rc, log = m.run_setup("8-insecure-url", "/ApiUrl=http://insecure.example.test")
     report.check("Setup refuses", rc != 0 and "Refused /ApiUrl" in log, str(rc))
     report.check("server address unchanged", m.server_address() == DEFAULT_API, m.server_address())
+    m.check_no_crash("8")
 
     report.phase("9 uninstall over the running tray, keeping the data")
     tray = m.start_tray("tray before uninstall")
     reg_set(APPROVED_KEY, "DoMe", bytes([3]) + bytes(11))  # what Task Manager writes when it disables an entry
-    rc, _log = m.run_uninstall("9-uninstall")
+    rc, log = m.run_uninstall("9-uninstall")
     report.check("uninstaller exit code 0", rc == 0, str(rc))
+    report.check("the uninstaller quit DoMe", "DoMe.exe quit --timeout 20 exited with code 0" in log)
+    m.check_uninstall_commands("9-uninstall", log)
     try:
         tray_rc = tray.wait(timeout=60)
     except subprocess.TimeoutExpired:
@@ -714,30 +785,44 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("no Windows error report for the tray", not m.wer_reports(tray.pid))
     m.check_removed()
     report.check("data kept: state.sqlite3", (m.state / "state.sqlite3").exists())
+    m.check_no_crash("9")
 
     report.phase("10 install with a staging address and no extension id")
     rc, log = m.run_setup("10-staging", f"/ApiUrl={STAGING_API}/")
     report.check("Setup exit code 0", rc == 0, str(rc))
     m.check_installed(host=False, run=False, api=STAGING_API)
     report.check("the log says the bridge was skipped", "Browser bridge not registered" in log)
+    # skipped for the intended reason, not because DoMe.exe crashed (70), hung (-2) or could not start (-1)
+    report.check(
+        "DoMe.exe install-native-host exited with code 1", "DoMe.exe install-native-host exited with code 1" in log
+    )
+    report.check(
+        "DoMe.exe said why: no extension id available",
+        re.search(r"DoMe\.exe: .*no extension id available", log) is not None,
+    )
     report.check("data kept: state.sqlite3", (m.state / "state.sqlite3").exists())
+    m.check_no_crash("10")
 
     report.phase("11 an upgrade keeps the staging address")
     rc, _log = m.run_setup("11-keeps-address")
     report.check("Setup exit code 0", rc == 0, str(rc))
     report.check("server address kept", m.server_address() == STAGING_API, m.server_address())
+    m.check_no_crash("11")
 
     report.phase("12 uninstall with /REMOVEDATA")
-    rc, _log = m.run_uninstall("12-removedata", "/REMOVEDATA")
+    m.check_no_crash("before 12")  # /REMOVEDATA deletes the logs folder
+    rc, log = m.run_uninstall("12-removedata", "/REMOVEDATA")
     report.check("uninstaller exit code 0", rc == 0, str(rc))
+    m.check_uninstall_commands("12-removedata", log)
     m.check_removed()
     report.check("state folder removed", not m.state.exists())
 
     report.phase("13 install and uninstall without ever starting DoMe: no empty state folder")
     rc, _log = m.run_setup("13-install")
     report.check("Setup exit code 0", rc == 0, str(rc))
-    rc, _log = m.run_uninstall("13-uninstall")
+    rc, log = m.run_uninstall("13-uninstall")
     report.check("uninstaller exit code 0", rc == 0, str(rc))
+    m.check_uninstall_commands("13-uninstall", log)
     m.check_removed()
     report.check(
         "no state folder left behind",

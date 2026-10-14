@@ -2,14 +2,17 @@
 # PyInstaller (one folder, pc-agent/packaging/dome-agent.spec), compiles the per-user Inno Setup 6
 # installer (pc-agent/packaging/installer/DoMe.iss) and smoke-tests it on the runner
 # (pc-agent/packaging/installer/smoke_test.py): a silent install, its files and HKCU entries, the frozen
-# programs, a native-messaging round trip, the tray and a second launch, an upgrade over the running
-# tray, an upgrade while DoMe will not quit (Setup must change nothing), a refused downgrade, a refused
-# http:// server address, and silent uninstalls with and without /REMOVEDATA. Uploads
-# DoMe-Setup-<version>.exe with SHA256SUMS and BUILD-INFO.txt (only when the smoke test passed), and the
-# logs (always).
+# programs, a native-messaging round trip, the tray process (DoMe.exe alone keeps running, a second
+# launch is refused, `DoMe.exe quit` ends it; the icon and its menu are not checked), an upgrade while
+# that process runs, an upgrade while DoMe will not quit (Setup must change nothing), a refused
+# downgrade, a refused http:// server address, and silent uninstalls with and without /REMOVEDATA.
+# Uploads DoMe-Setup-<version>.exe with SHA256SUMS and BUILD-INFO.txt (only when the smoke test passed,
+# and never for a pull request from a fork: anyone can open one, and the founder installs these files),
+# and the logs (always).
 #
 # The runner is an administrator with UAC off, so this proves the installer works there; it does not
-# replace a test on a real Windows 10/11 PC as a standard user.
+# replace a test on a real Windows 10/11 PC as a standard user. Recommended repository setting (public
+# repository): Settings > Actions > General > "Require approval for all external contributors".
 #
 # The installer is an UNSIGNED development build. No secrets are used. Code signing is deliberately not
 # wired in here: when the founder has a certificate (most likely Azure Trusted Signing), it goes into a
@@ -127,6 +130,12 @@ jobs:
         id: build
         working-directory: pc-agent
         timeout-minutes: 25
+        env:
+          # The branch commit: on a pull request GITHUB_SHA is GitHub's temporary merge commit (BUILD-INFO.txt
+          # names that one too). Passed through env, never pasted into the script.
+          BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          BUILD_EVENT: ${{ github.event_name }}
+          BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           uv run --no-sync python packaging/installer/build_installer.py --iscc "$env:ISCC"
           if ($LASTEXITCODE -ne 0) { throw "build_installer.py failed (exit code $LASTEXITCODE)" }
@@ -142,6 +151,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "installer smoke test failed (exit code $LASTEXITCODE)" }
 
       - name: Upload DoMe-Setup, SHA256SUMS and BUILD-INFO.txt
+        # Not for a pull request from a fork: its installer would carry an outsider's code under this
+        # repository's name. The smoke-test logs below are still uploaded.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.build.outputs.artifact_name }}

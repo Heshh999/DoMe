@@ -85,26 +85,38 @@ plan and must be confirmed (**not yet verified**). A restore rehearsal is requir
 ## 2. Windows PC (pc-agent)
 
 Location: `%LOCALAPPDATA%\DoMe` on Windows (`~/.local/state/dome` elsewhere). The directory is the
-customer's own; uninstall removes it (`pc-agent/README.md`). Nothing here leaves the PC except
-through the agent's relay connection or a customer-initiated diagnostics export.
+customer's own. Nothing here leaves the PC except through the agent's relay connection or a
+customer-initiated diagnostics export.
+
+**What "uninstall" means in this table** (`pc-agent/DECISIONS.md` 55, a reasoned deviation from spec
+§15): the Windows uninstaller always removes the program folder (with `dome-server.json`), the
+native-messaging manifest and keys and start at login. It deletes the rest of `%LOCALAPPDATA%\DoMe`
+(the key, the credential, `identity.json`, `state.sqlite3`, the logs and diagnostics) **only** when the
+user answers **Yes** to its question, or when a silent uninstall is given `/REMOVEDATA`. By default
+(No, or any silent uninstall without `/REMOVEDATA`) those records stay on the PC, still DPAPI-protected
+where the table says so, until the user deletes them or reinstalls and uninstalls with Yes. In every
+case the PC stays listed on the DoMe service until it is unlinked from the phone (Devices): the agent
+cannot unlink itself (section 1).
 
 | Record class | Purpose | Contents | Retention | Deletion trigger | Encryption at rest | Who can access |
 | --- | --- | --- | --- | --- | --- | --- |
-| `secrets/pc_key.bin` | PC identity key | PKCS8 PEM of the ES256 private key | Life of the install | Uninstall / delete state dir | DPAPI current-user scope on Windows (implemented, **not Windows-device-tested**); file mode 0600 with a logged warning elsewhere | The Windows user account that installed the agent |
-| `secrets/pc_credential.bin` | Relay credential | Opaque 32-byte credential from link time | Until `revoked`, credential rejection or unlink (implemented: discarded on `revoked` / 401) | Unlink, revocation, uninstall | DPAPI / 0600 | Same |
-| `identity.json` | Link record | `pc_id`, `account_id`, PC name, relay/API URLs, `linked_at` | Life of the link | Unlink, uninstall | Plain file (non-secret) | Same |
-| `state.sqlite3 › settings` | Local switches | `remote_enabled` (default false), `media_while_locked`, `start_at_login`, PC name, last snapshot id, `snapshot_pc_enabled`, last verified entitlement claims (never the token) | Life of the install | Uninstall | Plain SQLite (WAL) | Same |
-| `state.sqlite3 › grants` | Locally approved controllers (the only key source) | Controller id, `kid`, public JWK, capabilities, display name, timestamps, revocation reason, snapshot intersection data | Until revoked; revoked rows are kept so a snapshot cannot un-revoke them and are replaced on re-approval of the same `kid` (implemented, unit-tested) | Local revoke, snapshot revocation, uninstall | Plain SQLite | Same |
-| `state.sqlite3 › journal` | Durable command journal (replay protection, crash recovery) | `command_id`, SHA-256 of the signed payload, action, controller id, state, the last emitted result frame (validated result shape, may include the resulting player/tab state such as a video id and title as returned to the phone), error code, timestamps, `sent` | Newest 5,000 rows (implemented, pruned on every insert, unit-tested) | Prune, uninstall | Plain SQLite | Same; a redacted subset appears in diagnostics |
-| `state.sqlite3 › challenges` | Confirmation transactions | Exact `challenge_text`, pinned `kid`, digests, `expires_at`, `consumed_at` | Purged when older than 24 h past expiry at every start-up (implemented) | Purge, uninstall | Plain SQLite | Same |
-| `state.sqlite3 › approved_apps` | Local app allowlist | `app_id`, display name, absolute `.exe` path, pinned SHA-256 | Until removed locally | `remove-app`, uninstall | Plain SQLite; never editable remotely | Same (boundary: a local user who can edit the file is the same user the agent runs as) |
+| `secrets/pc_key.bin` | PC identity key | PKCS8 PEM of the ES256 private key | Life of the install | Uninstall (Yes / `/REMOVEDATA` only) / delete state dir | DPAPI current-user scope on Windows (implemented, **not Windows-device-tested**); file mode 0600 with a logged warning elsewhere | The Windows user account that installed the agent |
+| `secrets/pc_credential.bin` | Relay credential | Opaque 32-byte credential from link time | Until `revoked`, credential rejection or unlink (implemented: discarded on `revoked` / 401) | Unlink, revocation, uninstall (Yes / `/REMOVEDATA` only) | DPAPI / 0600 | Same |
+| `identity.json` | Link record | `pc_id`, `account_id`, PC name, relay/API URLs, `linked_at` | Life of the link | Unlink, uninstall (Yes / `/REMOVEDATA` only) | Plain file (non-secret) | Same |
+| `state.sqlite3 › settings` | Local switches | `remote_enabled` (default false), `media_while_locked`, `start_at_login`, PC name, last snapshot id, `snapshot_pc_enabled`, last verified entitlement claims (never the token) | Life of the install | Uninstall (Yes / `/REMOVEDATA` only) | Plain SQLite (WAL) | Same |
+| `state.sqlite3 › grants` | Locally approved controllers (the only key source) | Controller id, `kid`, public JWK, capabilities, display name, timestamps, revocation reason, snapshot intersection data | Until revoked; revoked rows are kept so a snapshot cannot un-revoke them and are replaced on re-approval of the same `kid` (implemented, unit-tested) | Local revoke, snapshot revocation, uninstall (Yes / `/REMOVEDATA` only) | Plain SQLite | Same |
+| `state.sqlite3 › journal` | Durable command journal (replay protection, crash recovery) | `command_id`, SHA-256 of the signed payload, action, controller id, state, the last emitted result frame (validated result shape, may include the resulting player/tab state such as a video id and title as returned to the phone), error code, timestamps, `sent` | Newest 5,000 rows (implemented, pruned on every insert, unit-tested) | Prune, uninstall (Yes / `/REMOVEDATA` only) | Plain SQLite | Same; a redacted subset appears in diagnostics |
+| `state.sqlite3 › challenges` | Confirmation transactions | Exact `challenge_text`, pinned `kid`, digests, `expires_at`, `consumed_at` | Purged when older than 24 h past expiry at every start-up (implemented) | Purge, uninstall (Yes / `/REMOVEDATA` only) | Plain SQLite | Same |
+| `state.sqlite3 › approved_apps` | Local app allowlist | `app_id`, display name, absolute `.exe` path, pinned SHA-256 | Until removed locally | `remove-app`, uninstall (Yes / `/REMOVEDATA` only) | Plain SQLite; never editable remotely | Same (boundary: a local user who can edit the file is the same user the agent runs as) |
 | `state.sqlite3 › pending_power` | Armed power countdown | Command id, action, `fires_at` | Cleared on completion, cancel and at every start-up (implemented) | Completion/restart | Plain SQLite | Same |
 | `state.sqlite3 › pending_revocations` | Offline local revocations | Controller id, `kid`, reason | Until the relay acknowledges the `revoke_controller` write (implemented) | Acknowledgement | Plain SQLite | Same |
-| `state.sqlite3 › security_events` | Local security log | Kind + redacted detail | Newest 500 rows (implemented) | Prune, uninstall | Plain SQLite | Same; included (redacted) in diagnostics |
-| `logs/agent.log` | Redacted JSON-lines log | Events after the redaction processor; no tokens, codes, challenge texts, payloads or titles | Rotating: 2 MB × 3 backups ≈ 8 MB (implemented) | Rotation, uninstall | Plain files | Same |
-| `diagnostics/dome-diagnostics-*.json` | Customer-initiated support bundle | Versions, non-secret settings, redacted status, local security events, last 200 redacted log lines; `kid`s truncated | Until the customer deletes it (no automatic purge) | Customer | Plain file | The customer; shared only if they choose to |
-| `com.dome.agent.json` + `HKCU` native-messaging keys | Browser bridge registration | Path to the native host, allowed extension ids | Life of the install | `uninstall-native-host` | — | Same |
-| `HKCU\…\Run\DoMe` | Start at login | Command line | Until toggled off | Tray toggle, uninstall | — | Same |
+| `state.sqlite3 › security_events` | Local security log | Kind + redacted detail | Newest 500 rows (implemented) | Prune, uninstall (Yes / `/REMOVEDATA` only) | Plain SQLite | Same; included (redacted) in diagnostics |
+| `logs/agent.log` | Redacted JSON-lines log | Events after the redaction processor; no tokens, codes, challenge texts, payloads or titles | Rotating: 2 MB × 3 backups ≈ 8 MB (implemented) | Rotation, uninstall (Yes / `/REMOVEDATA` only) | Plain files | Same |
+| `logs/crash.log` | Last-resort record of an unexpected error in `DoMe.exe` or `dome-native-host.exe` (`pc-agent/DECISIONS.md` 56) | Time, program name, the full command line and the Python traceback, including the exception message. Bearer tokens and long token-like strings are masked as in `agent.log`, but it is **not** a reviewed support bundle: a message can still hold a path, an address or other text | Appended per crash; started afresh once it passes 1 MB (implemented) | Uninstall (Yes / `/REMOVEDATA` only), or the user deletes it | Plain file | Same; never sent anywhere by DoMe. Support may ask the user to read it and copy its last lines (`docs/SUPPORT.md`) |
+| `diagnostics/dome-diagnostics-*.json` | Customer-initiated support bundle | Versions, non-secret settings, redacted status, local security events, last 200 redacted log lines; `kid`s truncated | Until the customer deletes it (no automatic purge) | Customer, uninstall (Yes / `/REMOVEDATA` only) | Plain file | The customer; shared only if they choose to |
+| `com.dome.agent.json` + `HKCU` native-messaging keys | Browser bridge registration | Path to the native host, allowed extension ids | Life of the install | `uninstall-native-host`, uninstall (always) | — | Same |
+| `HKCU\…\Run\DoMe` | Start at login | Command line | Until toggled off | Tray toggle, uninstall (always) | — | Same |
+| `%LOCALAPPDATA%\Programs\DoMe\dome-server.json` | The DoMe server address that `DoMe.exe link` falls back to (written by Setup) | Only `{"api_url": "https://…"}`: no account, PC or user data | Life of the install | Uninstall (always) | Plain file (non-secret) | Same |
 
 ## 3. Phone (PWA) and browser extension
 

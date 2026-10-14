@@ -4,12 +4,12 @@ Status: **pre-release engineering build. No formal Windows-device-tested pass is
 Windows API path in `pc-agent/dome_agent/platform/windows/` is implemented against the real Windows
 APIs and unit-tested on Linux behind an explicit fake platform (`DOME_AGENT_PLATFORM=fake`); the owner
 has run the agent from source on his Windows 11 PC through the test kit (`docs/HANDOFF.md` §4). A
-per-user installer, `DoMe-Setup-<version>.exe`, now exists (next section): GitHub Actions builds it on a
-Windows Server runner and smoke-tests install, upgrade and uninstall there. Installer evidence: **not
-yet verified — awaiting the first `windows-installer.yml` run** (a runner, not a PC). This document
-describes what the agent does and the install, run and uninstall steps **as the code implements them
-today**; the last section lists what is still blocked. Evidence tags follow
-`docs/spec/MASTER_PROMPT.md` §17.
+per-user installer, `DoMe-Setup-<version>.exe`, now exists (next section). A GitHub Actions workflow
+(`windows-installer.yml`) is set up to build it on a Windows Server runner and smoke-test install,
+upgrade and uninstall there; **it has not run yet**. Installer evidence: **not yet verified — awaiting
+the first `windows-installer.yml` run** (a runner, not a PC). This document describes what the agent
+does and the install, run and uninstall steps **as the code implements them today**; the last section
+lists what is still blocked. Evidence tags follow `docs/spec/MASTER_PROMPT.md` §17.
 
 Related: `pc-agent/README.md` (developer view and the manual verification checklist),
 `docs/IPHONE_SETUP.md` (the phone side), `docs/TROUBLESHOOTING.md`, `docs/ARCHITECTURE.md`.
@@ -19,20 +19,32 @@ Related: `pc-agent/README.md` (developer view and the manual verification checkl
 This is the normal way to put DoMe on a Windows PC. It needs no administrator rights and installs DoMe
 only for the Windows account that runs it.
 
-**Getting it.** Every time the PC code changes, GitHub builds the installer and tests it on a Windows
-machine. To download the newest one: open the repository on GitHub, click **Actions**, then **Windows
-installer**, open the newest run with a green tick, and under **Artifacts** download
-`DoMe-Setup-<version>+<code>` (you need to be signed in to GitHub). Unzip it. You get
-`DoMe-Setup-<version>.exe`, `SHA256SUMS` and `BUILD-INFO.txt` (which build this is). To check that the
-file arrived undamaged, run this in PowerShell and compare the result with the line in `SHA256SUMS`:
+**Getting it.** Once the team sends the PC code to GitHub, GitHub builds the installer and tests it on
+a Windows machine. That first build and test **has not run yet**; the team will tell you when there is a
+green one. Then, to download it:
+
+1. Open the repository on GitHub (signed in), click **Actions**, then **Windows installer** on the left.
+2. Above the list, set **Branch** to the branch the team names (`main` once the work is merged) and
+   **Event** to **push**. Only use a run from that branch and event: anyone on GitHub can open a pull
+   request, and a run started by someone else's pull request is not DoMe's code.
+3. Open the newest run with a green tick and, under **Artifacts**, download `DoMe-Setup-<version>+<code>`.
+   Downloads are deleted after 30 days; if the **Artifacts** section is empty, ask the team to run the
+   workflow again.
+4. Unzip it. You get `DoMe-Setup-<version>.exe`, `SHA256SUMS` and `BUILD-INFO.txt`. `BUILD-INFO.txt`
+   says which build this is: its `commit:` line must be a commit on that same branch (the team can check
+   it for you).
+
+To check that the file arrived undamaged, run this in PowerShell and compare the result with the line in
+`SHA256SUMS`:
 
 ```powershell
 Get-FileHash .\DoMe-Setup-0.1.0.exe -Algorithm SHA256
 ```
 
 **Installing.** Double-click `DoMe-Setup-<version>.exe`. Do **not** choose "Run as administrator":
-DoMe belongs to the account you use every day (if Setup is started as an administrator, it asks first).
-Setup:
+DoMe belongs to the account you use every day and must never run with administrator rights. If you do,
+Setup installs nothing and asks you to start it again normally. (On a PC where Windows' administrator
+prompts are switched off, it asks instead whether this is the right account.) Setup:
 
 - puts DoMe in `%LOCALAPPDATA%\Programs\DoMe` and adds **DoMe** to the Start menu;
 - offers **Start DoMe when I sign in to Windows** (unticked; tick it if you want DoMe running all the
@@ -40,11 +52,16 @@ Setup:
 - tells DoMe which server to use: `https://domeremote.com`, written to `dome-server.json` in that folder;
 - connects the YouTube browser add-on when it can. Until the add-on is in the Chrome and Edge stores it
   cannot, and Setup shows a page that says so; everything else is installed;
-- offers **Start DoMe now** at the end. DoMe then sits in the notification area, next to the clock.
+- offers **Start DoMe now** at the end. DoMe then sits in the notification area, next to the clock. If
+  you do not see its icon there, open **DoMe** from the Start menu.
 
 **The blue "Windows protected your PC" warning is expected for now.** The test build is not signed yet.
 For your own test build from GitHub you can click **More info**, then **Run anyway**. Customers must
 never be asked to do this: public downloads wait for signing.
+
+**If Windows says "Smart App Control blocked" DoMe or DoMe-Setup**, do not turn Smart App Control off:
+once it is off, Windows cannot switch it back on without resetting the PC. Keep using the test kit
+(`testkit/README.md`) on that PC until DoMe is signed.
 
 **Linking.** This test version cannot connect to your DoMe account by itself yet: linking needs the
 DoMe service at domeremote.com, which is not live yet. Until then, use the test kit
@@ -53,44 +70,57 @@ a "Link this PC" item in DoMe's menu will follow.
 
 **Updating.** Run a newer `DoMe-Setup` over the old one. It closes DoMe first (the same as **Quit
 DoMe**) and keeps your link, paired phones and settings. If DoMe does not close, Setup stops without
-changing anything and asks you to quit DoMe from its icon, then run Setup again. An older Setup refuses
-to install over a newer DoMe; uninstall first if you really want to go back.
+changing anything and asks you to quit DoMe from its icon, then run Setup again. Setup refuses to
+install an older **version number** over a newer one; uninstall first if you really want to go back.
+All test builds today have the same version number (0.1.0), so any of them can replace any other,
+older or newer: `BUILD-INFO.txt` (and the Setup file's **Properties → Details → Product version**)
+tells you which build you have.
 
 **Uninstalling.** Settings → Apps → DoMe → Uninstall. It closes DoMe, removes the program, the Start
 menu entry, the browser registration and Start at login, and asks whether to also remove DoMe's
 settings from this PC (the link to your account, the phones you allowed, the approved apps, the logs).
-**No** (the default) keeps them, so a reinstall works straight away; **Yes** removes them. Uninstalling
-does not remove the PC from your DoMe account: do that in the DoMe app on your phone (Devices). If you
-added the browser add-on, remove it in `chrome://extensions` or `edge://extensions`.
+**No** (the default) keeps them: if you install DoMe again, this PC is still linked and your phones are
+still allowed. **Yes** removes them. YouTube control is not kept either way: testers add
+`/ExtensionId=<id>` again when they reinstall (see "Options for testers"). Uninstalling never removes
+the PC from your DoMe account: if you answered **Yes**, or you will not use DoMe on this PC again,
+remove it in the DoMe app on your phone (Devices). If you added the browser add-on, remove it in
+`chrome://extensions` or `edge://extensions`.
 
 **The test kit and the installer on the same PC.** Both use the same settings folder
 (`%LOCALAPPDATA%\DoMe`), the same browser registration and the same "one DoMe at a time" rule. Quit one
 before starting the other. Answering **Yes** to the uninstaller's question also deletes the test kit's
-link. The installer sets no environment variable, so it never changes which server the test kit uses.
+link. Uninstalling also removes the browser registration the test kit set up: run the test kit's
+`2 Start DoMe on this PC.cmd` again afterwards. The installer sets no environment variable, so it never
+changes which server the test kit uses.
 
 **Options for testers.** Type them after the file name in PowerShell
-(`.\DoMe-Setup-0.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`). The last two work only in the
-development builds that GitHub makes today; a release build (`build_installer.py --release`) ignores
-them.
+(`.\DoMe-Setup-0.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`). `/ApiUrl=` and `/ExtensionId=`
+work only in the development builds that GitHub makes today; a release build
+(`build_installer.py --release`) ignores them, always uses `https://domeremote.com`, and registers only
+the production add-on.
 
 | Option | What it does |
 | --- | --- |
 | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` | install with no windows |
 | `/MERGETASKS=startatlogin` | tick "Start DoMe when I sign in" |
 | `/LOG=C:\path\setup.log` | write Setup's log there |
-| `/ApiUrl=https://staging.domeremote.com` | use another DoMe server (https only; upgrades keep it) |
+| `/ApiUrl=https://staging.domeremote.com` | use another DoMe server (https only; later development builds keep it when they upgrade; a release build replaces it with `https://domeremote.com`) |
 | `/ExtensionId=<32 letters a-p>` | connect a development browser add-on (the id the test kit prints) |
 
 The uninstaller, `%LOCALAPPDATA%\Programs\DoMe\unins000.exe`, takes `/VERYSILENT /SUPPRESSMSGBOXES`
 and `/REMOVEDATA` (also delete the settings).
 
 **What the installer does not do yet**: it is not signed (Authenticode); it has no automatic updates;
-the YouTube add-on is not in the stores, so there is no production add-on id; DoMe's menu has no
-"Link this PC" item; it has been tested only on GitHub's Windows Server machine, where the account is an
-administrator, not yet on a Windows 10 or 11 PC by a standard user; and Inno Setup's makers ask
-commercial users to buy a licence, which DoMe needs before it is sold. Evidence: **not yet verified**
-until the first green `windows-installer.yml` run; after that, "built and smoke-tested on the GitHub
-windows-latest runner (administrator, UAC off); not yet tested on a Windows 10/11 PC".
+the YouTube add-on is not in the stores, so there is no production add-on id (and `--release` refuses to
+build without one); DoMe's menu has no "Link this PC" item; test builds of the same version are not
+ordered (see "Updating"); it will first be tested on GitHub's Windows Server machine (an administrator
+account with UAC off), and it has not yet been tested on any Windows 10 or 11 PC, nor by a standard
+user; that test checks the tray only as a process (DoMe.exe keeps running, a second launch is refused,
+`DoMe.exe quit` ends it): the icon, its menu and **Quit DoMe** from the menu are not verified (the
+runner may have no visible notification area); and Inno Setup's makers ask commercial users to buy a
+licence, which DoMe needs before it is sold. Evidence: **not yet verified** until the first green
+`windows-installer.yml` run; after that, "integration-tested on the windows-latest CI runner
+(administrator, UAC off); not Windows-device-tested".
 
 How it is built (developers): `pc-agent/packaging/installer/build_installer.py` runs PyInstaller on
 `pc-agent/packaging/dome-agent.spec` (one folder with `DoMe.exe`, `dome-native-host.exe` and
@@ -155,7 +185,7 @@ changes). Treat all of this as the checklist for the first device pass, not as a
 | State directory | `%LOCALAPPDATA%\DoMe` (override: `DOME_AGENT_STATE_DIR` or `--state-dir`) | first command |
 | Local database | `%LOCALAPPDATA%\DoMe\state.sqlite3` (settings, locally approved phones, bounded command journal, confirmation challenges, approved apps, pending power action, pending revocations, local security events) | first command |
 | PC identity key and account credential | `%LOCALAPPDATA%\DoMe\secrets\pc_key.bin` (P-256 private key) and `pc_credential.bin` — each **DPAPI-protected (current user)** via `CryptProtectData`; decryptable only by the same Windows user on the same machine | `DoMe.exe link` |
-| Logs | `%LOCALAPPDATA%\DoMe\logs\agent.log`, redacted JSON lines, 2 MB × 3 rotations; `native-host.log`; `crash.log` only after an unexpected error in the installed programs (traceback, exit code 70) | `run`, the native host |
+| Logs | `%LOCALAPPDATA%\DoMe\logs\agent.log`, redacted JSON lines, 2 MB × 3 rotations; `native-host.log`; `crash.log` only after an unexpected error in the installed programs (command line and traceback, tokens masked but not reviewed: read it before sharing any of it; exit code 70) | `run`, the native host |
 | Diagnostics bundles | `%LOCALAPPDATA%\DoMe\diagnostics\dome-diagnostics-<timestamp>.json` | tray *Diagnostics…* or `DoMe.exe diagnostics` |
 | Native-messaging manifest | `%LOCALAPPDATA%\DoMe\com.dome.agent.json` | `install-native-host` |
 | Native-host registration | `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.dome.agent` (default value = manifest path) | `install-native-host` |
@@ -503,7 +533,7 @@ test `tests/test_processes.py::test_native_host_process_forwards_frames` (**unit
 | Installer with uninstall cleanup | Inno Setup per-user installer (`pc-agent/packaging/installer/DoMe.iss`): native host, start-at-login opt-in, upgrade that quits DoMe first, downgrade refusal, uninstall cleanup; smoke-tested by CI, **awaiting its first run**; never run on a PC by a standard user | The first green run, then the founder installs it on his Windows 11 PC |
 | Linking from the tray | `DoMe.exe link` works only from a console; the tray says "Not linked — run DoMe link" | A tray "Link this PC…" item (small change), and domeremote.com live |
 | **Code signing** (Authenticode) | Not possible here: needs the founder's publisher certificate/account. `build_installer.py --sign-thumbprint` is ready but deliberately not wired into CI | A certificate (most likely Azure Trusted Signing), then a separate, protected signing job. Without it SmartScreen warns; **never instruct customers to disable antivirus or SmartScreen** — ship signed builds instead |
-| Update mechanism with a signed manifest, downgrade rejection, staged rollout | Not implemented (spec §15); the agent has no updater. Setup refuses to install over a newer version, but an unsigned installer is no protection against tampering | A maintained update framework plus the signing key; version negotiation on `hello` already exists so mixed versions fail clearly (`PROTOCOL_INCOMPATIBLE`) |
+| Update mechanism with a signed manifest, downgrade rejection, staged rollout | Not implemented (spec §15); the agent has no updater. Setup refuses to install over a newer X.Y.Z version (builds of the same version are not ordered), but an unsigned installer is no protection against tampering | A maintained update framework plus the signing key; version negotiation on `hello` already exists so mixed versions fail clearly (`PROTOCOL_INCOMPATIBLE`) |
 | Inno Setup licence | Free for non-commercial use; its makers ask commercial users to buy a licence | Buy one before the paid launch |
 | Production extension id | `PRODUCTION_EXTENSION_IDS` is empty; only `DOME_AGENT_DEV_EXTENSION_ID` works | Chrome Web Store listing (founder account), pin its `"key"` in `browser-extension/public/manifest.json`, bake the id into the release build |
 | Public download page | `mobile-app` download links are disabled with "coming soon" | A signed build to link to |

@@ -8,12 +8,17 @@ into an entry in ``<state dir>/logs/crash.log`` (and on stderr when there is one
 :data:`EXIT_CRASH`. Only ``DoMe.exe run`` started by a person may show a short plain-English message
 box (the caller decides). This module uses nothing but the standard library, so that it still works
 when a DoMe module cannot be imported.
+
+crash.log gets the same masking as every other DoMe log (``logsetup``: bearer tokens and long
+token-like strings). It is still not a reviewed support bundle: an exception message can carry paths,
+addresses or other text, so the user reads it before sharing any of it (``docs/SUPPORT.md``).
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sys
 import time
 import traceback
@@ -27,8 +32,19 @@ CRASH_LOG_MAX_BYTES = 1_000_000
 CRASH_MESSAGE = (
     "DoMe could not start because of an unexpected problem.\n\n"
     "Details were saved in this file:\n{path}\n\n"
-    "Please send that file to the DoMe team."
+    "To get help, write what you were doing in a support request. Keep that file: the DoMe team may ask "
+    "you to open it and copy its last lines, after you have read them."
 )
+
+# The same two patterns as logsetup._BEARER_RE / _LONG_TOKEN_RE (copied: this module imports nothing of DoMe).
+_BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
+_LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{40,}\b")
+REDACTED = "[redacted]"
+
+
+def redact(text: str) -> str:
+    """Mask bearer tokens and long token-like strings, like every other DoMe log."""
+    return _LONG_TOKEN_RE.sub(REDACTED, _BEARER_RE.sub("Bearer " + REDACTED, text))
 
 
 def crash_log_path(argv: Sequence[str] = ()) -> Path:
@@ -57,10 +73,13 @@ def crash_log_path(argv: Sequence[str] = ()) -> Path:
 
 
 def record_crash(program: str, argv: Sequence[str], exc: BaseException) -> Path | None:
-    """Append the traceback to crash.log (started afresh once it passes 1 MB). Returns the file, or
-    None when it could not be written. Never raises."""
-    text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    entry = f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {program} {' '.join(argv)}\n{text}\n"
+    """Append the traceback to crash.log (started afresh once it passes 1 MB), masked like every other
+    DoMe log. Returns the file, or None when it could not be written. Never raises."""
+    try:
+        text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        entry = redact(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {program} {' '.join(argv)}\n{text}\n")
+    except Exception:  # noqa: BLE001 - an exception whose str() fails must still end in a crash entry
+        entry = f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {program}\n{type(exc).__name__} (details unavailable)\n\n"
     with contextlib.suppress(Exception):
         if sys.stderr is not None:
             sys.stderr.write(entry)

@@ -13,12 +13,19 @@ Steps:
    private keys (the old spec shipped ``shared/protocol/fixtures/test-controller-key.pem``).
 4. Compiles ``packaging/installer/DoMe.iss`` with ISCC (Inno Setup 6) into
    ``dist/installer/DoMe-Setup-<version>.exe`` and writes ``SHA256SUMS`` and ``BUILD-INFO.txt`` next to it.
-   The build number (``GITHUB_RUN_NUMBER``) and commit (``GITHUB_SHA``) go into the file's version
-   information and BUILD-INFO.txt, so two builds of the same version can be told apart.
+   The build number (``GITHUB_RUN_NUMBER``) and commit go into the file's version information and
+   BUILD-INFO.txt, so two builds of the same version can be told apart. The commit is ``BUILD_COMMIT``
+   when set (the workflow passes the branch commit of a pull request: ``GITHUB_SHA`` is then GitHub's
+   temporary merge commit, which is on no branch), else ``GITHUB_SHA``, else ``git rev-parse HEAD``; when
+   ``GITHUB_SHA`` differs, BUILD-INFO.txt names it too, because that merge is what was built.
+   ``BUILD_EVENT`` and ``BUILD_BRANCH`` (set by the workflow) say where the build came from.
 
 By default this is a DEVELOPMENT build: its Setup accepts ``/ApiUrl=https://...`` (a staging server) and
-``/ExtensionId=<32 a-p>`` (a development browser add-on). ``--release`` builds a Setup that accepts
-neither. ``--pyinstaller-only`` stops after step 3 (it also works on Linux, to check the spec).
+``/ExtensionId=<32 a-p>`` (a development browser add-on) and remembers a staging address for upgrades.
+``--release`` builds a Setup that accepts neither and always writes https://domeremote.com; it is refused
+while ``dome_agent.bridge.manifest.PRODUCTION_EXTENSION_IDS`` is empty (a release Setup would otherwise
+re-register whatever development add-on an earlier test install left on the PC). ``--pyinstaller-only``
+stops after step 3 (it also works on Linux, to check the spec).
 
 Signing (not wired into CI yet): ``--sign-thumbprint`` (or ``SIGN_THUMBPRINT``) names a code-signing
 certificate already in the user's certificate store by its SHA-1 thumbprint; Inno then signs DoMe.exe,
@@ -32,6 +39,7 @@ build_tag and artifact_name; ``GITHUB_STEP_SUMMARY`` gets a short note.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import os
 import re
@@ -46,9 +54,11 @@ REPO = PC_AGENT.parent
 SPEC = PC_AGENT / "packaging" / "dome-agent.spec"
 ISS = PC_AGENT / "packaging" / "installer" / "DoMe.iss"
 ICON = REPO / "brand" / "exports" / "windows" / "dome.ico"
+MANIFEST_MODULE = PC_AGENT / "dome_agent" / "bridge" / "manifest.py"
 TIMESTAMP_URL = "http://timestamp.digicert.com"
 VERSION_RE = re.compile(r"\A\d+\.\d+\.\d+\Z")
 THUMBPRINT_RE = re.compile(r"\A[0-9A-Fa-f]{40}\Z")
+LABEL_RE = re.compile(r"[^A-Za-z0-9._/+-]")
 
 
 def fail(message: str) -> int:
@@ -88,10 +98,31 @@ def default_signtool() -> str:
     return str(candidates[-1]) if candidates else "signtool.exe"
 
 
+def production_extension_ids() -> tuple[str, ...]:
+    """``PRODUCTION_EXTENSION_IDS`` as written in ``dome_agent/bridge/manifest.py`` (read, not imported)."""
+    tree = ast.parse(MANIFEST_MODULE.read_text(encoding="utf-8"))
+    for node in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        if isinstance(target, ast.Name) and target.id == "PRODUCTION_EXTENSION_IDS" and value is not None:
+            return tuple(str(v) for v in ast.literal_eval(value))
+    raise SystemExit(f"build_installer: PRODUCTION_EXTENSION_IDS not found in {MANIFEST_MODULE}")
+
+
+def label(value: str) -> str:
+    """A short ASCII label for BUILD-INFO.txt (branch names are free text)."""
+    return LABEL_RE.sub("_", value.strip())[:100]
+
+
 def git_commit() -> str:
-    env = os.environ.get("GITHUB_SHA", "")
-    if env:
-        return env
+    for name in ("BUILD_COMMIT", "GITHUB_SHA"):
+        env = os.environ.get(name, "").strip()
+        if env:
+            return label(env)
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607 - git from PATH; only a label for the build
@@ -175,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     version = read_version()
+    if args.release and not args.pyinstaller_only and not production_extension_ids():
+        return fail(
+            "--release needs the production browser add-on id in dome_agent/bridge/manifest.py "
+            "(PRODUCTION_EXTENSION_IDS is empty). Without it a release Setup would keep re-registering a "
+            "development add-on left on the PC by a test install."
+        )
     thumbprint = str(args.sign_thumbprint).strip()
     if thumbprint and not THUMBPRINT_RE.match(thumbprint):
         return fail("--sign-thumbprint must be a 40-character SHA-1 thumbprint")
@@ -227,9 +264,18 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / "SHA256SUMS").write_bytes(f"{digest}  {setup.name}\n".encode("ascii"))
     kind = "release build" if args.release else "development build (accepts /ApiUrl= and /ExtensionId=)"
     signed_note = "signed" if thumbprint else "NOT signed: Windows SmartScreen will warn (development build)"
+    merged = label(os.environ.get("GITHUB_SHA", ""))
+    built_from = (
+        f"built from: {merged} (GitHub's test merge of this pull request into its target branch)\n"
+        if merged and merged != commit
+        else ""
+    )
+    event, branch = label(os.environ.get("BUILD_EVENT", "")), label(os.environ.get("BUILD_BRANCH", ""))
+    source = f"source: {event or 'local build'}{f' on branch {branch}' if branch else ''}\n"
     info = (
         f"{setup.name}\nversion: {version}\nbuild: {build_tag} (build {build_number})\ncommit: {commit}\n"
-        f"sha256: {digest}\nkind: {kind}\nsignature: {signed_note}\n"
+        f"{built_from}{source}sha256: {digest}\nkind: {kind}\nsignature: {signed_note}\n"
+        "note: every test build of the same version (X.Y.Z) can replace any other; this file tells them apart\n"
     )
     (out_dir / "BUILD-INFO.txt").write_bytes(info.encode("ascii"))
     print(info)
