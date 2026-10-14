@@ -2,6 +2,48 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-14 — Launch review fixes: gate checks GitHub's own controls, stricter checks, founder guide (not run against Fly.io)
+
+A review of the one-button launch found ways the founder's approval could be bypassed or misdirected,
+and places where a run could be green while something was broken. Fixed:
+
+- **Gate** (`dome_deploy.py gate`, still no secret values): refuses while `FLY_API_TOKEN`,
+  `DOME_OIDC_CLIENT_SECRET` or `DATABASE_URL` exists as a repository secret. GitHub evaluates
+  `secrets.X != ''` and passes names only. A repository secret would otherwise reach the deploy job
+  silently, and reach any workflow run without approval. The gate also reads both GitHub Environments with
+  the job's own token (`actions: read`) and refuses unless each exists, has a required reviewer, has no
+  administrator bypass, and allows exactly one branch rule: the default branch.
+- **Checks after deploy**: the sign-in start (`/v1/auth/login` → 303 to the provider's
+  `authorization_endpoint` with this client id and callback) and a WebSocket upgrade to `/ws/agent` through
+  Fly's proxy. A custom host that answers unhealthy (or, in production, with another commit) is now a red
+  run. `status` is red for unhealthy, unreachable or a bad `forwarded_client`, and stays green while it
+  waits for DNS or the certificate.
+- **Supply chain**: flyctl v0.4.110 is downloaded from its release and checked with `sha256sum -c`
+  (hash from the release's checksums file, re-fetched and matched) instead of `setup-flyctl`, which
+  verified nothing. Only the binary is extracted. The program runs as `/usr/bin/python3 -I`. `flyctl
+  deploy` adds `--builder-pool=false --depot=false` (read in the v0.4.110 source: otherwise a Fly-side
+  flag could pick a remote builder that cannot see the runner's image). The base images in
+  `deploy/Dockerfile` are pinned by digest, and there is no environment `url:` (it showed the domain
+  as "deployed" before DNS existed).
+- **Robustness**: child output is decoded as UTF-8 with replacement, and a failure while streaming
+  kills the child process. A refused Fly token is a "needs you" stop with the fix.
+- **Docs**: `LAUNCH_SETUP.md` (approve only runs you started; untick the administrator bypass; no
+  repository secrets; a words box; vendor addresses; Auth0 tenants explained; Cloudflare's "@";
+  $41/$45 consent; private-repository advice corrected; troubleshooting rows for every headline).
+  `SECURITY.md` §6 now says the approval comes from the founder's GitHub account and authorizes
+  unreviewed default-branch code, with branch protection as a follow-up (§9). `OPERATIONS.md` §7
+  replaces the generated secrets in place on stdin: the old `fly secrets unset` step would have taken
+  production down.
+- **What ran here**: `deploy/launch` ruff, format check, mypy strict, pytest 136 passed. actionlint 1.7.12
+  with shellcheck 0.11.0 on all workflows: clean (a control case shows shellcheck runs). The flyctl
+  install step was run locally against the real release: hash OK; a changed hash stops it before
+  extraction and before the PATH entry. Base-image digests were read from the registries (registry HEAD;
+  for python and uv the index body was also hashed).
+- **Not run**: the image build with the pinned digests (CI's `container` job builds it), GitHub's
+  environments API (its answers in the tests follow GitHub's documented shapes), and **nothing against
+  Fly.io, Auth0 or Cloudflare**. Nothing is live.
+- **Evidence**: written and statically checked; unit-tested against fakes.
+
 ## 2026-10-14 — One-button launch: Deploy workflow, founder guide, hosting fixes (not run against Fly.io)
 
 Goal: going live becomes creating accounts, pasting values into GitHub/Fly/Auth0 settings pages and

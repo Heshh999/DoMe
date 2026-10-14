@@ -1,7 +1,8 @@
 # Deploy: the founder's one button. GitHub > Actions > "Deploy" > Run workflow, then choose
 #   environment  staging | production
 #   action       deploy (set up what is missing, deploy, check) | status (look only, change nothing)
-#   create the database (first run only; Fly Managed Postgres Basic, about $38 a month per environment)
+#   create the database (first run only; Fly Managed Postgres Basic with 10 GB, about $41 a month per
+#                        environment; with the app machine an environment costs about $45 a month)
 # Step by step, in plain English: docs/LAUNCH_SETUP.md. What each step does: deploy/README.md.
 #
 # STATUS (2026-10-14): written and statically checked (actionlint, tests in deploy/launch/tests). It has
@@ -10,21 +11,29 @@
 # Shape and safety rules (enforced by deploy/launch/tests/test_workflow_policy.py):
 # * workflow_dispatch only. Never push, pull_request or pull_request_target: the repository is public,
 #   and only someone with write access can press Run workflow.
-# * All logic is deploy/launch/dome_deploy.py (standard library only, unit-tested with a fake flyctl).
-#   Inputs reach it through env, never through ${{ }} inside a script.
-# * Job "gate" has no environment and no secrets: it checks the branch and, for production, that
-#   staging already runs this exact commit and is healthy. Only then does GitHub ask for approval.
-# * Job "deploy" is the only job with secrets. It uses the GitHub Environment named by the input, which
-#   holds FLY_API_TOKEN and DOME_OIDC_CLIENT_SECRET (and, only as a fallback, DATABASE_URL). Both
-#   environments have the founder as required reviewer and allow only the default branch, so no job
-#   receives a Fly token without his click (docs/SECURITY.md §6).
+# * All logic is deploy/launch/dome_deploy.py (standard library only, unit-tested with a fake flyctl),
+#   run with /usr/bin/python3 -I. Inputs reach it through env, never through ${{ }} inside a script.
+# * Job "gate" has no environment and no secret values. It refuses: another branch; any deploy secret
+#   that exists as a REPOSITORY secret (GitHub would hand it to any run without approval; GitHub itself
+#   evaluates `secrets.X != ''`, so only names reach the job); either GitHub Environment missing, without
+#   a required reviewer, with an administrator bypass, or allowing any branch but the default one (read
+#   with the job's own read-only token); and for production, any commit staging does not already run
+#   healthily. Only then does GitHub ask for approval.
+# * Job "deploy" is the only job with secret values. It uses the GitHub Environment named by the input,
+#   which holds FLY_API_TOKEN and DOME_OIDC_CLIENT_SECRET (and, only as a fallback, DATABASE_URL). No job
+#   receives a Fly token without an approval from the founder's GitHub account; that approval authorizes
+#   whatever is on the default branch at that commit (docs/SECURITY.md section 6).
 # * Job "status" has no environment and no secrets and never runs flyctl: it cannot change anything.
 # * Secrets appear only in the deploy step's env block. Values generated during the run are masked with
 #   ::add-mask:: before use and reach Fly only on stdin (`flyctl secrets import`).
+# * No environment url: GitHub would show it as "deployed" even before DNS and the certificate exist.
+#   Only the run summary names the custom domain, and calls it live only after checking it.
 #
 # This file must be on the DEFAULT branch, or GitHub shows no Run workflow button. Actions are pinned to
-# the commit of a release tag, re-checked with `git ls-remote --tags` on 2026-10-14; flyctl is pinned to
-# v0.4.110 (released 2026-09-29), the version whose source dome_deploy.py's output parsing was read from.
+# the commit of a release tag, re-checked with `git ls-remote --tags` on 2026-10-14. flyctl v0.4.110
+# (released 2026-09-29, the version whose source dome_deploy.py's output parsing was read from) is
+# downloaded from its GitHub release and checked against the SHA-256 in that release's
+# flyctl_0.4.110_checksums.txt (fetched 2026-10-14) before anything runs it.
 
 name: Deploy
 
@@ -48,7 +57,7 @@ on:
         default: deploy
         required: true
       create_database_if_missing:
-        description: "First run only: create this environment's Fly Managed Postgres database (Basic plan, about $38 a month) if it does not exist yet"
+        description: "First run only: create this environment's Fly Managed Postgres database if it does not exist yet (Basic plan with 10 GB storage, about $41 a month; with the app machine this environment costs about $45 a month)"
         type: boolean
         default: false
 
@@ -61,19 +70,26 @@ jobs:
     if: inputs.action == 'deploy'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # actions: read lets the job's own token read the environments' protection rules (GitHub REST API).
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Branch, and for production, staging runs this commit
+      - name: Branch, no repository secrets, protected environments, and for production, staging runs this commit
         env:
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
           FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
-        run: python3 deploy/launch/dome_deploy.py gate
+          # Names only: GitHub evaluates each comparison, so no secret value reaches this job.
+          REPO_LEVEL_SECRETS: ${{ secrets.FLY_API_TOKEN != '' && 'FLY_API_TOKEN ' || '' }}${{ secrets.DOME_OIDC_CLIENT_SECRET != '' && 'DOME_OIDC_CLIENT_SECRET ' || '' }}${{ secrets.DATABASE_URL != '' && 'DATABASE_URL' || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: /usr/bin/python3 -I deploy/launch/dome_deploy.py gate
 
   deploy:
     name: Deploy ${{ inputs.environment }}
@@ -85,7 +101,6 @@ jobs:
     timeout-minutes: 90
     environment:
       name: ${{ inputs.environment }}
-      url: ${{ inputs.environment == 'production' && 'https://domeremote.com' || 'https://staging.domeremote.com' }}
     concurrency:
       group: deploy-${{ inputs.environment }}
       cancel-in-progress: false
@@ -95,10 +110,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6 (= v1)
-        with:
-          version: "0.4.110"
+      - name: Install flyctl v0.4.110 (SHA-256 checked)
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/flyctl"
+          mkdir -p "$dir"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$dir/flyctl.tar.gz" \
+            https://github.com/superfly/flyctl/releases/download/v0.4.110/flyctl_0.4.110_Linux_x86_64.tar.gz
+          echo "62b48471d4d560831ec27a3c316c402750d34a3f5f8b956459d7cc5f6125ec97  $dir/flyctl.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/flyctl.tar.gz" -C "$dir" flyctl
+          rm "$dir/flyctl.tar.gz"
+          "$dir/flyctl" version
+          # this directory holds nothing but flyctl, so it cannot shadow python3, docker or openssl
+          echo "$dir" >> "$GITHUB_PATH"
 
       - name: Set up what is missing, deploy, check
         env:
@@ -117,7 +141,7 @@ jobs:
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           CREATE_DATABASE: ${{ inputs.create_database_if_missing }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: python3 deploy/launch/dome_deploy.py deploy
+        run: /usr/bin/python3 -I deploy/launch/dome_deploy.py deploy
 
   status:
     name: Status of ${{ inputs.environment }} (look only, no secrets)
@@ -135,4 +159,4 @@ jobs:
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
           FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
-        run: python3 deploy/launch/dome_deploy.py status
+        run: /usr/bin/python3 -I deploy/launch/dome_deploy.py status

@@ -9,8 +9,9 @@ Output shapes follow the flyctl v0.4.110 source (read 2026-10-14, see deploy/REA
   ``name``/``digest``/``status``; ``certs`` use json tags (``hostname``, ``dns_requirements``).
 
 Every call is appended to the log file as ``{"tool", "argv", "stdin", "env_has_client_secret",
-"env_has_fallback_db", "env_has_fly_token"}``. Failures are injected through ``state["fail"]``, keyed by
-the first two arguments (``"secrets list"``) with ``{"exit": n, "stdout": "...", "stderr": "..."}``.
+"env_has_fallback_db", "env_has_fly_token", "env_has_gh_token"}``. Failures are injected through
+``state["fail"]``, keyed by the first two arguments (``"secrets list"``) with ``{"exit": n, "stdout": "...",
+"stderr": "..."}``.
 """
 
 from __future__ import annotations
@@ -252,6 +253,7 @@ def main() -> int:
                     "env_has_client_secret": "DOME_OIDC_CLIENT_SECRET" in os.environ,
                     "env_has_fallback_db": "DOME_FALLBACK_DATABASE_URL" in os.environ,
                     "env_has_fly_token": "FLY_API_TOKEN" in os.environ,
+                    "env_has_gh_token": "GH_TOKEN" in os.environ,
                 }
             )
             + "\n"

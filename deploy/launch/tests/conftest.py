@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import pytest
 
@@ -32,6 +33,7 @@ CLIENT_SECRET = "auth0-client-secret_ABCdef0123456789-xyzXYZ0123456789abcdefABCD
 FALLBACK_DB = "postgresql://fly-user:FallbackPassw0rd987@pgbouncer.fallback.flympg.net/fly-db"
 ISSUER_HOST = "domeremote-staging.us.auth0.com"
 CLIENT_ID = "AbCdEf0123456789AbCdEf0123456789"
+GH_TOKEN = "ghs_" + "FakeJobToken0123456789abcdefABCDEF"
 
 SECURE_HEADERS = {
     "content-type": "text/html; charset=utf-8",
@@ -41,14 +43,24 @@ SECURE_HEADERS = {
 
 
 class FakeWeb:
-    """URL -> HttpResult, HttpFailure or a callable returning one. Unknown URLs fail like DNS would."""
+    """URL -> HttpResult, HttpFailure or a callable returning one. Unknown URLs fail like DNS would.
+    ``websockets``: host -> the HTTP status a WebSocket upgrade gets (or an HttpFailure)."""
 
     def __init__(self) -> None:
         self.routes: dict[str, Any] = {}
         self.requests: list[str] = []
+        self.no_redirect_requests: list[str] = []
+        self.websockets: dict[str, Any] = {}
+        self.websocket_requests: list[tuple[str, str]] = []
+        self.headers_seen: dict[str, dict[str, str]] = {}
 
-    def __call__(self, url: str, *, timeout: float = 0, headers: Any = None) -> HttpResult:
+    def __call__(
+        self, url: str, *, timeout: float = 0, headers: Any = None, follow_redirects: bool = True
+    ) -> HttpResult:
         self.requests.append(url)
+        self.headers_seen[url] = dict(headers or {})
+        if not follow_redirects:
+            self.no_redirect_requests.append(url)
         route = self.routes.get(url)
         if callable(route) and not isinstance(route, HttpResult | HttpFailure):
             route = route()
@@ -67,7 +79,11 @@ class FakeWeb:
     def discovery(
         self, host: str = ISSUER_HOST, *, issuer: str | None = None, methods: list[str] | None = None
     ) -> None:
-        doc: dict[str, Any] = {"issuer": issuer or f"https://{host}/", "token_endpoint": f"https://{host}/oauth/token"}
+        doc: dict[str, Any] = {
+            "issuer": issuer or f"https://{host}/",
+            "authorization_endpoint": f"https://{host}/authorize",
+            "token_endpoint": f"https://{host}/oauth/token",
+        }
         doc["token_endpoint_auth_methods_supported"] = methods or ["client_secret_basic", "client_secret_post"]
         self.json(f"https://{host}/.well-known/openid-configuration", doc)
 
@@ -84,6 +100,82 @@ class FakeWeb:
         if hsts:
             headers["strict-transport-security"] = "max-age=31536000; includeSubDomains"
         self.routes[base + "/"] = HttpResult(200, headers, b"<!doctype html><title>DoMe</title>")
+
+    def login(
+        self,
+        base: str,
+        callback: str,
+        *,
+        client_id: str = CLIENT_ID,
+        authorize: str = f"https://{ISSUER_HOST}/authorize",
+        status: int = 303,
+    ) -> None:
+        """What cloud-api's /v1/auth/login answers: 303 to the provider (authlib's query, PKCE included)."""
+        query = urlencode(
+            {
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": callback,
+                "scope": "openid email profile",
+                "state": "st4te-value-0123456789",
+                "nonce": "n0nce-value-0123456789",
+                "code_challenge": "chall3nge-0123456789",
+                "code_challenge_method": "S256",
+            }
+        )
+        headers = {"location": f"{authorize}?{query}", "cache-control": "no-store"} if status == 303 else {}
+        self.routes[base + "/v1/auth/login"] = HttpResult(status, headers, b"")
+
+    def websocket_status(self, host: str, path: str, *, timeout: float = 0) -> int:
+        self.websocket_requests.append((host, path))
+        answer = self.websockets.get(host)
+        if answer is None:
+            raise HttpFailure("dns", "unknown host")
+        if isinstance(answer, HttpFailure):
+            raise answer
+        assert isinstance(answer, int)
+        return answer
+
+    def github_environment(
+        self,
+        name: str,
+        *,
+        repo: str = "Heshh999/DoMe",
+        branches: list[dict[str, Any]] | None = None,
+        reviewers: int = 1,
+        prevent_self_review: bool = False,
+        custom_branch_policies: bool = True,
+        can_admins_bypass: bool | None = False,
+    ) -> None:
+        """GitHub's REST answers for a GitHub Environment (shapes from docs.github.com, API 2022-11-28)."""
+        base = f"https://api.github.com/repos/{repo}/environments/{name}"
+        rules: list[dict[str, Any]] = [{"id": 1, "node_id": "x", "type": "branch_policy"}]
+        if reviewers >= 0:
+            rules.append(
+                {
+                    "id": 2,
+                    "node_id": "y",
+                    "type": "required_reviewers",
+                    "prevent_self_review": prevent_self_review,
+                    "reviewers": [
+                        {"type": "User", "reviewer": {"login": f"reviewer{i}", "id": 100 + i}} for i in range(reviewers)
+                    ],
+                }
+            )
+        doc: dict[str, Any] = {
+            "id": 7,
+            "name": name,
+            "protection_rules": rules,
+            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": custom_branch_policies},
+        }
+        if can_admins_bypass is not None:
+            doc["can_admins_bypass"] = can_admins_bypass
+        self.json(base, doc)
+        policies = [{"id": 9, "node_id": "z", "name": "main", "type": "branch"}] if branches is None else branches
+        self.json(
+            base + "/deployment-branch-policies?per_page=100",
+            {"total_count": len(policies), "branch_policies": policies},
+        )
 
 
 @dataclass
@@ -203,6 +295,8 @@ class World:
         self.web.discovery()
         self.web.healthz(f"https://{app}.fly.dev", commit=commit)
         self.web.page(f"https://{app}.fly.dev")
+        self.web.login(f"https://{app}.fly.dev", "https://staging.domeremote.com/v1/auth/callback")
+        self.web.websockets[f"{app}.fly.dev"] = 401
 
 
 def _install(bin_dir: Path, name: str) -> None:
@@ -240,8 +334,12 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         "FLY_ORG": "",
         "VITE_DOME_SUPPORT_URL": "mailto:support@domeremote.com",
         "DOME_SUPPORT_RESPONSE_EXPECTATION": "",
+        "REPO_LEVEL_SECRETS": "",
+        "GH_TOKEN": GH_TOKEN,
     }
     web = FakeWeb()
+    for name in ("staging", "production"):
+        web.github_environment(name)
     dns: dict[str, list[str]] = {}
 
     def fake_resolve(hostname: str) -> list[str]:
@@ -251,6 +349,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
 
     clock = Clock()
     monkeypatch.setattr(dome_deploy, "http_get", web)
+    monkeypatch.setattr(dome_deploy, "websocket_status", web.websocket_status)
     monkeypatch.setattr(dome_deploy, "resolve", fake_resolve)
     monkeypatch.setattr(dome_deploy, "sleep", clock.sleep)
     monkeypatch.setattr(dome_deploy, "monotonic", clock.monotonic)

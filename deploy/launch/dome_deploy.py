@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """DoMe one-button deploy to Fly.io: everything the "Deploy" GitHub Actions workflow does.
 
-    dome_deploy.py gate     production only: refuse unless staging runs this commit, healthy (no secrets)
+    dome_deploy.py gate     before approval (no secrets): branch, no repository-level copies of the deploy
+                            secrets, both GitHub Environments protected, and for production, staging runs
+                            this commit, healthy
     dome_deploy.py deploy   set up what is missing, deploy, check (needs FLY_API_TOKEN)
     dome_deploy.py status   look only: HTTP, DNS and TLS of one environment (no secrets, never runs flyctl)
 
@@ -17,9 +19,11 @@ Secret rules enforced here (tested in tests/test_dome_deploy.py):
 * Child output is redacted: known values, credentials in URLs, Fly tokens and private-key blocks.
   ``flyctl mpg create`` and ``flyctl mpg attach`` print the database password, so their output is never
   shown at all; only a fixed line and the exit code are.
-* Child processes do not inherit DOME_OIDC_CLIENT_SECRET or DOME_FALLBACK_DATABASE_URL; flyctl gets
+* Child processes do not inherit DOME_OIDC_CLIENT_SECRET, DOME_FALLBACK_DATABASE_URL or GH_TOKEN; flyctl gets
   FLY_API_TOKEN because it needs it.
 * The summary (``$GITHUB_STEP_SUMMARY``) names secrets and says what happened to them; it never holds a value.
+* The gate job never sees a secret value: GitHub evaluates ``secrets.X != ''`` and hands over only the NAMES of
+  deploy secrets that exist at repository level (REPO_LEVEL_SECRETS); its GH_TOKEN is the job's read-only token.
 
 Nothing in this program has run against a live Fly.io account yet. flyctl output shapes were read from the
 flyctl v0.4.110 source and are parsed leniently; anything unexpected stops the run with a plain message
@@ -29,6 +33,7 @@ before it can change something it does not understand.
 from __future__ import annotations
 
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -47,9 +52,10 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from http.client import HTTPMessage
 from pathlib import Path
-from typing import Any, TextIO
-from urllib.parse import urlsplit
+from typing import IO, Any, TextIO
+from urllib.parse import parse_qs, urlsplit
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
@@ -59,7 +65,12 @@ DOCKERFILE = "deploy/Dockerfile"
 
 ENVIRONMENTS = ("staging", "production")
 # Environment variables a child process never receives (flyctl reads FLY_API_TOKEN itself and keeps it).
-CHILD_ENV_DROP = frozenset({"DOME_OIDC_CLIENT_SECRET", "DOME_FALLBACK_DATABASE_URL"})
+CHILD_ENV_DROP = frozenset({"DOME_OIDC_CLIENT_SECRET", "DOME_FALLBACK_DATABASE_URL", "GH_TOKEN"})
+# The deploy secrets that must exist only as GitHub ENVIRONMENT secrets. The gate job (no environment) receives
+# the names of any that exist at repository or organization level in REPO_LEVEL_SECRETS (deploy.yml), never values.
+DEPLOY_SECRET_NAMES = ("FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DATABASE_URL")
+GITHUB_API = "https://api.github.com"
+WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455 section 1.3
 GENERATED_SECRETS = ("DOME_SESSION_SECRET", "DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64")
 DATABASE_SECRET_NAMES = ("DATABASE_URL", "DOME_DATABASE_URL")
 # Cloudflare's published edge ranges (cloudflare.com/ips): a record pointing here is proxied (orange cloud).
@@ -191,13 +202,29 @@ class HttpFailure(Exception):  # noqa: N818
         self.kind = kind
 
 
-def http_get(url: str, *, timeout: float = HTTP_TIMEOUT, headers: Mapping[str, str] | None = None) -> HttpResult:
-    """GET with TLS verification. Non-2xx answers are results, not exceptions."""
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Hands a 3xx answer back as a result (the sign-in check reads its Location header itself)."""
+
+    def redirect_request(
+        self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
+    ) -> None:
+        return None
+
+
+def http_get(
+    url: str,
+    *,
+    timeout: float = HTTP_TIMEOUT,
+    headers: Mapping[str, str] | None = None,
+    follow_redirects: bool = True,
+) -> HttpResult:
+    """GET with TLS verification. Non-2xx answers are results, not exceptions (3xx too without redirects)."""
     request = urllib.request.Request(url, headers=dict(headers or {}), method="GET")  # noqa: S310 - https only
     if not url.startswith("https://"):
         raise ValueError("https only")
+    opener = urllib.request.build_opener() if follow_redirects else urllib.request.build_opener(_NoRedirect)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
+        with opener.open(request, timeout=timeout) as resp:
             return HttpResult(resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read(1 << 20))
     except urllib.error.HTTPError as exc:
         return HttpResult(exc.code, {k.lower(): v for k, v in exc.headers.items()}, exc.read(1 << 20))
@@ -222,6 +249,57 @@ def resolve(hostname: str) -> list[str]:
     """Every address the name resolves to (A and AAAA). Raises OSError when it does not resolve."""
     infos = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
     return sorted({str(ipaddress.ip_address(str(info[4][0]).split("%")[0])) for info in infos})
+
+
+def websocket_status(host: str, path: str, *, timeout: float = HTTP_TIMEOUT) -> int:
+    """Send an RFC 6455 upgrade request without credentials over TLS and return the HTTP status of the answer
+    (0 when it is not HTTP; 101 only with a correct Sec-WebSocket-Accept). Raises HttpFailure like http_get."""
+    key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+    request = (
+        f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: dome-deploy\r\n\r\n"
+    )
+    data = b""
+    try:
+        with socket.create_connection((host, 443), timeout=timeout) as raw:
+            with ssl.create_default_context().wrap_socket(raw, server_hostname=host) as tls:
+                tls.sendall(request.encode("ascii"))
+                while b"\r\n\r\n" not in data and len(data) < 16384:
+                    chunk = tls.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+    except (ssl.SSLError, ssl.CertificateError) as exc:
+        raise HttpFailure("tls", str(exc)) from None
+    except socket.gaierror as exc:
+        raise HttpFailure("dns", str(exc)) from None
+    except TimeoutError as exc:
+        raise HttpFailure("timeout", str(exc)) from None
+    except OSError as exc:
+        raise HttpFailure("connect", str(exc)) from None
+    lines = data.partition(b"\r\n\r\n")[0].decode("latin-1").split("\r\n")
+    match = re.match(r"^HTTP/1\.[01] (\d{3})\b", lines[0])
+    if not match:
+        return 0
+    status = int(match.group(1))
+    if status == 101:
+        headers = {k.strip().lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])}
+        accept = base64.b64encode(hashlib.sha1((key + WEBSOCKET_GUID).encode("ascii")).digest()).decode("ascii")  # noqa: S324 - RFC 6455
+        return 101 if headers.get("sec-websocket-accept") == accept else 0
+    return status
+
+
+def github_get(env: Mapping[str, str], path: str) -> HttpResult:
+    """GitHub REST API GET with the job's own token (GH_TOKEN, read-only), never a founder secret."""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "dome-deploy",
+    }
+    token = env.get("GH_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return http_get(GITHUB_API + path, headers=headers)
 
 
 # ======================================================================================================
@@ -334,7 +412,8 @@ class Runner:
                 input=input_text,
                 stdin=subprocess.DEVNULL if input_text is None else None,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",  # one stray byte in a tool's output must not end the run
                 timeout=timeout,
                 env=self.child_env,
                 cwd=REPO_ROOT,
@@ -364,7 +443,8 @@ class Runner:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
+            encoding="utf-8",
+            errors="replace",  # one stray byte in a build log must not end the run
             env=self.child_env,
             cwd=REPO_ROOT,
         )
@@ -384,6 +464,11 @@ class Runner:
                 print(f"  {clean}", file=self.out, flush=True)
                 tail = (tail + [clean])[-40:]
             code = proc.wait()
+        except BaseException:
+            # never leave a deploy running unattended behind an error in this program
+            proc.kill()
+            proc.wait()
+            raise
         finally:
             timer.cancel()
         if timed_out.is_set():
@@ -510,6 +595,23 @@ def variables_page(env: Mapping[str, str]) -> str:
     return f"https://github.com/{repo}/settings/variables/actions"
 
 
+def secrets_page(env: Mapping[str, str]) -> str:
+    repo = env.get("GITHUB_REPOSITORY", "Heshh999/DoMe")
+    return f"https://github.com/{repo}/settings/secrets/actions"
+
+
+def token_next_steps(env: Mapping[str, str]) -> list[str]:
+    """What the founder does when Fly refuses the token or does not know the organization."""
+    name = env.get("DEPLOY_ENVIRONMENT", "").strip() or "this environment"
+    return [
+        f"Open {environments_page(env)}, choose **{name}**, and under **Environment secrets** paste the whole Fly "
+        "token again (with `FlyV1 ` and the space at the start) over `FLY_API_TOKEN`. It must be an "
+        "**organization** token from the Fly Tokens page. If you use another Fly organization than Personal, "
+        "check the environment variable `FLY_ORG`.",
+        "Run Deploy again.",
+    ]
+
+
 def normalize_issuer(raw: str) -> str:
     """Accepts what Auth0 shows as "Domain" (``x.us.auth0.com``) or a full issuer URL, with or without the
     trailing slash; returns ``https://host[/path]`` without it. Raises ValueError (message without the value)."""
@@ -571,6 +673,110 @@ def check_ref(env: Mapping[str, str]) -> None:
             f"{ref or 'an unknown ref'}. Nothing was created or changed.",
             next_steps=["Run Deploy again and keep the branch selector on the default branch."],
         )
+
+
+def check_no_repository_secrets(env: Mapping[str, str]) -> None:
+    """GitHub hands a REPOSITORY secret to any workflow run without approval, and the deploy job silently uses
+    one when the environment has no secret of that name. REPO_LEVEL_SECRETS holds the names (never values) of
+    deploy secrets the gate job (no environment) can see, i.e. repository or organization secrets."""
+    found = [n for n in DEPLOY_SECRET_NAMES if n in env.get("REPO_LEVEL_SECRETS", "").split()]
+    if not found:
+        return
+    listed = ", ".join(f"`{n}`" for n in found)
+    steps = [
+        f"Open {secrets_page(env)} and, under **Repository secrets**, delete {listed} (the bin icon next to each). "
+        "Keep them only as **Environment secrets** (Settings > Environments > staging / production).",
+    ]
+    if "FLY_API_TOKEN" in found:
+        steps.append(
+            "On the Fly Tokens page, revoke the token you stored there, create a new **organization** token, and "
+            "paste it only as the Environment secret `FLY_API_TOKEN` (docs/LAUNCH_SETUP.md section 4)."
+        )
+    if "DOME_OIDC_CLIENT_SECRET" in found:
+        steps.append(
+            "In Auth0 (application > **Credentials** > Rotate), make a new Client Secret and paste it only as the "
+            "Environment secret `DOME_OIDC_CLIENT_SECRET`."
+        )
+    if "DATABASE_URL" in found:
+        steps.append(
+            "Tell an engineer that the database address was a repository secret, so its password can be changed."
+        )
+    steps.append("Run Deploy again.")
+    raise Stop(
+        "you",
+        f"{listed} exist as repository secrets. GitHub gives a repository secret to every workflow run without "
+        "asking you, so the Deploy button refuses to run while one exists. Nothing was created or changed.",
+        next_steps=steps,
+    )
+
+
+def check_environment_protection(env: Mapping[str, str], name: str, default_branch: str) -> str:
+    """Raises Stop unless the GitHub Environment ``name`` exists with a required reviewer (self-review allowed),
+    no administrator bypass, and exactly one deployment branch rule: the default branch. Returns a summary line.
+    Without these, a run nobody approved could receive that environment's Fly token."""
+    repo = env.get("GITHUB_REPOSITORY", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise Stop("engineer", "GITHUB_REPOSITORY is missing or malformed.")
+    page = environments_page(env)
+    base = f"/repos/{repo}/environments/{name}"
+    setup = f"Set up **{name}** exactly as docs/LAUNCH_SETUP.md section 3 says, at {page}, then run Deploy again."
+
+    def get(path: str) -> HttpResult:
+        try:
+            return github_get(env, path)
+        except HttpFailure as exc:
+            raise Stop(
+                "failed",
+                f"GitHub's API did not answer ({exc.kind}) when this run checked the environment {name}. "
+                "Nothing was created or changed.",
+                next_steps=["Run Deploy again in a few minutes."],
+            ) from None
+
+    result = get(base)
+    if result.status == 404:
+        raise Stop(
+            "you",
+            f"The GitHub Environment **{name}** does not exist yet. Both environments must be set up before the "
+            "first deploy. Nothing was created or changed.",
+            next_steps=[setup],
+        )
+    doc = result.json() if result.status == 200 else None
+    if not isinstance(doc, dict):
+        raise Stop("engineer", f"GitHub answered HTTP {result.status} when asked about the environment {name}.")
+
+    problems: list[str] = []
+    rules = doc.get("protection_rules")
+    rules = rules if isinstance(rules, list) else []
+    reviewer_rules = [r for r in rules if isinstance(r, dict) and r.get("type") == "required_reviewers"]
+    if not any(isinstance(r.get("reviewers"), list) and r["reviewers"] for r in reviewer_rules):
+        problems.append("**Required reviewers** is not ticked, or names nobody (it should name you, Heshh999)")
+    elif any(r.get("prevent_self_review") is True for r in reviewer_rules):
+        problems.append("**Prevent self-review** is ticked (it locks you out: you are the only reviewer)")
+    if doc.get("can_admins_bypass", False) is not False:
+        problems.append("**Allow administrators to bypass configured protection rules** is ticked")
+    policy = doc.get("deployment_branch_policy")
+    if not isinstance(policy, dict) or policy.get("custom_branch_policies") is not True:
+        problems.append("**Deployment branches and tags** is not set to **Selected branches and tags**")
+    else:
+        branches = get(base + "/deployment-branch-policies?per_page=100")
+        data = branches.json() if branches.status == 200 else None
+        items = data.get("branch_policies") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise Stop("engineer", f"GitHub answered HTTP {branches.status} for the branch rules of {name}.")
+        found = [(p.get("type", "branch"), p.get("name")) for p in items if isinstance(p, dict)]
+        if found != [("branch", default_branch)] or len(items) != 1:
+            shown = ", ".join(f"`{n}`" for _, n in found) or "none"
+            problems.append(
+                f"the deployment branch rules must be exactly one branch rule named `{default_branch}` (found: {shown})"
+            )
+    if problems:
+        raise Stop(
+            "you",
+            f"The GitHub Environment **{name}** is not protected yet, so a run nobody approved could receive its Fly "
+            "token. Nothing was created or changed." + "".join(f"\n\n- {p}" for p in problems),
+            next_steps=[setup],
+        )
+    return f"protected: required reviewer, branch `{default_branch}` only, no administrator bypass"
 
 
 def read_environment_choice(env: Mapping[str, str], envs: Mapping[str, EnvConfig]) -> EnvConfig:
@@ -670,7 +876,8 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
         next_steps.append(
             f"Open {page}, choose **{cfg.name}**, and under **Environment secrets** add: "
             + ", ".join(f"`{n}`" for n in missing_secrets)
-            + ". They must be Environment secrets of this environment, not repository secrets."
+            + ". They must be Environment secrets of this environment, not repository secrets (the Deploy "
+            "button refuses to run while a repository copy of one exists)."
         )
     if missing_vars:
         next_steps.append(
@@ -706,7 +913,8 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
 # ======================================================================================================
 
 
-def check_discovery(issuer: str) -> None:
+def check_discovery(issuer: str) -> str:
+    """Returns the provider's authorization_endpoint (the sign-in redirect check compares with it)."""
     url = issuer + "/.well-known/openid-configuration"
     try:
         result = http_get(url)
@@ -733,6 +941,10 @@ def check_discovery(issuer: str) -> None:
             "The sign-in provider does not accept client_secret_post, the method DoMe uses "
             "(cloud-api/dome_api/auth/oidc.py).",
         )
+    endpoint = doc.get("authorization_endpoint")
+    if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
+        raise Stop("engineer", f"The sign-in provider at {issuer} publishes no https authorization_endpoint.")
+    return endpoint
 
 
 @dataclass
@@ -868,20 +1080,22 @@ def host_next_steps(cfg: EnvConfig, report: HostReport, records: list[tuple[str,
         if not records:
             return [f"Add the DNS record for {cfg.hostname} that the next successful Deploy run lists."]
         return [
-            f"In {zone_page}, first delete any existing A, AAAA or CNAME record named **{cfg.dns_name}**.",
+            f"In {zone_page}, first delete any existing A, AAAA or CNAME record named {dns_name_text(cfg)}.",
             f"Then add: {record_text}. {grey} on each. Save.",
             "About 10 minutes later, run Deploy with action **status**.",
         ]
     if report.state == "proxied":
         return [
-            f"In {zone_page}, the record(s) for **{cfg.dns_name}** are proxied (orange cloud). Click each and switch "
-            f"Proxy status to **DNS only** (grey cloud): Fly cannot issue the certificate through Cloudflare's proxy.",
+            f"In {zone_page}, the record(s) named {dns_name_text(cfg)} are proxied (orange cloud). Click each and "
+            "switch Proxy status to **DNS only** (grey cloud): Fly cannot issue the certificate through "
+            "Cloudflare's proxy.",
             "About 10 minutes later, run Deploy with action **status**.",
         ]
     if report.state == "elsewhere":
         return [
             f"{cfg.hostname} points at {', '.join(report.addresses)}, which is not this app. In {zone_page}, replace "
-            f"the record(s) named **{cfg.dns_name}** with: {record_text or 'the records a Deploy run lists'}. {grey}.",
+            f"the record(s) named {dns_name_text(cfg)} with: {record_text or 'the records a Deploy run lists'}. "
+            f"{grey}.",
         ]
     if report.state == "tls_pending":
         return [
@@ -897,6 +1111,13 @@ def host_next_steps(cfg: EnvConfig, report: HostReport, records: list[tuple[str,
     if report.state in ("unreachable", "unhealthy"):
         return [f"{cfg.hostname} resolves correctly but did not answer well ({report.detail}). Ask an engineer."]
     return []
+
+
+def dns_name_text(cfg: EnvConfig) -> str:
+    """How the record's Name appears: Cloudflare's list shows ``@`` as the zone name itself."""
+    if cfg.dns_name == "@":
+        return f"**@** (shown as **{cfg.dns_zone}** in the list)"
+    return f"**{cfg.dns_name}**"
 
 
 def host_result_text(cfg: EnvConfig, report: HostReport) -> str:
@@ -921,6 +1142,7 @@ PRODUCTION_NOT_READY = [
     "Auth0 production tenant: own email provider for sign-up/reset emails - not checked by this run.",
     "Auth0 production: Google sign-in either off or using your own Google keys - not checked by this run.",
     "Sign-in itself is never tested by this workflow: sign up and sign in by hand.",
+    "Branch protection with required review on the default branch (docs/SECURITY.md section 6) - not set up.",
 ]
 
 
@@ -956,9 +1178,10 @@ class Deployer:
         if items is None:
             hint = permission_hint(result)
             raise Stop(
-                "engineer",
+                "you" if hint else "engineer",
                 f"Could not read {what} from Fly ({'timed out' if result.timed_out else f'exit {result.code}'})."
-                + (f" {hint}." if hint else ""),
+                + (f" {hint[0].upper()}{hint[1:]}." if hint else ""),
+                next_steps=token_next_steps(self.env) if hint else (),
             )
         return items
 
@@ -1012,7 +1235,7 @@ class Deployer:
     def deploy(self, inp: Inputs) -> None:
         cfg, app = inp.cfg, inp.app
         self.log(f"Checking the sign-in provider {inp.issuer}")
-        check_discovery(inp.issuer)
+        authorization_endpoint = check_discovery(inp.issuer)
         self.summary.step("Sign-in provider (OIDC discovery)", f"{inp.issuer} answers")
 
         if cfg.requires_staging_commit:
@@ -1081,7 +1304,7 @@ class Deployer:
         self.build_and_deploy(inp)
         self.ensure_one_machine(app)
         records = self.ensure_certificate(inp, addresses)
-        self.smoke(inp, addresses, records)
+        self.smoke(inp, addresses, records, authorization_endpoint)
 
     # ----- database -------------------------------------------------------------------------------
     def list_clusters(self, inp: Inputs) -> list[dict[str, Any]] | None:
@@ -1114,8 +1337,9 @@ class Deployer:
             )
         raise Stop(
             "you",
-            "This environment has no database yet. Fly charges about $38 a month for one (Managed Postgres, "
-            "Basic plan). Nothing was created or changed.",
+            "This environment has no database yet. Fly charges about $41 a month for one: Managed Postgres Basic "
+            f"($38) plus about $3 for its {inp.cfg.database_volume_gb} GB of storage. With the app machine, this "
+            "environment costs about $45 a month (docs/LAUNCH_SETUP.md section 0). Nothing was created or changed.",
             next_steps=[
                 "If you agree to that cost, run Deploy again with **create the database** ticked.",
             ],
@@ -1237,7 +1461,11 @@ class Deployer:
                     ],
                 )
             hint = permission_hint(result)
-            raise Stop("you" if hint else "engineer", "Fly did not create the app" + (f" ({hint})." if hint else "."))
+            raise Stop(
+                "you" if hint else "engineer",
+                "Fly did not create the app" + (f" ({hint})." if hint else "."),
+                next_steps=token_next_steps(self.env) if hint else (),
+            )
         self.mutated = True
         self.summary.step(f"Fly app {inp.app}", f"created in organization {inp.org}")
 
@@ -1336,7 +1564,12 @@ class Deployer:
             app,
             "--image",
             image,
+            # Look for the image on this runner only. --local-only alone is not enough in flyctl v0.4.110: a
+            # Fly-side feature flag (managed builder) or the Depot default could still pick a remote builder,
+            # which cannot see the image built here (deploy_build.go determineImage, imgsrc.NewDockerDaemonType).
             "--local-only",
+            "--builder-pool=false",
+            "--depot=false",
             "--image-label",
             label,
             "--primary-region",
@@ -1398,7 +1631,9 @@ class Deployer:
             self.summary.notes.append("Fly's certificate check did not answer; run Deploy with action status later.")
         return dns_records(cfg, app, detail, addresses)
 
-    def smoke(self, inp: Inputs, addresses: set[str], records: list[tuple[str, str, str]]) -> None:
+    def smoke(
+        self, inp: Inputs, addresses: set[str], records: list[tuple[str, str, str]], authorization_endpoint: str
+    ) -> None:
         cfg, app = inp.cfg, inp.app
         base = f"https://{app}.fly.dev"
         self.log(f"Checking {base}")
@@ -1422,11 +1657,39 @@ class Deployer:
         page = self.page_problems(base, production=cfg.dome_env == "production")
         problems += page
         self.summary.step(f"{app}.fly.dev web page", "ok" if not page else "; ".join(page))
+        login = login_problems(base, cfg, inp.client_id, authorization_endpoint)
+        problems += login
+        self.summary.step(
+            f"{app}.fly.dev sign-in start (/v1/auth/login)",
+            "sends visitors to the sign-in provider with this client id and callback (sign-in itself not tested)"
+            if not login
+            else "; ".join(login),
+        )
+        socket_problems = websocket_problems(f"{app}.fly.dev")
+        problems += socket_problems
+        self.summary.step(
+            f"{app}.fly.dev WebSocket (/ws/agent)",
+            "the upgrade reaches the app through Fly's proxy (refused without a PC token, as it should be)"
+            if not socket_problems
+            else "; ".join(socket_problems),
+        )
         if problems:
-            raise Stop("engineer", "The new version is deployed but does not pass its checks: " + " ".join(problems))
+            raise Stop(
+                "engineer",
+                "The new version is deployed but does not pass its checks: "
+                + " ".join(p if p.endswith(".") else p + "." for p in problems),
+            )
 
         report = check_custom_host(cfg.hostname, addresses, inp.sha, production=cfg.dome_env == "production")
         self.summary.step(cfg.hostname, host_result_text(cfg, report))
+        if report.state == "unhealthy" or (report.state == "wrong_commit" and cfg.dome_env == "production"):
+            # fly.dev passed just now, so a bad answer on the real name is a real misconfiguration, not a delay
+            raise Stop(
+                "engineer",
+                f"The new version passes its checks at {base}, but {cfg.hostname} "
+                f"{host_result_text(cfg, report)}. Visitors at {cfg.hostname} are not served correctly.",
+                next_steps=host_next_steps(cfg, report, records),
+            )
         if report.state == "live":
             self.summary.headline = f"{cfg.title} deploy finished: live at https://{cfg.hostname}"
             self.summary.next_steps.append(
@@ -1457,6 +1720,54 @@ class Deployer:
         return problems
 
 
+def login_problems(base: str, cfg: EnvConfig, client_id: str, authorization_endpoint: str) -> list[str]:
+    """The app's own sign-in start: it must fetch the provider's discovery document from inside Fly and send the
+    visitor there with this client id and callback. The redirect is not followed and sign-in is not attempted
+    (it leaves one unfinished sign-in attempt row, which expires by itself)."""
+    try:
+        result = http_get(base + "/v1/auth/login", follow_redirects=False)
+    except HttpFailure as exc:
+        return [f"/v1/auth/login did not answer ({exc.kind})"]
+    if result.status != 303:
+        why = (
+            " (the app could not reach the sign-in provider from Fly, or its sign-in settings are wrong)"
+            if result.status in (500, 502, 503)
+            else ""
+        )
+        return [f"/v1/auth/login answered HTTP {result.status} instead of sending visitors to sign in{why}"]
+    target = urlsplit(result.headers.get("location", ""))
+    expected = urlsplit(authorization_endpoint)
+    if (target.scheme, target.netloc, target.path) != (expected.scheme, expected.netloc, expected.path):
+        return [
+            f"/v1/auth/login sends visitors to {target.scheme}://{target.netloc}{target.path} instead of the sign-in "
+            f"provider's {authorization_endpoint} (check DOME_OIDC_ISSUER)"
+        ]
+    query = parse_qs(target.query)
+    problems = []
+    if query.get("client_id") != [client_id]:
+        problems.append("the app's sign-in request carries a different client id than the variable DOME_OIDC_CLIENT_ID")
+    if query.get("redirect_uri") != [cfg.callback_url]:
+        shown = ", ".join(query.get("redirect_uri", [])) or "none"
+        problems.append(f"the app's sign-in request returns visitors to {shown} instead of {cfg.callback_url}")
+    return problems
+
+
+def websocket_problems(host: str) -> list[str]:
+    """A WebSocket upgrade through Fly's proxy must reach the app. Without a PC token the app refuses it with its
+    own HTTP 401 (cloud-api/dome_api/relay/ws_http.py); a 502, 404 or proxy error means the relay is unreachable."""
+    try:
+        status = websocket_status(host, "/ws/agent")
+    except HttpFailure as exc:
+        return [f"a WebSocket upgrade to /ws/agent could not connect ({exc.kind})"]
+    if status in (101, 401):
+        return []
+    answer = f"HTTP {status}" if status else "something that is not a valid HTTP answer"
+    return [
+        f"a WebSocket upgrade to /ws/agent answered {answer} instead of the app's own refusal (HTTP 401), so PCs "
+        "could not connect to the relay"
+    ]
+
+
 def permission_hint(result: Result) -> str:
     text = (result.stdout + " " + result.stderr).lower()
     if "require updated tokens" in text or "macaroon" in text:
@@ -1471,9 +1782,10 @@ def permission_hint(result: Result) -> str:
 def dashboard_database_steps(inp: Inputs) -> list[str]:
     cfg = inp.cfg
     return [
-        f"On fly.io, open the dashboard, then **Managed Postgres** > **Create new cluster**: name "
-        f"`{cfg.database_cluster}`, region **{cfg.region}** (Ashburn, Virginia), plan **{cfg.database_plan}**. "
-        "Wait until it says ready.",
+        f"On fly.io, open the dashboard (https://fly.io/dashboard), then **Managed Postgres** > **Create new "
+        f"cluster**: name `{cfg.database_cluster}`, region **{cfg.region}** (Ashburn, Virginia), plan "
+        f"**{cfg.database_plan}**, storage **{cfg.database_volume_gb} GB**, PostgreSQL **{cfg.pg_major_version}**. "
+        "This costs about $41 a month. Wait until it says ready.",
         f"Run Deploy for **{cfg.name}** again (without ticking create): it connects that cluster by itself. "
         f"If it still cannot, open the cluster's **Connect** tab, choose the app **{inp.app}** and click **Set "
         "secret and deploy** (if the app is not in the list yet, run Deploy once more first).",
@@ -1522,11 +1834,21 @@ def run_gate(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig])
         summary.title = f"{cfg.title} deploy: checks before approval"
         sha = read_sha(env)
         app_name_for(cfg, env)
+        check_no_repository_secrets(env)
+        summary.step("Repository secrets", "none of the deploy secrets is a repository secret")
+        default_branch = env.get("DEFAULT_BRANCH", "").strip()
+        for name in ENVIRONMENTS:  # both: either token can reach both apps (docs/SECURITY.md section 6)
+            summary.step(f"GitHub Environment {name}", check_environment_protection(env, name, default_branch))
+        own_run = (
+            "Approve only if you started this run yourself in the last few minutes; otherwise click Reject and "
+            "tell an engineer."
+        )
         if cfg.requires_staging_commit:
             production_gate(env, envs, sha, summary)
             summary.headline = "Staging runs this commit and is healthy: production may be approved"
         else:
             summary.headline = "Staging needs no earlier environment: approve the deploy when GitHub asks"
+        summary.next_steps.append(own_run)
     except Stop as stop:
         summary.headline = HEADLINES[stop.kind]
         summary.problem = stop.message
@@ -1559,7 +1881,7 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
                 "action **deploy**; if it was, and this persists, ask an engineer."
             )
             write_summary(summary, env, out)
-            return 0
+            return 1
         if health.status_code != 200 or health.body.get("status") != "ok":
             summary.headline = f"{cfg.title} is deployed but not healthy ({describe_health(health, sha)})"
             summary.next_steps.append(
@@ -1567,7 +1889,7 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
                 "(Fly dashboard > the app > Monitoring shows its log)."
             )
             write_summary(summary, env, out)
-            return 0
+            return 1
         if cfg.dome_env == "production":
             staging_app = app_name_for(envs["staging"], env)
             staging = get_health(f"https://{staging_app}.fly.dev")
@@ -1581,6 +1903,8 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
         report = check_custom_host(cfg.hostname, app_addresses, health.commit, production=cfg.dome_env == "production")
         summary.step(cfg.hostname, host_result_text(cfg, report))
         records = dns_records(cfg, app, None, app_addresses)
+        forwarded_bad = health.body.get("forwarded_client") not in (None, "ok")
+        host_bad = report.state == "unhealthy" or (report.state == "wrong_commit" and cfg.dome_env == "production")
         if report.state == "live" and health.body.get("forwarded_client") == "ok":
             summary.headline = (
                 f"{cfg.title} is live at https://{cfg.hostname} (commit {running_commit[:12] or 'unknown'})"
@@ -1589,11 +1913,16 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
         else:
             summary.headline = f"{cfg.title} is running at {base}; {host_result_text(cfg, report)}"
             summary.next_steps += host_next_steps(cfg, report, records)
-            if health.body.get("forwarded_client") not in (None, "ok"):
+            if forwarded_bad:
+                summary.headline += "; client-address self-check not ok"
                 summary.next_steps.append(
                     "The client-address self-check is not ok: ask an engineer (deploy/README.md 'Client addresses')."
                 )
         summary.notes.append("This run only looked; it has no secrets and changed nothing.")
+        if forwarded_bad or host_bad:
+            # red in the Actions list: something is deployed and wrong (not merely waiting for DNS or a certificate)
+            write_summary(summary, env, out)
+            return 1
     except Stop as stop:
         summary.headline = HEADLINES[stop.kind]
         summary.problem = stop.message

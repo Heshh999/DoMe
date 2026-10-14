@@ -227,10 +227,28 @@ Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet*
 
 - **Who can start what.** The workflow runs only when someone with write access presses Run workflow
   (`workflow_dispatch`; never `push`, `pull_request` or `pull_request_target` on this public repository).
-  Its `gate` and `status` jobs have no environment and no secrets and cannot change anything. The
+  Its `gate` and `status` jobs have no environment and no secret values and cannot change anything. The
   `deploy` job uses the GitHub Environment named by the input; both environments allow only the default
-  branch and require the founder's approval, so **no job receives a Fly token without his click**, even
-  when a collaborator or an AI session with a run-workflow tool starts the run.
+  branch and require the founder as reviewer, so **no job receives a Fly token without an approval from
+  the founder's GitHub account**. That approval authorizes whatever is on the default branch at that
+  commit, and anything authorized to act as that account can give it. A review request from a run a
+  collaborator or an AI session (with a run-workflow tool) started looks the same as his own, so
+  `docs/LAUNCH_SETUP.md` (sections 3, 6, 10) tells him to approve only a run he started himself in the
+  last few minutes and to reject any other. AI sessions in this setup push to the default branch, and no
+  one reviews that code before his click: **branch protection with required review on the default
+  branch** is the follow-up control (§9).
+- **The gate checks the controls before approval is requested** (`dome_deploy.py gate`, no secret
+  values). (1) A deploy secret stored as a **repository** secret would reach the deploy job silently (GitHub
+  falls back to it when the environment has none) and any workflow run without approval, for example `ci.yml`
+  on a push to a `claude/**` branch. The gate job, which has no environment, receives
+  `${{ secrets.X != '' && 'X' || '' }}` for `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET` and `DATABASE_URL`:
+  GitHub evaluates the comparison, so only names reach the runner. Any name present stops the run with
+  "delete it, revoke and re-create the token". (2) With the job's own token (`actions: read`, the only
+  widened permission in the workflow), it reads both GitHub Environments from the REST API and stops unless
+  each exists, has a required-reviewers rule with at least one reviewer, does not let administrators
+  bypass it (`can_admins_bypass` false when present), and allows exactly one deployment branch rule: the
+  default branch. A refused gate skips the deploy job, so GitHub never auto-creates an unprotected
+  environment. Both environments are checked on every run because either token reaches both apps.
 - **What each token can reach.** `FLY_API_TOKEN` is a Fly **organization** token in each environment,
   because only an organization token can create apps and attach databases and Fly has no dashboard form
   for creating apps. Both tokens can therefore reach **both** apps and **both** databases in the
@@ -249,12 +267,21 @@ Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet*
 - **No accidental rotation.** A generated secret counts as absent only when `flyctl secrets list`
   succeeded and parsed; a production app that already has machines but lacks one stops for an engineer
   instead of getting a new key (which would sign everyone out and invalidate every linked PC).
-- **Supply chain.** Actions pinned to commits (tag in a comment, re-checked 2026-10-14); `flyctl`
-  pinned to v0.4.110; the program uses only the Python standard library; the image is built with the
-  same `docker build` CI runs and deployed under the image label `git-<12 hex of the commit>`.
+- **Supply chain.** Actions pinned to commits (tag in a comment, re-checked 2026-10-14). `flyctl`
+  v0.4.110, SHA-256 verified: downloaded from its GitHub release and checked against the hash from that
+  release's checksums file before extraction, then only the `flyctl` binary is extracted into a directory
+  of its own (nothing else on that PATH entry can shadow `python3`, `docker` or `openssl`). The program
+  runs as `/usr/bin/python3 -I` and uses only the Python standard library. `flyctl deploy` runs with
+  `--local-only --builder-pool=false --depot=false`, so it looks for the image only on the runner and a
+  Fly-side builder flag cannot change that. The image is built with the same `docker build` CI runs, from
+  base images pinned by digest (`deploy/Dockerfile`, resolved 2026-10-14), and deployed under the image
+  label `git-<12 hex of the commit>`.
 - **Production gate.** Production deploys only a commit that staging already runs with `status ok`,
   `database ok` and `forwarded_client ok` (`/healthz`), checked before approval is requested and again
-  inside the job.
+  inside the job. Production's image is rebuilt from that commit with the same lockfiles and digest-pinned
+  base images, not copied from staging: the release channel and support URL are build arguments, so the
+  two images are not byte-identical by design. Reusing staging's image would need the channel to become
+  runtime configuration (follow-up).
 
 ## 7. The local PC boundary
 
@@ -345,6 +372,7 @@ at the desk uses the same keys at the same moment.
 | Stale subscriptions after unlink, unscoped-looking `command_id` probe cost, `user_code` in request logs | cloud-api review | fixed in this build (`DECISIONS.md` #24, #25, README) |
 | Fly organization tokens: each environment's token can reach both environments (§6 "The deploy pipeline"); move to separate Fly organizations per environment, or app-scoped deploy tokens after first-time setup | launch plan critique, 2026-10-14 | medium (mitigated by required approval on both GitHub Environments) |
 | No one-click rollback or rotate-generated-secrets action; both are engineer `flyctl` steps today | `deploy/README.md` | low |
+| No branch protection on the default branch: AI sessions push to it, and the founder's deploy approval authorizes whatever is there unreviewed; add required review (and keep the founder approving only runs he started) | launch review, 2026-10-14 | medium (mitigated by the approval rule and the gate's environment checks) |
 | A wrong `Fly-Client-IP` trust (or Cloudflare's proxy put in front) would make every visitor share one address for per-IP limits; detected by `/healthz` → `forwarded_client`, which only the deploy job and an (not yet configured) external monitor read | `deploy/README.md` "Client addresses" | medium until the external monitor exists |
 
 ## 10. Development hygiene

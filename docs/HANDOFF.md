@@ -37,7 +37,9 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   the deploy and the certificate, and ends with a plain-English summary of the next click
   (`.github/workflows/deploy.yml`, `deploy/launch/dome_deploy.py`; the founder's guide is
   `docs/LAUNCH_SETUP.md`). Production is refused unless staging runs the same commit, healthy; both
-  environments need the founder's approval. Code changes for real hosting: the ID-token issuer is checked
+  environments need the founder's approval, and the gate refuses to run while a deploy secret is a
+  repository secret or either GitHub Environment is missing its reviewer or branch rule. The founder
+  approves only runs he started himself; nobody reviews the default branch's code before his click yet. Code changes for real hosting: the ID-token issuer is checked
   against the discovery document exactly (Auth0's trailing slash would otherwise reject every sign-in),
   the token request uses `client_secret_post`, `/healthz` reports the build `commit` and a
   `forwarded_client` self-check, Fly's client address comes from `Fly-Client-IP` behind the private-range
@@ -103,7 +105,7 @@ cloud-api and deploy/launch (2026-10-14):
 cd shared/python && uv run pytest -q           # 264
 cd shared/ts && pnpm test                       # 124
 cd cloud-api && uv run pytest -q                # 329 (+1 live AI test skipped without a key; needs the local PostgreSQL and tools/dev-idp venv)
-cd deploy/launch && uv run --extra dev pytest -q  # 82 (the Deploy button's program against a fake flyctl; real openssl)
+cd deploy/launch && uv run --extra dev pytest -q  # 136 (the Deploy button's program against a fake flyctl; real openssl)
 cd pc-agent && uv run pytest -q                 # 604 (+3 skipped: root, named-pipe-only, no Tk)
 cd pc-agent && uv run mypy --config-file mypy-windows.ini  # Windows code paths vs. pywin32 stubs
 cd browser-extension && pnpm test               # 154
@@ -308,9 +310,12 @@ founder-driven; then:
    engineer reads the first staging run's log and summary and fixes whatever the real Fly.io answers
    differently from the flyctl source. Before production is called ready: restore rehearsal,
    failed-deploy rehearsal, external `/healthz` monitor, backup retention recorded, support URL, Auth0
-   email provider and Google keys (`docs/OPERATIONS.md` §12). Follow-ups: a rollback action (redeploy the
-   previous `git-<sha>` image), a rotate-generated-secrets action, app-scoped tokens or separate Fly
-   organizations per environment (`docs/SECURITY.md` §9), auto-deploying staging on push.
+   email provider and Google keys (`docs/OPERATIONS.md` §12). Follow-ups: branch protection with
+   required review on the default branch (the founder's approval otherwise authorizes unreviewed code;
+   `docs/SECURITY.md` §6), a rollback action (redeploy the previous `git-<sha>` image), a
+   rotate-generated-secrets action, app-scoped tokens or separate Fly organizations per environment
+   (`docs/SECURITY.md` §9), reusing staging's image for production (needs the release channel as runtime
+   configuration), a scheduled bump of the digest-pinned base images, auto-deploying staging on push.
 1. **Plans metering (#51)**: make the website's Free / Pro / Pro Plus real (the figures are in
    `mobile-app/README.md` "Plan content"). A contract MINOR: a `pro_plus` plan; AI allowances as a 5-hour
    window that starts at the first AI request plus a weekly window that refreshes 7 days after the week's

@@ -45,6 +45,10 @@ runtime    python:3.12-slim-bookworm, user dome (uid 10001), /app/cloud-api/.ven
 - `uv sync --locked` and `pnpm install --frozen-lockfile` fail the build if a lockfile is out of
   date instead of resolving something new. The `uv` and `pnpm` versions in the image are the ones
   that produced the lockfiles in this repository.
+- The three base images (`python:3.12-slim-bookworm`, `node:22-bookworm-slim`, `ghcr.io/astral-sh/uv:0.11.32`)
+  are pinned by **digest** (the tag's multi-platform index, resolved 2026-10-14), so staging's and
+  production's builds of one commit start from the same layers and a re-pushed tag changes nothing. Bumping
+  them is a manual edit (resolve the tag, replace the digest, let CI build it); no bot does it yet.
 - The API serves the PWA from the same origin (`/` static, `/v1` REST, `/ws` sockets), so there is
   no CORS configuration and no second deployable. API and PWA are always the same commit.
 - Build arguments: `VITE_DOME_RELEASE_CHANNEL` (default `staging`), `VITE_DOME_SUPPORT_URL`,
@@ -120,7 +124,8 @@ guide. In short:
 1. **Fly.io** account with a card on file (the trial stops machines after 5 minutes), one organization
    token per GitHub Environment.
 2. **GitHub Environments** `staging` and `production` on this repository, each limited to the default
-   branch with the founder as **required reviewer**, holding the secrets and variables in
+   branch with the founder as **required reviewer** and no administrator bypass (the `gate` job checks
+   this), approving only runs he started himself, holding the secrets and variables in
    [Secrets and configuration](#secrets-and-configuration-names-only--values-never-enter-this-repository).
 3. **Auth0**: one tenant per environment, one Regular Web Application each, callback URL exactly
    `<origin>/v1/auth/callback`, Credentials > Authentication Method **Client Secret (Post)** (what
@@ -135,12 +140,13 @@ guide. In short:
 ## The Deploy button (`.github/workflows/deploy.yml`)
 
 GitHub > Actions > **Deploy** > Run workflow; inputs `environment` (staging | production), `action`
-(deploy | status) and `create_database_if_missing` (the founder's consent to the ~$38/month database).
+(deploy | status) and `create_database_if_missing` (the founder's consent to about $41 a month for the
+database and its 10 GB; about $45 a month for the whole environment).
 The file must be on the default branch or GitHub shows no button. Three jobs:
 
 | Job | Secrets | What it does |
 | --- | --- | --- |
-| `gate` | none, no environment | refuses any branch but the default branch; for production, refuses unless `https://<staging app>.fly.dev/healthz` reports `status ok`, `database ok`, `forwarded_client ok` and **this** commit. Runs before GitHub asks for approval, so the founder is never asked to approve a run that would be refused. |
+| `gate` | no values, no environment | refuses any branch but the default branch; refuses while `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET` or `DATABASE_URL` exists as a **repository** secret (GitHub evaluates `secrets.X != ''` and passes only names, `REPO_LEVEL_SECRETS`); reads both GitHub Environments with the job's own token (`actions: read`) and refuses unless each exists, has a required reviewer, no administrator bypass and exactly one branch rule, the default branch; for production, refuses unless `https://<staging app>.fly.dev/healthz` reports `status ok`, `database ok`, `forwarded_client ok` and **this** commit. Runs before GitHub asks for approval, so the founder is never asked to approve a run that would be refused, and a refused gate never lets GitHub auto-create an unprotected environment. |
 | `deploy` | the chosen GitHub Environment's | `dome_deploy.py deploy`, below. Needs the founder's approval (required reviewer on both environments). |
 | `status` | none, no environment | `dome_deploy.py status`: reads `/healthz`, DNS and TLS for one environment and prints the next click. Never runs `flyctl`; cannot change anything. |
 
@@ -155,7 +161,7 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
    app that already has machines but lacks a generated secret stops for an engineer instead of getting a
    new one (that would sign everyone out or invalidate every linked PC).
 5. Database decision: already attached / the cluster exists / create it (only with the checkbox) / the
-   GitHub fallback secret `DATABASE_URL`. None of these: stop, "about $38 a month", nothing changed.
+   GitHub fallback secret `DATABASE_URL`. None of these: stop, "about $41 a month", nothing changed.
 6. Create the app if missing (a name owned by someone else stops with "set the repository variable
    `FLY_STAGING_APP`/`FLY_PRODUCTION_APP`"); allocate a dedicated IPv6 and the **free shared** IPv4
    (never a dedicated IPv4).
@@ -167,21 +173,35 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
    them plus `DOME_OIDC_CLIENT_SECRET` (always re-copied from GitHub) with `flyctl secrets import --stage`
    on stdin.
 9. `docker build` exactly as CI does, with the channel, support URL and commit build arguments, then
-   `flyctl deploy --image <that image> --local-only --ha=false --no-public-ips` with `-e DOME_ENV`,
+   `flyctl deploy --image <that image> --local-only --builder-pool=false --depot=false --ha=false
+   --no-public-ips` with `-e DOME_ENV`,
    `DOME_PUBLIC_ORIGIN`, `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`. Fly's release command runs the
    migrations first; a failure leaves the previous version running.
 10. Scale to exactly one machine if Fly created more (the relay is in memory).
 11. `flyctl certs add <host>` if missing, `certs check`; the DNS records to add come from Fly's answer.
 12. Checks on `https://<app>.fly.dev`: `/healthz` with this commit, `database ok` and
     `forwarded_client ok` (up to 3 minutes for a rolling restart); the web page with its security
-    headers and `X-Robots-Tag` (the fly.dev name is never indexable). Then the custom host: not in DNS /
-    proxied by Cloudflare / pointing elsewhere / certificate pending / **live**. "Live" is said only when
-    `https://<host>/healthz` answered with this commit during this run; sign-in is never claimed.
+    headers and `X-Robots-Tag` (the fly.dev name is never indexable); the sign-in start, `GET
+    /v1/auth/login` without following the redirect: 303 to the discovery document's
+    `authorization_endpoint` with `client_id` = `DOME_OIDC_CLIENT_ID` and `redirect_uri` = the callback (it
+    proves the app reached the provider from inside Fly; it leaves one unfinished sign-in attempt row that
+    expires); and a WebSocket upgrade to `/ws/agent` without credentials over raw TLS, which must reach the
+    app (its own 401, or 101) rather than a proxy error. Then the custom host: not in DNS / proxied by
+    Cloudflare / pointing elsewhere / certificate pending (green, with the next click) / unhealthy, or in
+    production another commit (red: fly.dev just passed, so it is a real misconfiguration) / **live**.
+    "Live" is said only when `https://<host>/healthz` answered with this commit during this run; sign-in
+    is never claimed. `status` runs are red for the same states and for a `forwarded_client` that is not
+    ok, green for "not deployed yet" and DNS or certificate pending.
 13. The run summary (Actions > the run > Summary): what was created, what was already there, the next
     click with exact Cloudflare records, and for production the list of what is still not done.
 
-Engineer notes: the program runs with the runner's system `python3` (3.12 on ubuntu-24.04) and installs
-nothing; `cd deploy/launch && uv sync --extra dev && uv run pytest` runs its tests. Unverified until the
+Engineer notes: the program runs as `/usr/bin/python3 -I` (the runner's system Python 3.12 on
+ubuntu-24.04, isolated from `PYTHON*` variables and the working directory) and installs nothing. flyctl
+v0.4.110 comes from its GitHub release tarball, checked with `sha256sum -c` against the hash in the
+workflow (from the release's `flyctl_0.4.110_checksums.txt`) before extraction; only the `flyctl`
+binary is extracted, into `$RUNNER_TEMP/flyctl`, which is then added to `$GITHUB_PATH`. Child output is
+decoded as UTF-8 with replacement, and a failure while streaming kills the child before the error is
+reported. `cd deploy/launch && uv sync --extra dev && uv run pytest` runs its tests. Unverified until the
 first real run, so parsed leniently with plain stops: the JSON shapes of `flyctl` 0.4.110 (read from its
 source), `mpg create`/`attach` with an organization token, and attach before the app has machines.
 
@@ -239,7 +259,7 @@ Founder-pasted values are **GitHub Environment** secrets and variables (Settings
 
 | Name | Kind | Set by | Used for | Rotation effect |
 | --- | --- | --- | --- | --- |
-| `FLY_API_TOKEN` | GitHub Environment secret | founder (Fly dashboard > Tokens, organization token) | `flyctl` in the deploy job only | revoke on the Fly Tokens page, paste a new one |
+| `FLY_API_TOKEN` | GitHub Environment secret (never a repository secret: the gate refuses while one exists) | founder (Fly dashboard > Tokens, organization token) | `flyctl` in the deploy job only | revoke on the Fly Tokens page, paste a new one |
 | `DOME_OIDC_CLIENT_SECRET` | GitHub Environment secret → Fly secret | founder (Auth0 > Application > Settings); re-copied to Fly on every deploy | the relying-party credential | rotate in Auth0 (Credentials > Rotate), paste in GitHub, press Deploy |
 | `DATABASE_URL` | Fly secret | `flyctl mpg attach` in the deploy job (pooled PgBouncer URL); fallback: founder pastes it as a GitHub Environment secret, or uses the cluster's Connect tab > Set secret | PostgreSQL connection; the entrypoint converts it to `postgresql+psycopg://` | rotate the database user's password, then the secret, then deploy |
 | `DOME_SESSION_SECRET` | Fly secret | generated in the deploy job (`secrets.token_hex(32)`) only when absent | HMAC key for session-cookie ids and `ip_hash` values | every web session is signed out; the PWA redirects to sign-in |
@@ -294,7 +314,8 @@ fly mpg attach <ID> -a domeremote-staging        # prints the password: do not p
   printf 'DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64=%s\n' "$(openssl genpkey -algorithm ed25519 | base64 -w0)"
 } | fly secrets import --stage -a domeremote-staging
 docker build -f deploy/Dockerfile --build-arg DOME_BUILD_COMMIT="$(git rev-parse HEAD)" -t dome-launch:manual .
-fly deploy --config deploy/fly.toml -a domeremote-staging --image dome-launch:manual --local-only --ha=false \
+fly deploy --config deploy/fly.toml -a domeremote-staging --image dome-launch:manual --local-only \
+  --builder-pool=false --depot=false --ha=false \
   -e DOME_ENV=staging -e DOME_PUBLIC_ORIGIN=https://staging.domeremote.com \
   -e DOME_OIDC_ISSUER=https://<tenant>.us.auth0.com -e DOME_OIDC_CLIENT_ID=<client id>
 fly certs add staging.domeremote.com -a domeremote-staging
@@ -357,9 +378,12 @@ across statements that PostgreSQL cannot run in a transaction.
 
 Follow the table above. Founder-pasted secrets: create the new value at its source → paste it into the
 GitHub Environment → press Deploy → check one sign-in → revoke the old value at its source. Generated
-secrets have no button yet (a "rotate" action is a follow-up): an engineer runs `fly secrets unset` for
-that name and presses Deploy, which generates a new one. Rotating `DOME_SESSION_SECRET` signs everyone out
-by design; announce it. The entitlement key's JWKS only ever serves the current key.
+secrets have no button yet (a "rotate" action is a follow-up): an engineer replaces the value in place on
+stdin, for example `printf 'DOME_SESSION_SECRET=%s\n' "$(openssl rand -hex 32)" | fly secrets import -a
+<app>` (`docs/OPERATIONS.md` §7). Never `fly secrets unset` a generated secret: the machines restart
+without it and the app cannot start, and the Deploy button refuses to generate a new one for a production
+app that already has machines. Rotating `DOME_SESSION_SECRET` signs everyone out by design; announce it.
+The entitlement key's JWKS only ever serves the current key.
 
 ### Incident basics
 
@@ -412,7 +436,7 @@ Six jobs, no secrets, SHA-pinned actions (tag in the trailing comment). Green on
 | Image | built by CI's `container` job on every push since 2026-10-11; run in the test-kit rehearsal (Linux) | built, not run on Fly.io |
 | `entrypoint.sh` | `sh -n`; all four paths exercised locally (staging without key → exit 2; development → generated 0600 PEM; `_B64` → identical PEM and `DATABASE_URL` translated; existing key untouched); shellcheck 0.11.0 clean | unit-tested (shell, locally) |
 | `fly.toml` | parses; `launch/tests/test_fly_config.py` (no secrets or placeholders, ports, release command, region, trusted ranges); flags and merge rules checked in the flyctl v0.4.110 source | not yet verified on Fly.io |
-| Deploy workflow + `dome_deploy.py` | `launch/tests/` (82 tests: order of operations, re-runs, stops before changes, database paths, production gate, DNS states, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14 | written and statically checked; **never run against Fly.io, Auth0 or Cloudflare** |
+| Deploy workflow + `dome_deploy.py` | `launch/tests/` (136 tests: order of operations, re-runs, stops before changes, database paths, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Auth0, Cloudflare or GitHub's environments API** |
 | `docker-compose.dev.yml` | `docker compose config --quiet` (Compose v5.6.0) | not brought up |
 | `ci.yml` | green on GitHub Actions since 2026-10-11 | CI-tested |
 

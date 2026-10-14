@@ -15,6 +15,19 @@ Order: **staging first, then production.** Staging is a full copy at https://sta
 where you can try things safely. Production only accepts the exact version that already runs well on
 staging.
 
+> **Words you will see**
+>
+> - **Commit**: one saved version of DoMe's code, shown as a short code like `1a2b3c4d5e6f`.
+> - **Default branch**: the line of saved versions the Deploy button uses; today it is called
+>   `claude/stoic-heisenberg-txq6ja`.
+> - **Tenant** (Auth0): a separate Auth0 space with its own users. You need one for staging and one
+>   for production.
+> - **DNSSEC**: a free Cloudflare setting that stops others from faking your domain's addresses.
+> - **Pooled URL**: the database address Fly labels "pooled". You only need it if a summary asks.
+> - **Test kit**: the engineer's testing setup. You do not need it.
+> - **Engineer**: whoever maintains DoMe's code for you, for example a Claude Code session working on
+>   this repository (section 13 says what to give them).
+
 ---
 
 ## 0. Before you start
@@ -36,12 +49,13 @@ staging.
 | GitHub Actions (the Deploy button) on a public repository | $0 | $0 |
 
 Fly.io has **no spending cap and no billing alerts**. **Deleting an app does not delete its database**:
-the database keeps costing $38 a month until you delete it separately (section 12).
+the database keeps costing about $41 a month (with its storage) until you delete it separately
+(section 12).
 
-**Keep the GitHub repository public.** On a free GitHub account, a private repository loses
-Environments and their secrets, so the Deploy button stops working. On the paid plans, private
-repositories lose the "required reviewer" approval step. If you ever want the repository private,
-upgrade your GitHub plan first and ask an engineer to check the setup.
+**Keep the GitHub repository public.** The Deploy button relies on GitHub's "Required reviewers"
+approval (section 3). On a private repository, only GitHub Enterprise keeps that approval; on the
+Free, Pro and Team plans it disappears (and on Free, the environment secrets go too). So on those
+plans, keep the repository public. Ask an engineer before changing this.
 
 ## 1. Three rules about passwords and tokens
 
@@ -56,15 +70,20 @@ Names like `FLY_API_TOKEN` are labels, not secrets, so it is fine to write them 
 
 ## 2. Fly.io: account and card *(per vendor docs, not yet exercised)*
 
-1. Go to **fly.io**, sign up, and confirm your email.
-2. Open **Billing** and add a credit card **before the first deploy**. Without a card, Fly's free trial
-   stops every machine after 5 minutes, so DoMe would look broken. Adding a card ends the trial.
-   Fly may place a temporary hold of under $10.
+1. Go to https://fly.io, sign up, and confirm your email.
+2. Open https://fly.io/dashboard/personal/billing and add a credit card **before the first deploy**.
+   Without a card, Fly's free trial stops every machine after 5 minutes, so DoMe would look broken.
+   Adding a card ends the trial. Fly may place a temporary hold of under $10.
 3. Use your **Personal** organization. Do not create apps or databases by hand: the Deploy button
-   does that. If you deliberately use another Fly organization, add its short name (the "slug") as
-   the GitHub variable `FLY_ORG` in step 3.
+   does that. If you deliberately use another Fly organization, add its short name (the "slug") as an
+   **Environment variable** named `FLY_ORG` in both the staging and production environments (GitHub >
+   Settings > Environments > each environment > **Environment variables** > **Add environment
+   variable**; section 3 creates the environments).
 
 ## 3. GitHub: two environments *(per vendor docs, not yet exercised)*
+
+**Do not press Deploy until both environments are set up as below.** The Deploy button checks these
+settings before every run and refuses to start while one is missing or wrong.
 
 Open https://github.com/Heshh999/DoMe/settings/environments (repository **Settings** >
 **Environments**). Do the following twice: once with the name `staging`, then once with `production`
@@ -72,23 +91,29 @@ Open https://github.com/Heshh999/DoMe/settings/environments (repository **Settin
 
 1. Click **New environment**, type the name, and click **Configure environment**.
 2. Tick **Required reviewers**, type `Heshh999` (you), and **leave "Prevent self-review" unticked**.
-   You are the only reviewer, and ticking it would lock you out. Click **Save protection rules**.
-3. Under **Deployment branches and tags**, choose **Selected branches and tags**. Then **Add deployment
-   branch or tag rule**, type the default branch name exactly as it is today:
-   `claude/stoic-heisenberg-txq6ja`, and click **Add rule**.
+   You are the only reviewer, and ticking it would lock you out.
+3. **Untick "Allow administrators to bypass configured protection rules"** (GitHub ticks it by
+   default). Ticked, it lets the run skip your approval. Click **Save protection rules**.
+4. Under **Deployment branches and tags**, choose **Selected branches and tags**. Then **Add deployment
+   branch or tag rule**, keep **Ref type: Branch**, type the default branch name exactly as it is today:
+   `claude/stoic-heisenberg-txq6ja`, and click **Add rule**. Add no other rule.
 
-Why both environments need your approval: the Fly token you store in each (next step) can manage
+Why both environments need your approval: the Fly token you store in each (next section) can manage
 **every** app and database in your Fly organization, production included. With you as the required
-reviewer, no run ever receives a token until you click **Approve**. That holds even if someone else
-with access to the repository, or an AI assistant, starts a run.
+reviewer, no run receives a token without an approval from your GitHub account. That approval lets
+the run use whatever code is on the default branch at that moment.
+
+**Approve only a run you started yourself in the last few minutes.** If GitHub asks you to approve any
+other run, even one that shows your own name, click **Reject** and tell an engineer. A request from a
+run someone else (or an AI assistant) started looks exactly the same as your own.
 
 If the default branch is ever renamed (for example to `main`), these two rules must be changed to the
 new name, or every deploy is refused.
 
 ## 4. Fly tokens into GitHub *(per vendor docs, not yet exercised)*
 
-1. On fly.io, open the dashboard. Choose your organization in the organization drop-down, then click
-   **Tokens**.
+1. Open https://fly.io/dashboard/personal/tokens (on the Fly dashboard: your organization in the
+   organization drop-down, then **Tokens**).
 2. Create an **organization token** named `github-staging`. If an expiry is offered, choose 1 year
    and put a reminder in your calendar.
 3. Copy the **whole** value, including `FlyV1 ` at the start and the space after it. Right away, open
@@ -97,14 +122,22 @@ new name, or every deploy is refused.
 4. Repeat with a second token named `github-production`, pasted into the **production** environment as
    `FLY_API_TOKEN`.
 
-It must be an **Environment secret** of that environment, not a "repository secret". If a Deploy
-summary says a value is missing, this mix-up is the most likely cause.
+It must be an **Environment secret** of that environment, never a **repository secret** (the list
+under Settings > **Secrets and variables** > **Actions** > **Repository secrets**). GitHub gives a
+repository secret to every workflow run without asking you, so your approval would not protect it. A
+repository secret is **not** reported as missing: instead, the Deploy button refuses to run at all
+while a repository secret named `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET` or `DATABASE_URL` exists,
+and tells you to delete it and make a new token.
 
 ## 5. Auth0 for staging *(per vendor docs, not yet exercised)*
 
-1. Sign up at **auth0.com**. Create a tenant named, for example, `domeremote-staging`, region **US**.
-   The name cannot be changed later. Under **Settings > General**, set the **Environment Tag** to
-   **Development**.
+1. Sign up at https://auth0.com. A **tenant** is a separate Auth0 space; you need one for staging and
+   one for production. In the Auth0 dashboard (https://manage.auth0.com), click the tenant name at the
+   top left > **Create tenant**. Tenant Domain `domeremote-staging`, Region **US**, Environment Tag
+   **Development** > **Create**. The tenant name cannot be changed later.
+   If sign-up already made a tenant with a random name (like `dev-abc123`), you may use it for staging
+   instead: set its Environment Tag to **Development** under **Settings > General**. Only the Domain
+   you paste in step 5 is different.
 2. **Applications > Applications > Create Application**. Name it `DoMe staging`, choose **Regular Web
    Application**, and click **Create**.
 3. On the **Settings** tab:
@@ -130,25 +163,30 @@ Secrets. The Deploy button refuses a Client ID that looks like a secret.
 
 ## 6. First staging deploy
 
-1. Open https://github.com/Heshh999/DoMe/actions, click **Deploy** in the left list, then **Run
-   workflow** on the right.
+1. Open https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml and click **Run workflow** on
+   the right.
 2. Leave the branch as it is (the default branch). Choose **environment: staging**, **action:
-   deploy**, and tick **create the database** (this is your agreement to the $38 a month). Click the
-   green **Run workflow**.
-3. The first job, "Checks before approval", takes about a minute. Then the run waits for you: click
-   **Review deployments**, tick **staging**, and click **Approve and deploy**.
+   deploy**, and tick **create the database**. Ticking it is your agreement to about $41 a month for
+   the database and its storage; with the app machine, this environment costs about $45 a month
+   (section 0). Click the green **Run workflow**.
+3. The first job, "Checks before approval", takes about a minute. It also checks your settings from
+   sections 3 and 4 and stops with a plain message if one is missing. Then the run waits for you:
+   click **Review deployments**, tick **staging**, and click **Approve and deploy**.
+   **Approve only a run you started yourself in the last few minutes.** If GitHub asks you to approve
+   any other run, click **Reject** and tell an engineer.
 4. Wait 15-25 minutes. Creating the database alone can take 10 or more.
 5. Open the run and read its **Summary**. It lists what was created, what was already there, and
    **What to do next**. Red is fine on a first try: the summary says what to fix, and you can press
    Run workflow again at any time. A second run never creates anything twice and never changes the
-   generated passwords.
+   generated passwords. The run also checks that DoMe's sign-in page sends visitors to Auth0 with your
+   settings and that PCs can reach DoMe through Fly; it cannot sign in for you.
 
 ## 7. Cloudflare record for staging *(per vendor docs, not yet exercised)*
 
 Do exactly what the summary's **What to do next** says. Normally that is:
 
-1. Cloudflare > **domeremote.com** > **DNS** > **Records**. If a record named `staging` already
-   exists (type A, AAAA or CNAME), delete it first.
+1. Open https://dash.cloudflare.com > **domeremote.com** > **DNS** > **Records**. If a record named
+   `staging` already exists (type A, AAAA or CNAME), delete it first.
 2. **Add record**: Type **CNAME**, Name `staging`, Target exactly as the summary shows (normally
    `domeremote-staging.fly.dev`).
 3. Click the orange cloud so it turns **grey ("DNS only")**. This matters: with the orange cloud, Fly
@@ -157,19 +195,21 @@ Do exactly what the summary's **What to do next** says. Normally that is:
 ## 8. Check staging and sign in
 
 1. About 10 minutes later, run **Deploy** again with **environment: staging** and **action:
-   status**. Status needs no approval and changes nothing.
+   status**. Status needs no approval and changes nothing. A status run is red only when something is
+   deployed and wrong; while DNS or the certificate is still on its way, it stays green and says so.
 2. When the summary says **"Staging is live at https://staging.domeremote.com"**, open that address,
    create an account, and sign in. The Deploy button cannot test sign-in; only you can.
 3. If you sign out and sign in again, Auth0 may let you straight back in without asking. That is
    Auth0 remembering you, and it is expected.
-4. Linking a Windows PC to **staging** needs the test kit or a development build. The normal
-   installer always connects to domeremote.com (production).
+4. A normal DoMe installer on a Windows PC always connects to domeremote.com (production). Linking a
+   PC to **staging** needs the engineer's test kit; you can skip it.
 
 ## 9. Auth0 for production *(per vendor docs, not yet exercised)*
 
 Same as section 5, with these differences:
 
-- A **separate tenant**, for example `domeremote`, with **Environment Tag: Production**.
+- A **separate tenant**: in https://manage.auth0.com, click the tenant name at the top left > **Create
+  tenant**. Tenant Domain `domeremote`, Region **US**, Environment Tag **Production** > **Create**.
 - Application name `DoMe`. **Allowed Callback URLs**: exactly `https://domeremote.com/v1/auth/callback`.
 - **Credentials > Authentication Method: Client Secret (Post)**.
 - In the application's **Connections** tab, turn **off** `google-oauth2` and keep
@@ -182,13 +222,17 @@ Same as section 5, with these differences:
 
 ## 10. Production deploy
 
-1. **Actions > Deploy > Run workflow**: **environment: production**, **action: deploy**, tick
-   **create the database**.
+1. Open https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml > **Run workflow**:
+   **environment: production**, **action: deploy**, tick **create the database** (about $41 a month
+   for the database and its storage; about $45 a month for the whole environment).
 2. The first job checks that staging already runs this exact version and is healthy. If not, it
    stops before asking you for anything and tells you to deploy staging first.
 3. When asked: **Review deployments** > tick **production** > **Approve and deploy**.
-4. When it finishes, add the two records the summary lists in Cloudflare > **domeremote.com** >
-   **DNS** > **Records**. First delete any existing A, AAAA or CNAME record named `@`. Then:
+   **Approve only a run you started yourself in the last few minutes.** If GitHub asks you to approve
+   any other run, click **Reject** and tell an engineer.
+4. When it finishes, add the two records the summary lists in https://dash.cloudflare.com >
+   **domeremote.com** > **DNS** > **Records**. First delete any existing A, AAAA or CNAME record whose
+   Name shows as `domeremote.com` (that is what Cloudflare calls `@`). Then:
    - Type **A**, Name `@`, IPv4 address from the summary, **grey cloud (DNS only)**
    - Type **AAAA**, Name `@`, IPv6 address from the summary, **grey cloud (DNS only)**
 5. Run **status** for production until it says **"Production is live at https://domeremote.com"**.
@@ -196,26 +240,27 @@ Same as section 5, with these differences:
 
 ## 11. Redirects and DNSSEC *(per vendor docs, not yet exercised)*
 
-Only `https://domeremote.com` serves DoMe. The other names send visitors there.
+Only `https://domeremote.com` serves DoMe. The other names send visitors there. All of this is in
+https://dash.cloudflare.com.
 
 **In the domeremote.com zone:**
 
 1. **DNS > Records > Add record**: Type **AAAA**, Name `www`, IPv6 address `100::`, **orange cloud
    (Proxied) ON**. (This record only exists so Cloudflare can answer and redirect.)
-2. **Rules > Overview > Create rule > Redirect Rule** > **Wildcard pattern**:
-   Request URL `http*://www.domeremote.com/*`, Target URL `https://domeremote.com/${2}`, Status code
-   **301**, tick **Preserve query string**, then **Deploy**.
+2. **Rules > Overview > Create rule > Redirect Rule**. **Rule name**: anything, for example `www to
+   domeremote.com`. Then **Wildcard pattern**: Request URL `http*://www.domeremote.com/*`, Target URL
+   `https://domeremote.com/${2}`, Status code **301**, tick **Preserve query string**, then **Deploy**.
 
 **In the domeremote.app zone:**
 
 1. Add two records, both **orange cloud ON**: Type **AAAA**, Name `@`, `100::`; and Type **AAAA**, Name
    `www`, `100::`.
-2. Two redirect rules as above, with Request URL `http*://domeremote.app/*` and
-   `http*://www.domeremote.app/*`, both with Target URL `https://domeremote.com/${2}`, **301**, and
+2. Two redirect rules as above (each with any Rule name), with Request URL `http*://domeremote.app/*`
+   and `http*://www.domeremote.app/*`, both with Target URL `https://domeremote.com/${2}`, **301**, and
    Preserve query string.
 
-**DNSSEC, in each of the two zones:** **DNS > Settings > Enable DNSSEC**. Cloudflare finishes it by
-itself within 1-2 days.
+**DNSSEC, in each of the two zones** (it stops others from faking your domain's addresses): **DNS >
+Settings > Enable DNSSEC**. Cloudflare finishes it by itself within 1-2 days.
 
 ## 12. Stopping or undoing *(per vendor docs, not yet exercised)*
 
@@ -232,41 +277,54 @@ Auth0 application or tenant, and the Cloudflare records.
 
 ## 13. If a run stops: what the summary means
 
-Each run ends with a headline: **finished**, **Stopped: needs you**, or **Failed: needs an
-engineer**. When you need help, share the **link to the run**, never a token or a password.
+Each run ends with a headline: **finished**, **Stopped: needs you**, **Failed: needs an engineer**, or
+just **Failed**.
+
+**An engineer** means whoever maintains DoMe's code for you, for example a Claude Code session working
+on this repository. Give them only the link to the run page; the log is built to show no secrets.
+Never give them a token or a password, and never approve a run they started (section 3).
+
+Look for the sentence under the headline in this table first: it can be something you can fix
+yourself even when the headline says "needs an engineer".
 
 | The summary says | What to do |
 | --- | --- |
-| "Some values this deploy needs are missing or not usable" | Add exactly the names listed, on the tab it names. Check they are under Settings > **Environments** > the right environment, on the right tab (**secrets** vs **variables**), not under repository secrets. |
-| "This environment has no database yet ... about $38 a month" | If you agree, run Deploy again with **create the database** ticked. |
+| "Some values this deploy needs are missing or not usable" | Add exactly the names listed, on the tab it names. Check they are under Settings > **Environments** > the right environment, on the right tab (**secrets** vs **variables**). |
+| "... exist as repository secrets" | Delete them under Settings > **Secrets and variables** > **Actions** > **Repository secrets**. For `FLY_API_TOKEN`: revoke that token on the Fly Tokens page, create a new one, and paste it only as an **Environment secret** (section 4). For `DOME_OIDC_CLIENT_SECRET`: rotate it in Auth0 and paste the new one as an Environment secret. Run Deploy again. |
+| "The GitHub Environment ... does not exist yet" or "... is not protected yet" | Set that environment up exactly as in section 3; the summary lists which setting is wrong. Run Deploy again. |
+| "This environment has no database yet ... about $41 a month" | If you agree, run Deploy again with **create the database** ticked. |
 | "Could not read the apps of organization ..." or "Fly refused this token" | Copy the token again from Fly (whole value, with `FlyV1 `) into `FLY_API_TOKEN`. If you use another Fly organization, check the variable `FLY_ORG`. |
 | "personal sign-in token (it starts with fo1_)" | Create an **organization** token on the Fly Tokens page (section 4) and paste it over the old one. |
 | "The Fly app name ... belongs to someone else" | GitHub > Settings > **Secrets and variables** > **Actions** > **Variables** tab > **New repository variable**: `FLY_STAGING_APP` (or `FLY_PRODUCTION_APP`) = another name, for example `domeremote-staging-2`. Run Deploy again. |
 | "Fly is still preparing the database" | Nothing is broken. Run Deploy again in about 10 minutes. |
-| "Fly would not let this token create or list Managed Postgres databases" | Follow the dashboard steps in the summary: create the database on fly.io (name, region and plan are listed), then run Deploy again. |
-| "Production only receives a commit that staging already runs" | Run Deploy for **staging** first (same branch, same moment), wait for it to finish green, then production. |
+| "Fly would not let this token create or list Managed Postgres databases" | Follow the dashboard steps in the summary: create the database on fly.io (name, region, plan, storage 10 GB and PostgreSQL 16 are listed; about $41 a month), then run Deploy again. |
+| "Production only receives a commit that staging already runs" | Run Deploy for **staging** again, wait for it to finish green, then run production right away. If anyone changed the code in between, staging must be deployed again first. |
 | "The sign-in provider ... could not be reached" or "names a different issuer" | Check `DOME_OIDC_ISSUER` is the Auth0 **Domain** of the right tenant. |
 | "looks like the Client Secret, not the Client ID" | Rotate the secret in Auth0 (Credentials), put the new secret under **Secrets** and the Client ID under **Variables**. |
+| "... sign-in request carries a different client id" or "... sends visitors to ... instead of the sign-in provider" | Check that `DOME_OIDC_ISSUER` and `DOME_OIDC_CLIENT_ID` both come from the same Auth0 application of the right tenant. If they do, share the run link with an engineer. |
+| "a WebSocket upgrade to /ws/agent ..." or "resolves, but unhealthy" | Share the run link with an engineer. |
 | "no DNS record yet" | Add the Cloudflare record(s) listed (sections 7 and 10). |
 | "DNS record is proxied by Cloudflare" | Click the record's orange cloud so it turns grey ("DNS only"). |
 | "DNS points somewhere else" | Replace the record(s) with the ones listed. |
 | "certificate not issued yet" | Wait 10 minutes, then run **status**. |
-| "Failed: needs an engineer" | Share the run link with an engineer. Do not retry production repeatedly. |
-| GitHub shows "branch not allowed" or never asks you to approve | Check section 3, step 3: the deployment branch rule must name the default branch exactly. |
+| **Failed** (without "needs ...") | Fly or GitHub did not do one step. Run Deploy once more; if the same step fails again, share the run link with an engineer. |
+| "Failed: needs an engineer" (and nothing above fits) | Share the run link with an engineer. Do not retry production repeatedly. |
+| GitHub shows "branch not allowed" | Check section 3, step 4: the deployment branch rule must name the default branch exactly. |
+| A deploy started without asking you to approve | Open Settings > Environments > that environment now, tick **Required reviewers** with `Heshh999`, untick the administrator bypass and save (section 3, steps 2 and 3); check the branch rule (step 4). If the environment was missing, GitHub created it without protection when the run started, so set it up exactly as in section 3. Tell an engineer. |
 | There is no **Run workflow** button | The repository must stay public, and the Deploy workflow must be on the default branch. Ask an engineer. |
 
 ## 14. Where every value lives
 
 | Name | Secret? | Where you paste it | Where it comes from |
 | --- | --- | --- | --- |
-| `FLY_API_TOKEN` | **yes** | GitHub > Environments > staging / production > Environment **secrets** | Fly > organization > Tokens (one per environment) |
-| `DOME_OIDC_CLIENT_SECRET` | **yes** | GitHub > Environments > staging / production > Environment **secrets** | Auth0 > Application > Settings > Client Secret |
-| `DATABASE_URL` | **yes** | Only if a summary asks: GitHub > Environments > ... > Environment **secrets** | Fly > Managed Postgres > cluster > Connect (pooled URL) |
+| `FLY_API_TOKEN` | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret) | Fly > organization > Tokens (one per environment) |
+| `DOME_OIDC_CLIENT_SECRET` | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret) | Auth0 > Application > Settings > Client Secret |
+| `DATABASE_URL` | **yes** | Only if a summary asks: GitHub > Environments > ... > Environment **secrets** | Fly > Managed Postgres > cluster > Connect (the pooled URL) |
 | `DOME_OIDC_ISSUER` | no | GitHub > Environments > ... > Environment **variables** | Auth0 > Application > Settings > Domain |
 | `DOME_OIDC_CLIENT_ID` | no | GitHub > Environments > ... > Environment **variables** | Auth0 > Application > Settings > Client ID |
 | `VITE_DOME_SUPPORT_URL` (optional) | no (public) | GitHub > Environments > ... > Environment **variables** | your support mailbox |
 | `DOME_SUPPORT_RESPONSE_EXPECTATION` (optional) | no | GitHub > Environments > ... > Environment **variables** | your promise, for example "within 2 business days" |
-| `FLY_ORG` (optional) | no | GitHub > Environments > ... > Environment **variables** | only if not your Personal organization |
+| `FLY_ORG` (optional) | no | GitHub > Environments > staging **and** production > Environment **variables** | only if not your Personal organization |
 | `FLY_STAGING_APP`, `FLY_PRODUCTION_APP` (optional) | no | GitHub > Settings > Secrets and variables > Actions > **Variables** (repository) | only if a summary says the app name is taken |
 | Session secret, entitlement signing key, database password | **yes** | nowhere: the Deploy button creates them inside Fly | generated during the first deploy |
 
@@ -284,4 +342,6 @@ summary lists them again until an engineer closes them:
 - the database backup retention, written down in `docs/OPERATIONS.md`;
 - a support contact (`VITE_DOME_SUPPORT_URL`);
 - an Auth0 email provider, and Google sign-in either off or with your own keys;
-- signing in yourself on production (the button cannot test sign-in).
+- signing in yourself on production (the button cannot test sign-in);
+- branch protection with required review on the default branch, so that no code reaches the Deploy
+  button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).

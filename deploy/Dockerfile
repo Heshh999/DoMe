@@ -19,10 +19,15 @@
 #   --build-arg VITE_DOME_RELEASE_CHANNEL=staging|production  --build-arg VITE_DOME_SUPPORT_URL=...
 #   --build-arg DOME_BUILD_COMMIT=<40-hex git commit>          (reported by /healthz as "commit")
 
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
-ARG NODE_IMAGE=node:22-bookworm-slim
+# Base images are pinned by DIGEST (each tag's multi-platform index), so every build of a commit, staging's
+# and production's alike, starts from the same layers; a re-pushed tag changes nothing here. The tag stays for
+# readers; with a digest present, docker uses the digest. Resolved 2026-10-14 from Docker Hub and ghcr.io
+# (registry HEAD of the tag, Docker-Content-Digest). To update, resolve the tag again (for example
+# `docker buildx imagetools inspect python:3.12-slim-bookworm`), replace the digest, and let CI build it.
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 # Same uv release that produced the lockfiles in this repository.
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.32
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c
 
 ############################################################################################
 # 1. PWA

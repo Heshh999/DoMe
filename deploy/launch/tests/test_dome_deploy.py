@@ -5,8 +5,20 @@ line, the log or the summary."""
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
+import os
 import re
+import socket
+import ssl
+import sys
+import threading
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import (
@@ -16,6 +28,7 @@ from conftest import (
     FLY_TOKEN,
     FLY_TOKEN_PARTS,
     FM,
+    GH_TOKEN,
     ISSUER_HOST,
     OTHER_SHA,
     SHA,
@@ -76,7 +89,7 @@ def assert_hygiene(world: World, run: Run) -> None:
         for arg in call["argv"]:
             for value in values:
                 assert value not in arg, (call["argv"][:2], "argv carries a secret")
-        assert not call["env_has_client_secret"] and not call["env_has_fallback_db"]
+        assert not call["env_has_client_secret"] and not call["env_has_fallback_db"] and not call["env_has_gh_token"]
     output = "\n".join(line for line in run.stdout.splitlines() if not line.startswith("::add-mask::"))
     for value in values:
         assert value not in output, "a secret value reached the log"
@@ -126,7 +139,8 @@ def test_first_staging_run_sets_up_everything_in_order(world: World) -> None:
     ]  # fmt: skip
     assert deploy_argv(world) == [
         "deploy", "--config", "deploy/fly.toml", "--app", "domeremote-staging",
-        "--image", f"dome-launch:git-{SHA[:12]}", "--local-only", "--image-label", f"git-{SHA[:12]}",
+        "--image", f"dome-launch:git-{SHA[:12]}", "--local-only", "--builder-pool=false", "--depot=false",
+        "--image-label", f"git-{SHA[:12]}",
         "--primary-region", "iad", "--ha=false", "--no-public-ips", "--yes",
         "-e", "DOME_ENV=staging", "-e", "DOME_PUBLIC_ORIGIN=https://staging.domeremote.com",
         "-e", f"DOME_OIDC_ISSUER=https://{ISSUER_HOST}", "-e", f"DOME_OIDC_CLIENT_ID={CLIENT_ID}",
@@ -154,6 +168,12 @@ def test_first_staging_run_sets_up_everything_in_order(world: World) -> None:
     assert "DNS only" in run.summary and "https://staging.domeremote.com/v1/auth/callback" in run.summary
     assert "live at" not in run.summary and "verified" not in run.summary.lower()
     assert "created (Managed Postgres Basic, iad)" in run.summary
+    # the sign-in start and the relay's WebSocket were checked through Fly's proxy, without following the redirect
+    assert world.web.no_redirect_requests == ["https://domeremote-staging.fly.dev/v1/auth/login"]
+    assert world.web.websocket_requests == [("domeremote-staging.fly.dev", "/ws/agent")]
+    assert "sends visitors to the sign-in provider with this client id and callback" in run.summary
+    assert "sign-in itself not tested" in run.summary
+    assert "the upgrade reaches the app through Fly's proxy" in run.summary
     assert_hygiene(world, run)
 
 
@@ -184,7 +204,8 @@ def test_no_database_and_no_consent_stops_without_changes(world: World) -> None:
     run = world.run("deploy")
     assert run.code == 1
     assert mutating_calls(world) == []
-    assert "Stopped: needs you" in run.summary and "$38 a month" in run.summary
+    assert "Stopped: needs you" in run.summary and "about $41 a month" in run.summary
+    assert "about $45 a month" in run.summary and "$38 a month" not in run.summary
     assert "Nothing was created or changed" in run.summary
     assert_hygiene(world, run)
 
@@ -308,6 +329,7 @@ def test_no_cluster_listing_permission_without_fallback_gives_dashboard_steps(wo
     run = world.run("deploy", CREATE_DATABASE="true")
     assert run.code == 1 and mutating_calls(world) == []
     assert "Create new cluster" in run.summary and "Fly refused this token" in run.summary
+    assert "storage **10 GB**, PostgreSQL **16**" in run.summary and "about $41 a month" in run.summary
 
 
 def test_cluster_creation_that_outlasts_its_budget_still_writes_a_summary(
@@ -453,6 +475,8 @@ def production_world(world: World) -> None:
     world.staging_ready_web(commit=SHA)
     world.web.healthz("https://domeremote-production.fly.dev")
     world.web.page("https://domeremote-production.fly.dev", robots=True, hsts=True)
+    world.web.login("https://domeremote-production.fly.dev", "https://domeremote.com/v1/auth/callback")
+    world.web.websockets["domeremote-production.fly.dev"] = 401
     world.add_cluster("domeremote-production-db")
 
 
@@ -508,7 +532,10 @@ def test_production_apex_records_are_a_and_aaaa(world: World) -> None:
     assert run.code == 0, run.summary
     assert f"Type **A**, Name **@**, IPv4 address **{V4}**" in run.summary
     assert f"Type **AAAA**, Name **@**, IPv6 address **{V6}**" in run.summary
-    assert "first delete any existing A, AAAA or CNAME record named **@**" in run.summary
+    assert (
+        "first delete any existing A, AAAA or CNAME record named **@** (shown as **domeremote.com** in the list)"
+        in run.summary
+    )
 
 
 def test_production_with_search_engine_header_on_apex_is_not_live(world: World) -> None:
@@ -516,6 +543,8 @@ def test_production_with_search_engine_header_on_apex_is_not_live(world: World) 
     world.dns["domeremote.com"] = [V4, V6]
     world.web.healthz("https://domeremote.com", headers={"x-robots-tag": "noindex, nofollow"})
     run = world.run("deploy", DEPLOY_ENVIRONMENT="production")
+    assert run.code == 1, "a misconfigured real domain is a red run, not a green one"
+    assert "Failed: needs an engineer" in run.summary
     assert "live at https://domeremote.com" not in run.summary
     assert "production headers are wrong" in run.summary
 
@@ -562,6 +591,7 @@ def test_status_reports_an_unhealthy_app(world: World) -> None:
     world.web.json("https://domeremote-staging.fly.dev/healthz", {"status": "degraded", "database": "unavailable"}, 503)
     run = world.run("status")
     assert "Staging is deployed but not healthy (HTTP 503)" in run.summary and world.calls() == []
+    assert run.code == 1
 
 
 def test_production_status_shows_both_commits(world: World) -> None:
@@ -675,3 +705,378 @@ def test_multiline_values_are_masked_line_by_line() -> None:
     assert lines == ["::add-mask::MC4CAQAwBQYDK2VwBCIEIAbcdefghijklmnop"]
     redacted = book.redact("key: " + pem + "again: " + pem.replace("\n", "\r\n"))
     assert "MC4CAQ" not in redacted and "BEGIN PRIVATE KEY" not in redacted
+
+
+# ======================================================================================================
+# gate: repository secrets and protected environments (review findings, 2026-10-14)
+# ======================================================================================================
+
+
+@pytest.mark.parametrize(
+    ("probe", "named"),
+    [
+        ("FLY_API_TOKEN ", ["FLY_API_TOKEN"]),
+        ("DOME_OIDC_CLIENT_SECRET ", ["DOME_OIDC_CLIENT_SECRET"]),
+        ("DATABASE_URL", ["DATABASE_URL"]),
+        (
+            "FLY_API_TOKEN DOME_OIDC_CLIENT_SECRET DATABASE_URL",
+            ["FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DATABASE_URL"],
+        ),
+    ],
+)
+def test_gate_refuses_while_a_deploy_secret_is_a_repository_secret(world: World, probe: str, named: list[str]) -> None:
+    run = world.run("gate", REPO_LEVEL_SECRETS=probe)
+    assert run.code == 1 and "Stopped: needs you" in run.summary
+    for name in named:
+        assert f"`{name}`" in run.summary
+    assert "refuses to run while one exists" in run.summary
+    assert "https://github.com/Heshh999/DoMe/settings/secrets/actions" in run.summary
+    assert ("revoke the token" in run.summary) == ("FLY_API_TOKEN" in named)
+    assert ("Rotate" in run.summary) == ("DOME_OIDC_CLIENT_SECRET" in named)
+    assert world.web.requests == [] and world.calls() == []  # refused before asking GitHub or Fly anything
+
+
+def test_gate_ignores_an_empty_probe_and_unknown_names(world: World) -> None:
+    assert world.run("gate", REPO_LEVEL_SECRETS="  ").code == 0
+    assert world.run("gate", REPO_LEVEL_SECRETS="SOMETHING_ELSE").code == 0
+
+
+def test_gate_reads_both_environments_with_the_job_token(world: World) -> None:
+    run = world.run("gate")
+    assert run.code == 0, run.summary
+    for name in ("staging", "production"):
+        url = f"https://api.github.com/repos/Heshh999/DoMe/environments/{name}"
+        assert url in world.web.requests and url + "/deployment-branch-policies?per_page=100" in world.web.requests
+        assert world.web.headers_seen[url]["Authorization"] == "Bearer " + GH_TOKEN
+        assert f"| GitHub Environment {name} | protected: required reviewer, branch `main` only" in run.summary
+    assert "Approve only if you started this run yourself in the last few minutes" in run.summary
+    assert GH_TOKEN not in run.stdout and GH_TOKEN not in run.summary
+
+
+@pytest.mark.parametrize(
+    ("setup", "expected"),
+    [
+        ({"reviewers": 0}, "**Required reviewers** is not ticked"),
+        ({"reviewers": -1}, "**Required reviewers** is not ticked"),
+        ({"prevent_self_review": True}, "**Prevent self-review** is ticked"),
+        ({"can_admins_bypass": True}, "**Allow administrators to bypass configured protection rules** is ticked"),
+        ({"custom_branch_policies": False}, "not set to **Selected branches and tags**"),
+        ({"branches": []}, "exactly one branch rule named `main` (found: none)"),
+        ({"branches": [{"id": 1, "name": "*", "type": "branch"}]}, "(found: `*`)"),
+        ({"branches": [{"id": 1, "name": "main", "type": "tag"}]}, "exactly one branch rule named `main`"),
+        (
+            {"branches": [{"id": 1, "name": "main", "type": "branch"}, {"id": 2, "name": "dev", "type": "branch"}]},
+            "(found: `main`, `dev`)",
+        ),
+    ],
+)
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_gate_refuses_an_unprotected_environment(
+    world: World, environment: str, setup: dict[str, Any], expected: str
+) -> None:
+    world.web.github_environment(environment, **setup)
+    for deploying in ("staging", "production"):  # either token reaches both apps, so both must be protected
+        production_world(world)
+        run = world.run("gate", DEPLOY_ENVIRONMENT=deploying)
+        assert run.code == 1, (deploying, run.summary)
+        assert "Stopped: needs you" in run.summary and expected in run.summary
+        assert f"The GitHub Environment **{environment}** is not protected yet" in run.summary
+        assert "docs/LAUNCH_SETUP.md section 3" in run.summary and "Nothing was created or changed" in run.summary
+    assert world.calls() == []
+
+
+def test_gate_accepts_an_environment_without_the_bypass_field(world: World) -> None:
+    world.web.github_environment("staging", can_admins_bypass=None)
+    assert world.run("gate").code == 0
+
+
+def test_gate_refuses_a_missing_environment(world: World) -> None:
+    world.web.json("https://api.github.com/repos/Heshh999/DoMe/environments/production", {"message": "Not Found"}, 404)
+    run = world.run("gate")  # a staging run too: production must exist before the first deploy
+    assert run.code == 1 and "The GitHub Environment **production** does not exist yet" in run.summary
+    assert "https://github.com/Heshh999/DoMe/settings/environments" in run.summary
+
+
+def test_gate_when_github_does_not_answer(world: World) -> None:
+    world.web.routes["https://api.github.com/repos/Heshh999/DoMe/environments/staging"] = HttpFailure("timeout", "t")
+    run = world.run("gate")
+    assert run.code == 1 and "## Failed\n" in run.summary and "Run Deploy again in a few minutes" in run.summary
+    world.web.json("https://api.github.com/repos/Heshh999/DoMe/environments/staging", {"message": "x"}, 403)
+    run = world.run("gate")
+    assert run.code == 1 and "Failed: needs an engineer" in run.summary and "HTTP 403" in run.summary
+
+
+# ======================================================================================================
+# sign-in start and WebSocket through Fly's proxy
+# ======================================================================================================
+
+
+def staging_with_database(world: World) -> None:
+    world.staging_ready_web()
+    world.add_cluster("domeremote-staging-db")
+
+
+@pytest.mark.parametrize(
+    ("login", "expected"),
+    [
+        ({"client_id": "SomeOtherClientId0123456789"}, "different client id than the variable DOME_OIDC_CLIENT_ID"),
+        (
+            {"callback": "https://domeremote.com/v1/auth/callback"},
+            "returns visitors to https://domeremote.com/v1/auth/callback instead of "
+            "https://staging.domeremote.com/v1/auth/callback",
+        ),
+        ({"authorize": "https://someone-else.us.auth0.com/authorize"}, "check DOME_OIDC_ISSUER"),
+        ({"status": 503}, "HTTP 503 instead of sending visitors to sign in (the app could not reach the sign-in"),
+        ({"status": 200}, "HTTP 200 instead of sending visitors to sign in."),
+    ],
+)
+def test_a_broken_sign_in_start_fails_the_deploy(world: World, login: dict[str, Any], expected: str) -> None:
+    staging_with_database(world)
+    callback = login.pop("callback", "https://staging.domeremote.com/v1/auth/callback")
+    world.web.login("https://domeremote-staging.fly.dev", callback, **login)
+    run = world.run("deploy")
+    assert run.code == 1 and "Failed: needs an engineer" in run.summary
+    assert expected in run.summary
+    assert "st4te-value" not in run.summary and "n0nce-value" not in run.summary  # one-time values stay out
+    assert_hygiene(world, run)
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        (502, "answered HTTP 502 instead of the app's own refusal (HTTP 401)"),
+        (404, "answered HTTP 404"),
+        (0, "answered something that is not a valid HTTP answer"),
+        (HttpFailure("connect", "refused"), "could not connect (connect)"),
+    ],
+)
+def test_a_websocket_that_does_not_reach_the_app_fails_the_deploy(world: World, answer: Any, expected: str) -> None:
+    staging_with_database(world)
+    world.web.websockets["domeremote-staging.fly.dev"] = answer
+    run = world.run("deploy")
+    assert run.code == 1 and "Failed: needs an engineer" in run.summary and expected in run.summary
+    assert "PCs could not connect to the relay" in run.summary or "could not connect" in run.summary
+
+
+def test_an_accepted_websocket_upgrade_also_passes(world: World) -> None:
+    staging_with_database(world)
+    world.web.websockets["domeremote-staging.fly.dev"] = 101
+    assert world.run("deploy").code == 0
+
+
+# ======================================================================================================
+# a wrong real domain is red, waiting for DNS is not
+# ======================================================================================================
+
+
+def test_unhealthy_custom_host_fails_the_staging_deploy(world: World) -> None:
+    staging_with_database(world)
+    world.dns["staging.domeremote.com"] = [V4, V6]
+    world.web.json("https://staging.domeremote.com/healthz", {"status": "degraded"}, 500)
+    run = world.run("deploy")
+    assert run.code == 1 and "Failed: needs an engineer" in run.summary
+    assert "staging.domeremote.com resolves, but unhealthy (HTTP 500)" in run.summary
+    assert "live at" not in run.summary
+
+
+def test_wrong_commit_on_the_apex_fails_production_but_not_staging(world: World) -> None:
+    production_world(world)
+    world.dns["domeremote.com"] = [V4, V6]
+    world.web.healthz(
+        "https://domeremote.com",
+        commit=OTHER_SHA,
+        headers={"strict-transport-security": "max-age=31536000; includeSubDomains"},
+    )
+    run = world.run("deploy", DEPLOY_ENVIRONMENT="production")
+    assert run.code == 1 and "answers with a different build" in run.summary
+    world.add_cluster("domeremote-staging-db")
+    world.dns["staging.domeremote.com"] = [V4, V6]
+    world.web.healthz("https://staging.domeremote.com", commit=OTHER_SHA)
+    staging = world.run("deploy")
+    assert staging.code == 0, staging.summary
+    assert "answers with a different build" in staging.summary and "live at" not in staging.summary
+
+
+def test_status_exit_codes(world: World) -> None:
+    assert world.run("status").code == 0  # not deployed yet
+    world.staging_ready_web()
+    world.dns["domeremote-staging.fly.dev"] = [V4, V6]
+    assert world.run("status").code == 0  # running, waiting for DNS
+    world.dns["staging.domeremote.com"] = [V4, V6]
+    world.web.routes["https://staging.domeremote.com/healthz"] = HttpFailure("tls", "no certificate yet")
+    assert world.run("status").code == 0  # waiting for the certificate
+    world.web.json("https://staging.domeremote.com/healthz", {"status": "degraded"}, 500)
+    run = world.run("status")
+    assert run.code == 1 and "resolves, but unhealthy" in run.summary
+    world.web.healthz("https://staging.domeremote.com")
+    world.web.healthz("https://domeremote-staging.fly.dev", forwarded="unresolved_private")
+    run = world.run("status")
+    assert run.code == 1 and "client-address self-check not ok" in run.summary and "is live" not in run.summary
+    world.web.routes["https://domeremote-staging.fly.dev/healthz"] = HttpFailure("connect", "refused")
+    run = world.run("status")
+    assert run.code == 1 and "could not be reached" in run.summary
+    assert world.calls() == []
+
+
+# ======================================================================================================
+# a refused token is something the founder fixes
+# ======================================================================================================
+
+
+def test_a_refused_token_is_a_stop_for_the_founder_with_the_fix(world: World) -> None:
+    world.staging_ready_web()
+    world.update(lambda s: s["fail"].update({"apps list": {"exit": 1, "stderr": "Error: unauthorized\n"}}))
+    run = world.run("deploy", CREATE_DATABASE="true")
+    assert run.code == 1 and "Stopped: needs you" in run.summary
+    assert "Could not read the apps of organization personal" in run.summary
+    assert "Fly refused this token for that action" in run.summary
+    assert "paste the whole Fly token again" in run.summary and "`FLY_ORG`" in run.summary
+    assert mutating_calls(world) == []
+
+
+def test_an_unexplained_fly_failure_still_needs_an_engineer(world: World) -> None:
+    world.staging_ready_web()
+    world.update(lambda s: s["fail"].update({"apps list": {"exit": 1, "stderr": "Error: 500 internal\n"}}))
+    run = world.run("deploy", CREATE_DATABASE="true")
+    assert run.code == 1 and "Failed: needs an engineer" in run.summary
+
+
+# ======================================================================================================
+# units: runner robustness, redirects, the WebSocket handshake
+# ======================================================================================================
+
+
+def test_runner_survives_output_that_is_not_utf8(tmp_path: Path) -> None:
+    out = io.StringIO()
+    runner = dome_deploy.Runner({"PATH": os.environ["PATH"]}, SecretBook(out), out)
+    code = "import sys; sys.stdout.buffer.write(b'built \\xff ok\\n'); sys.stdout.flush()"
+    result = runner.run([sys.executable, "-c", code])
+    assert result.ok and "built � ok" in result.stdout
+    streamed = runner.stream([sys.executable, "-c", code], timeout=30)
+    assert streamed.ok and "built � ok" in out.getvalue()
+
+
+def test_stream_stops_the_child_when_this_program_fails(tmp_path: Path) -> None:
+    out = io.StringIO()
+    runner = dome_deploy.Runner({"PATH": os.environ["PATH"]}, SecretBook(out), out)
+    pid_file = tmp_path / "pid"
+    code = f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); print('first', flush=True); time.sleep(60)"
+
+    def boom(text: str) -> str:
+        raise RuntimeError("redaction failed")
+
+    runner.book.redact = boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        runner.stream([sys.executable, "-c", code], timeout=120)
+    pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)  # killed and reaped, not left running behind the error
+
+
+def test_no_redirect_handler_returns_the_303_itself() -> None:
+    class Redirecting(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(303)
+            self.send_header("Location", "https://idp.example.com/authorize?client_id=x")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Redirecting)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), dome_deploy._NoRedirect)
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            opener.open(f"http://127.0.0.1:{server.server_port}/v1/auth/login", timeout=5)
+        assert caught.value.code == 303
+        assert caught.value.headers["Location"] == "https://idp.example.com/authorize?client_id=x"
+    finally:
+        server.shutdown()
+
+
+class FakeTls:
+    """Stands in for the TLS socket: records the request, answers with ``reply(request)``."""
+
+    def __init__(self, reply: Callable[[str], bytes]) -> None:
+        self.reply = reply
+        self.sent = b""
+        self.chunks: list[bytes] = []
+
+    def __enter__(self) -> FakeTls:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+    def sendall(self, data: bytes) -> None:
+        self.sent += data
+        answer = self.reply(data.decode("ascii"))
+        self.chunks = [answer[i : i + 7] for i in range(0, len(answer), 7)]  # arrives in small pieces
+
+    def recv(self, size: int) -> bytes:
+        return self.chunks.pop(0) if self.chunks else b""
+
+
+def accept_for(request: str) -> str:
+    key = re.search(r"Sec-WebSocket-Key: (\S+)\r\n", request)
+    assert key
+    digest = hashlib.sha1((key.group(1) + dome_deploy.WEBSOCKET_GUID).encode()).digest()
+    return base64.b64encode(digest).decode()
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        (
+            lambda r: b'HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\n\r\n{"code":"UNAUTHENTICATED"}',
+            401,
+        ),
+        (lambda r: f"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: {accept_for(r)}\r\n\r\n".encode(), 101),
+        (lambda r: b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: wrong\r\n\r\n", 0),
+        (lambda r: b"HTTP/1.1 502 Bad Gateway\r\nserver: Fly/abc\r\n\r\n", 502),
+        (lambda r: b"garbage", 0),
+    ],
+)
+def test_websocket_handshake_parsing(
+    monkeypatch: pytest.MonkeyPatch, reply: Callable[[str], bytes], expected: int
+) -> None:
+    tls = FakeTls(reply)
+    opened: list[tuple[str, int]] = []
+
+    class FakeContext:
+        def wrap_socket(self, raw: object, server_hostname: str) -> FakeTls:
+            assert server_hostname == "domeremote-staging.fly.dev"
+            return tls
+
+    class FakeRaw:
+        def __enter__(self) -> FakeRaw:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    def connect(address: tuple[str, int], timeout: float) -> FakeRaw:
+        opened.append(address)
+        return FakeRaw()
+
+    monkeypatch.setattr(socket, "create_connection", connect)
+    monkeypatch.setattr(ssl, "create_default_context", lambda: FakeContext())
+    assert dome_deploy.websocket_status("domeremote-staging.fly.dev", "/ws/agent") == expected
+    assert opened == [("domeremote-staging.fly.dev", 443)]
+    request = tls.sent.decode()
+    assert request.startswith("GET /ws/agent HTTP/1.1\r\nHost: domeremote-staging.fly.dev\r\n")
+    assert "Upgrade: websocket\r\n" in request and "Sec-WebSocket-Version: 13\r\n" in request
+    assert "Authorization" not in request and "Origin" not in request  # no credentials, not a browser
+
+
+def test_websocket_handshake_failures_are_classified(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(address: tuple[str, int], timeout: float) -> object:
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    with pytest.raises(HttpFailure) as caught:
+        dome_deploy.websocket_status("domeremote-staging.fly.dev", "/ws/agent")
+    assert caught.value.kind == "connect"

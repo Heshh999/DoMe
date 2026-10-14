@@ -11,10 +11,23 @@ from typing import Any
 import pytest
 import yaml
 
+import dome_deploy
+
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
 DEPLOY = WORKFLOWS / "deploy.yml"
 PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+DOCKERFILE = ROOT / "deploy" / "Dockerfile"
+# The one form of `secrets.` allowed outside the deploy step: GitHub evaluates it and the gate receives a NAME.
+PROBE = "${{{{ secrets.{0} != '' && '{0}{1}' || '' }}}}"
+FLYCTL_URL = "https://github.com/superfly/flyctl/releases/download/v0.4.110/flyctl_0.4.110_Linux_x86_64.tar.gz"
+# From flyctl_0.4.110_checksums.txt of the v0.4.110 release (fetched 2026-10-14; the tarball hashed the same).
+FLYCTL_SHA256 = "62b48471d4d560831ec27a3c316c402750d34a3f5f8b956459d7cc5f6125ec97"
+
+
+def repo_level_probe() -> str:
+    names = dome_deploy.DEPLOY_SECRET_NAMES
+    return "".join(PROBE.format(n, " " if i < len(names) - 1 else "") for i, n in enumerate(names))
 
 
 def load(path: Path) -> dict[Any, Any]:
@@ -60,15 +73,20 @@ def test_inputs_are_exactly_the_three_buttons(wf: dict[str, Any]) -> None:
     assert inputs["action"]["type"] == "choice" and inputs["action"]["options"] == ["deploy", "status"]
     assert inputs["action"]["default"] == "deploy"
     create = inputs["create_database_if_missing"]
-    assert create["type"] == "boolean" and create["default"] is False and "$38" in create["description"]
+    assert create["type"] == "boolean" and create["default"] is False
+    assert "about $41 a month" in create["description"] and "about $45 a month" in create["description"]
 
 
 def test_read_only_token_and_three_jobs(wf: dict[str, Any]) -> None:
     assert wf["permissions"] == {"contents": "read"}
     assert set(wf["jobs"]) == {"gate", "deploy", "status"}
-    for job in wf["jobs"].values():
-        assert "permissions" not in job  # nothing widens the read-only token
+    # only the gate reads more: the environments' protection rules (actions: read); nothing can write
+    assert wf["jobs"]["gate"]["permissions"] == {"contents": "read", "actions": "read"}
+    for name, job in wf["jobs"].items():
+        if name != "gate":
+            assert "permissions" not in job
         assert isinstance(job.get("timeout-minutes"), int)
+    assert "write" not in DEPLOY.read_text().split("name: Deploy", 1)[1]
 
 
 def test_every_action_is_pinned_to_a_commit(wf: dict[str, Any]) -> None:
@@ -82,9 +100,22 @@ def test_every_action_is_pinned_to_a_commit(wf: dict[str, Any]) -> None:
     assert lines and all("# " in line for line in lines), "every pin carries its tag as a comment"
 
 
-def test_flyctl_and_checkout_settings(wf: dict[str, Any]) -> None:
-    [setup] = [s for s in steps(wf["jobs"]["deploy"]) if "setup-flyctl" in s.get("uses", "")]
-    assert setup["with"] == {"version": "0.4.110"}
+def test_flyctl_is_downloaded_and_checked_by_sha256(wf: dict[str, Any]) -> None:
+    deploy_steps = steps(wf["jobs"]["deploy"])
+    [install] = [s for s in deploy_steps if s.get("name", "").startswith("Install flyctl")]
+    assert "uses" not in install and "env" not in install  # no action, and no secret near the download
+    script = install["run"]
+    assert "set -euo pipefail" in script and FLYCTL_URL in script and "--proto '=https'" in script
+    assert f'echo "{FLYCTL_SHA256}  $dir/flyctl.tar.gz" | sha256sum -c -' in script
+    # the check comes before the archive is opened, and only flyctl is extracted into a directory of its own
+    assert script.index("sha256sum -c") < script.index("tar -xzf")
+    assert 'tar -xzf "$dir/flyctl.tar.gz" -C "$dir" flyctl' in script and 'dir="$RUNNER_TEMP/flyctl"' in script
+    assert 'echo "$dir" >> "$GITHUB_PATH"' in script
+    assert deploy_steps.index(install) < len(deploy_steps) - 1  # installed before the step with the secrets
+    assert "setup-flyctl" not in DEPLOY.read_text()
+
+
+def test_checkout_settings(wf: dict[str, Any]) -> None:
     for job in wf["jobs"].values():
         for step in steps(job):
             if step.get("uses", "").startswith("actions/checkout@"):
@@ -114,9 +145,16 @@ def test_secrets_only_in_the_deploy_step_env(wf: dict[str, Any]) -> None:
                     if key != "env":
                         assert "secrets." not in str(value), (job_name, key)
                 for name, value in step["env"].items():
-                    if "secrets." in str(value):
+                    if "secrets." not in str(value):
+                        continue
+                    if job_name == "gate":
+                        assert name == "REPO_LEVEL_SECRETS" and value == repo_level_probe(), name
+                    else:
                         assert re.fullmatch(r"\$\{\{ secrets\.[A-Z_]+ \}\}", value), name
-    assert holders == [("deploy", "Set up what is missing, deploy, check")]
+    assert holders == [
+        ("gate", "Branch, no repository secrets, protected environments, and for production, staging runs this commit"),
+        ("deploy", "Set up what is missing, deploy, check"),
+    ]
     env = steps(wf["jobs"]["deploy"])[-1]["env"]
     assert {k for k, v in env.items() if "secrets." in v} == {
         "FLY_API_TOKEN",
@@ -126,12 +164,27 @@ def test_secrets_only_in_the_deploy_step_env(wf: dict[str, Any]) -> None:
     assert env["DOME_FALLBACK_DATABASE_URL"] == "${{ secrets.DATABASE_URL }}"
 
 
-def test_gate_and_status_have_no_environment_and_no_secrets(wf: dict[str, Any]) -> None:
+def test_gate_and_status_have_no_environment_and_no_secret_values(wf: dict[str, Any]) -> None:
     for name in ("gate", "status"):
         job = wf["jobs"][name]
         assert "environment" not in job
-        assert "secrets." not in str(job)
-        assert not any("setup-flyctl" in s.get("uses", "") for s in steps(job))
+        assert not any("flyctl" in str(s) for s in steps(job))
+    assert "secrets." not in str(wf["jobs"]["status"])
+    # the gate sees secrets only through the probe: GitHub evaluates `!= ''` and hands over names, never values
+    [probe_step] = [s for s in steps(wf["jobs"]["gate"]) if "env" in s]
+    env = probe_step["env"]
+    assert env["REPO_LEVEL_SECRETS"] == repo_level_probe()
+    assert env["GH_TOKEN"] == "${{ github.token }}"
+    assert all("secrets." not in str(v) for k, v in env.items() if k != "REPO_LEVEL_SECRETS")
+    assert set(dome_deploy.DEPLOY_SECRET_NAMES) == {"FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DATABASE_URL"}
+    deploy_env = steps(wf["jobs"]["deploy"])[-1]["env"]
+    probed = {v.split("secrets.")[1].split(" ")[0] for v in deploy_env.values() if "secrets." in v}
+    assert probed == set(dome_deploy.DEPLOY_SECRET_NAMES), "every secret the deploy job reads is probed"
+
+
+def test_no_environment_url_that_would_claim_a_live_site(wf: dict[str, Any]) -> None:
+    assert wf["jobs"]["deploy"]["environment"] == {"name": "${{ inputs.environment }}"}
+    assert "domeremote.com" not in str(wf["jobs"])
 
 
 def test_no_expressions_inside_scripts_and_no_tracing() -> None:
@@ -149,11 +202,24 @@ def test_no_expressions_inside_scripts_and_no_tracing() -> None:
 
 def test_each_job_runs_the_program_once_with_its_own_mode(wf: dict[str, Any]) -> None:
     runs = {name: [s["run"] for s in steps(job) if "run" in s] for name, job in wf["jobs"].items()}
-    assert runs == {
-        "gate": ["python3 deploy/launch/dome_deploy.py gate"],
-        "deploy": ["python3 deploy/launch/dome_deploy.py deploy"],
-        "status": ["python3 deploy/launch/dome_deploy.py status"],
-    }
+    program = [r for job in runs.values() for r in job if "dome_deploy.py" in r]
+    assert program == [
+        "/usr/bin/python3 -I deploy/launch/dome_deploy.py gate",
+        "/usr/bin/python3 -I deploy/launch/dome_deploy.py deploy",
+        "/usr/bin/python3 -I deploy/launch/dome_deploy.py status",
+    ]
+    assert runs["gate"] == [program[0]] and runs["status"] == [program[2]]
+    assert runs["deploy"][-1] == program[1] and len(runs["deploy"]) == 2  # flyctl install, then the program
+
+
+def test_dockerfile_base_images_are_pinned_by_digest() -> None:
+    text = DOCKERFILE.read_text()
+    args = dict(re.findall(r"^ARG ((?:PYTHON|NODE|UV)_IMAGE)=(\S+)$", text, re.MULTILINE))
+    assert set(args) == {"PYTHON_IMAGE", "NODE_IMAGE", "UV_IMAGE"}
+    for name, ref in args.items():
+        assert re.fullmatch(r"[a-z0-9./-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}", ref), name
+    froms = re.findall(r"^FROM (\S+)", text, re.MULTILINE)
+    assert froms and all(f.startswith("${") for f in froms), "every stage starts from a pinned ARG"
 
 
 def test_ai_stays_off_and_no_anthropic_names_anywhere() -> None:
