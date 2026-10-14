@@ -300,3 +300,27 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
 61. **The development console log is coloured only on a terminal** (`ConsoleRenderer(colors=sys.stderr.isatty())`).
     The test kit runs `DOME_ENV=development` in a container without one, and its README has the owner search
     `docker logs` with `findstr`; an older Command Prompt printed the escape codes as text.
+62. **The ID token's `iss` is checked against the discovery document's issuer exactly (OIDC Core 3.1.3.7).**
+    `DOME_OIDC_ISSUER` is stored without a trailing slash and the discovery document must match it up to that
+    slash, but Auth0 publishes `https://<tenant>.<region>.auth0.com/` and puts exactly that in every `iss`; the
+    old exact comparison with the stripped setting rejected every Auth0 sign-in. The stored `Identity.issuer`
+    keeps the stripped form, so account keys (issuer + subject) are unchanged and no migration is needed.
+    `tests/test_oidc_issuer.py`.
+63. **The token endpoint is called with `client_secret_post`, explicitly.** Authlib defaults to
+    `client_secret_basic`; a new Auth0 Regular Web Application expects Post. Keycloak and `tools/dev-idp`
+    accept both. The founder's guide still has the Auth0 Credentials tab checked.
+64. **`DOME_BUILD_COMMIT` and `/healthz` → `commit`.** The image records its git commit (Dockerfile build
+    argument, environment variable, OCI revision label); `/healthz` reports it so the Deploy workflow can prove
+    which build runs and refuse production unless staging runs the same commit. Validated as 7–40 lower-case
+    hex digits so a stray value cannot reach the health body.
+65. **Fly.io client addresses come from `Fly-Client-IP` behind a private-range trust (`DOME_CLIENT_IP_HEADER`).**
+    Only `fly-client-ip` is accepted, only from a peer in `DOME_TRUSTED_PROXIES`, and only when it appears
+    exactly once with one valid address (IPv4-mapped IPv6 unwrapped); otherwise the X-Forwarded-For walk's
+    answer stays. Chosen over trusting the app's own public addresses in the walk, which would collapse every
+    client to one address whenever Fly changed them. `/healthz` → `forwarded_client` is the live self-check;
+    "private" there means "not a global address" (`not ip.is_global`), so shared address space counts too.
+66. **Production adds `X-Robots-Tag: noindex, nofollow` on non-canonical hosts.** The `<app>.fly.dev` name serves
+    the same site (where sign-in fails on the Origin check); only the `DOME_PUBLIC_ORIGIN` host, with or without
+    an explicit default port, is indexable. A missing or repeated `Host` header counts as non-canonical.
+67. **The database pool recycles connections after 600 s** (was 1800), per Fly Managed Postgres guidance (the
+    proxy drains connections after 10 minutes); `pool_pre_ping` stays on.

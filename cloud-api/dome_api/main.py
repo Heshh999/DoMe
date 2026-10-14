@@ -177,9 +177,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         csp=build_csp(settings.issuer_origin),
         hsts=settings.env == "production",
         noindex=settings.env != "production",
+        canonical_host=settings.public_host,
     )
     app.add_middleware(RequestLogMiddleware)
     # Outermost: the client address every limiter and ip_hash sees is resolved exactly once, and only
     # from headers a configured proxy sent (DOME_TRUSTED_PROXIES; empty = the TCP peer is the client).
-    app.add_middleware(TrustedProxyMiddleware, trusted=settings.trusted_proxy_list)
+    app.add_middleware(
+        TrustedProxyMiddleware, trusted=settings.trusted_proxy_list, client_ip_header=settings.client_ip_header
+    )
     return app

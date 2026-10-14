@@ -11,8 +11,13 @@
 #          api-build  python:3.12 + uv: `uv sync --locked --no-dev`        -> /app/cloud-api/.venv
 #          runtime    python:3.12-slim, non-root, venv + PWA + entrypoint; CMD `dome-api`
 #
-# Evidence: syntax-checked with the BuildKit parser and hadolint; NOT built or run here (no Docker
-# daemon in the development environment). The first `docker build` may still surface something.
+# Evidence: built by CI on every push since 2026-10-11 (.github/workflows/ci.yml, job "container"),
+# which also checks the image refuses to invent a signing key outside development and carries the
+# build commit. Built and run in the test-kit rehearsal (Linux). NOT yet run on Fly.io.
+#
+# The Deploy workflow (deploy/launch/dome_deploy.py) builds it with:
+#   --build-arg VITE_DOME_RELEASE_CHANNEL=staging|production  --build-arg VITE_DOME_SUPPORT_URL=...
+#   --build-arg DOME_BUILD_COMMIT=<40-hex git commit>          (reported by /healthz as "commit")
 
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 ARG NODE_IMAGE=node:22-bookworm-slim
@@ -88,7 +93,12 @@ RUN groupadd --system --gid 10001 dome \
 COPY --from=api-build --chown=dome:dome /app /app
 COPY --from=pwa --chown=dome:dome /src/mobile-app/dist /app/static
 COPY --chown=dome:dome --chmod=0755 deploy/entrypoint.sh /app/entrypoint.sh
-ENV PATH="/app/cloud-api/.venv/bin:${PATH}" \
+# The git commit this image was built from (empty for local builds). Declared after the COPY lines so a
+# new commit does not invalidate the cached layers above; settings.py accepts only 7-40 hex digits.
+ARG DOME_BUILD_COMMIT=
+LABEL org.opencontainers.image.revision="${DOME_BUILD_COMMIT}"
+ENV DOME_BUILD_COMMIT=${DOME_BUILD_COMMIT} \
+    PATH="/app/cloud-api/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     DOME_STATIC_DIR=/app/static \
     DOME_API_BIND=0.0.0.0:8080 \

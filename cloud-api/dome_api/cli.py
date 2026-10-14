@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         env=settings.env,
         reload=args.reload,
         trusted_proxies=settings.trusted_proxy_list or "none",
+        client_ip_header=settings.client_ip_header or "none",
+        commit=settings.build_commit or "unknown",
     )
     uvicorn.run(
         "dome_api.main:create_app",

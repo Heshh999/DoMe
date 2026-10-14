@@ -1,0 +1,40 @@
+[project]
+name = "dome-launch"
+version = "0.1.0"
+description = "DoMe one-button deploy to Fly.io (the Deploy GitHub Actions workflow). The program itself uses only the standard library."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+# Only for the tests and checks (ci.yml job deploy-tooling); the workflow runs dome_deploy.py with the
+# runner's system python3 and installs nothing.
+dev = [
+    "pytest>=9.1.1,<10",
+    "pyyaml>=6.0.3,<7",
+    "types-pyyaml>=6.0.12,<7",
+    "ruff>=0.16.10,<0.17",
+    "mypy>=1.20,<3",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "N", "W"]
+ignore = ["S101", "S104", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["dome_deploy.py", "tests"]

@@ -1,15 +1,20 @@
-# DoMe cloud-api + relay on Fly.io (ADR-0001 D2: Fly.io, single region to start; reversible).
+# DoMe cloud-api + relay + PWA on Fly.io (ADR-0001 D2: Fly.io, single region; reversible).
 #
-# STATUS: written against the Fly.io configuration reference (superfly/docs, fly.toml reference,
-# read 2026-10-09) but NOT YET DEPLOYED - nothing in this file is verified against a live Fly app.
-# Values marked PLACEHOLDER must be replaced per environment (one Fly app per environment:
-# dome-api-staging, dome-api-prod). No secret belongs in this file; see deploy/README.md "Secrets".
+# STATUS (2026-10-14): written against the Fly.io configuration reference and the flyctl v0.4.110 source;
+# NOT YET DEPLOYED. Nothing in this file has been verified against a live Fly app.
 #
-# Deploy from the repository root (build context = repository root, see deploy/Dockerfile):
-#   fly deploy --config deploy/fly.toml --dockerfile deploy/Dockerfile .
+# This is the environment-neutral base for BOTH environments. The "Deploy" GitHub Actions workflow
+# (.github/workflows/deploy.yml -> deploy/launch/dome_deploy.py) always passes --app and the
+# per-environment values with -e, which override [env] below:
+#   DOME_ENV, DOME_PUBLIC_ORIGIN, DOME_OIDC_ISSUER, DOME_OIDC_CLIENT_ID (and the optional
+#   DOME_SUPPORT_RESPONSE_EXPECTATION); the public, build-time VITE_ values are docker build arguments.
+# Fixed per-environment facts live in deploy/launch/environments.toml; the founder's guide is
+# docs/LAUNCH_SETUP.md. There is deliberately NO public origin, issuer or client id here: a manual
+# `fly deploy` without them refuses to start (exit 2) instead of running with made-up values.
+# No secret belongs in this file; see deploy/README.md "Secrets".
 
-app = "dome-api-staging"          # PLACEHOLDER: the Fly app name for this environment
-primary_region = "ams"            # PLACEHOLDER: pick the region closest to the first customers
+app = "domeremote-staging"        # a safe default that is never production; the workflow always passes --app
+primary_region = "iad"           # Ashburn, Virginia: the Managed Postgres region nearest New Jersey (ewr has none)
 
 # Draining: uvicorn is started with timeout_graceful_shutdown=20 (cloud-api/dome_api/cli.py), so
 # the kill timeout must be longer than 20 s. Agents reconnect with backoff; commands in flight at
@@ -22,53 +27,51 @@ kill_timeout = "30s"              # Fly maximum is 300 s
 swap_size_mb = 256
 
 [build]
-  # Paths are relative to the fly.toml location by flyctl's own rule; passing --dockerfile on the
-  # command line (as above) removes the ambiguity. ignorefile keeps node_modules/.venv/.env out.
+  # Used only by an engineer's manual `fly deploy --config deploy/fly.toml .` (paths are relative to
+  # this file). The Deploy workflow builds with plain `docker build` (as CI does) and deploys the result
+  # with `flyctl deploy --image`, so this section is not used there.
   dockerfile = "Dockerfile"
   ignorefile = "Dockerfile.dockerignore"
-  [build.args]
-    VITE_DOME_RELEASE_CHANNEL = "staging"   # PLACEHOLDER: "production" for the production app
-    VITE_DOME_SUPPORT_URL = ""              # PLACEHOLDER: mailto:/https: shown on Support pages
 
 [deploy]
   # Migrations run once, in a temporary machine, before the new version starts; the app process
   # is then started with --skip-migrations (start-up still refuses to run unless the schema is at
-  # head). Forward-only: Alembic downgrades are not part of the rollback procedure (README).
+  # head). Fly keeps the image ENTRYPOINT for the release command, so deploy/entrypoint.sh writes the
+  # signing key and derives DOME_DATABASE_URL first. Forward-only: Alembic downgrades are not part of
+  # the rollback procedure (README).
   release_command = "alembic -c alembic.ini upgrade head"
   # One machine, in-memory connection manager (ADR-0001 D1): a deploy means a brief relay restart.
   # "rolling" with a single machine is a restart; do not switch to multiple machines without the
-  # Redis seam (cloud-api/KNOWN_ISSUES.md #2).
+  # Redis seam (cloud-api/KNOWN_ISSUES.md #2). The workflow deploys with --ha=false and scales to 1.
   strategy = "rolling"
 
 [processes]
   app = "dome-api --skip-migrations"
 
 # Non-sensitive configuration only. Secrets (DOME_SESSION_SECRET, DOME_OIDC_CLIENT_SECRET,
-# DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64, DATABASE_URL, Stripe keys) are set with `fly secrets set`
-# and take precedence over [env] values of the same name.
+# DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64, DATABASE_URL) are Fly app secrets set by the Deploy workflow
+# (`flyctl secrets import`, stdin) or by `flyctl mpg attach`, never here.
 [env]
-  DOME_ENV = "staging"                                      # PLACEHOLDER: "production" for prod
-  # The exact https origin the PWA is served from (deploy/README.md "Domain"): production
-  # "https://domeremote.com"; staging "https://staging.domeremote.com" once its DNS record exists,
-  # the fly.dev address until then. Never domeremote.app or www: those only redirect.
-  DOME_PUBLIC_ORIGIN = "https://dome-api-staging.fly.dev"   # PLACEHOLDER: see the three lines above
+  DOME_ENV = "staging"                                      # strict floor; production overrides it with -e
   DOME_API_BIND = "0.0.0.0:8080"                            # must match internal_port and the image HEALTHCHECK
   DOME_LOG_LEVEL = "INFO"
   DOME_STATIC_DIR = "/app/static"
   DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH = "/app/run/entitlement-ed25519.pem"
-  DOME_OIDC_ISSUER = "https://idp.example.com"              # PLACEHOLDER: Auth0 tenant / Keycloak realm issuer URL (https)
-  DOME_OIDC_CLIENT_ID = "dome-staging"                      # PLACEHOLDER: the relying-party client id registered at the issuer
   DOME_OIDC_REDIRECT_PATH = "/v1/auth/callback"
   DOME_OIDC_SCOPES = "openid email profile"
   DOME_RELAY_MAX_CONNECTIONS = "5000"                       # design assumption; keep above the concurrency hard_limit below
   DOME_RELAY_MAX_FRAME_BYTES = "65536"
   DOME_RELAY_PER_PC_QUEUE_DEPTH = "16"
-  # DOME_TRUSTED_PROXIES is REQUIRED in staging/production and intentionally NOT given a value here:
-  # it is the address range the Fly proxy connects FROM as seen by this process (expected to be the
-  # private 6PN range, e.g. "fdaa::/16"). Verify it on the first machine with
-  # `fly ssh console -C "ss -tn"` and then set it with `fly secrets set` or add it here. A wrong value
-  # makes every per-IP abuse limit and every stored ip_hash attacker-chosen; "*" is refused by the API.
-  # The process refuses to start until it is set (cloud-api/dome_api/settings.py).
+  # Client addresses (deploy/README.md "Client addresses"). Fly's proxy reaches the app over a private
+  # IPv4 address on the machine (fly.io/docs/networking/app-services) and this process listens on IPv4
+  # only (0.0.0.0), so every TCP peer is Fly's proxy on a private IPv4 address: those ranges are the
+  # trusted proxies. The client address is then read from Fly-Client-IP, which Fly's proxy sets on every
+  # request (fly.io/docs/networking/request-headers recommends it over X-Forwarded-For), so the app's own
+  # public addresses never need to be listed. /healthz reports "forwarded_client": "ok" only when the
+  # address the app resolved equals Fly-Client-IP; the Deploy workflow refuses a deploy where it is not
+  # ok. NOT YET VERIFIED on a live machine: the first staging deploy is that check.
+  DOME_TRUSTED_PROXIES = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  DOME_CLIENT_IP_HEADER = "fly-client-ip"
 
 [http_service]
   internal_port = 8080

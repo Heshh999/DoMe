@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 
+from dome_api.main import create_app
 from dome_api.plans import plan_for
 from dome_api.security.headers import SecurityHeadersMiddleware, loggable_path
 from dome_api.security.proxy import TrustedProxyMiddleware
@@ -54,19 +55,26 @@ async def test_forwarded_for_from_an_untrusted_peer_cannot_evade_per_ip_limits(e
         svc.link_start_limiter = original
 
 
-async def _run_middleware(trusted: list[str], peer: str, headers: dict[str, str]) -> tuple[str | None, str]:
+async def _run_middleware(
+    trusted: list[str],
+    peer: str,
+    headers: dict[str, str] | list[tuple[str, str]],
+    *,
+    client_ip_header: str = "",
+) -> tuple[str | None, str]:
     seen: dict[str, Any] = {}
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         seen["client"] = scope.get("client")
         seen["scheme"] = scope.get("scheme")
 
-    mw = TrustedProxyMiddleware(app, trusted=trusted)
+    mw = TrustedProxyMiddleware(app, trusted=trusted, client_ip_header=client_ip_header)
+    pairs = list(headers.items()) if isinstance(headers, dict) else headers
     scope = {
         "type": "http",
         "scheme": "http",
         "client": (peer, 40000),
-        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+        "headers": [(k.lower().encode(), v.encode()) for k, v in pairs],
     }
 
     async def receive() -> dict[str, Any]:
@@ -95,6 +103,90 @@ async def test_trusted_proxy_middleware_uses_the_hop_the_proxy_appended() -> Non
     assert (await _run_middleware([], "127.0.0.1", xff))[0] == "127.0.0.1"
     with pytest.raises(ValueError):
         TrustedProxyMiddleware(lambda *a: None, trusted=["*"])  # type: ignore[arg-type,return-value]
+
+
+# Fly.io's documented shape: the proxy connects from a private IPv4 address on the VM, and the right-most
+# X-Forwarded-For hop is the app's own public address (fly.io/docs/networking/request-headers).
+FLY_PEER = "172.19.3.2"
+FLY_TRUSTED = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+FLY_XFF = "6.6.6.6, 203.0.113.9, 66.241.124.10"
+
+
+async def test_fly_forwarded_for_shape_needs_the_client_ip_header() -> None:
+    # without the header, the walk stops at the app's own address: every client would share one address
+    walk_only = await _run_middleware(FLY_TRUSTED, FLY_PEER, {"X-Forwarded-For": FLY_XFF})
+    assert walk_only[0] == "66.241.124.10"
+    # listing the app's public addresses fixes the walk, but they can change without a deploy
+    assert (await _run_middleware([*FLY_TRUSTED, "66.241.124.10"], FLY_PEER, {"X-Forwarded-For": FLY_XFF}))[0] == (
+        "203.0.113.9"
+    )
+    # DOME_CLIENT_IP_HEADER=fly-client-ip: the header the proxy sets wins, independent of the app's addresses
+    fly = {"X-Forwarded-For": FLY_XFF, "Fly-Client-IP": "203.0.113.9", "X-Forwarded-Proto": "https"}
+    assert await _run_middleware(FLY_TRUSTED, FLY_PEER, fly, client_ip_header="fly-client-ip") == (
+        "203.0.113.9",
+        "https",
+    )
+    mapped = {"Fly-Client-IP": "::ffff:198.51.100.4"}
+    assert (await _run_middleware(FLY_TRUSTED, FLY_PEER, mapped, client_ip_header="fly-client-ip"))[0] == (
+        "198.51.100.4"
+    )
+    v6 = {"Fly-Client-IP": "2001:db8::7"}
+    assert (await _run_middleware(FLY_TRUSTED, FLY_PEER, v6, client_ip_header="fly-client-ip"))[0] == "2001:db8::7"
+
+
+async def test_client_ip_header_is_ignored_unless_single_valid_and_from_a_trusted_peer() -> None:
+    forged = {"X-Forwarded-For": FLY_XFF, "Fly-Client-IP": "1.1.1.1"}
+    # an untrusted peer (any internet client) cannot choose its address with the header
+    assert (await _run_middleware(FLY_TRUSTED, "203.0.113.50", forged, client_ip_header="fly-client-ip"))[0] == (
+        "203.0.113.50"
+    )
+    # repeated or malformed: the X-Forwarded-For walk's answer stays
+    repeated = [("X-Forwarded-For", FLY_XFF), ("Fly-Client-IP", "1.1.1.1"), ("Fly-Client-IP", "2.2.2.2")]
+    assert (await _run_middleware(FLY_TRUSTED, FLY_PEER, repeated, client_ip_header="fly-client-ip"))[0] == (
+        "66.241.124.10"
+    )
+    garbage = {"X-Forwarded-For": FLY_XFF, "Fly-Client-IP": "1.1.1.1, 2.2.2.2"}
+    assert (await _run_middleware(FLY_TRUSTED, FLY_PEER, garbage, client_ip_header="fly-client-ip"))[0] == (
+        "66.241.124.10"
+    )
+    # not configured: the header means nothing
+    assert (await _run_middleware(FLY_TRUSTED, FLY_PEER, forged))[0] == "66.241.124.10"
+    with pytest.raises(ValueError):
+        TrustedProxyMiddleware(lambda *a: None, trusted=[], client_ip_header="fly-client-ip")  # type: ignore[arg-type,return-value]
+
+
+def test_create_app_wires_the_client_ip_header_and_the_canonical_host(settings: Settings) -> None:
+    fly = settings.model_copy(update={"trusted_proxies": ",".join(FLY_TRUSTED), "client_ip_header": "fly-client-ip"})
+    app = create_app(fly)
+    options = {m.cls.__name__: m.kwargs for m in app.user_middleware}  # type: ignore[attr-defined]
+    assert options["TrustedProxyMiddleware"] == {"trusted": FLY_TRUSTED, "client_ip_header": "fly-client-ip"}
+    assert options["SecurityHeadersMiddleware"]["canonical_host"] == fly.public_host == fly.public_origin.split("//")[1]
+
+
+def _settings_base(settings: Settings) -> dict[str, Any]:
+    base = settings.model_dump()
+    base["session_secret"] = settings.session_secret.get_secret_value()
+    base["oidc_client_secret"] = settings.oidc_client_secret.get_secret_value()
+    base.update(ai_enabled=False, ai_provider="", ai_dev_grant_interpretations=0, ai_dev_grant_cost_cap_cents=0)
+    return base
+
+
+def test_settings_client_ip_header_and_build_commit(settings: Settings) -> None:
+    base = _settings_base(settings)
+    with pytest.raises(ValidationError, match="DOME_CLIENT_IP_HEADER"):
+        Settings(**{**base, "trusted_proxies": "", "client_ip_header": "fly-client-ip"})
+    with pytest.raises(ValidationError):
+        Settings(**{**base, "trusted_proxies": "10.0.0.0/8", "client_ip_header": "x-forwarded-for"})
+    fly = Settings(
+        **{**base, "env": "staging", "trusted_proxies": ",".join(FLY_TRUSTED), "client_ip_header": "fly-client-ip"}
+    )
+    assert fly.trusted_proxy_list == FLY_TRUSTED and fly.client_ip_header == "fly-client-ip"
+    assert Settings(**base).build_commit == ""
+    for good in ("0123456789abcdef0123456789abcdef01234567", "0123abc"):
+        assert Settings(**{**base, "build_commit": good}).build_commit == good
+    for bad in ("main", "012345", "0123456789ABCDEF0123456789abcdef01234567", "a" * 41, "0123abc\n"):
+        with pytest.raises(ValidationError):
+            Settings(**{**base, "build_commit": bad})
 
 
 def test_settings_refuse_wildcard_and_require_proxies_outside_development(settings: Settings) -> None:
@@ -280,6 +372,39 @@ async def test_only_production_responses_are_indexable() -> None:
     assert staging[b"x-robots-tag"] == b"noindex, nofollow" and b"strict-transport-security" not in staging
     production = await headers_for(production=True)
     assert b"x-robots-tag" not in production and b"strict-transport-security" in production
+
+
+async def test_production_noindex_on_non_canonical_hosts() -> None:
+    """The hosting provider's own address (e.g. <app>.fly.dev) is a duplicate of the production site."""
+
+    async def page(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request"}
+
+    async def robots(hosts: list[str], *, noindex: bool = False) -> bytes | None:
+        sent: list[Any] = []
+
+        async def send(message: Any) -> None:
+            sent.append(message)
+
+        middleware = SecurityHeadersMiddleware(
+            page, csp="default-src 'self'", hsts=True, noindex=noindex, canonical_host="DoMeRemote.com"
+        )
+        scope = {"type": "http", "path": "/", "headers": [(b"host", h.encode()) for h in hosts]}
+        await middleware(scope, receive, send)
+        return dict(sent[0]["headers"]).get(b"x-robots-tag")
+
+    assert await robots(["domeremote.com"]) is None
+    assert await robots(["DOMEREMOTE.COM:443"]) is None
+    assert await robots(["domeremote-production.fly.dev"]) == b"noindex, nofollow"
+    assert await robots(["www.domeremote.com"]) == b"noindex, nofollow"
+    assert await robots([]) == b"noindex, nofollow"
+    assert await robots(["domeremote.com", "evil.example"]) == b"noindex, nofollow"
+    # staging keeps saying noindex everywhere, canonical host or not
+    assert await robots(["domeremote.com"], noindex=True) == b"noindex, nofollow"
 
 
 # ----- finding 6: command ids are looked up within the account only --------------------------------------

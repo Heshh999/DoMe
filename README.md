@@ -37,8 +37,8 @@ touchpad or keyboard; buttons and typed commands never need it.
 | `tools/dev-idp/` | Development-only OpenID Connect issuer, so local runs and tests never need an authentication bypass; optional passphrase gate for the test kit. | 14 (unit) |
 | `testkit/` | **Try DoMe on your own Windows PC and iPhone**: three double-click scripts run the whole service in Docker behind temporary HTTPS addresses, start the PC program from source and build the extension; a fourth switches the optional AI assistant on with your own Anthropic API key. Start with `testkit/README.md`. | 240 script checks (pwsh); full rehearsal on Linux with an HTTPS stand-in (before the assistant) |
 | `brand/` | Original DoMe icon and wordmark (editable SVG), export script, `BRAND.md`. | 29 (unit) + export drift check |
-| `deploy/` | Container image, Fly.io configuration, Docker Compose for development, deployment notes. | image built and run by the test kit rehearsal (Linux); not deployed |
-| `.github/workflows/` | CI for every suite above. | not run on GitHub yet |
+| `deploy/` | Container image, Fly.io configuration, the one-button deploy program (`deploy/launch/`), Docker Compose for development, deployment notes. | image built by CI and run by the test kit rehearsal (Linux); deploy program tested against a fake `flyctl`; not deployed |
+| `.github/workflows/` | CI for every suite above (`ci.yml`), the Windows installer build, and the founder's **Deploy** button (`deploy.yml`). | CI green on GitHub since 2026-10-11; Deploy never run against Fly.io yet |
 | `docs/` | Everything written for people: see the list below. | — |
 
 Evidence tags used throughout: **unit-tested**, **integration-tested**, **load-tested**,
@@ -56,6 +56,8 @@ Start with `docs/adr/0001-foundational-decisions.md`, then `docs/ARCHITECTURE.md
 | `docs/PROTOCOL.md` | The wire contract explained: envelopes, frames, states, error codes, versioning |
 | `docs/PRODUCT_AND_PLANS.md` | Product principles, Free vs Pro, limits, rate budgets |
 | `docs/BILLING.md` | Subscription → entitlement design for paid launch (not implemented) |
+| `docs/LAUNCH_SETUP.md` | The founder's click-by-click guide to putting DoMe online (Fly.io, GitHub, Auth0, Cloudflare) |
+| `docs/OPERATIONS.md` | Deployment, migrations, backups, rollback, rotation, monitoring, incidents |
 | `docs/COST_MODEL.md` | Hosting/vendor cost assumptions with dated sources |
 | `docs/DATA_RETENTION.md` | What is stored, for how long, and why |
 | `docs/WINDOWS_INSTALL.md`, `docs/IPHONE_SETUP.md` | Customer setup, as implemented today |

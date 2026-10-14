@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # "nothing is trusted" (the TCP peer is the client); "*" is refused because it makes every per-IP abuse
     # limit and every recorded ip_hash attacker-chosen. Staging and production must set it explicitly.
     trusted_proxies: str = ""
+    # Optional single-value header the trusted proxy sets to the client address it accepted the connection
+    # from. Only "fly-client-ip" is accepted (Fly.io overwrites it on every request it proxies; Fly's docs
+    # recommend it over X-Forwarded-For when nothing else sits in front). It is read only when the TCP peer
+    # is one of DOME_TRUSTED_PROXIES, so the app's own public addresses never have to be listed there.
+    client_ip_header: Literal["", "fly-client-ip"] = ""
     database_url: str
     session_secret: SecretStr = Field(min_length=16)
     session_idle_days: int = Field(default=30, ge=1, le=90)
@@ -92,6 +97,9 @@ class Settings(BaseSettings):
     support_response_expectation: str = Field(default="", max_length=200)
     static_dir: Path | None = None
     log_level: str = "INFO"
+    # The git commit the image was built from (deploy/Dockerfile build argument), reported by /healthz so a
+    # deploy can prove which build is running; empty outside a built image.
+    build_commit: str = Field(default="", pattern=r"^([0-9a-f]{7,40})?$")
 
     # Phase C (disabled when blank); declared so the schema is complete and validated.
     stripe_secret_key: SecretStr = SecretStr("")
@@ -195,6 +203,11 @@ class Settings(BaseSettings):
                 f"{self.env} requires DOME_TRUSTED_PROXIES: the addresses/CIDRs of the ingress proxy whose "
                 "X-Forwarded-For is trusted, or 'none' when clients reach this process directly"
             )
+        if self.client_ip_header and not self.trusted_proxy_list:
+            raise ValueError(
+                "DOME_CLIENT_IP_HEADER is only read from a trusted proxy; set DOME_TRUSTED_PROXIES to that proxy's "
+                "addresses as well"
+            )
         if self.static_dir is not None and not self.static_dir.is_dir():
             raise ValueError(f"DOME_STATIC_DIR {self.static_dir} is not a directory")
         self._v_ai()
@@ -259,6 +272,11 @@ class Settings(BaseSettings):
         if not self.trusted_proxies or self.trusted_proxies == "none":
             return []
         return self.trusted_proxies.split(",")
+
+    @property
+    def public_host(self) -> str:
+        """``host[:port]`` of DOME_PUBLIC_ORIGIN (already lower-case)."""
+        return self.public_origin.split("://", 1)[1]
 
     @property
     def cookie_secure(self) -> bool:

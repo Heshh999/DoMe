@@ -60,6 +60,31 @@ figure on the vendor page before relying on it; prices change.
 | Apple | Not applicable: the phone client is a PWA, no App Store membership | — | A native app later would need the developer programme |
 | Domain + DNS | $15/yr ≈ $1.25/mo; DNS at a free tier | assumption | — |
 
+### 2A. Launch decision: hosting per environment (2026-10-14)
+
+What the Deploy workflow (`deploy/launch/environments.toml`, `docs/LAUNCH_SETUP.md`) creates, priced from
+Fly.io's documentation source read on 2026-10-13 (superfly/docs; `fly.io/docs/about/pricing`,
+`fly.io/docs/mpg`). These figures replace the 2026-10-08 inputs above where they differ: the 512 MB
+machine is now listed at $3.69 (was $3.32) and Managed Postgres storage at $0.28 per GB-month (the
+2026-10-08 row used $0.30).
+
+| Item | Staging | Production | Notes |
+| --- | --- | --- | --- |
+| Fly Managed Postgres, Basic (shared-2x, 1 GB), PostgreSQL 16, region `iad` | $38 | $38 | one cluster per environment, nothing shared; created only when the founder ticks the checkbox |
+| Storage, 10 GB initial | ≈ $2.80 | ≈ $2.80 | billed on use, up to 1 TB |
+| One always-on Machine, shared-cpu-1x 512 MB (`deploy/fly.toml`) | $3.69 | $3.69 | exactly one machine (in-memory relay); `--ha=false` |
+| Shared IPv4 + dedicated IPv6 | $0 | $0 | a dedicated IPv4 ($2/mo) is never allocated |
+| TLS certificates (first 10 hostnames) | $0 | $0 | |
+| Outbound data, North America | $0.02/GB | $0.02/GB | traffic inside `iad` (app ↔ database) is free |
+| **Per environment** | **≈ $45** | **≈ $45** | **≈ $90/month for both** |
+
+Region `iad` (Ashburn, Virginia) for both the app and the database: `ewr` (Secaucus, NJ) has no Managed
+Postgres, and since February 2026 cross-region database traffic is billed. Fly has **no spending cap and
+no billing alerts**; deleting an app does not delete its Managed Postgres cluster. Not included: Auth0
+(Free plan up to 25,000 MAU, §8 notes conflicting figures), Cloudflare (free plan: DNS, DNSSEC, 10 redirect
+rules per zone) and GitHub Actions (free on a public repository). The §4 tiers below assume a 2 GB
+machine and are the planning model for growth, not the launch configuration.
+
 ## 3. Product and behaviour assumptions
 
 | Input | Value | Basis |

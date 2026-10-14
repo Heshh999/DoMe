@@ -215,15 +215,16 @@ misconfiguration stops the process with a plain error.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DOME_ENV` | `development` | `development` / `staging` / `production` / `test`. Production requires https origins and a real session secret and enables HSTS. |
-| `DOME_PUBLIC_ORIGIN` | — (required) | Exact origin the PWA is served from (production `https://domeremote.com`, staging `https://staging.domeremote.com`; `deploy/README.md` "Domain"). Used for Origin checks, cookies, QR/link URLs and as the OIDC redirect base. Outside `production` every response also carries `X-Robots-Tag: noindex, nofollow`. |
+| `DOME_PUBLIC_ORIGIN` | — (required) | Exact origin the PWA is served from (production `https://domeremote.com`, staging `https://staging.domeremote.com`; `deploy/README.md` "Domain"). Used for Origin checks, cookies, QR/link URLs and as the OIDC redirect base. Outside `production` every response also carries `X-Robots-Tag: noindex, nofollow`; in `production`, so does every response served under another `Host` (the hosting provider's own address). |
 | `DOME_EXTRA_ORIGINS` | `` | Comma-separated additional exact origins (e.g. the Vite dev server). |
 | `DOME_API_BIND` | `127.0.0.1:8000` | Listen address. |
 | `DOME_TRUSTED_PROXIES` | `` (development/test) | Comma-separated IP addresses or CIDR networks of the reverse proxy whose `X-Forwarded-For` / `X-Forwarded-Proto` are honoured, or `none` when clients reach the process directly. **Required in `staging` and `production`**; `*` is refused. See "Client addresses behind a proxy". |
+| `DOME_CLIENT_IP_HEADER` | `` | `fly-client-ip` or empty. When set, a connection from a trusted proxy takes its client address from that single header (Fly.io sets `Fly-Client-IP` on every request); requires `DOME_TRUSTED_PROXIES`. |
 | `DOME_DATABASE_URL` | — (required) | `postgresql+psycopg://user@host:port/db` (unix socket: `postgresql+psycopg://dome@/dome_dev?host=/tmp&port=54329`). |
 | `DOME_SESSION_SECRET` | — (required, ≥16 chars) | HMAC key for session-cookie ids and IP hashes. Rotating it signs everyone out. |
 | `DOME_SESSION_IDLE_DAYS` / `DOME_SESSION_ABSOLUTE_DAYS` | `30` / `90` | Sliding idle expiry and absolute cap of web sessions. |
-| `DOME_OIDC_ISSUER` | — (required) | OIDC issuer URL (discovery at `/.well-known/openid-configuration`). Auth0, Keycloak or `tools/dev-idp`. |
-| `DOME_OIDC_CLIENT_ID` / `DOME_OIDC_CLIENT_SECRET` | — (required) | Relying-party credentials. |
+| `DOME_OIDC_ISSUER` | — (required) | OIDC issuer URL (discovery at `/.well-known/openid-configuration`). Auth0 (`https://<tenant>.<region>.auth0.com`, with or without the trailing slash), Keycloak or `tools/dev-idp`. Stored without a trailing slash; the ID token's `iss` is compared with the discovery document's `issuer` exactly as published (Auth0 keeps the slash). |
+| `DOME_OIDC_CLIENT_ID` / `DOME_OIDC_CLIENT_SECRET` | — (required) | Relying-party credentials. The token endpoint is called with `client_secret_post` (Auth0: Credentials > Authentication Method "Client Secret (Post)"). |
 | `DOME_OIDC_REDIRECT_PATH` | `/v1/auth/callback` | Registered redirect path (appended to `DOME_PUBLIC_ORIGIN`). |
 | `DOME_OIDC_SCOPES` | `openid email profile` | Requested scopes. |
 | `DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH` | — (required) | Ed25519 private key (PKCS8 PEM) that signs entitlement assertions; public key served at `/.well-known/dome-jwks.json`. |
@@ -244,6 +245,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_SUPPORT_RESPONSE_EXPECTATION` | `` | Customer-facing response expectation (≤ 200 chars) returned with tickets **only** when set by the founder (spec §11A). Unset = the field is absent. |
 | `DOME_STATIC_DIR` | unset | Built PWA directory to serve at `/` (SPA fallback to `index.html`). |
 | `DOME_LOG_LEVEL` | `INFO` | structlog level. JSON output except in `development`. |
+| `DOME_BUILD_COMMIT` | `` | Set by the image (`deploy/Dockerfile` build argument): the git commit, 7–40 lower-case hex digits. Reported by `/healthz` as `commit`. |
 | `DOME_STRIPE_*` | blank | Declared for Phase C; billing endpoints are not implemented yet (`GET /v1/plans` reports `billing_enabled: false`). |
 | `DOME_AI_ENABLED` | `false` | Master switch of the AI assistant. When true, start-up requires a provider, a key for `anthropic` and no `ANTHROPIC_*` variable in the environment, a ceiling above 0, a deadline ≥ timeout + 5, and for every plan with an effective allowance a cost cap of at least one reservation. |
 | `DOME_AI_PROVIDER` | `` | `anthropic` or `fake` (scripted test provider; refused in staging and production). |
@@ -273,12 +275,21 @@ own proxy handling disabled (`proxy_headers=False`, so `FORWARDED_ALLOW_IPS` has
 Settings by deployment:
 
 - development / tests: leave it empty — the TCP peer is the client and forwarded headers are ignored.
-- behind an ingress proxy (ADR-0001 D2 names Fly.io): set the address range the proxy connects *from*
-  as seen by this process (on Fly.io the proxy reaches the VM over the private 6PN network; verify the
-  range with `fly ssh console` + `ss -tn` before trusting it). Example: `DOME_TRUSTED_PROXIES=fdaa::/16`.
+- Fly.io (ADR-0001 D2; set in `deploy/fly.toml`): `DOME_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`
+  and `DOME_CLIENT_IP_HEADER=fly-client-ip`. Fly's proxy reaches the machine over a private IPv4 address
+  and `DOME_API_BIND=0.0.0.0:8080` is IPv4 only, so every peer is the proxy; the right-most
+  `X-Forwarded-For` hop on Fly is the app's own public address, which is why the single `Fly-Client-IP`
+  header the proxy sets is used instead (`deploy/README.md` "Client addresses"). The earlier example
+  `fdaa::/16` (Fly's IPv6 private network) cannot match an IPv4-only socket.
+- another ingress proxy: the address range it connects *from* as seen by this process, and no
+  `DOME_CLIENT_IP_HEADER` unless that proxy overwrites a single-value client header on every request.
 - a process reached directly over TLS: `DOME_TRUSTED_PROXIES=none`.
 
-Staging and production refuse to start without an explicit value.
+Staging and production refuse to start without an explicit value. `GET /healthz` → `forwarded_client`
+checks the result on a live host: `ok` when the resolved address equals the request's `Fly-Client-IP`,
+`not_checked` without that header, `unresolved_private` when the resolved address is not a public one
+(the proxy itself was not trusted), `unresolved_other` for a different public address. The header is
+used only for this self-check; a client that forges it changes nothing but its own answer.
 
 ### Entitlement signing key
 
@@ -334,7 +345,11 @@ frame against `relay-frames.schema.json`.
   `recent`, `persona`, `context`, `steps`, `params`, `user_json`, `system_text`, and anything ending in
   `_token/_secret/_code/_credential/_key` are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
   beyond the error code), so typed text exists only in transit through this process.
-- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`. `dome-api` applies them at start-up.
+- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`. `dome-api` applies them at start-up;
+  on Fly.io the `release_command` applies them and the process starts with `--skip-migrations`.
+- `GET /healthz` (no auth, `no-store`): `status` (`ok`/`degraded`, 200/503), `version`, `commit` (the build
+  commit or null), `database`, `forwarded_client` (above) and the relay counts. The database pool recycles
+  connections after 600 s and pre-pings (Fly Managed Postgres guidance).
 - Request log lines carry the matched route template and a masked path: a device-link `user_code`
   never appears (`/v1/agent-link/{user_code}/approve`); query strings are never logged.
 - Security headers: restrictive CSP (`form-action` allows the OIDC issuer), `Referrer-Policy: same-origin`,

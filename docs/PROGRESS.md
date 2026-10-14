@@ -2,6 +2,62 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-14 — One-button launch: Deploy workflow, founder guide, hosting fixes (not run against Fly.io)
+
+Goal: going live becomes creating accounts, pasting values into GitHub/Fly/Auth0 settings pages and
+pressing one button, with no command line for the founder. Built from a researched plan and an adversarial
+critique of it (every blocking and major point applied; see the commit message).
+
+- **The button**: `.github/workflows/deploy.yml` (manual runs only; inputs environment staging|production,
+  action deploy|status, a "create the database" consent checkbox). Job `gate` (no secrets, no environment)
+  refuses other branches and, for production, any commit staging does not already run healthily; job
+  `deploy` (the chosen GitHub Environment's secrets, founder approval on both environments) runs
+  `deploy/launch/dome_deploy.py deploy`; job `status` (no secrets, never runs flyctl) reads `/healthz`, DNS
+  and TLS. The program (standard library only) creates the Fly app, the free shared IPv4 and IPv6, the
+  Managed Postgres cluster (Basic, `iad`, only with consent) and attaches it, generates the session secret
+  and the Ed25519 entitlement key only when absent (masked, stdin only), builds the image with CI's
+  `docker build` and deploys it with `flyctl deploy --image`, scales to one machine, adds the certificate
+  and checks fly.dev and the custom host; the summary gives the next click with exact Cloudflare records.
+  `deploy/launch/environments.toml` holds the fixed per-environment facts; `deploy/fly.toml` is now an
+  environment-neutral base (region `iad`, no placeholder origin/issuer/client id, so a manual deploy fails
+  closed).
+- **Secret handling, from the critique**: flyctl v0.4.110's `mpg create` and `mpg attach` print the
+  database password, so their output is never shown and `mpg status` is never called; all child output is
+  redacted (known values, URL credentials, Fly tokens, key blocks); argv is checked for secret values;
+  multi-line values are masked line by line (a test caught a PEM printed through a multi-line
+  `::add-mask::`); a generated secret is "absent" only when `secrets list` succeeded and parsed; a
+  production app with machines but no generated secret stops for an engineer; the run keeps its own
+  80-minute budget so the summary is always written.
+- **cloud-api** (`DECISIONS.md` 62–67): the ID token's `iss` is checked against the discovery document's
+  exact issuer (Auth0's trailing slash rejected every sign-in before); `client_secret_post` explicitly;
+  `DOME_BUILD_COMMIT` and `/healthz` → `commit`; `/healthz` → `forwarded_client` self-check;
+  `DOME_CLIENT_IP_HEADER=fly-client-ip` behind private-range trust (the documented `fdaa::/16` could never
+  match the IPv4-only socket, and the right-most X-Forwarded-For hop on Fly is the app's own address);
+  production `X-Robots-Tag` on non-canonical hosts; pool recycle 600 s. `deploy/Dockerfile` carries the
+  build commit; `ci.yml` gained the `deploy-tooling` job and a build-commit check in `container`.
+- **Docs**: `docs/LAUNCH_SETUP.md` (new, the founder's guide), `deploy/README.md` (button first, stale
+  lines fixed, client addresses, engineer-only `flyctl` with `fly mpg`), `docs/OPERATIONS.md`, `HANDOFF.md`
+  (§0, §4, §7 item 0), `SECURITY.md` (§6 deploy pipeline: who can run what, what each token reaches; §9),
+  `COST_MODEL.md` §2A (~$45 per environment, ~$90 both), cloud-api README/KNOWN_ISSUES #5, `.env.example`,
+  root README.
+- **What ran here**: cloud-api ruff, format check, mypy strict and pytest: 329 passed, 1 skipped (the live
+  AI test; local PostgreSQL 16 + `tools/dev-idp`). `deploy/launch`: `uv lock --check`, ruff, format check,
+  mypy strict, pytest 82 passed (fake `flyctl` with Fly-shaped output read from the v0.4.110 source, real
+  `openssl`). actionlint 1.7.12 with shellcheck 0.11.0 on all three workflows: clean (shellcheck integration
+  proven with a deliberately bad script). PyYAML/tomllib parse of every workflow and TOML file. The new
+  Dockerfile ARG/LABEL/ENV lines replayed on top of the cached CI image: commit in the environment and the
+  OCI label, empty without the argument, entrypoint still exits 2 in staging without a key. `git ls-remote`
+  re-checked the setup-flyctl and actionlint pins. A grep of the whole change for token, key and
+  credential-URL patterns finds only the tests' fake values (assembled at run time so no line looks like a
+  real Fly token).
+- **Not run**: the full image build (base images need the sandbox proxy; CI builds it on push), and
+  **nothing against Fly.io, Auth0 or Cloudflare**: no account exists, and HTTPS to those hosts is blocked
+  here. Nothing is live, and no sign-in against a real provider has happened.
+- **Evidence**: written and statically checked; unit-tested against fakes.
+- **Next**: the founder follows `docs/LAUNCH_SETUP.md` to the first staging run; an engineer reads that
+  run's log and summary and fixes whatever Fly answers differently from the source-derived expectations
+  (`mpg` with an organization token, attach before machines exist, `forwarded_client` on a live machine).
+
 ## 2026-10-14 — First Windows installer build: green
 
 - **What ran**: `.github/workflows/windows-installer.yml` on the push of a686dda (run 38488799434,

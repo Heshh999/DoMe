@@ -4,6 +4,13 @@ Discovery and JWKS documents are fetched from the configured issuer and cached. 
 ``nonce`` and the PKCE verifier live in the ``auth_flows`` table for one login attempt (10 minutes,
 single use). The ID token is verified with ``joserfc`` (RS256/ES256 only, issuer's JWKS) and its
 ``iss``, ``aud``/``azp``, ``exp``, ``iat`` and ``nonce`` claims are checked explicitly.
+
+``iss`` is compared with the discovery document's ``issuer`` exactly as the provider wrote it (OpenID
+Connect Core 3.1.3.7): Auth0 publishes ``https://<tenant>.auth0.com/`` with a trailing slash, while
+``DOME_OIDC_ISSUER`` is stored without one. The configured issuer only has to match the discovery
+document up to that slash. The token endpoint is called with ``client_secret_post`` (client id and secret
+in the form body), which is what a new Auth0 Regular Web Application expects by default; Keycloak and
+``tools/dev-idp`` accept it as well.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from dome_api.util import utcnow
 log = get_logger("dome_api.oidc")
 FLOW_LIFETIME = timedelta(minutes=10)
 ALLOWED_ID_TOKEN_ALGS = ("RS256", "ES256")
+TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post"  # noqa: S105 - a method name, not a secret
 _DISCOVERY_TTL = 3600.0
 _JWKS_TTL = 3600.0
 
@@ -70,7 +78,11 @@ class OIDCClient:
                     raise ApiError(
                         503, "SERVICE_UNAVAILABLE", "Sign-in is temporarily unavailable. Try again shortly."
                     ) from None
-                if not isinstance(doc, dict) or doc.get("issuer", "").rstrip("/") != self.settings.oidc_issuer:
+                if (
+                    not isinstance(doc, dict)
+                    or not isinstance(doc.get("issuer"), str)
+                    or doc["issuer"].rstrip("/") != self.settings.oidc_issuer
+                ):
                     raise RuntimeError("OIDC discovery document issuer mismatch")
                 for key in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
                     if not isinstance(doc.get(key), str) or not doc[key].startswith(("https://", "http://")):
@@ -102,6 +114,8 @@ class OIDCClient:
             scope=self.settings.oidc_scopes,
             redirect_uri=self.settings.redirect_uri,
             code_challenge_method="S256",
+            # Explicit, so the method never depends on the library default (Authlib: client_secret_basic).
+            token_endpoint_auth_method=TOKEN_ENDPOINT_AUTH_METHOD,
             timeout=10.0,
         )
 
@@ -165,6 +179,9 @@ class OIDCClient:
         ), flow.return_to
 
     async def _verify_id_token(self, id_token: str, nonce: str) -> dict[str, Any]:
+        # The exact issuer string from discovery (already checked against DOME_OIDC_ISSUER up to a trailing
+        # slash); the stored identity keeps the configured, slash-free form so account keys never change.
+        expected_iss = str((await self.discovery())["issuer"])
         keyset = await self.jwks()
         try:
             try:
@@ -173,7 +190,7 @@ class OIDCClient:
                 tok = jwt.decode(id_token, await self.jwks(force=True), algorithms=list(ALLOWED_ID_TOKEN_ALGS))
             registry = jwt.JWTClaimsRegistry(
                 leeway=60,
-                iss={"essential": True, "value": self.settings.oidc_issuer},
+                iss={"essential": True, "value": expected_iss},
                 sub={"essential": True},
                 exp={"essential": True},
                 iat={"essential": True},

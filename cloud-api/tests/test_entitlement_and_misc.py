@@ -11,8 +11,10 @@ from typing import Any
 
 from joserfc import jwt
 from joserfc.jwk import KeySet
+from starlette.requests import Request
 
 from dome_api.logging import redact
+from dome_api.routes.health import forwarded_client_check
 from tests.conftest import SCHEMAS, AgentSim, Browser, ControllerSim, Env, sql
 
 
@@ -107,6 +109,30 @@ async def test_health(env: Env) -> None:
     r = await env.http.get("/healthz")
     assert r.status_code == 200 and r.json()["status"] == "ok" and r.json()["database"] == "ok"
     assert r.headers["cache-control"] == "no-store"
+    # no build commit outside a built image; no Fly-Client-IP header, so the proxy self-check did not run
+    assert r.json()["commit"] is None and r.json()["forwarded_client"] == "not_checked"
+    # the suite trusts no proxy: a Fly-Client-IP header is never believed, and the check says so
+    r = await env.http.get("/healthz", headers={"Fly-Client-IP": "203.0.113.9"})
+    assert r.json()["forwarded_client"] == "unresolved_private"
+
+
+def _health_request(client: str, headers: list[tuple[bytes, bytes]]) -> Request:
+    return Request({"type": "http", "method": "GET", "path": "/healthz", "headers": headers, "client": (client, 0)})
+
+
+def test_forwarded_client_check_classifies_the_resolved_address() -> None:
+    fly = [(b"fly-client-ip", b"203.0.113.9")]
+    assert forwarded_client_check(_health_request("203.0.113.9", fly)) == "ok"
+    assert forwarded_client_check(_health_request("::ffff:203.0.113.9", fly)) == "ok"
+    assert forwarded_client_check(_health_request("203.0.113.9", [])) == "not_checked"
+    assert forwarded_client_check(_health_request("203.0.113.9", [*fly, *fly])) == "not_checked"
+    assert forwarded_client_check(_health_request("203.0.113.9", [(b"fly-client-ip", b"nope")])) == "not_checked"
+    # the proxy's own private address: DOME_TRUSTED_PROXIES does not cover the proxy
+    assert forwarded_client_check(_health_request("172.19.3.2", fly)) == "unresolved_private"
+    assert forwarded_client_check(_health_request("100.64.0.9", fly)) == "unresolved_private"  # shared space
+    assert forwarded_client_check(_health_request("127.0.0.1", fly)) == "unresolved_private"
+    # the app's own public address (X-Forwarded-For walk without the header): every client would share it
+    assert forwarded_client_check(_health_request("66.241.124.10", fly)) == "unresolved_other"
 
 
 async def test_security_headers_and_no_store(env: Env) -> None:

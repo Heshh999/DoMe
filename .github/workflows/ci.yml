@@ -8,6 +8,8 @@
 # secrets are used or needed: the suites run against a PostgreSQL service container and the
 # in-repository development identity provider (tools/dev-idp). The Windows installer has its own
 # workflow, windows-installer.yml, which runs the same Windows test list before it builds anything.
+# The Deploy workflow (deploy.yml) is tested here without secrets: job "deploy-tooling" runs the deploy
+# program's tests against a fake flyctl and lints all three workflow files with actionlint.
 #
 # Actions are pinned to the commit of a release tag that was resolved on 2026-10-09
 # (`git ls-remote --tags`); the comment carries the tag.
@@ -298,9 +300,15 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Builds the API + PWA image from the repository root; nothing is pushed anywhere.
+      # Builds the API + PWA image from the repository root; nothing is pushed anywhere. The build
+      # argument is the one the Deploy workflow passes, so /healthz can report which commit runs.
       - name: docker build
-        run: docker build --file deploy/Dockerfile --tag dome-api:ci .
+        run: docker build --file deploy/Dockerfile --build-arg DOME_BUILD_COMMIT="$GITHUB_SHA" --tag dome-api:ci .
+
+      - name: image carries the build commit
+        run: |
+          commit="$(docker run --rm --entrypoint printenv dome-api:ci DOME_BUILD_COMMIT)"
+          test "$commit" = "$GITHUB_SHA"
 
       # The image must start far enough to validate its configuration: with no database and a
       # non-development DOME_ENV the entrypoint must refuse to invent a signing key (exit 2), and
@@ -312,3 +320,45 @@ jobs:
           code=$?
           set -e
           test "$code" -eq 2
+
+  deploy-tooling:
+    # The one-button deploy (deploy.yml -> deploy/launch/dome_deploy.py) cannot be run here: it needs the
+    # founder's Fly token. Its logic runs against tests/fake_flyctl.py instead (order of operations,
+    # re-runs, stops, and that no secret value reaches a command line, the log or the summary), and the
+    # workflow files are checked for their safety rules and with actionlint.
+    name: Deploy tooling (dome_deploy.py tests, workflow policy, actionlint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: deploy/launch - sync
+        working-directory: deploy/launch
+        run: uv sync --locked --extra dev
+      - name: deploy/launch - ruff
+        working-directory: deploy/launch
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: deploy/launch - mypy
+        working-directory: deploy/launch
+        run: uv run mypy
+      - name: deploy/launch - pytest (fake flyctl, real openssl)
+        working-directory: deploy/launch
+        run: uv run pytest -q -p no:cacheprovider
+
+      # actionlint v1.7.12 (tag commit 914e7df21a07ef503a81201c76d2b11c789d3fca, 2026-03-30), built from
+      # source; Go's checksum database verifies the module. It runs shellcheck on every run: block too.
+      - name: actionlint (all workflows)
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color

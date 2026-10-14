@@ -1,0 +1,40 @@
+# Fixed, public facts about each DoMe environment, read by deploy/launch/dome_deploy.py (the
+# "Deploy" GitHub Actions workflow, .github/workflows/deploy.yml). Nothing here is secret.
+#
+# Founder-specific values (Auth0 domain and client id, the Fly organization) are GitHub Environment
+# variables, and secrets are GitHub Environment secrets: see docs/LAUNCH_SETUP.md. Fly app names are
+# global across Fly.io; if one is taken, the founder can paste a different name into the repository
+# variable FLY_STAGING_APP or FLY_PRODUCTION_APP instead of changing this file.
+#
+# Region: iad (Ashburn, Virginia) for the app AND its database. ewr (Secaucus, NJ) has no Fly Managed
+# Postgres; keeping both in one region keeps their private traffic free and fast (fly.io/docs/mpg).
+
+[staging]
+dome_env = "staging"
+fly_app = "domeremote-staging"
+region = "iad"
+public_origin = "https://staging.domeremote.com"
+hostname = "staging.domeremote.com"
+dns_zone = "domeremote.com"
+dns_name = "staging"
+release_channel = "staging"
+database_cluster = "domeremote-staging-db"
+database_plan = "Basic"
+database_volume_gb = 10
+pg_major_version = 16
+requires_staging_commit = false
+
+[production]
+dome_env = "production"
+fly_app = "domeremote-production"
+region = "iad"
+public_origin = "https://domeremote.com"
+hostname = "domeremote.com"
+dns_zone = "domeremote.com"
+dns_name = "@"
+release_channel = "production"
+database_cluster = "domeremote-production-db"
+database_plan = "Basic"
+database_volume_gb = 10
+pg_major_version = 16
+requires_staging_commit = true

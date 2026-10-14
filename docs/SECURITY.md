@@ -215,10 +215,46 @@ person with production access (database, host, secrets) can and cannot do given 
 - Must not, by policy to be enforced by the future operator interface: execute customer PC commands,
   bypass local approvals, or read unredacted diagnostics. Administrative changes need an audit trail
   (`operator_audit` table exists, nothing writes to it).
-- Deployment prerequisites that only the founder can complete: production OIDC application and
-  redirect URIs, `DOME_TRUSTED_PROXIES` for the real ingress, Ed25519 key provisioning, Stripe keys
-  (Phase C), the Anthropic API key and the monthly AI ceiling (Phase E; a key from a workspace with
-  its own Console spend limit), code-signing identity, store listings.
+- Deployment prerequisites that only the founder can complete: the Fly.io account and tokens, the
+  GitHub Environments, the production OIDC application and redirect URIs (`docs/LAUNCH_SETUP.md`),
+  Stripe keys (Phase C), the Anthropic API key and the monthly AI ceiling (Phase E; a key from a
+  workspace with its own Console spend limit), code-signing identity, store listings. The Ed25519
+  entitlement key and the session secret are generated inside the deploy job (below), never by a person.
+
+### The deploy pipeline (`.github/workflows/deploy.yml`, `deploy/launch/dome_deploy.py`; 2026-10-14)
+
+Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet**.
+
+- **Who can start what.** The workflow runs only when someone with write access presses Run workflow
+  (`workflow_dispatch`; never `push`, `pull_request` or `pull_request_target` on this public repository).
+  Its `gate` and `status` jobs have no environment and no secrets and cannot change anything. The
+  `deploy` job uses the GitHub Environment named by the input; both environments allow only the default
+  branch and require the founder's approval, so **no job receives a Fly token without his click**, even
+  when a collaborator or an AI session with a run-workflow tool starts the run.
+- **What each token can reach.** `FLY_API_TOKEN` is a Fly **organization** token in each environment,
+  because only an organization token can create apps and attach databases and Fly has no dashboard form
+  for creating apps. Both tokens can therefore reach **both** apps and **both** databases in the
+  founder's organization: the staging token could deploy to, change or delete production. The approval
+  rule on both environments is the control today; the target is separate Fly organizations per
+  environment or app-scoped deploy tokens after first-time setup (§9).
+- **Secrets in transit.** Secrets appear only in the deploy step's `env` block. Values generated in the
+  job (`DOME_SESSION_SECRET`, the entitlement key) are registered with `::add-mask::` line by line before
+  use, live in memory only, and reach Fly only on `flyctl secrets import` stdin. Every command line is
+  checked for known secret values before it runs; child output is redacted (known values, credentials in
+  URLs, Fly tokens, private-key blocks); child processes do not inherit the OIDC client secret or the
+  fallback database URL. `flyctl mpg create` and `flyctl mpg attach` print the database password in clear
+  text (flyctl v0.4.110 source), so their output is never shown, and `flyctl mpg status` (which returns
+  the credentials) is never called. Each comma-separated part of the Fly token is masked as well, because
+  GitHub masks only the exact stored string. The repository is public, so Actions logs are public.
+- **No accidental rotation.** A generated secret counts as absent only when `flyctl secrets list`
+  succeeded and parsed; a production app that already has machines but lacks one stops for an engineer
+  instead of getting a new key (which would sign everyone out and invalidate every linked PC).
+- **Supply chain.** Actions pinned to commits (tag in a comment, re-checked 2026-10-14); `flyctl`
+  pinned to v0.4.110; the program uses only the Python standard library; the image is built with the
+  same `docker build` CI runs and deployed under the image label `git-<12 hex of the commit>`.
+- **Production gate.** Production deploys only a commit that staging already runs with `status ok`,
+  `database ok` and `forwarded_client ok` (`/healthz`), checked before approval is requested and again
+  inside the job.
 
 ## 7. The local PC boundary
 
@@ -307,6 +343,9 @@ at the desk uses the same keys at the same moment.
 | Other-session agent conflicts detected only through the pid file; a `Global\` per-account mutex is proposed | `pc-agent/KNOWN_ISSUES.md` #10 | low |
 | UIPI-dropped pointer events (and keyboard events at unknown integrity) are acked as accepted | `pc-agent/KNOWN_ISSUES.md` #15 | low (copy says "Windows accepted", never "done") |
 | Stale subscriptions after unlink, unscoped-looking `command_id` probe cost, `user_code` in request logs | cloud-api review | fixed in this build (`DECISIONS.md` #24, #25, README) |
+| Fly organization tokens: each environment's token can reach both environments (§6 "The deploy pipeline"); move to separate Fly organizations per environment, or app-scoped deploy tokens after first-time setup | launch plan critique, 2026-10-14 | medium (mitigated by required approval on both GitHub Environments) |
+| No one-click rollback or rotate-generated-secrets action; both are engineer `flyctl` steps today | `deploy/README.md` | low |
+| A wrong `Fly-Client-IP` trust (or Cloudflare's proxy put in front) would make every visitor share one address for per-IP limits; detected by `/healthz` → `forwarded_client`, which only the deploy job and an (not yet configured) external monitor read | `deploy/README.md` "Client addresses" | medium until the external monitor exists |
 
 ## 10. Development hygiene
 

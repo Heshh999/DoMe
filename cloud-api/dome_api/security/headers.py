@@ -24,14 +24,34 @@ def build_csp(issuer_origin: str) -> str:
     )
 
 
+def _host_matches(request_host: str, canonical_host: str) -> bool:
+    """``Host`` equals the canonical host, allowing an explicit default port (``:443``/``:80``)."""
+    host = request_host.strip().lower()
+    if host == canonical_host:
+        return True
+    return ":" not in canonical_host and host in (f"{canonical_host}:443", f"{canonical_host}:80")
+
+
 class SecurityHeadersMiddleware:
-    def __init__(self, app: ASGIApp, *, csp: str, hsts: bool, noindex: bool = False) -> None:
+    def __init__(self, app: ASGIApp, *, csp: str, hsts: bool, noindex: bool = False, canonical_host: str = "") -> None:
         self.app = app
         self.csp = csp
         self.hsts = hsts
         # Outside production every response says "do not index", so a staging site never shows up in
         # search results next to the real one (robots.txt is the same file in every environment).
         self.noindex = noindex
+        # In production, a response served under any other host name (the hosting provider's own address,
+        # e.g. <app>.fly.dev) also says "do not index": it is the same site, and sign-in fails there anyway
+        # because the Origin check only accepts the public origin. Empty = every host is canonical.
+        self.canonical_host = canonical_host.strip().lower()
+
+    def _noindex_for(self, scope: Scope) -> bool:
+        if self.noindex:
+            return True
+        if not self.canonical_host:
+            return False
+        hosts = [value.decode("latin1") for key, value in scope.get("headers", []) if key == b"host"]
+        return len(hosts) != 1 or not _host_matches(hosts[0], self.canonical_host)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -39,6 +59,7 @@ class SecurityHeadersMiddleware:
             return
         path: str = scope.get("path", "")
         private = path.startswith("/v1") or path.startswith("/ws") or path.startswith("/healthz")
+        noindex = self._noindex_for(scope)
 
         async def send_wrapper(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
@@ -57,7 +78,7 @@ class SecurityHeadersMiddleware:
                 }
                 if self.hsts:
                     extra[b"strict-transport-security"] = b"max-age=31536000; includeSubDomains"
-                if self.noindex:
+                if noindex:
                     extra[b"x-robots-tag"] = b"noindex, nofollow"
                 if private:
                     extra[b"cache-control"] = b"no-store"

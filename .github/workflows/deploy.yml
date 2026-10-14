@@ -1,0 +1,138 @@
+# Deploy: the founder's one button. GitHub > Actions > "Deploy" > Run workflow, then choose
+#   environment  staging | production
+#   action       deploy (set up what is missing, deploy, check) | status (look only, change nothing)
+#   create the database (first run only; Fly Managed Postgres Basic, about $38 a month per environment)
+# Step by step, in plain English: docs/LAUNCH_SETUP.md. What each step does: deploy/README.md.
+#
+# STATUS (2026-10-14): written and statically checked (actionlint, tests in deploy/launch/tests). It has
+# NEVER run against Fly.io, Auth0 or Cloudflare; the first staging run is the real test.
+#
+# Shape and safety rules (enforced by deploy/launch/tests/test_workflow_policy.py):
+# * workflow_dispatch only. Never push, pull_request or pull_request_target: the repository is public,
+#   and only someone with write access can press Run workflow.
+# * All logic is deploy/launch/dome_deploy.py (standard library only, unit-tested with a fake flyctl).
+#   Inputs reach it through env, never through ${{ }} inside a script.
+# * Job "gate" has no environment and no secrets: it checks the branch and, for production, that
+#   staging already runs this exact commit and is healthy. Only then does GitHub ask for approval.
+# * Job "deploy" is the only job with secrets. It uses the GitHub Environment named by the input, which
+#   holds FLY_API_TOKEN and DOME_OIDC_CLIENT_SECRET (and, only as a fallback, DATABASE_URL). Both
+#   environments have the founder as required reviewer and allow only the default branch, so no job
+#   receives a Fly token without his click (docs/SECURITY.md §6).
+# * Job "status" has no environment and no secrets and never runs flyctl: it cannot change anything.
+# * Secrets appear only in the deploy step's env block. Values generated during the run are masked with
+#   ::add-mask:: before use and reach Fly only on stdin (`flyctl secrets import`).
+#
+# This file must be on the DEFAULT branch, or GitHub shows no Run workflow button. Actions are pinned to
+# the commit of a release tag, re-checked with `git ls-remote --tags` on 2026-10-14; flyctl is pinned to
+# v0.4.110 (released 2026-09-29), the version whose source dome_deploy.py's output parsing was read from.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment"
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+        required: true
+      action:
+        description: "deploy = set up what is missing and deploy; status = look only, change nothing"
+        type: choice
+        options:
+          - deploy
+          - status
+        default: deploy
+        required: true
+      create_database_if_missing:
+        description: "First run only: create this environment's Fly Managed Postgres database (Basic plan, about $38 a month) if it does not exist yet"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Checks before approval (no secrets)
+    if: inputs.action == 'deploy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Branch, and for production, staging runs this commit
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
+          FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
+        run: python3 deploy/launch/dome_deploy.py gate
+
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    needs: gate
+    if: inputs.action == 'deploy'
+    runs-on: ubuntu-24.04
+    # Database creation alone can take 25 minutes; dome_deploy.py keeps its own budgets below this, so the
+    # summary is always written before GitHub would stop the job.
+    timeout-minutes: 90
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.environment == 'production' && 'https://domeremote.com' || 'https://staging.domeremote.com' }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6 (= v1)
+        with:
+          version: "0.4.110"
+
+      - name: Set up what is missing, deploy, check
+        env:
+          # Secrets: only here. Environment secrets of the chosen GitHub Environment.
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DOME_OIDC_CLIENT_SECRET: ${{ secrets.DOME_OIDC_CLIENT_SECRET }}
+          DOME_FALLBACK_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Not secret: environment variables (or repository variables for the app-name overrides).
+          DOME_OIDC_ISSUER: ${{ vars.DOME_OIDC_ISSUER }}
+          DOME_OIDC_CLIENT_ID: ${{ vars.DOME_OIDC_CLIENT_ID }}
+          FLY_ORG: ${{ vars.FLY_ORG }}
+          FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
+          FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
+          VITE_DOME_SUPPORT_URL: ${{ vars.VITE_DOME_SUPPORT_URL }}
+          DOME_SUPPORT_RESPONSE_EXPECTATION: ${{ vars.DOME_SUPPORT_RESPONSE_EXPECTATION }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          CREATE_DATABASE: ${{ inputs.create_database_if_missing }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 deploy/launch/dome_deploy.py deploy
+
+  status:
+    name: Status of ${{ inputs.environment }} (look only, no secrets)
+    if: inputs.action == 'status'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Look at the site, DNS and certificate
+        env:
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+          FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
+          FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
+        run: python3 deploy/launch/dome_deploy.py status

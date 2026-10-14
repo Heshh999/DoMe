@@ -12,7 +12,9 @@ def make_engine(database_url: str, *, pool_size: int = 10, max_overflow: int = 2
         pool_size=pool_size,
         max_overflow=max_overflow,
         pool_pre_ping=True,
-        pool_recycle=1800,
+        # Fly.io Managed Postgres guidance: recycle client connections every 600 s; the Fly proxy drains a
+        # connection after 10 minutes, and pre-ping catches one that was closed in between.
+        pool_recycle=600,
     )
 
 

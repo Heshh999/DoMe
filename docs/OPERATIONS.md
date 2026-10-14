@@ -1,9 +1,11 @@
 # DoMe operations
 
-Status: written on 2026-10-09 from the code in this repository. **No DoMe deployment exists yet.**
-`deploy/README.md` is a placeholder ("Build in progress"), `.github/workflows/` is empty, and no
-`Dockerfile` or `fly.toml` is checked in; the `README.md` rows that describe them name intended
-content. Everything below is therefore one of two kinds, and each section says which:
+Status: written on 2026-10-09 from the code in this repository; updated 2026-10-14 for the Deploy
+workflow. **No DoMe deployment exists yet.** The image (`deploy/Dockerfile`) is built by CI on every push;
+`deploy/fly.toml`, the Deploy workflow (`.github/workflows/deploy.yml`) and its program
+(`deploy/launch/dome_deploy.py`) exist and are tested against a fake `flyctl`, but have never run against
+Fly.io. The founder's guide is `docs/LAUNCH_SETUP.md`. Everything below is one of two kinds, and each
+section says which:
 
 - **as implemented** — behaviour the service and agent code has today, with the test that shows it
   (tag: unit-tested / integration-tested on Linux);
@@ -54,67 +56,59 @@ with `uv run dome-api-gen-entitlement-key <path>` (refuses to overwrite without 
 
 Client address resolution: `dome-api` starts uvicorn with `proxy_headers=False` and applies its own
 `TrustedProxyMiddleware`, taking the client IP from the right-most `X-Forwarded-For` hop that is not
-itself a trusted proxy. Running uvicorn by hand with `--proxy-headers` weakens this. Every per-IP
-limit and every stored `ip_hash` depends on it (**integration-tested**:
+itself a trusted proxy, or, with `DOME_CLIENT_IP_HEADER=fly-client-ip` (Fly.io, set in `deploy/fly.toml`),
+from the single `Fly-Client-IP` header of a trusted peer. Running uvicorn by hand with `--proxy-headers`
+weakens this. Every per-IP limit and every stored `ip_hash` depends on it (**integration-tested**:
 `test_security_fixes.py::test_forwarded_for_from_an_untrusted_peer_cannot_evade_per_ip_limits`,
-`::test_trusted_proxy_middleware_uses_the_hop_the_proxy_appended`).
+`::test_trusted_proxy_middleware_uses_the_hop_the_proxy_appended`,
+`::test_fly_forwarded_for_shape_needs_the_client_ip_header`). `/healthz` → `forwarded_client` says
+whether it works on the live host (`ok`); the Deploy workflow refuses a deploy where it does not.
 
-## 2. Build (procedure, not yet run)
+## 2. Build (as implemented)
 
-There is no container definition yet. One must do, in order:
+`deploy/Dockerfile` (multi-stage: PWA with pnpm, API with `uv sync --locked`, slim non-root runtime),
+built from the repository root. CI's `container` job builds it on every push (green since 2026-10-11)
+and checks that it refuses to invent a signing key outside development and carries the commit it was
+built from (`DOME_BUILD_COMMIT`, reported by `/healthz` → `commit`). The Deploy workflow runs the same
+`docker build` on the GitHub runner and deploys that image (`deploy/README.md` "The Deploy button").
 
-1. `cd shared/ts && pnpm install && pnpm gen:types`, then `cd mobile-app && pnpm install && pnpm build`
-   → `mobile-app/dist/`.
-2. `cd cloud-api && uv sync --no-dev` (installs `dome-protocol` from `../shared/python` as a path
-   dependency, so the build context must contain `shared/`).
-3. Image contents: Python 3.12, the `cloud-api` virtual environment, `shared/python`,
-   `mobile-app/dist` at the path given by `DOME_STATIC_DIR`. Entry point: `dome-api` (runs
-   `alembic upgrade head`, then serves on `DOME_API_BIND`, which must be `0.0.0.0:<port>` inside a
-   container). Do not bake `.env` in; do not include `tools/dev-idp`.
-4. Tag the image with the git commit and the `dome_api.__version__` string (`0.1.0` today) so
-   `/healthz` → `version` identifies the running build.
+Before deploying any commit, the suites in `docs/ACCEPTANCE.md` §1 must pass on it (CI).
 
-Before building any image, the suites in `docs/ACCEPTANCE.md` §1 must pass on the commit.
-
-## 3. Deployment to Fly.io (procedure, not yet run)
+## 3. Deployment to Fly.io (via the Deploy workflow; never run yet)
 
 ADR-0001 D2 chose Fly.io for long-lived WebSockets on ordinary VMs plus managed Postgres; nothing in
-the code is Fly-specific and Render/Railway are equivalents. The steps that follow are what the code
-requires; the Fly-specific values are to be confirmed against Fly's current documentation at the time
-of the first deployment.
+the code is Fly-specific and Render/Railway are equivalents. The founder deploys with GitHub > Actions >
+**Deploy** (`docs/LAUNCH_SETUP.md`); every step is listed in `deploy/README.md` "The Deploy button". What
+it guarantees, in operator terms:
 
-1. **Database.** Create a managed PostgreSQL 16 instance in the same region. Confirm on the vendor
-   page that volumes and backups are encrypted at rest and note the backup retention
-   (`docs/DATA_RETENTION.md` §1, **not yet verified**). Create a database and a role for the API with
-   ownership of that database only.
-2. **App.** Create the app with **one** machine, no autoscaling (`min_machines = max_machines = 1`),
-   and a health check on `GET /healthz` expecting 200. The process must receive `SIGTERM` and be given
-   at least **25 s** to stop (`kill_timeout`): uvicorn's graceful shutdown is 20 s
-   (`timeout_graceful_shutdown=20` in `dome_api/cli.py`) and the lifespan then stops the sweeper,
-   closes the OIDC client and disposes the engine.
-3. **Secrets.** Set the variables from §1 as Fly secrets; mount or write the entitlement PEM to the
-   path in `DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH` (a Fly secret written to a file by the entry point
-   is acceptable; the file must be 0600).
-4. **Identity provider.** Register `<DOME_PUBLIC_ORIGIN>/v1/auth/callback` as the redirect URI at
-   Auth0/Keycloak (production: `https://domeremote.com/v1/auth/callback`; staging:
-   `https://staging.domeremote.com/v1/auth/callback`; see `deploy/README.md` "Domain"); set `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`, `DOME_OIDC_CLIENT_SECRET`.
-   `tools/dev-idp` is never used here. Only `tools/dev-idp` has been exercised so far
-   (`docs/HANDOFF.md` §4).
-5. **Trusted proxies.** Before the first start with `DOME_ENV=staging|production`, find the address
-   range the Fly proxy connects *from* as seen inside the VM: `fly ssh console`, then `ss -tn` while
-   a request is in flight. Set `DOME_TRUSTED_PROXIES` to that range (the README example is
-   `fdaa::/16`, the 6PN private network, **to be verified**, `cloud-api/KNOWN_ISSUES.md` #5). The
-   process refuses to start without a value.
-6. **Deploy.** `fly deploy` with the image from §2. `dome-api` runs migrations at start-up (§4). Watch
-   the log for `migrations.start`, `migrations.done`, `startup_sweep` (rows closed from the previous
-   process), `startup` with `env` and `origin`.
-7. **Verify.** `GET /healthz` → `{"status":"ok","database":"ok","relay":{...}}`; `GET /` serves the
-   PWA; `GET /v1/plans` is public and reports `billing_enabled:false`; sign in from a phone; link a
-   development agent with `DOME_AGENT_API_URL=https://<origin>` (the relay URL is handed to the agent at
-   link time, `wss://<origin>/ws/agent`); confirm `agent_connected` appears in security activity and
-   `/healthz` → `relay.agents` is 1. Then run Scenario 4 of `docs/ACCEPTANCE.md`.
-8. **Environments.** Staging and production are separate Fly apps with separate databases, separate
-   OIDC clients and separate entitlement keys (spec §18 D). Never point a staging agent at production.
+1. **Database.** Fly Managed Postgres, Basic plan, PostgreSQL 16, region `iad`, one cluster per
+   environment, created only when the founder ticks the checkbox; `flyctl mpg attach` sets the pooled
+   `DATABASE_URL` (PgBouncer, session mode). Encryption at rest and backup retention are to be confirmed
+   on Fly's page and recorded (`docs/DATA_RETENTION.md` §1, **not yet verified**).
+2. **App.** One machine (`--ha=false`, scaled to 1 if Fly made more), no autoscaling, health check on
+   `GET /healthz`, `kill_timeout` 30 s (uvicorn's graceful shutdown is 20 s).
+3. **Secrets.** `DOME_SESSION_SECRET` and the entitlement key are generated inside the job only when
+   absent and go to Fly on stdin; `DOME_OIDC_CLIENT_SECRET` is copied from the GitHub Environment on
+   every deploy; the entrypoint writes the key file 0600.
+4. **Identity provider.** Callback `https://domeremote.com/v1/auth/callback` (production) and
+   `https://staging.domeremote.com/v1/auth/callback` (staging). The job checks the issuer's discovery
+   document and that it accepts `client_secret_post`. Only `tools/dev-idp` has been signed in against so
+   far (`docs/HANDOFF.md` §4).
+5. **Trusted proxies.** Fixed in `deploy/fly.toml`: private IPv4 ranges plus `DOME_CLIENT_IP_HEADER=
+   fly-client-ip` (`deploy/README.md` "Client addresses"). Verified on every deploy through `/healthz` →
+   `forwarded_client: ok`; **not yet verified on a live machine**.
+6. **Migrations** run once per deploy as Fly's `release_command` (`alembic upgrade head`, in a temporary
+   machine, before the new version starts); the app process starts with `--skip-migrations` and still
+   refuses to serve unless the schema is at head (§4). A failing migration stops the deploy and leaves
+   the previous version running.
+7. **Verify.** The job checks `/healthz` (this commit, database ok, `forwarded_client` ok) and the PWA's
+   headers on `<app>.fly.dev`, then DNS and TLS of the custom host. By hand after the first deploy: sign
+   in from a phone; link a development agent (`DOME_AGENT_API_URL=https://staging.domeremote.com`);
+   confirm `agent_connected` in security activity and `/healthz` → `relay.agents` is 1; then Scenario 4
+   of `docs/ACCEPTANCE.md`.
+8. **Environments.** Staging and production are separate Fly apps, databases, Auth0 tenants and
+   entitlement keys (spec §18 D). Production is refused unless staging runs the same commit, healthy.
+   Never point a staging agent at production.
 
 Idle WebSockets: the agent sends an application `ping` every 25 s and closes a socket silent for
 55 s; the PWA pings every 25 s with a 75 s idle rule; uvicorn sends protocol pings every 20 s with a
@@ -123,16 +117,17 @@ as agents cycling `reconnecting` every few seconds in the logs.
 
 ## 4. Database migrations (as implemented)
 
-- Alembic, scripts in `cloud-api/dome_api/db/alembic/versions/`. There is exactly one revision,
-  `0001` (initial schema including the empty Phase C tables); `downgrade()` exists and drops
-  everything, so a downgrade of `0001` is a wipe, never a rollback.
-- `dome-api` runs `alembic upgrade head` **before** binding the port (`dome_api/cli.py`). The
-  application lifespan then re-checks `alembic_version` and refuses to start if the database is not
-  at the single head (`main.py::_check_migrations`; it also refuses if there is more than one head).
-  `dome-api --skip-migrations` serves without upgrading but still performs the check.
+- Alembic, scripts in `cloud-api/dome_api/db/alembic/versions/`. Three revisions: `0001_initial`
+  (initial schema including the empty Phase C tables), `0002_support_tickets`, `0003_assistant`. The
+  downgrade of `0001` drops everything, so it is a wipe, never a rollback.
+- On Fly, `deploy/fly.toml` runs `alembic -c alembic.ini upgrade head` as the `release_command` and
+  starts the process with `dome-api --skip-migrations`. Locally, `dome-api` runs `alembic upgrade head`
+  **before** binding the port (`dome_api/cli.py`). Either way the application lifespan re-checks
+  `alembic_version` and refuses to start if the database is not at the single head
+  (`main.py::_check_migrations`; it also refuses if there is more than one head).
 - Manual use: `cd cloud-api && DOME_DATABASE_URL=… uv run alembic -c alembic.ini current | upgrade head | downgrade <rev>`.
-- `alembic check` (run during the cloud-api review) confirms the SQLAlchemy models and `0001` are
-  in sync; make it part of CI when CI exists.
+- `alembic check` runs in CI (`ci.yml` job `python`) and confirms the SQLAlchemy models and the
+  migrations are in sync.
 
 Procedure for a release that adds a migration (not yet exercised):
 
@@ -141,12 +136,12 @@ Procedure for a release that adds a migration (not yet exercised):
    schema; removals go in a later release after the code that needed the old shape is gone
    (expand/contract). This is what makes §6 rollback possible.
 2. Take a backup (§5) and record its id in the release notes.
-3. Deploy. Because the single machine upgrades the schema and then serves, the window between
-   `migrations.start` and `startup` is downtime for REST and every socket; agents reconnect with
-   backoff and phones re-subscribe. Keep migrations short; anything long-running belongs in a
-   separate step run before the deploy with the old code still serving.
-4. If `migrations.*` fails the process exits non-zero and the previous machine state is whatever the
-   platform does on a failed health check; see §6.
+3. Deploy (staging first). The release command migrates while the old version still serves, then the
+   single machine restarts on the new image: the restart is the downtime for REST and every socket;
+   agents reconnect with backoff and phones re-subscribe. Keep migrations short and additive (the old
+   version runs against the new schema for the length of the migration).
+4. If the release command fails, Fly stops the deploy and the previous version keeps running; the
+   Deploy summary says "Failed: needs an engineer"; see §6.
 
 ## 5. Backup and restore (procedure, not yet run)
 
@@ -192,8 +187,9 @@ consistent snapshot".
 
 ## 6. Deployment rollback (procedure, not yet run)
 
-- Rolling back the **code** is redeploying the previous image (`fly releases` / `fly deploy
-  --image <previous>`). It is safe only if every migration applied since is additive (§4 rule 1): the
+- Rolling back the **code** is redeploying the previous image (`fly releases --image` / `fly deploy
+  --config deploy/fly.toml --image <previous>`; the Deploy workflow labels images `git-<12 hex>`), or
+  running Deploy on the previous commit, staging first. It is safe only if every migration applied since is additive (§4 rule 1): the
   lifespan head check compares the database to the *image's* newest revision, so an older image
   started against a newer schema **refuses to start** (`database revision '0002' is not the expected
   head '0001'`). Therefore: a rollback across a migration boundary requires either the old image to
@@ -204,16 +200,16 @@ consistent snapshot".
   availability. Expect `startup_sweep` to close in-flight rows and a burst of reconnects when the
   working image returns.
 - Spec §15 asks for a failed-deployment recovery to be tested before release: on staging, deploy an
-  image with a deliberately broken setting (for example a missing `DOME_TRUSTED_PROXIES`), observe the
+  image with a deliberately broken setting (for example an empty `DOME_TRUSTED_PROXIES`), observe the
   exit-code-2 configuration error, roll back, and time the recovery. Not done yet.
 
 ## 7. Secret rotation (as implemented, procedures not yet run)
 
 | Secret | How to rotate | Effect on customers |
 | --- | --- | --- |
-| `DOME_SESSION_SECRET` | Set the new value and restart | Every web session is invalid: all phones and browsers sign in again (`UNAUTHENTICATED` / close 4008); controller keys and pairings are unaffected. Stored `ip_hash` values no longer match new ones (they are keyed by this secret), which only affects correlating old security events by IP. |
+| `DOME_SESSION_SECRET` | Generated by the Deploy workflow only when absent: `fly secrets unset DOME_SESSION_SECRET`, then press Deploy (a rotate action is a follow-up) | Every web session is invalid: all phones and browsers sign in again (`UNAUTHENTICATED` / close 4008); controller keys and pairings are unaffected. Stored `ip_hash` values no longer match new ones (they are keyed by this secret), which only affects correlating old security events by IP. |
 | Entitlement signing key (Ed25519) | Generate a new PEM, deploy it, restart. The JWKS at `/.well-known/dome-jwks.json` serves the current public key; agents fetch the JWKS and refresh their assertion on every connect and at 80 % of the 1 h lifetime (`rules.token_and_entitlement_refresh`, **unit-tested** `pc-agent/tests/test_entitlement.py::test_refresh_against_fake_api`) | Free accounts: none (their assertion is null). Pro (Phase C): an assertion signed by the old key fails verification at the next refresh and the agent treats the account as Free until it obtains a new one — within an hour, immediately on reconnect. The 72 h grace applies only to network errors/5xx, never to a verification failure, so there is no window in which a revoked key keeps Pro alive. Serve both keys during a transition is **not** implemented (single key, single `kid`). |
-| OIDC client secret | Rotate at the provider, set `DOME_OIDC_CLIENT_SECRET`, restart | Logins fail between the two steps (`oidc.token_exchange_failed`, HTTP 503 to the customer); existing sessions keep working. |
+| OIDC client secret | Rotate at the provider, paste the new value into the GitHub Environment secret `DOME_OIDC_CLIENT_SECRET`, press Deploy | Logins fail between the two steps (`oidc.token_exchange_failed`, HTTP 503 to the customer); existing sessions keep working. |
 | Database password | Rotate at the provider, set `DOME_DATABASE_URL`, restart | Brief downtime; `pool_pre_ping` discards dead connections. |
 | PC credential (per PC) | Customer: Devices → Unlink, then `DoMe.exe link` again; or operator sets `pc_credentials.revoked_at` | The agent gets 401 on `/v1/agent/token`, stops and asks for a re-link; pairings are not inherited (`cloud-api/DECISIONS.md` #2). |
 | PC access tokens | Automatic: 1 h lifetime (`DOME_PC_ACCESS_TOKEN_SECONDS`), refreshed by the agent before reconnecting when < 5 min remain; open sockets are never closed for token expiry | none |
@@ -390,7 +386,8 @@ scenario to this table.
 - [ ] Retention purge job implemented (`docs/DATA_RETENTION.md` §4) or table growth accepted and monitored
 - [ ] Load smoke run against staging from a separate machine; sustained idle/reconnect test (24 h) recorded in `docs/ACCEPTANCE.md` Scenario 17
 - [ ] Agent socket frame budget (`cloud-api/KNOWN_ISSUES.md` #1) implemented or explicitly accepted
-- [ ] CI workflow exists and runs every suite on every push (currently none)
+- [x] CI workflow exists and runs every suite on every push (`ci.yml`, green since 2026-10-11)
+- [ ] First staging deploy through the Deploy workflow; `forwarded_client: ok` and a real Auth0 sign-in confirmed
 - [ ] Staging and production separated: apps, databases, OIDC clients, entitlement keys, agents never cross
 - [ ] `docs/SECURITY.md` §6 operator boundaries re-read; the operator interface (Phase C/D) or a written manual-access procedure with audit in place
 - [ ] Incident contacts and the write-up template agreed (§10)
@@ -401,5 +398,7 @@ scenario to this table.
 | --- | --- |
 | Settings validation, start-up migration and head check, start-up sweep, `/healthz`, limits in §9, log event names and security-event kinds | code read; integration-tested where a test is named |
 | Reconnect/ping/idle behaviour of the agent, PWA and extension | unit-tested against fakes |
-| Everything about Fly.io, images, backups, restore, rollback, rotation procedures, incident handling | not yet verified (procedure, never run) |
+| Image build | CI-tested (`container` job) |
+| Deploy workflow logic | unit-tested against a fake `flyctl` (`deploy/launch/tests/`); never run against Fly.io |
+| Everything about Fly.io itself, backups, restore, rollback, rotation procedures, incident handling | not yet verified (procedure, never run) |
 | Behaviour of the hosting provider's proxy, idle timeouts, `kill_timeout` semantics, encryption at rest | not yet verified; confirm against the vendor's current documentation at first deployment |

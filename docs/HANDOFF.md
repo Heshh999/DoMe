@@ -9,7 +9,7 @@ Evidence tags used everywhere in this repository: **unit-tested**, **integration
 Windows-device-tested or iPhone-tested pass has been recorded in `docs/ACCEPTANCE.md` yet; the owner has
 reported features working on their Windows 11 PC and iPhone through the test kit (§0).
 
-## 0. Current state (2026-10-13)
+## 0. Current state (2026-10-14)
 
 What happened since the 2026-10-09 baseline that §1–§6 describe (details in `docs/PROGRESS.md`):
 
@@ -32,6 +32,17 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   Screen view "Coming" and point-and-talk "Planned" (DECISIONS 62–63). Two polish rounds followed; the
   second is saved as a checkpoint (6d76945) and still in progress. mobile-app: 68 files, 1218 tests pass.
 - **Domain** (2026-10-13): see the next subsection.
+- **One-button launch tooling** (2026-10-14, §7 item 0): GitHub > Actions > **Deploy** (staging or
+  production; deploy or status) sets up the Fly app, its Managed Postgres database, the generated secrets,
+  the deploy and the certificate, and ends with a plain-English summary of the next click
+  (`.github/workflows/deploy.yml`, `deploy/launch/dome_deploy.py`; the founder's guide is
+  `docs/LAUNCH_SETUP.md`). Production is refused unless staging runs the same commit, healthy; both
+  environments need the founder's approval. Code changes for real hosting: the ID-token issuer is checked
+  against the discovery document exactly (Auth0's trailing slash would otherwise reject every sign-in),
+  the token request uses `client_secret_post`, `/healthz` reports the build `commit` and a
+  `forwarded_client` self-check, Fly's client address comes from `Fly-Client-IP` behind the private-range
+  trust (`DOME_CLIENT_IP_HEADER`). **Written and statically checked only: never run against Fly.io,
+  Auth0 or Cloudflare**; the founder's first staging run is the test.
 - **Windows installer** (2026-10-13/14, §7 item 4, pulled forward): an unsigned per-user development
   installer, `DoMe-Setup-<version>.exe` (Inno Setup), and `.github/workflows/windows-installer.yml`,
   which is to build it and smoke-test it on a GitHub Windows Server runner. Its first run was green on 2026-10-14 (run 38488799434: Windows unit tests, the build and 157
@@ -48,7 +59,7 @@ because the session cookie, the Origin check and the phone's signing key are per
 into the code: link-preview tags and image, `robots.txt`, `sitemap.xml`, `X-Robots-Tag: noindex` outside
 production, the extension's homepage link. **Nothing is configured at Cloudflare yet.** The DNS records,
 redirect rules, DNSSEC and identity-provider callbacks are written up in `deploy/README.md` "Domain";
-carry them out once the Fly apps exist (§7 item 5). The Windows installer points `DoMe.exe link` at
+carry them out once the Fly apps exist (§7 item 0; the Deploy summary prints the exact records). The Windows installer points `DoMe.exe link` at
 `https://domeremote.com` (`dome-server.json` in the install folder, no environment variable; §7 item 4).
 
 ## 1. Where things stand
@@ -66,7 +77,7 @@ Test counts in this table are from 2026-10-09 unless dated; §2 has the latest r
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. Optional passphrase gate (`DEV_IDP_PASSPHRASE`) for the test kit: the right passphrase always works, wrong ones never lock anyone out; readable refusal page for browsers. | unit-tested: 14 tests (run in CI) |
 | `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. Since then run by the owner on Windows 11 with quick tunnels and an iPhone (§0, §4) |
 | `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension, tray, both Windows programs, Setup and the Start menu shortcut use the exports (the last three since 2026-10-13, built by the first green Windows run on 2026-10-14). | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
-| `deploy/`, `.github/workflows/ci.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck), entrypoint that refuses to invent a signing key outside development, `fly.toml` tuned for long-lived WebSockets, Compose file for machines with Docker, deploy README; CI with Python/Node/integration/container jobs and pinned actions. | CI runs on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green; the Windows job runs the pipe, native-host, tray and adapter tests); `windows-installer.yml` (2026-10-13) awaits its first run; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed (no Fly account here) |
+| `deploy/`, `.github/workflows/ci.yml`, `.github/workflows/deploy.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck, build commit), entrypoint that refuses to invent a signing key outside development, an environment-neutral `fly.toml` tuned for long-lived WebSockets, the one-button Deploy workflow and `deploy/launch/dome_deploy.py` (2026-10-14), Compose file for machines with Docker, deploy README; CI with Python/Windows/Node/integration/container/deploy-tooling jobs and pinned actions. | CI runs on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green; the Windows job runs the pipe, native-host, tray and adapter tests); `windows-installer.yml` (2026-10-13) awaits its first run; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed (no Fly account here) |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
 ## 2. Running everything on a fresh machine
@@ -85,12 +96,14 @@ make agent                 # terminal 4: agent (Linux → development platform, 
 ```
 
 Tests, per component (each is a standalone package with its own lockfile). Counts are the last recorded
-runs: 2026-10-11 (`docs/PROGRESS.md`, AI butler step 1) except mobile-app and brand (2026-10-13):
+runs: 2026-10-11 (`docs/PROGRESS.md`, AI butler step 1) except mobile-app and brand (2026-10-13) and
+cloud-api and deploy/launch (2026-10-14):
 
 ```sh
 cd shared/python && uv run pytest -q           # 264
 cd shared/ts && pnpm test                       # 124
-cd cloud-api && uv run pytest -q                # 316 (+1 live AI test skipped without a key; needs the local PostgreSQL and tools/dev-idp venv)
+cd cloud-api && uv run pytest -q                # 329 (+1 live AI test skipped without a key; needs the local PostgreSQL and tools/dev-idp venv)
+cd deploy/launch && uv run --extra dev pytest -q  # 82 (the Deploy button's program against a fake flyctl; real openssl)
 cd pc-agent && uv run pytest -q                 # 604 (+3 skipped: root, named-pipe-only, no Tk)
 cd pc-agent && uv run mypy --config-file mypy-windows.ini  # Windows code paths vs. pywin32 stubs
 cd browser-extension && pnpm test               # 154
@@ -199,11 +212,15 @@ unless stated.
 - **iPhone**: the owner has used the PWA in iOS Safari (pairing, the remote, touchpad, keyboard, Type);
   standalone (Home Screen) mode, resume behaviour, QR scanning and key persistence across restarts are
   not reported; see `docs/IPHONE_SETUP.md` and `mobile-app/KNOWN_ISSUES.md` #5.
-- **Production identity provider**: only `tools/dev-idp` was used; Auth0/Keycloak settings exist in
-  `cloud-api/README.md` but have not been exercised.
-- **Hosting**: `deploy/` has not been deployed; `DOME_TRUSTED_PROXIES` for Fly.io is a deployment fact
-  that must be set by hand (`cloud-api/KNOWN_ISSUES.md` #5). The domain is registered but no DNS record,
-  redirect or certificate exists yet (§0 "Domain").
+- **Production identity provider**: only `tools/dev-idp` was used. The two Auth0 incompatibilities found
+  by reading (trailing-slash issuer, client authentication method) are fixed and unit-tested
+  (`cloud-api/tests/test_oidc_issuer.py`), but no sign-in against a real Auth0 tenant has happened.
+- **Hosting**: nothing is deployed. The Deploy workflow and `deploy/launch/dome_deploy.py` are tested
+  against a fake `flyctl` only; flyctl output shapes were read from its v0.4.110 source. Unverified until
+  the first staging run: `flyctl mpg create`/`attach` with an organization token, the client-address
+  self-check (`forwarded_client: ok`) on a live machine, Fly's `release_command` with this image, the
+  certificate and DNS steps. The domain is registered but no DNS record, redirect or certificate exists
+  yet (§0 "Domain").
 - **Billing and plans**: no Stripe code exists. `cloud-api` only reports `billing_enabled` from the
   presence of a Stripe key, and the PWA shows plan state without any checkout. `docs/BILLING.md` is a
   design. The website's Free / Pro / Pro Plus figures are static content (`mobile-app/src/content/plans.ts`);
@@ -280,8 +297,20 @@ in a protocol MINOR bump (`shared/protocol/version.json`), regenerate fixtures a
 
 ## 7. Next tasks, in order (2026-10-13)
 
-Finish polish round 2 of the redesign first (checkpoint 6d76945); then:
+Finish polish round 2 of the redesign first (checkpoint 6d76945); item 0 runs in parallel because it is
+founder-driven; then:
 
+0. **Launch setup (founder-driven, `docs/LAUNCH_SETUP.md`)**: the founder creates the Fly.io account
+   (card on file), the GitHub Environments `staging` and `production` (default branch only, himself as
+   required reviewer on **both**), one Fly organization token per environment, two Auth0 tenants with a
+   Regular Web Application each (Client Secret (Post)), pastes the values, and runs Deploy for staging
+   (ticking the database), then the Cloudflare record, `status`, a real sign-in, then production. An
+   engineer reads the first staging run's log and summary and fixes whatever the real Fly.io answers
+   differently from the flyctl source. Before production is called ready: restore rehearsal,
+   failed-deploy rehearsal, external `/healthz` monitor, backup retention recorded, support URL, Auth0
+   email provider and Google keys (`docs/OPERATIONS.md` §12). Follow-ups: a rollback action (redeploy the
+   previous `git-<sha>` image), a rotate-generated-secrets action, app-scoped tokens or separate Fly
+   organizations per environment (`docs/SECURITY.md` §9), auto-deploying staging on push.
 1. **Plans metering (#51)**: make the website's Free / Pro / Pro Plus real (the figures are in
    `mobile-app/README.md` "Plan content"). A contract MINOR: a `pro_plus` plan; AI allowances as a 5-hour
    window that starts at the first AI request plus a weekly window that refreshes 7 days after the week's
@@ -321,10 +350,9 @@ Finish polish round 2 of the redesign first (checkpoint 6d76945); then:
    Signing) in a separate protected job; an Inno Setup commercial licence before paid launch; an updater
    with signature verification (`docs/SECURITY.md` T12). The Download page says "not yet published" until
    signing exists.
-5. **Domain and staging**: create the Fly apps, then carry out `deploy/README.md` "Domain" (DNS-only
-   records for Fly, redirect rules for `.app` and `www`, DNSSEC, identity-provider callbacks) and the
-   staging steps there: PostgreSQL, Auth0 or Keycloak, `DOME_TRUSTED_PROXIES`, the entitlement signing
-   key. (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
+5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
+   certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
+   (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
    `windows-installer.yml` runs when PC code changes; first green run 2026-10-14.)
 6. **Device evidence**: record the owner's Windows 11 + iPhone results in `docs/ACCEPTANCE.md` with build
    and iOS versions; still to report: sleep, restart, shut down, and the redesign and film on the iPhone

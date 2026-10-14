@@ -16,9 +16,13 @@ Items the review surfaced that are deliberately deferred, with the reason and th
    `pc_status`. A dedicated code would be a contract change (`errors.json` is frozen for this component).
 4. **Proof of possession at link start** is a contract gap (`CONTRACT_ISSUES.md` #10); the backend-side
    mitigation (no takeover of a linked PC) is in place, the cryptographic fix needs the MINOR bump.
-5. **`DOME_TRUSTED_PROXIES` on Fly.io is a deployment fact, not a code default.** The README explains
-   how to find the proxy's source range; the process refuses to start in staging/production without an
-   explicit value rather than guessing one.
+5. **The Fly.io client-address settings are verified by a self-check, not yet on a live machine.**
+   `deploy/fly.toml` trusts the private IPv4 ranges and reads `Fly-Client-IP` (`DOME_CLIENT_IP_HEADER`),
+   based on Fly's documentation (the proxy connects over a private IPv4 address; the right-most
+   `X-Forwarded-For` hop is the app's own address). `/healthz` → `forwarded_client` reports whether the
+   resolved address equals `Fly-Client-IP`; the Deploy workflow refuses a deploy where it is not `ok`, and
+   production requires `ok` on staging. Nothing outside a deploy run watches it until an external monitor
+   exists. Staging and production still refuse to start without an explicit `DOME_TRUSTED_PROXIES`.
 6. **Operators have no support route.** Tickets are written and read by the owning account only; the
    `status` / `answer` columns exist (`in_review`, `answered`, `closed`) but nothing sets them yet. The
    operator interface (spec §15: strong operator authentication, audit, no command execution) is the
