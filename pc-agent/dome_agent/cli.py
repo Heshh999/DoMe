@@ -56,7 +56,7 @@ from dome_protocol import ProtocolError
 
 from . import __version__
 from .logsetup import configure_logging, get_logger
-from .settings import Settings, installed_api_url, load_settings
+from .settings import Settings, command_name, installed_api_url, load_settings
 
 log = get_logger(__name__)
 
@@ -134,7 +134,7 @@ def _second_launch(settings: Settings) -> int:
         report = inspect(settings.state_dir)
         print(report.message)
         if report.lock_held_by_other and not report.control_responding:
-            print(f"(control channel: {exc.code}) Run `dome-agent repair` to check the local endpoints.")
+            print(f"(control channel: {exc.code}) Run `{command_name()} repair` to check the local endpoints.")
         log.warning("second launch: lock held but the running instance did not answer", code=exc.code)
         return 1
 
@@ -472,7 +472,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             detail = failure.get("message") or (f"OS error {failure['os_error']}" if "os_error" in failure else "")
             print(f"  {source} read failing since {failure.get('since')}: {code}" + (f": {detail}" if detail else ""))
         if status.get("relink_required"):
-            print(f"  RE-LINK REQUIRED ({status.get('relink_reason')}): run `dome-agent link`")
+            print(f"  RE-LINK REQUIRED ({status.get('relink_reason')}): run `{command_name()} link`")
         if status.get("configuration_error"):
             print(f"  CONFIGURATION ERROR: {status['configuration_error']}")
         if status.get("pending_revocations"):

@@ -19,6 +19,7 @@ from dome_protocol import format_rfc3339, now_utc
 from .api import ApiClient, ApiError, LinkStart
 from .identity import Identity, LinkRecord
 from .logsetup import get_logger
+from .settings import command_name
 from .store import SETTING_PC_NAME, Store
 
 log = get_logger(__name__)
@@ -58,7 +59,9 @@ async def link_pc(
     max_wait_seconds: int | None = None,
 ) -> LinkOutcome:
     if identity.is_linked:
-        raise LinkError("This PC is already linked. Unlink it first (dome-agent unlink) to link it to another account.")
+        raise LinkError(
+            f"This PC is already linked. Unlink it first ({command_name()} unlink) to link it to another account."
+        )
     start = await api.link_start(identity.public_jwk, platform, pc_name_hint)
     present(start)
     if open_browser:
@@ -68,14 +71,14 @@ async def link_pc(
     interval = max(1, start.interval)
     while True:
         if asyncio.get_running_loop().time() >= deadline:
-            raise LinkError("The link code expired before it was approved. Run `dome-agent link` again.")
+            raise LinkError(f"The link code expired before it was approved. Run `{command_name()} link` again.")
         await asyncio.sleep(interval)
         try:
             outcome = await api.link_poll(start.device_code)
         except ApiError as exc:
             if exc.status in (400, 404, 410):
                 raise LinkError(
-                    f"The link request was rejected or expired ({exc.code}). Run `dome-agent link` again."
+                    f"The link request was rejected or expired ({exc.code}). Run `{command_name()} link` again."
                 ) from exc
             if exc.status == 403:
                 raise LinkError("Linking was denied in the browser.") from exc

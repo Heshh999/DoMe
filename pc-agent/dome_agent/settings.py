@@ -132,3 +132,9 @@ def installed_api_url(path: Path | None = None) -> str:
         return ""
     value = value.strip().rstrip("/")
     return value if _HTTPS_ORIGIN_RE.match(value) else ""
+
+
+def command_name() -> str:
+    """How the person runs DoMe's commands on this PC, for messages: ``DoMe.exe`` for the installed copy,
+    ``dome-agent`` when run from source."""
+    return "DoMe.exe" if getattr(sys, "frozen", False) else "dome-agent"

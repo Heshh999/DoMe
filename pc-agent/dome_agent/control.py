@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .bridge import ipc
 from .bridge.framing import MAX_FRAME_BYTES, encode_frame
 from .logsetup import get_logger
+from .settings import command_name
 
 log = get_logger(__name__)
 
@@ -70,7 +71,7 @@ class ControlServer:
             return
         # Windows: another process holds the pipe name; the IPC thread keeps retrying until it is free.
         log.error(
-            "control channel NOT listening: `dome-agent status` and a second launch cannot reach this agent",
+            f"control channel NOT listening: `{command_name()} status` and a second launch cannot reach this agent",
             address=self._ipc.address,
             reason=self._ipc.unavailable_reason,
         )
@@ -156,7 +157,7 @@ class ControlClient:
             conn = ipc.connect(self._state_dir, timeout=self._timeout, kind="control")
         except OSError as exc:  # ConnectionRefusedError included
             raise ControlError(
-                "AGENT_NOT_RUNNING", "The DoMe agent is not running (start it with `dome-agent run`)."
+                "AGENT_NOT_RUNNING", f"The DoMe agent is not running (start it with `{command_name()} run`)."
             ) from exc
         try:
             conn.write_frame(request)

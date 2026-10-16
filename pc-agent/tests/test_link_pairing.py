@@ -13,7 +13,7 @@ from dome_protocol import (
 )
 
 from dome_agent.api import ApiClient
-from dome_agent.identity import Identity
+from dome_agent.identity import Identity, LinkRecord
 from dome_agent.link import LinkError, link_pc
 from dome_agent.settings import Settings
 from dome_agent.store import Store
@@ -270,3 +270,41 @@ def test_cli_capability_prompt_is_explicit(monkeypatch: Any, capsys: Any) -> Non
     cli._print_pending(pending)  # noqa: SLF001
     out = capsys.readouterr().out
     assert "every app of the unlocked Windows session" in out and "not a sandbox" in out
+
+
+async def test_messages_name_the_installed_command(
+    settings: Settings, store: Store, fake_api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The installed copy is run as DoMe.exe, so its messages must not tell the person to run `dome-agent`."""
+    import sys
+
+    from dome_agent.settings import command_name
+
+    assert command_name() == "dome-agent"  # from source
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert command_name() == "DoMe.exe"
+    identity = Identity(settings.state_dir)
+    identity.store_link(
+        LinkRecord(
+            pc_id="11111111-1111-4111-8111-111111111111",
+            account_id="22222222-2222-4222-8222-222222222222",
+            pc_name="Desk PC",
+            relay_url="wss://example.invalid/ws/agent",
+            api_url="https://example.invalid",
+            linked_at="2026-10-16T00:00:00Z",
+        ),
+        "credential-for-the-test",
+    )
+    api = ApiClient(fake_api.url)
+    with pytest.raises(LinkError, match=r"Unlink it first \(DoMe\.exe unlink\)"):
+        await link_pc(
+            api,
+            identity,
+            store,
+            platform="development",
+            pc_name_hint=None,
+            open_browser=False,
+            present=lambda s: None,
+            enable_remote=True,
+        )
+    await api.close()

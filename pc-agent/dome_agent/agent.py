@@ -66,7 +66,7 @@ from .pairing import INPUT_CAPABILITIES, PairingManager
 from .platform import PlatformSet, build_platform
 from .queue import Emitter, Executor
 from .relay_client import ConnectionState, RelayClient, StopReason, TokenManager
-from .settings import Settings
+from .settings import Settings, command_name
 from .state import ReadFailureLog, StateAggregator
 from .store import ApprovedAppRow, Store
 from .ui import AgentUI, NullUI, StatusView
@@ -202,7 +202,7 @@ class Agent:
         if self.identity.is_linked:
             self._start_relay()
         else:
-            log.warning("this PC is not linked yet; waiting for `dome-agent link`")
+            log.warning(f"this PC is not linked yet; waiting for `{command_name()} link`")
             self._link_watch = asyncio.get_running_loop().create_task(self._watch_for_link(), name="dome-link-watch")
         self._update_ui()
 
@@ -307,7 +307,7 @@ class Agent:
         if reason == "configuration_error":
             # Local misconfiguration (invalid relay URL): the credential is untouched; no re-link needed.
             self.configuration_error = (
-                "The relay URL is invalid. Check DOME_AGENT_RELAY_URL or re-run `dome-agent link`."
+                f"The relay URL is invalid. Check DOME_AGENT_RELAY_URL or re-run `{command_name()} link`."
             )
             log.error("agent stopped connecting", reason=reason)
             self.ui.notify("DoMe cannot connect", self.configuration_error)
@@ -847,7 +847,7 @@ class Agent:
 
         async def pair_start(_: dict[str, Any]) -> dict[str, Any]:
             if self.pairing is None:
-                raise ControlError("NOT_LINKED", "This PC is not linked yet. Run `dome-agent link` first.")
+                raise ControlError("NOT_LINKED", f"This PC is not linked yet. Run `{command_name()} link` first.")
             if self.relay is None or not self.relay.connected:
                 raise ControlError(
                     "OFFLINE", "The agent is not connected to the DoMe service; pairing needs a connection."

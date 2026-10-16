@@ -249,6 +249,10 @@ in `pc-agent/README.md`. Code signing and a signed update manifest are blocked o
 credentials (`docs/WINDOWS_INSTALL.md` §9). Record as **Windows-device-tested** with Windows build
 numbers.
 
+**Device runs:**
+
+2026-10-16 · owner smoke test, not the full checklist · Windows (build not recorded), `DoMe-Setup-0.1.0+a686dda` from `windows-installer.yml` run 38488799434, iPhone (model, iOS version and Safari/home-screen mode not recorded), hosting: production `https://domeremote.com` (commit 7a590ad) · Steps: Setup as a standard user (unsigned build: **More info → Run anyway**), tray icon appeared; `DoMe.exe link` first refused with "This PC is already linked" (a link left by the test kit, which shares `%LOCALAPPDATA%\DoMe`), then `DoMe.exe unlink` and `DoMe.exe link` linked the PC through the domeremote.com Link page; pairing an iPhone through the tray · Result: pass as reported by the owner · Follow-up: messages now name `DoMe.exe` instead of `dome-agent` in the installed copy; the rest of the Outstanding list (Start at login, native-host keys, upgrade, uninstall, Windows 10 and 11) is still open.
+
 ### Scenario 17 — A small load test covers declared concurrent connections and dispatch rate with bounded resource use, plus a sustained idle/reconnect test
 
 | Evidence now | Tag |
@@ -297,6 +301,10 @@ Record the observed pointer-acceleration ratio ("Enhance pointer precision", pc-
 Record as **Windows-device-tested** + **iPhone-tested** with the Windows build, monitor layout, iOS
 version and PWA/Safari mode.
 
+**Device runs:**
+
+2026-10-16 · owner smoke test, not the full checklist · Windows (build not recorded), `DoMe-Setup-0.1.0+a686dda` from `windows-installer.yml` run 38488799434, iPhone (model, iOS version and Safari/home-screen mode not recorded), hosting: production `https://domeremote.com` (commit 7a590ad) · Steps: slide, tap, two-finger tap (right click), two-finger scroll, Drag → End Drag, Windows volume slider · Result: pass as reported by the owner ("works great"); single monitor assumed; per-row observations, double tap, rotation/call/app switch during a drag and the pointer acceleration ratio were not recorded · Follow-up: the Outstanding rows above stay open.
+
 ### Scenario 19 — Click and type into real YouTube/Google search, a supported browser address bar and a desktop editor; input/composition, correction, Enter, focus changes and Compose and Send work on supported real phones
 
 | Evidence now | Tag |
@@ -326,6 +334,10 @@ on a real desktop"). Switch the PC's foreground window during live typing: typin
 - weak cellular.
 
 Record as **Windows-device-tested** + **iPhone-tested**, with the keyboard and IME names.
+
+**Device runs:**
+
+2026-10-16 · owner smoke test, not the full checklist · Windows (build not recorded), `DoMe-Setup-0.1.0+a686dda` from `windows-installer.yml` run 38488799434, iPhone (model, iOS version and Safari/home-screen mode not recorded), hosting: production `https://domeremote.com` (commit 7a590ad) · Steps: click into Notepad with the touchpad, **Keyboard**, **Type live** "hello from my phone" · Result: pass as reported by the owner · Follow-up: browser search boxes, the address bar, autocorrect, IME, dictation, emoji and Compose and Send are not yet checked on a device.
 
 ### Scenario 20 — Manual-input permission/revocation, lease expiry, disconnect, stale events, switching PCs/controllers, lock/UAC restrictions and Stop Input preserve the §10A boundary and release injected holds; no typed content enters logs, persistent queues or AI requests
 

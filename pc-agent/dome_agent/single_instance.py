@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from .logsetup import get_logger
+from .settings import command_name
 
 log = get_logger(__name__)
 
@@ -309,9 +310,7 @@ def inspect(state_dir: Path, *, control_timeout: float = 2.0) -> InstanceReport:
 def describe(report: InstanceReport) -> str:
     pid = f" (pid {report.running_pid})" if report.running_pid else ""
     if report.permission_problem:
-        return (
-            f"Permission problem: {report.permission_problem}. Run `dome-agent repair` or fix the folder permissions."
-        )
+        return f"Permission problem: {report.permission_problem}. Run `{command_name()} repair` or fix the folder permissions."
     if report.other_session_conflict:
         return (
             f"DoMe already runs for this Windows account in session {report.other_session}{pid}. Both sessions "
@@ -323,12 +322,16 @@ def describe(report: InstanceReport) -> str:
     if report.lock_held_by_other and not report.control_responding:
         return (
             f"Another DoMe instance is running but not responding{pid}. It may still be starting; if this persists, "
-            "quit it from the tray (or sign out and back in) and run `dome-agent repair`."
+            f"quit it from the tray (or sign out and back in) and run `{command_name()} repair`."
         )
     if report.control_endpoint_stale:
-        return "Stale control endpoint: a previous DoMe did not shut down cleanly. `dome-agent repair` removes it."
+        return (
+            f"Stale control endpoint: a previous DoMe did not shut down cleanly. `{command_name()} repair` removes it."
+        )
     if report.pid_file_stale:
-        return "Stale pid file from a previous DoMe (no such process). Harmless; `dome-agent repair` cleans it up."
+        return (
+            f"Stale pid file from a previous DoMe (no such process). Harmless; `{command_name()} repair` cleans it up."
+        )
     return "No DoMe agent is running in this session."
 
 

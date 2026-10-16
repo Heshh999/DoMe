@@ -49,6 +49,7 @@ from dome_protocol import ProtocolError
 
 from .logsetup import get_logger
 from .platform.protocol import f11_toggles_fullscreen
+from .settings import command_name
 from .store import ApprovedAppRow, Store
 
 log = get_logger(__name__)
@@ -87,7 +88,7 @@ class AppIdTakenError(ApprovalError):
     def __init__(self, row: ApprovedAppRow) -> None:
         super().__init__(
             f"'{row.app_id}' is already approved for {row.exe_path}; remove it first or replace it explicitly "
-            "(dome-agent approve-app --replace)",
+            f"({command_name()} approve-app --replace)",
             code="APP_ID_TAKEN",
         )
         self.row = row

@@ -46,7 +46,7 @@ from .approved_apps import (
 )
 from .logsetup import get_logger
 from .pairing import INPUT_CAPABILITIES, INPUT_SCOPE_EXPLANATION
-from .settings import Settings
+from .settings import Settings, command_name
 from .store import ApprovedAppRow
 from .ui import PairingApproval, PairingDisplay, StatusView
 
@@ -446,7 +446,9 @@ class TrayUI:
             self.notify("DoMe", "DoMe is still starting. Try again in a moment.")
             return
         if self._tk.root is None:  # no tkinter: the Tk thread never pumps, so nothing posted would run
-            self.notify("DoMe", "DoMe cannot open windows here. Use: dome-agent approve-app <name> <path to .exe>")
+            self.notify(
+                "DoMe", f"DoMe cannot open windows here. Use: {command_name()} approve-app <name> <path to .exe>"
+            )
             return
         self._tk.post(lambda: self._open_apps_window(add=add))
 
@@ -467,7 +469,7 @@ class TrayUI:
             if self.agent is not None and self.agent.pairing is not None:
                 self._call(self.agent.pairing.start())
             else:
-                self.notify("DoMe", "Link this PC to your account first (dome-agent link).")
+                self.notify("DoMe", f"Link this PC to your account first ({command_name()} link).")
 
         def add_app(icon: Any, item: Any) -> None:
             self._open_apps_from_tray(add=True)

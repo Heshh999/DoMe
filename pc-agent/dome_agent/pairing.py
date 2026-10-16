@@ -30,6 +30,7 @@ from dome_protocol import (
 
 from .frames import pairing_decision_frame
 from .logsetup import get_logger
+from .settings import command_name
 from .ui import AgentUI, PairingApproval, PairingDisplay
 
 if TYPE_CHECKING:
@@ -133,7 +134,7 @@ class PairingManager:
     # ----- start ---------------------------------------------------------------------------------------------
     async def start(self) -> PairingSession:
         if self._identity.pc_id is None:
-            raise ProtocolError("PC_OFFLINE", "This PC is not linked yet. Run `dome-agent link` first.")
+            raise ProtocolError("PC_OFFLINE", f"This PC is not linked yet. Run `{command_name()} link` first.")
         code = generate_pairing_code()
         code_hash = pairing_code_handle(code)
         token = await self._tokens.get()

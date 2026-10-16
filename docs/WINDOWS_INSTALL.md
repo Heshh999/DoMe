@@ -65,10 +65,15 @@ never be asked to do this: public downloads wait for signing.
 once it is off, Windows cannot switch it back on without resetting the PC. Keep using the test kit
 (`testkit/README.md`) on that PC until DoMe is signed.
 
-**Linking.** This test version cannot connect to your DoMe account by itself yet: linking needs the
-DoMe service at domeremote.com, which is not live yet. Until then, use the test kit
-(`testkit/README.md`). Later, in PowerShell: `& "$env:LOCALAPPDATA\Programs\DoMe\DoMe.exe" link | Out-Host`;
-a "Link this PC" item in DoMe's menu will follow.
+**Linking.** domeremote.com is live (2026-10-16), so the installed DoMe links to your account. Open
+Windows PowerShell (not as administrator) and run
+`& "$env:LOCALAPPDATA\Programs\DoMe\DoMe.exe" link | Out-Host`. It shows a code and opens the
+domeremote.com **Link a PC** page: check the code, name the PC, keep **Enable remote control** ticked and
+click **Link this PC**. A running DoMe picks the link up by itself. If it says "This PC is already
+linked", the PC still holds an older link, for example from the test kit, which shares the same settings
+folder: quit DoMe from its icon, run the same command with `unlink` instead of `link`, then `link` again
+and start DoMe from the Start menu. A "Link this PC" item in DoMe's menu will follow. First done on a
+real PC against production on 2026-10-16 (`docs/ACCEPTANCE.md` Scenario 16).
 
 **Updating.** Run a newer `DoMe-Setup` over the old one. It closes DoMe first (the same as **Quit
 DoMe**) and keeps your link, paired phones and settings. If DoMe does not close, Setup stops without

@@ -2,6 +2,30 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-16 — DoMe is live at domeremote.com; first real PC + iPhone run; installed copy names `DoMe.exe`
+
+- **Live.** Production deploy #4 (commit 7a590ad) runs on Fly.io (Managed Postgres Basic, iad); the founder
+  added the apex A/AAAA records in Cloudflare as DNS only, `www.domeremote.com` redirects to the apex with a
+  Cloudflare redirect rule, and sign-in works on https://domeremote.com. DNSSEC is being turned on.
+  `domeremote.app` stays parked by the founder's choice (LAUNCH_SETUP §12's domeremote.app part is for later).
+- **First real-device run (owner smoke test, not the full checklists).** `DoMe-Setup-0.1.0+a686dda` installed
+  on the founder's Windows PC as a standard user; `DoMe.exe link` linked it to production after `DoMe.exe
+  unlink` cleared an older test-kit link; an iPhone paired; the founder reported touchpad (move, tap, two-finger
+  tap, two-finger scroll, drag), live typing into Notepad and the Windows volume slider "work great". Recorded
+  in `docs/ACCEPTANCE.md` Scenarios 16, 18 and 19 as owner-reported rows; Windows build, iOS version and
+  Safari/home-screen mode were not recorded, so the scenarios stay open.
+- **Wording fix.** The installed copy is run as `DoMe.exe`, but its messages said `dome-agent link`,
+  `dome-agent unlink`, `dome-agent repair` and so on. `settings.command_name()` gives `DoMe.exe` in the
+  frozen build and `dome-agent` from source; every user-facing message uses it.
+  `pc-agent/tests/test_link_pairing.py::test_messages_name_the_installed_command`. `docs/WINDOWS_INSTALL.md`
+  "Linking" now describes linking to the live service and the "already linked" case.
+- **Screen view (#52).** The founder looked for it on the phone: it is not built (the website says
+  "Coming"). Its design started: research, three competing designs, a judge and an adversarial review,
+  writing `docs/design/screen-view.md` and `docs/adr/0002-screen-view-transport.md`.
+- Tests run: pc-agent 635 passed, 3 skipped; ruff clean; mypy clean (default and `mypy-windows.ini`).
+  **Evidence tag: unit-tested** for the wording fix; the device run is owner-reported.
+- Next: Screen view design → contract → implementation; a tray "Link this PC…" item so nobody needs PowerShell.
+
 ## 2026-10-14 — Neon launch review fixes: one app per environment, no Neon in production, channel binding, a paused Neon (not run against Fly.io or Neon)
 
 A review of the Neon change (entry below) found that one wrong repository variable could deploy staging into
