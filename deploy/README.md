@@ -110,7 +110,7 @@ Nothing is shared between them; a secret that exists in two environments is a mi
 | Database | local PostgreSQL | Neon free plan, project `domeremote-staging`, AWS `us-east-1`, outside Fly; its direct address is the GitHub Environment secret `DATABASE_URL` ([Staging database](#staging-database-neon)) | Fly Managed Postgres Basic, `domeremote-production-db`, `iad` |
 | Machine | — | one, sleeps when idle (`auto_stop_machines = "stop"`, `auto_start_machines = true`, `min_machines_running = 0`); the first request after a nap takes a few seconds | one, always on (`"off"`, `false`, `1`): PCs hold WebSockets |
 | Entitlement key | generated locally (`make`/entrypoint) | generated once, stored only in Fly secrets | generated once, stored only in Fly secrets; never the staging key |
-| Stripe | none (Phase C not implemented) | test-mode keys only, when Phase C exists | live keys only after the founder's go-live decision |
+| Stripe (billing) | off, or the fake provider (`DOME_BILLING_PROVIDER=fake`) or test-mode keys in `.env` | off without values; Test mode keys only (the Deploy button refuses a live key, and so does the app) | off without values; Test mode or Live mode keys (the founder tries Test mode first; every Deploy summary says "Stripe: TEST MODE — no real charges" or "Stripe: LIVE — real charges") |
 | Data | throwaway | throwaway; may be reset; Neon's 6-hour restore window is the only backup | retained per `docs/DATA_RETENTION.md` |
 
 Code paths that differ by `DOME_ENV` are in `cloud-api/dome_api/settings.py`: production requires
@@ -137,8 +137,12 @@ guide. In short:
 4. **Cloudflare**: the DNS records each Deploy summary prints, as **DNS only**; the redirects and DNSSEC
    below.
 5. **Stripe**: billing is built (`docs/BILLING.md`; integration-tested with a fake Stripe, not
-   sandbox-provider-tested), but the Deploy button does not yet pass `DOME_STRIPE_*` to Fly, so billing
-   stays off on both environments (`docs/LAUNCH_SETUP.md` section 11A).
+   sandbox-provider-tested). The founder puts seven values in a GitHub Environment (the secrets
+   `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET`; the variables `DOME_STRIPE_PRICE_PRO_MONTHLY`,
+   `_PRO_ANNUAL`, `_PRO_PLUS_MONTHLY`, `_PRO_PLUS_ANNUAL`, `_TOPUP`) and creates the webhook endpoint
+   `<origin>/v1/billing/webhook` in Stripe; the Deploy button carries them to Fly
+   ([Billing](#billing-stripe-through-the-deploy-button), `docs/LAUNCH_SETUP.md` section 11A). Without them
+   billing stays off.
    **Anthropic key**: not now (the assistant stays off: the workflow never sets `DOME_AI_*`; the protocol 1.3
    allowances describe the plans, and the website labels them "Not switched on yet").
 6. **Windows code signing, Chrome Web Store, support mailbox** are release prerequisites outside
@@ -154,14 +158,15 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
 
 | Job | Secrets | What it does |
 | --- | --- | --- |
-| `gate` | no values, no environment | refuses any branch but the default branch; refuses while `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET` or `DATABASE_URL` exists as a **repository** secret (GitHub evaluates `secrets.X != ''` and passes only names, `REPO_LEVEL_SECRETS`); reads both GitHub Environments with the job's own token (`actions: read`) and refuses unless each exists, has a required reviewer, no administrator bypass and exactly one branch rule, the default branch; for production, refuses unless `https://<staging app>.fly.dev/healthz` reports `status ok`, `database ok`, `forwarded_client ok` and **this** commit. Runs before GitHub asks for approval, so the founder is never asked to approve a run that would be refused, and a refused gate never lets GitHub auto-create an unprotected environment. |
+| `gate` | no values, no environment | refuses any branch but the default branch; refuses while `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET`, `DATABASE_URL`, `DOME_STRIPE_SECRET_KEY` or `DOME_STRIPE_WEBHOOK_SECRET` exists as a **repository** secret (GitHub evaluates `secrets.X != ''` and passes only names, `REPO_LEVEL_SECRETS`); reads both GitHub Environments with the job's own token (`actions: read`) and refuses unless each exists, has a required reviewer, no administrator bypass and exactly one branch rule, the default branch; for production, refuses unless `https://<staging app>.fly.dev/healthz` reports `status ok`, `database ok`, `forwarded_client ok` and **this** commit. Runs before GitHub asks for approval, so the founder is never asked to approve a run that would be refused, and a refused gate never lets GitHub auto-create an unprotected environment. |
 | `deploy` | the chosen GitHub Environment's | `dome_deploy.py deploy`, below. Needs the founder's approval (required reviewer on both environments). |
-| `status` | none, no environment | `dome_deploy.py status`: reads `/healthz`, DNS and TLS for one environment and prints the next click. Never runs `flyctl`; cannot change anything. |
+| `status` | none, no environment | `dome_deploy.py status`: reads `/healthz`, the public `GET /v1/plans` (billing off / test mode / live), DNS and TLS for one environment and prints the next click. Never runs `flyctl`; cannot change anything. |
 
 `dome_deploy.py deploy`, in order (steps 1-5 only read; a stop there changes nothing):
 
 1. Branch, inputs (each missing value is named with the exact GitHub page and tab), issuer normalization
-   (`x.us.auth0.com`, `https://x.us.auth0.com` and `https://x.us.auth0.com/` are all accepted).
+   (`x.us.auth0.com`, `https://x.us.auth0.com` and `https://x.us.auth0.com/` are all accepted), and the
+   Stripe values ([Billing](#billing-stripe-through-the-deploy-button)).
 2. OIDC discovery from the runner: the issuer answers, names itself, and accepts `client_secret_post`.
 3. Production only: the staging check of the `gate` job again.
 4. `flyctl apps list`, `secrets list` (names and digests only), and for production `mpg list`. A
@@ -190,13 +195,17 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
    their output is never shown; only the exit code is.
 8. Generate `DOME_SESSION_SECRET` (`secrets.token_hex(32)`) and `DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64`
    (base64 of `openssl genpkey -algorithm ed25519`, in memory only) **only if absent**; mask them; stage
-   them plus `DOME_OIDC_CLIENT_SECRET` (always re-copied from GitHub) and, for staging, `DATABASE_URL`
-   (always re-copied from GitHub, so a Neon password reset is: paste in GitHub, press Deploy) with
-   `flyctl secrets import --stage` on stdin. The password inside `DATABASE_URL` is masked on its own.
+   them plus `DOME_OIDC_CLIENT_SECRET` (always re-copied from GitHub), for staging `DATABASE_URL`
+   (always re-copied from GitHub, so a Neon password reset is: paste in GitHub, press Deploy) and, with
+   billing on, `DOME_STRIPE_SECRET_KEY` and `DOME_STRIPE_WEBHOOK_SECRET` (always re-copied) with
+   `flyctl secrets import --stage` on stdin. The password inside `DATABASE_URL` is masked on its own. Any
+   `DOME_STRIPE_*` Fly secret that GitHub no longer supplies is removed with `flyctl secrets unset --stage`
+   (below).
 9. `docker build` exactly as CI does, with the channel, support URL and commit build arguments, then
    `flyctl deploy --config deploy/fly.<environment>.generated.toml --image <that image> --local-only
    --builder-pool=false --depot=false --ha=false --no-public-ips` with `-e DOME_ENV`,
-   `DOME_PUBLIC_ORIGIN`, `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID`. The config is a copy of `fly.toml`
+   `DOME_PUBLIC_ORIGIN`, `DOME_OIDC_ISSUER`, `DOME_OIDC_CLIENT_ID` and, with billing on, the five
+   `DOME_STRIPE_PRICE_*` ids. The config is a copy of `fly.toml`
    written next to it just before the deploy, with `environments.toml`'s machine sleep in
    `[http_service]`; the program refuses to deploy unless the copy parses to exactly `fly.toml` with only
    those three keys changed, and deletes it afterwards, failure or not (git ignores
@@ -213,7 +222,8 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
     `authorization_endpoint` with `client_id` = `DOME_OIDC_CLIENT_ID` and `redirect_uri` = the callback (it
     proves the app reached the provider from inside Fly; it leaves one unfinished sign-in attempt row that
     expires); and a WebSocket upgrade to `/ws/agent` without credentials over raw TLS, which must reach the
-    app (its own 401, or 101) rather than a proxy error. Then the custom host: not in DNS / proxied by
+    app (its own 401, or 101) rather than a proxy error; and `GET /v1/plans`, whose `billing_mode` (and
+    `billing_enabled`) must match what this deploy configured (`off`, `test` or `live`). Then the custom host: not in DNS / proxied by
     Cloudflare / pointing elsewhere / certificate pending (green, with the next click) / unhealthy, or in
     production another commit (red: fly.dev just passed, so it is a real misconfiguration) / **live**.
     "Live" is said only when `https://<host>/healthz` answered with this commit during this run; sign-in
@@ -223,6 +233,48 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
     502-504: that is a sleeping staging machine starting and its Neon database waking.
 13. The run summary (Actions > the run > Summary): what was created, what was already there, the next
     click with exact Cloudflare records, and for production the list of what is still not done.
+
+### Billing (Stripe) through the Deploy button
+
+The seven values of `cloud-api/dome_api/settings.py` (`_STRIPE_FIELDS`): the GitHub Environment **secrets**
+`DOME_STRIPE_SECRET_KEY` and `DOME_STRIPE_WEBHOOK_SECRET` (only in the deploy step's `env`, staged into Fly on stdin,
+dropped from every child process's environment, in the redaction book, never echoed; the redaction also hides any
+`sk_`/`rk_` key or `whsec_` secret it was never told about) and the Environment **variables**
+`DOME_STRIPE_PRICE_PRO_MONTHLY`, `_PRO_ANNUAL`, `_PRO_PLUS_MONTHLY`, `_PRO_PLUS_ANNUAL`, `_TOPUP` (price ids are not
+secret; passed with `flyctl deploy -e`, like `DOME_OIDC_CLIENT_ID`). Checked in step 1, before any `flyctl` call, with
+founder-readable stops that name variables, never values:
+
+- all seven or none: none = billing off (the summary says "Stripe: off"); some = "Payments are half set up", naming
+  the missing ones on their tab;
+- the key starts with `sk_test_`/`rk_test_` or `sk_live_`/`rk_live_`; a publishable `pk_` key, a `whsec_` secret in
+  the key's place, any other shape or a cut-off key is refused; **staging refuses a live key** (so does the app outside
+  production); production accepts both, and the summary says **"Stripe: TEST MODE — no real charges"** or **"Stripe:
+  LIVE — real charges"** (with a warning while production is in test mode: anyone can subscribe with a test card);
+- the signing secret starts with `whsec_` (an API key there is refused);
+- each price id matches `price_[A-Za-z0-9_]{4,}` (the app's `_PRICE_ID`), a `prod_` id gets its own message, and the
+  five must differ; a Stripe secret pasted into a price **variable** is reported as exposed (variables are printed in
+  the step's log) with the roll steps;
+- a Stripe secret saved as a **variable** instead of a secret: deploy.yml hands over only its NAME
+  (`STRIPE_SECRETS_AS_VARIABLES`, `vars.X != ''`), and the run stops with the roll steps;
+- the gate refuses repository-level copies of the two secrets, like the other deploy secrets.
+
+**Removal semantics.** The GitHub Environment is the only source of the Stripe values, as it is for
+`DOME_OIDC_CLIENT_SECRET`, and the app refuses to start with only some of the seven. So a deploy removes every
+`DOME_STRIPE_*` Fly secret that it does not stage itself: with billing off, the two secrets an earlier deploy stored
+(the summary notes that billing was switched off, and that existing subscriptions keep charging at Stripe until
+cancelled there); with billing on, any price id someone kept as a Fly secret by hand (the price ids come with `-e`).
+`flyctl secrets unset --stage` (v0.4.110 `internal/command/secrets/unset.go` shares `--stage`, read 2026-10-20), so
+nothing restarts until the deploy itself. Not passed, ever: `DOME_STRIPE_AUTOMATIC_TAX` (Stripe Tax stays off; the
+founder's prices are tax-inclusive), `DOME_BILLING_PROVIDER` (blank = Stripe when a key is set; `fake` is refused in
+staging and production) and the other `DOME_BILLING_*` tuning values (their defaults apply).
+
+**Webhook.** `<origin>/v1/billing/webhook` (`routes/billing.py`, mounted under `/v1`): `https://domeremote.com/v1/billing/webhook`
+for production, `https://staging.domeremote.com/v1/billing/webhook` for staging, each with its own signing secret.
+Events: the nine the webhook acts on (`checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+`checkout.session.expired`, `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`,
+`invoice.payment_action_required`) plus the four it only records for the operator (`charge.refunded`,
+`charge.dispute.created|updated|closed`). A billing-on summary repeats the address and the events;
+`tests/test_deploy_billing.py` checks them against `billing/service.py` and the route.
 
 Engineer notes: the program runs as `/usr/bin/python3 -I` (the runner's system Python 3.12 on
 ubuntu-24.04, isolated from `PYTHON*` variables and the working directory) and installs nothing. flyctl
@@ -297,7 +349,8 @@ Founder-pasted values are **GitHub Environment** secrets and variables (Settings
 | `FLY_ORG`, `VITE_DOME_SUPPORT_URL`, `DOME_SUPPORT_RESPONSE_EXPECTATION` | GitHub Environment variables, optional | founder | Fly organization (default `personal`); support contact (public, build-time); support promise | press Deploy |
 | `FLY_STAGING_APP`, `FLY_PRODUCTION_APP` | repository variables, optional | founder, only if a default app name is taken | overrides `launch/environments.toml` | a new name is a new app |
 | `DOME_TRUSTED_PROXIES`, `DOME_CLIENT_IP_HEADER` | `fly.toml` `[env]` | repository | client addresses, below | none |
-| `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET`, `DOME_STRIPE_PRICE_*` | GitHub Environment secrets / variables (`docs/LAUNCH_SETUP.md` 11A) | founder | billing is built (`docs/BILLING.md`), but the Deploy button does not yet pass these to Fly, so billing stays off | — |
+| `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET` | GitHub Environment secrets → Fly secrets (never repository secrets or variables: refused) | founder (Stripe > Developers > API keys; > Webhooks > the endpoint > Signing secret); re-copied to Fly on every deploy, removed from Fly when GitHub no longer has them | billing (`docs/BILLING.md`); all seven Stripe values or none; a live key is refused on staging | roll in Stripe, paste in GitHub, press Deploy (`docs/LAUNCH_SETUP.md` 11A) |
+| `DOME_STRIPE_PRICE_PRO_MONTHLY`, `_PRO_ANNUAL`, `_PRO_PLUS_MONTHLY`, `_PRO_PLUS_ANNUAL`, `_TOPUP` | GitHub Environment variables | founder (Stripe > Product catalog > the price's `price_...` id) | passed with `flyctl deploy -e` | change and press Deploy (test and live prices are different ids: switch all seven together) |
 | `DOME_AI_ANTHROPIC_API_KEY` | — | nobody yet | the AI assistant stays off (`DOME_AI_ENABLED` unset); the workflow never sets any `DOME_AI_*` or `ANTHROPIC_*` variable | — |
 
 Non-secret configuration shared by both environments lives in `fly.toml` `[env]` and is documented
@@ -352,7 +405,8 @@ fly deploy --config deploy/fly.toml -a domeremote-production --image dome-launch
 fly certs add domeremote.com -a domeremote-production
 ```
 
-(`DOME_OIDC_CLIENT_SECRET` too must arrive on stdin via `fly secrets import`.) **Staging** by hand: no `mpg`
+(`DOME_OIDC_CLIENT_SECRET` too must arrive on stdin via `fly secrets import`, and with billing so must
+`DOME_STRIPE_SECRET_KEY` and `DOME_STRIPE_WEBHOOK_SECRET`; the five `DOME_STRIPE_PRICE_*` ids go with `-e`.) **Staging** by hand: no `mpg`
 lines; put `DATABASE_URL=<Neon direct string>` on the same stdin import (read it with `read -rs`, never type
 it on a command line), and deploy a copy of `fly.toml` with `auto_stop_machines = "stop"`,
 `auto_start_machines = true` and `min_machines_running = 0` (`fly.toml` itself is production's shape).
@@ -506,7 +560,7 @@ Six jobs, no secrets, SHA-pinned actions (tag in the trailing comment). Green on
 | Image | built by CI's `container` job on every push since 2026-10-11; run in the test-kit rehearsal (Linux) | built, not run on Fly.io |
 | `entrypoint.sh` | `sh -n`; all four paths exercised locally (staging without key → exit 2; development → generated 0600 PEM; `_B64` → identical PEM and `DATABASE_URL` translated; existing key untouched); shellcheck 0.11.0 clean; a Neon-style `DATABASE_URL` keeps `?sslmode=require&channel_binding=require` (`cloud-api/tests/test_database_url.py`, 2026-10-14) | unit-tested (shell, locally) |
 | `fly.toml` | parses; `launch/tests/test_fly_config.py` (no secrets or placeholders, ports, release command, region, trusted ranges); flags and merge rules checked in the flyctl v0.4.110 source | not yet verified on Fly.io |
-| Deploy workflow + `dome_deploy.py` | `launch/tests/` (180 tests: order of operations, re-runs, stops before changes, database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Neon, Auth0, Cloudflare or GitHub's environments API** |
+| Deploy workflow + `dome_deploy.py` | `launch/tests/` (258 tests: order of operations, re-runs, stops before changes, the Stripe values (all or none, shapes, live key refused on staging, removal, `/v1/plans` check, status, agreement with cloud-api's names, events and webhook path), database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Neon, Auth0, Cloudflare or GitHub's environments API** |
 | `docker-compose.dev.yml` | `docker compose config --quiet` (Compose v5.6.0) | not brought up |
 | `ci.yml` | green on GitHub Actions since 2026-10-11 | CI-tested |
 

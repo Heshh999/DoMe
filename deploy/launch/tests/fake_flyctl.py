@@ -11,8 +11,12 @@ Output shapes follow the flyctl v0.4.110 source (read 2026-10-14, see deploy/REA
   deletes afterwards); the fake keeps what it parsed in the app's ``deployed_config`` and the path in
   ``deployed_config_path``. A file that is missing or not TOML fails the deploy.
 
+* ``secrets unset --stage -a <app> NAME...`` removes those names (v0.4.110 unset.go shares the ``--stage`` flag).
+* ``deploy`` refuses, like the app's start-up check (cloud-api settings.py ``_v_billing``), when only some of the seven
+  Stripe values reach the app (Fly secrets plus ``-e``); the ``-e`` values are kept in the app's ``deployed_env``.
+
 Every call is appended to the log file as ``{"tool", "argv", "stdin", "env_has_client_secret",
-"env_has_database_url", "env_has_fly_token", "env_has_gh_token"}``. Failures are injected through
+"env_has_database_url", "env_has_fly_token", "env_has_gh_token", "env_has_stripe_secret"}``. Failures are injected through
 ``state["fail"]``, keyed by the first two arguments (``"secrets list"``) with ``{"exit": n, "stdout": "...",
 "stderr": "..."}``.
 """
@@ -29,6 +33,15 @@ from pathlib import Path
 from typing import Any
 
 FLY_DB_PASSWORD = "SuperSecretFlyDbPw4242"
+STRIPE_NAMES = (
+    "DOME_STRIPE_SECRET_KEY",
+    "DOME_STRIPE_WEBHOOK_SECRET",
+    "DOME_STRIPE_PRICE_PRO_MONTHLY",
+    "DOME_STRIPE_PRICE_PRO_ANNUAL",
+    "DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY",
+    "DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL",
+    "DOME_STRIPE_PRICE_TOPUP",
+)
 V6 = "2a09:8280:1::4b:1"
 V4 = "66.241.124.10"
 
@@ -114,6 +127,14 @@ def flyctl(argv: list[str], stdin: str, state: dict[str, Any]) -> int:
             app["secrets"][name.strip()] = value
         _out("Secrets are staged for the first deployment\n")
         return 0
+    if key == "secrets unset":
+        assert app is not None and "--stage" in argv
+        names = [a for a in argv[2:] if not a.startswith("-") and a != _opt(argv, "-a", "--app")]
+        assert names
+        for name in names:
+            app["secrets"].pop(name, None)
+        _out("Secrets are staged for the next deployment\n")
+        return 0
     if key == "ips list":
         assert app is not None
         _out(json.dumps(app["ips"]))
@@ -195,6 +216,12 @@ def flyctl(argv: list[str], stdin: str, state: dict[str, Any]) -> int:
         if not ({"DATABASE_URL", "DOME_DATABASE_URL"} & set(app["secrets"])):
             _out("Running release_command\nalembic: no database URL\n")
             return 1
+        deployed_env = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-e")
+        app["deployed_env"] = deployed_env
+        stripe = [n for n in STRIPE_NAMES if n in app["secrets"] or deployed_env.get(n)]
+        if stripe and len(stripe) != len(STRIPE_NAMES):
+            _out("Running release_command\nValueError: billing is half configured\n")
+            return 1
         count = state.get("machines_after_deploy", 1)
         app["machines"] = [
             {"id": f"m{i}", "state": "started", "config": {"metadata": {"fly_process_group": "app"}}}
@@ -266,6 +293,9 @@ def main() -> int:
                     "env_has_database_url": "DEPLOY_DATABASE_URL" in os.environ,
                     "env_has_fly_token": "FLY_API_TOKEN" in os.environ,
                     "env_has_gh_token": "GH_TOKEN" in os.environ,
+                    "env_has_stripe_secret": any(
+                        n in os.environ for n in ("DOME_STRIPE_SECRET_KEY", "DOME_STRIPE_WEBHOOK_SECRET")
+                    ),
                 }
             )
             + "\n"

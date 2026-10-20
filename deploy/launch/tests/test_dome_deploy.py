@@ -57,6 +57,7 @@ MUTATING = (
     "flyctl mpg create",
     "flyctl mpg attach",
     "flyctl secrets import",
+    "flyctl secrets unset",
     "flyctl deploy",
     "flyctl scale count",
     "flyctl certs add",

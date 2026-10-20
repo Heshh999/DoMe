@@ -162,10 +162,44 @@ def test_secrets_only_in_the_deploy_step_env(wf: dict[str, Any]) -> None:
         "FLY_API_TOKEN",
         "DOME_OIDC_CLIENT_SECRET",
         "DEPLOY_DATABASE_URL",
+        "DOME_STRIPE_SECRET_KEY",
+        "DOME_STRIPE_WEBHOOK_SECRET",
     }
     assert env["DEPLOY_DATABASE_URL"] == "${{ secrets.DATABASE_URL }}"
-    # the program drops it (and the client secret) from every child process's environment
+    for name in dome_deploy.STRIPE_SECRET_NAMES:
+        assert env[name] == f"${{{{ secrets.{name} }}}}"
+    # the program drops them (and the client secret) from every child process's environment
     assert {"DEPLOY_DATABASE_URL", "DOME_OIDC_CLIENT_SECRET"} <= dome_deploy.CHILD_ENV_DROP
+    assert set(dome_deploy.STRIPE_SECRET_NAMES) <= dome_deploy.CHILD_ENV_DROP
+
+
+def test_stripe_price_ids_are_variables_and_secrets_saved_as_variables_reach_the_program_as_names_only(
+    wf: dict[str, Any],
+) -> None:
+    env = steps(wf["jobs"]["deploy"])[-1]["env"]
+    assert list(dome_deploy.STRIPE_PRICES) == [
+        "DOME_STRIPE_PRICE_PRO_MONTHLY",
+        "DOME_STRIPE_PRICE_PRO_ANNUAL",
+        "DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY",
+        "DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL",
+        "DOME_STRIPE_PRICE_TOPUP",
+    ]
+    for name in dome_deploy.STRIPE_PRICES:
+        assert env[name] == f"${{{{ vars.{name} }}}}", name
+    # a secret saved as a VARIABLE never reaches the step env as a value (variables are printed in the step's log)
+    probe = "".join(
+        f"${{{{ vars.{n} != '' && '{n}{' ' if i == 0 else ''}' || '' }}}}"
+        for i, n in enumerate(dome_deploy.STRIPE_SECRET_NAMES)
+    )
+    assert env["STRIPE_SECRETS_AS_VARIABLES"] == probe
+    text = DEPLOY.read_text()
+    for name in dome_deploy.STRIPE_SECRET_NAMES:
+        assert f"vars.{name} }}}}" not in text and f"vars.{name}}}}}" not in text
+    for name in dome_deploy.STRIPE_PRICES:
+        assert f"secrets.{name}" not in text
+    # nothing billing-related anywhere else: the gate sees only names, status nothing at all
+    assert "STRIPE" not in str(wf["jobs"]["status"])
+    assert "DOME_STRIPE_AUTOMATIC_TAX" not in text  # Stripe Tax stays off (prices are tax-inclusive)
 
 
 def test_gate_and_status_have_no_environment_and_no_secret_values(wf: dict[str, Any]) -> None:
@@ -180,7 +214,13 @@ def test_gate_and_status_have_no_environment_and_no_secret_values(wf: dict[str, 
     assert env["REPO_LEVEL_SECRETS"] == repo_level_probe()
     assert env["GH_TOKEN"] == "${{ github.token }}"
     assert all("secrets." not in str(v) for k, v in env.items() if k != "REPO_LEVEL_SECRETS")
-    assert set(dome_deploy.DEPLOY_SECRET_NAMES) == {"FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DATABASE_URL"}
+    assert set(dome_deploy.DEPLOY_SECRET_NAMES) == {
+        "FLY_API_TOKEN",
+        "DOME_OIDC_CLIENT_SECRET",
+        "DATABASE_URL",
+        "DOME_STRIPE_SECRET_KEY",
+        "DOME_STRIPE_WEBHOOK_SECRET",
+    }
     deploy_env = steps(wf["jobs"]["deploy"])[-1]["env"]
     probed = {v.split("secrets.")[1].split(" ")[0] for v in deploy_env.values() if "secrets." in v}
     assert probed == set(dome_deploy.DEPLOY_SECRET_NAMES), "every secret the deploy job reads is probed"

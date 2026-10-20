@@ -23,12 +23,14 @@
 # * Job "deploy" is the only job with secret values. It uses the GitHub Environment named by the input,
 #   which holds FLY_API_TOKEN, DOME_OIDC_CLIENT_SECRET and DATABASE_URL (staging: required, its Neon
 #   database's direct address; production: only a fallback when Fly will not list or attach its Managed
-#   Postgres, never a Neon address). No job receives a Fly token without an approval from the founder's
+#   Postgres, never a Neon address), and optionally billing: the secrets DOME_STRIPE_SECRET_KEY and
+#   DOME_STRIPE_WEBHOOK_SECRET with the five variables DOME_STRIPE_PRICE_* (all seven or none). No job receives a Fly token without an approval from the founder's
 #   GitHub account; that approval authorizes whatever is on the default branch at that commit
 #   (docs/SECURITY.md section 6).
 # * Jobs "gate", "deploy" and "status" all refuse, before any request, when staging and production resolve
 #   to the same Fly app (repository variables FLY_STAGING_APP / FLY_PRODUCTION_APP).
-# * Job "status" has no environment and no secrets and never runs flyctl: it cannot change anything.
+# * Job "status" has no environment and no secrets and never runs flyctl: it cannot change anything. It reports
+#   billing (off / test mode / live) from the app's public GET /v1/plans.
 # * Secrets appear only in the deploy step's env block. Values generated during the run are masked with
 #   ::add-mask:: before use and reach Fly only on stdin (`flyctl secrets import`).
 # * No environment url: GitHub would show it as "deployed" even before DNS and the certificate exist.
@@ -92,7 +94,7 @@ jobs:
           FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
           FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
           # Names only: GitHub evaluates each comparison, so no secret value reaches this job.
-          REPO_LEVEL_SECRETS: ${{ secrets.FLY_API_TOKEN != '' && 'FLY_API_TOKEN ' || '' }}${{ secrets.DOME_OIDC_CLIENT_SECRET != '' && 'DOME_OIDC_CLIENT_SECRET ' || '' }}${{ secrets.DATABASE_URL != '' && 'DATABASE_URL' || '' }}
+          REPO_LEVEL_SECRETS: ${{ secrets.FLY_API_TOKEN != '' && 'FLY_API_TOKEN ' || '' }}${{ secrets.DOME_OIDC_CLIENT_SECRET != '' && 'DOME_OIDC_CLIENT_SECRET ' || '' }}${{ secrets.DATABASE_URL != '' && 'DATABASE_URL ' || '' }}${{ secrets.DOME_STRIPE_SECRET_KEY != '' && 'DOME_STRIPE_SECRET_KEY ' || '' }}${{ secrets.DOME_STRIPE_WEBHOOK_SECRET != '' && 'DOME_STRIPE_WEBHOOK_SECRET' || '' }}
           GH_TOKEN: ${{ github.token }}
         run: /usr/bin/python3 -I deploy/launch/dome_deploy.py gate
 
@@ -137,6 +139,10 @@ jobs:
           # staging: required (its free Neon database); production: only a fallback when Fly will not list or
           # attach its Managed Postgres (a Neon address is refused there)
           DEPLOY_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Billing (docs/LAUNCH_SETUP.md section 11A): all seven DOME_STRIPE_* values or none (none = billing off).
+          # Staging refuses a live key. Staged into Fly on stdin, never echoed.
+          DOME_STRIPE_SECRET_KEY: ${{ secrets.DOME_STRIPE_SECRET_KEY }}
+          DOME_STRIPE_WEBHOOK_SECRET: ${{ secrets.DOME_STRIPE_WEBHOOK_SECRET }}
           # Not secret: environment variables (or repository variables for the app-name overrides).
           DOME_OIDC_ISSUER: ${{ vars.DOME_OIDC_ISSUER }}
           DOME_OIDC_CLIENT_ID: ${{ vars.DOME_OIDC_CLIENT_ID }}
@@ -145,6 +151,14 @@ jobs:
           FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
           VITE_DOME_SUPPORT_URL: ${{ vars.VITE_DOME_SUPPORT_URL }}
           DOME_SUPPORT_RESPONSE_EXPECTATION: ${{ vars.DOME_SUPPORT_RESPONSE_EXPECTATION }}
+          # the five Stripe price ids (price_...; not secret), passed to the app with flyctl deploy -e
+          DOME_STRIPE_PRICE_PRO_MONTHLY: ${{ vars.DOME_STRIPE_PRICE_PRO_MONTHLY }}
+          DOME_STRIPE_PRICE_PRO_ANNUAL: ${{ vars.DOME_STRIPE_PRICE_PRO_ANNUAL }}
+          DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY: ${{ vars.DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY }}
+          DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL: ${{ vars.DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL }}
+          DOME_STRIPE_PRICE_TOPUP: ${{ vars.DOME_STRIPE_PRICE_TOPUP }}
+          # Names only, never values: a Stripe secret saved as a VARIABLE by mistake (variables are never hidden).
+          STRIPE_SECRETS_AS_VARIABLES: ${{ vars.DOME_STRIPE_SECRET_KEY != '' && 'DOME_STRIPE_SECRET_KEY ' || '' }}${{ vars.DOME_STRIPE_WEBHOOK_SECRET != '' && 'DOME_STRIPE_WEBHOOK_SECRET' || '' }}
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           CREATE_DATABASE: ${{ inputs.create_database_if_missing }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

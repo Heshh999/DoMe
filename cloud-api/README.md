@@ -104,7 +104,11 @@ and the billing and plan-selection routes in `routes/account.py`.
 | `GET` / `PUT /v1/account/plan-selection` | session (+ CSRF for PUT) | `plan_selection_request` | `plan_selection_response`; 409 `PLAN_SELECTION_CLOSED`, 400 `PLAN_SELECTION_INVALID` |
 
 The page creations share a per-account budget (`DOME_RATE_BILLING_REQUESTS_PER_HOUR`, 429). Webhook URL to give
-Stripe: `{DOME_PUBLIC_ORIGIN}/v1/billing/webhook`. `accounts.plan` is written only by `billing/state.py::apply()`,
+Stripe: `{DOME_PUBLIC_ORIGIN}/v1/billing/webhook` (`https://domeremote.com/v1/billing/webhook`,
+`https://staging.domeremote.com/v1/billing/webhook`). On staging and production the seven Stripe values come from the
+GitHub Environment through the Deploy button (`deploy/README.md` "Billing (Stripe) through the Deploy button";
+founder steps in `docs/LAUNCH_SETUP.md` 11A), which applies the same all-or-none and live-key rules before Fly is
+touched. `accounts.plan` is written only by `billing/state.py::apply()`,
 from an object fetched from Stripe (never from an event payload or a return URL); after the commit every online PC
 of the account gets a new `grants_snapshot`. The entitlement assertion's `plan` claim and
 `agent_entitlement_response.plan` are `pro` for Pro Plus too (the installed agents know only free and pro). An
@@ -299,7 +303,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_STRIPE_AUTOMATIC_TAX` | `false` | Stripe Tax on Checkout pages. Keep off: the founder's prices are tax-inclusive. |
 | `DOME_BILLING_WEBHOOK_TOLERANCE_SECONDS` | `300` | 60–900; signature timestamp tolerance. |
 | `DOME_BILLING_RECONCILE_INTERVAL_SECONDS` | `3600` | Reconciler period. |
-| `DOME_BILLING_CHECKOUT_PENDING_HOURS` | `24` | 1–72; after this a pending checkout row is dropped. |
+| `DOME_BILLING_CHECKOUT_PENDING_HOURS` | `24` | 1–24 (Stripe's limit); how long a hosted Checkout page stays payable, and how long the reconciler waits before it asks Stripe about a page still pending. |
 | `DOME_RATE_BILLING_REQUESTS_PER_HOUR` | `10` | Checkout/Portal/top-up page creations per account per hour. |
 | `DOME_AI_ENABLED` | `false` | Master switch of the AI assistant. When true, start-up requires a provider, a key for `anthropic` and no `ANTHROPIC_*` variable in the environment, a ceiling above 0, a deadline ≥ timeout + 5, and for every plan with an effective allowance a cost cap of at least one reservation. |
 | `DOME_AI_PROVIDER` | `` | `anthropic` or `fake` (scripted test provider; refused in staging and production). |

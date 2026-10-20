@@ -19,9 +19,9 @@ Secret rules enforced here (tested in tests/test_dome_deploy.py):
 * Child output is redacted: known values, credentials in URLs, Fly tokens and private-key blocks.
   ``flyctl mpg create`` and ``flyctl mpg attach`` print the database password, so their output is never
   shown at all; only a fixed line and the exit code are.
-* Child processes do not inherit DOME_OIDC_CLIENT_SECRET, DEPLOY_DATABASE_URL (the GitHub secret DATABASE_URL) or
-  GH_TOKEN; flyctl gets FLY_API_TOKEN because it needs it. The database password inside DATABASE_URL is masked on its
-  own too (GitHub masks only the whole stored value).
+* Child processes do not inherit DOME_OIDC_CLIENT_SECRET, DEPLOY_DATABASE_URL (the GitHub secret DATABASE_URL),
+  DOME_STRIPE_SECRET_KEY, DOME_STRIPE_WEBHOOK_SECRET or GH_TOKEN; flyctl gets FLY_API_TOKEN because it needs it. The
+  database password inside DATABASE_URL is masked on its own too (GitHub masks only the whole stored value).
 * The summary (``$GITHUB_STEP_SUMMARY``) names secrets and says what happened to them; it never holds a value.
 * The gate job never sees a secret value: GitHub evaluates ``secrets.X != ''`` and hands over only the NAMES of
   deploy secrets that exist at repository level (REPO_LEVEL_SECRETS); its GH_TOKEN is the job's read-only token.
@@ -30,8 +30,15 @@ Databases (``database_mode`` in environments.toml): staging uses an EXTERNAL dat
 is the required GitHub Environment secret DATABASE_URL, stored in Fly again on every deploy; it never touches Fly
 Managed Postgres. Production uses Fly Managed Postgres ("fly-managed"), created only with the founder's tick; its
 DATABASE_URL secret is used only when Fly will not list or attach the cluster, and a Neon address there is refused.
-Staging and production must resolve to two different Fly apps (checked before any flyctl call). Each
-deploy writes a temporary per-environment copy of deploy/fly.toml with that environment's machine-sleep settings
+Staging and production must resolve to two different Fly apps (checked before any flyctl call).
+
+Billing (Stripe, docs/BILLING.md): the GitHub Environment is the only source of the seven Stripe values. All seven or
+none, checked before any flyctl call. With all seven, the two secrets are staged into Fly on stdin and the five price
+ids are passed with ``flyctl deploy -e`` on every deploy; with none, billing is off and any DOME_STRIPE_* secret an
+earlier deploy left in Fly is removed with ``flyctl secrets unset --stage`` (the app refuses to start with only some
+of the seven). A live key is refused on staging; production accepts test keys, and the summary says which mode runs.
+
+Each deploy writes a temporary per-environment copy of deploy/fly.toml with that environment's machine-sleep settings
 (staging sleeps when idle, production never does) and deletes it afterwards.
 
 Nothing in this program has run against a live Fly.io account yet. flyctl output shapes were read from the
@@ -79,14 +86,66 @@ NEON_CONSOLE = "https://console.neon.tech"
 
 ENVIRONMENTS = ("staging", "production")
 # Environment variables a child process never receives (flyctl reads FLY_API_TOKEN itself and keeps it).
-CHILD_ENV_DROP = frozenset({"DOME_OIDC_CLIENT_SECRET", "DEPLOY_DATABASE_URL", "GH_TOKEN"})
+CHILD_ENV_DROP = frozenset(
+    {
+        "DOME_OIDC_CLIENT_SECRET",
+        "DEPLOY_DATABASE_URL",
+        "DOME_STRIPE_SECRET_KEY",
+        "DOME_STRIPE_WEBHOOK_SECRET",
+        "GH_TOKEN",
+    }
+)
 # The deploy secrets that must exist only as GitHub ENVIRONMENT secrets. The gate job (no environment) receives
 # the names of any that exist at repository or organization level in REPO_LEVEL_SECRETS (deploy.yml), never values.
-DEPLOY_SECRET_NAMES = ("FLY_API_TOKEN", "DOME_OIDC_CLIENT_SECRET", "DATABASE_URL")
+DEPLOY_SECRET_NAMES = (
+    "FLY_API_TOKEN",
+    "DOME_OIDC_CLIENT_SECRET",
+    "DATABASE_URL",
+    "DOME_STRIPE_SECRET_KEY",
+    "DOME_STRIPE_WEBHOOK_SECRET",
+)
 GITHUB_API = "https://api.github.com"
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455 section 1.3
 GENERATED_SECRETS = ("DOME_SESSION_SECRET", "DOME_ENTITLEMENT_SIGNING_KEY_PEM_B64")
 DATABASE_SECRET_NAMES = ("DATABASE_URL", "DOME_DATABASE_URL")
+# Billing: the seven values of cloud-api/dome_api/settings.py (_STRIPE_FIELDS), all or none. The two secrets are GitHub
+# Environment SECRETS staged into Fly on stdin; the five price ids are GitHub Environment VARIABLES passed with -e.
+STRIPE_SECRET_NAMES = ("DOME_STRIPE_SECRET_KEY", "DOME_STRIPE_WEBHOOK_SECRET")
+STRIPE_PRICES = {  # variable -> what the founder calls that price (docs/LAUNCH_SETUP.md section 11A)
+    "DOME_STRIPE_PRICE_PRO_MONTHLY": "DoMe Pro, monthly",
+    "DOME_STRIPE_PRICE_PRO_ANNUAL": "DoMe Pro, yearly",
+    "DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY": "DoMe Pro Plus, monthly",
+    "DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL": "DoMe Pro Plus, yearly",
+    "DOME_STRIPE_PRICE_TOPUP": "DoMe AI top-up, one-time",
+}
+STRIPE_NAMES = (*STRIPE_SECRET_NAMES, *STRIPE_PRICES)
+STRIPE_TEST_KEY_PREFIXES = ("sk_test_", "rk_test_")
+STRIPE_LIVE_KEY_PREFIXES = ("sk_live_", "rk_live_")
+STRIPE_WEBHOOK_PATH = "/v1/billing/webhook"  # cloud-api/dome_api/routes/billing.py, mounted under /v1
+# The events the webhook acts on (cloud-api/dome_api/billing/service.py: SUBSCRIPTION_EVENTS, CHECKOUT_DONE_EVENTS and
+# checkout.session.expired), then the ones it only records for the operator (OPERATOR_EVENTS). Anything else is ignored.
+STRIPE_WEBHOOK_EVENTS = (
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.expired",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "invoice.paid",
+    "invoice.payment_failed",
+    "invoice.payment_action_required",
+)
+STRIPE_OPERATOR_EVENTS = (
+    "charge.refunded",
+    "charge.dispute.created",
+    "charge.dispute.updated",
+    "charge.dispute.closed",
+)
+BILLING_MODE_TEXT = {
+    "off": "Stripe: off — nothing can be bought, everyone stays on Free",
+    "test": "Stripe: TEST MODE — no real charges",
+    "live": "Stripe: LIVE — real charges",
+}
 DATABASE_MODES = ("external", "fly-managed")
 AUTO_STOP_VALUES = ("off", "stop", "suspend")
 # The three [http_service] keys that differ per environment (environments.toml -> the generated fly.toml copy).
@@ -147,6 +206,8 @@ _CLIENT_ID = re.compile(r"^[A-Za-z0-9._~:@-]{1,64}$")
 _URL_CREDENTIALS = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@]+):[^\s@]+@")
 _FLY_TOKENS = re.compile(r"\b(FlyV1\s+\S+|f[mo][12]_[A-Za-z0-9_+/=-]{8,})")
 _PRIVATE_KEY_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)
+_STRIPE_SECRETS = re.compile(r"\b((?:sk|rk)_(?:test|live)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9+/=]{8,})")
+_STRIPE_PRICE_ID = re.compile(r"^price_[A-Za-z0-9_]{4,}$")  # cloud-api settings.py _PRICE_ID
 _SECRET_ASSIGNMENT = re.compile(r"\b([A-Z][A-Z0-9_]*(?:URL|SECRET|PASSWORD|TOKEN|KEY|B64))=\S+")
 
 
@@ -196,6 +257,11 @@ class EnvConfig:
     @property
     def callback_url(self) -> str:
         return self.public_origin + "/v1/auth/callback"
+
+    @property
+    def webhook_url(self) -> str:
+        """Where Stripe sends this environment's billing events (the founder types it into Stripe)."""
+        return self.public_origin + STRIPE_WEBHOOK_PATH
 
     @property
     def external_database(self) -> bool:
@@ -464,6 +530,7 @@ class SecretBook:
         text = _PRIVATE_KEY_BLOCK.sub("[private key hidden]", text)
         text = _URL_CREDENTIALS.sub(r"\1:***@", text)
         text = _FLY_TOKENS.sub("[fly token hidden]", text)
+        text = _STRIPE_SECRETS.sub("[stripe secret hidden]", text)
         return _SECRET_ASSIGNMENT.sub(r"\1=***", text)
 
 
@@ -789,6 +856,230 @@ def is_neon_host(host: str) -> bool:
     return host == "neon.tech" or host.endswith(".neon.tech")
 
 
+@dataclass(frozen=True)
+class Billing:
+    """The Stripe values of one GitHub Environment. ``mode``: "off" (none of the seven), "test" or "live" (all seven,
+    by the secret key's prefix). The two secrets live in memory only and reach Fly on stdin."""
+
+    mode: str = "off"
+    secret_key: str = field(default="", repr=False)
+    webhook_secret: str = field(default="", repr=False)
+    prices: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def on(self) -> bool:
+        return self.mode != "off"
+
+
+@dataclass
+class BillingCheck:
+    billing: Billing
+    problems: list[str] = field(default_factory=list)
+    missing_secrets: list[str] = field(default_factory=list)
+    missing_vars: list[str] = field(default_factory=list)
+    next_steps: list[str] = field(default_factory=list)
+
+
+def _names(names: Sequence[str]) -> str:
+    return ", ".join(f"`{n}`" for n in names)
+
+
+def stripe_key_steps(env: Mapping[str, str], cfg: EnvConfig, name: str) -> str:
+    """How to replace one Stripe secret that others may have seen (it was stored somewhere that is not hidden)."""
+    page = environments_page(env)
+    if name == "DOME_STRIPE_SECRET_KEY":
+        source = (
+            "In Stripe, open **Developers** > **API keys** and choose **Roll key** in the secret key's menu (this ends "
+            "the old key at once)."
+        )
+    else:
+        source = (
+            f"In Stripe, open **Developers** > **Webhooks** > the endpoint `{cfg.webhook_url}` and roll its **Signing "
+            "secret**."
+        )
+    return (
+        f"{source} Then open {page}, choose **{cfg.name}**, and add the new value under **Environment secrets** as "
+        f"`{name}`."
+    )
+
+
+def read_billing(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook) -> BillingCheck:
+    """The seven Stripe values, checked before any flyctl call with the rules of cloud-api settings.py (all or none;
+    sk_/rk_ key, test-only outside production; whsec_ signing secret; five different price_ ids) plus the mix-ups a
+    founder can make. Messages name variables, never values."""
+    page = environments_page(env)
+    key = env.get("DOME_STRIPE_SECRET_KEY", "").strip()
+    webhook = env.get("DOME_STRIPE_WEBHOOK_SECRET", "").strip()
+    for value in (key, webhook):
+        if value:
+            book.add(value, mask=False)  # stored GitHub secrets: GitHub masks the whole value itself
+    prices = {name: env.get(name, "").strip() for name in STRIPE_PRICES}
+    values = {"DOME_STRIPE_SECRET_KEY": key, "DOME_STRIPE_WEBHOOK_SECRET": webhook, **prices}
+    # NAMES (never values) of the two secrets saved as Environment variables instead (deploy.yml evaluates
+    # `vars.X != ''`): a variable is never hidden, so such a value must be replaced at Stripe.
+    as_variables = [n for n in STRIPE_SECRET_NAMES if n in env.get("STRIPE_SECRETS_AS_VARIABLES", "").split()]
+    check = BillingCheck(Billing())
+    if not any(values.values()) and not as_variables:
+        return check
+
+    for name in as_variables:
+        check.problems.append(
+            f"`{name}` is saved as an Environment **variable**. It is a password, and GitHub never hides variables, "
+            "so treat it as seen by others."
+        )
+        check.next_steps.append(
+            stripe_key_steps(env, cfg, name)
+            + f" Delete the **variable** `{name}` (Environment variables, the bin icon next to it)."
+        )
+
+    missing = [n for n in STRIPE_NAMES if not values[n] and n not in as_variables]
+    if missing:
+        check.problems.append(
+            f"Payments are half set up in the {cfg.name} environment: {_names(missing)} "
+            + ("is" if len(missing) == 1 else "are")
+            + " missing. DoMe takes all seven Stripe values or none (with none, payments simply stay off)."
+        )
+        check.missing_secrets += [n for n in missing if n in STRIPE_SECRET_NAMES]
+        check.missing_vars += [n for n in missing if n in STRIPE_PRICES]
+        labels = "; ".join(f"`{n}` = {label}" for n, label in STRIPE_PRICES.items())
+        check.next_steps.append(
+            f"Each price variable is the id (it starts with `price_`) of one Stripe price: {labels} "
+            "(docs/LAUNCH_SETUP.md section 11A). Price ids are **variables**, the key and the signing secret are "
+            "**secrets**. To keep payments off instead, delete every `DOME_STRIPE_` secret and variable from the "
+            f"{cfg.name} environment."
+        )
+
+    mode = ""
+    if key:
+        if not importable(key):
+            check.problems.append(
+                "`DOME_STRIPE_SECRET_KEY` contains a space, a quote or #. Copy it again with Stripe's copy button."
+            )
+        elif key.startswith(("pk_test_", "pk_live_")):
+            check.problems.append(
+                "`DOME_STRIPE_SECRET_KEY` is Stripe's **publishable** key (it starts with `pk_`). DoMe needs the "
+                "**secret** key: in Stripe > **Developers** > **API keys**, click **Reveal** next to **Secret key** "
+                "(it starts with `sk_test_` in Test mode, `sk_live_` in Live mode) and paste it over this one. The "
+                "publishable key is public, so it needs no other change."
+            )
+        elif key.startswith("whsec_"):
+            check.problems.append(
+                "`DOME_STRIPE_SECRET_KEY` holds the webhook's signing secret (`whsec_...`). That one belongs in "
+                "`DOME_STRIPE_WEBHOOK_SECRET`; `DOME_STRIPE_SECRET_KEY` is the secret key from **Developers** > "
+                "**API keys** (`sk_test_...` or `sk_live_...`)."
+            )
+        elif not key.startswith(STRIPE_TEST_KEY_PREFIXES + STRIPE_LIVE_KEY_PREFIXES):
+            check.problems.append(
+                "`DOME_STRIPE_SECRET_KEY` is not a Stripe secret key: it must start with `sk_test_` (Test mode) or "
+                "`sk_live_` (Live mode); a restricted key (`rk_test_` / `rk_live_`) works too."
+            )
+        elif len(key) < 24:
+            check.problems.append(
+                "`DOME_STRIPE_SECRET_KEY` is too short to be a whole Stripe key. Copy it again with Stripe's copy "
+                "button."
+            )
+        elif key.startswith(STRIPE_LIVE_KEY_PREFIXES) and cfg.dome_env != "production":
+            check.problems.append(
+                f"`DOME_STRIPE_SECRET_KEY` in the {cfg.name} environment is a **live** key (`sk_live_...`), which "
+                f"charges real cards. {cfg.title} must only ever use Test mode: switch the Stripe dashboard to **Test "
+                "mode**, copy that secret key (`sk_test_...`) and paste it over this one. A live key belongs only in "
+                "the production environment."
+            )
+        else:
+            mode = "live" if key.startswith(STRIPE_LIVE_KEY_PREFIXES) else "test"
+
+    if webhook:
+        if not importable(webhook):
+            check.problems.append(
+                "`DOME_STRIPE_WEBHOOK_SECRET` contains a space, a quote or #. Copy it again with Stripe's copy button."
+            )
+        elif webhook.startswith(("sk_", "rk_", "pk_")):
+            check.problems.append(
+                "`DOME_STRIPE_WEBHOOK_SECRET` holds a Stripe API key, not the webhook's signing secret. Put the "
+                "secret key in `DOME_STRIPE_SECRET_KEY`, and here the endpoint's **Signing secret** (it starts with "
+                "`whsec_`)."
+            )
+        elif not webhook.startswith("whsec_") or len(webhook) < 16:
+            check.problems.append(
+                "`DOME_STRIPE_WEBHOOK_SECRET` must be the webhook endpoint's **Signing secret**, which starts with "
+                f"`whsec_` (Stripe > **Developers** > **Webhooks** > the endpoint `{cfg.webhook_url}` > **Signing "
+                "secret** > **Reveal**)."
+            )
+
+    for name, value in prices.items():
+        label = STRIPE_PRICES[name]
+        if not value or _STRIPE_PRICE_ID.match(value):
+            continue
+        if value.startswith(("sk_", "rk_", "whsec_")):
+            secret = "DOME_STRIPE_WEBHOOK_SECRET" if value.startswith("whsec_") else "DOME_STRIPE_SECRET_KEY"
+            check.problems.append(
+                f"The variable `{name}` holds a Stripe secret instead of a price id. Variables are visible in this "
+                "public log, so treat that secret as exposed."
+            )
+            check.next_steps.append(
+                stripe_key_steps(env, cfg, secret)
+                + f" Then put the price id of {label} (it starts with `price_`) in the variable `{name}`."
+            )
+        elif value.startswith("prod_"):
+            check.problems.append(
+                f"The variable `{name}` holds a product id (`prod_...`), not a price id. In Stripe > **Product "
+                f"catalog**, open the product, click its price for {label}, and copy the id that starts with `price_`."
+            )
+        else:
+            check.problems.append(
+                f"The variable `{name}` ({label}) is not a Stripe price id: it must start with `price_` and have no "
+                "spaces. In Stripe > **Product catalog** > the product > the price, copy the id that starts with "
+                "`price_`."
+            )
+    seen: dict[str, list[str]] = {}
+    for name, value in prices.items():
+        if _STRIPE_PRICE_ID.match(value):
+            seen.setdefault(value, []).append(name)
+    for names in seen.values():
+        if len(names) > 1:
+            check.problems.append(
+                f"The variables {_names(names)} hold the same price id. Each of the five must be a different Stripe "
+                "price: " + "; ".join(STRIPE_PRICES.values()) + "."
+            )
+
+    if mode and not check.problems and not check.missing_secrets and not check.missing_vars:
+        check.billing = Billing(mode, key, webhook, tuple(prices.items()))
+    if check.problems or check.missing_secrets or check.missing_vars:
+        check.next_steps.append(f"The Stripe values are at {page} > **{cfg.name}** (docs/LAUNCH_SETUP.md section 11A).")
+    return check
+
+
+def billing_step_text(billing: Billing) -> str:
+    if billing.on:
+        return (
+            f"**{BILLING_MODE_TEXT[billing.mode]}** (the secret key and the webhook signing secret stored in Fly, the "
+            "five price ids passed to the app, all from this GitHub Environment)"
+        )
+    return f"**{BILLING_MODE_TEXT['off']}** (this GitHub Environment has no `DOME_STRIPE_` values)"
+
+
+def billing_next_steps(cfg: EnvConfig, billing: Billing) -> list[str]:
+    """What the founder checks in Stripe after a deploy with billing on (a deploy cannot see the webhook's settings)."""
+    if not billing.on:
+        return []
+    mode = "Test mode" if billing.mode == "test" else "Live mode"
+    steps = [
+        f"In Stripe ({mode}) > **Developers** > **Webhooks**, the endpoint for {cfg.name} must be exactly "
+        f"`{cfg.webhook_url}` and listen to these events: "
+        + ", ".join(f"`{e}`" for e in STRIPE_WEBHOOK_EVENTS)
+        + "; and, so an engineer hears about refunds and disputes, "
+        + ", ".join(f"`{e}`" for e in STRIPE_OPERATOR_EVENTS)
+        + f". Its **Signing secret** is the {cfg.name} Environment secret `DOME_STRIPE_WEBHOOK_SECRET`."
+    ]
+    if billing.mode == "test":
+        steps.append(
+            f'To try a payment: sign in at https://{cfg.hostname}, open **Billing** (it says "Test mode: no real '
+            'charges"), choose DoMe Pro and pay with the test card `4242 4242 4242 4242`, any future date, any '
+            "3-digit CVC (docs/LAUNCH_SETUP.md section 11A)."
+        )
+    return steps
+
+
 @dataclass
 class Inputs:
     cfg: EnvConfig
@@ -805,6 +1096,7 @@ class Inputs:
     create_database: bool
     support_url: str
     support_expectation: str
+    billing: Billing = field(default_factory=Billing)
 
 
 def url_password(url: str) -> str:
@@ -917,6 +1209,17 @@ def check_no_repository_secrets(env: Mapping[str, str]) -> None:
             "database) > **Roles & Databases**, choose **Reset password** in the role's menu, and paste the new "
             "connection string only as the staging Environment secret `DATABASE_URL` (docs/LAUNCH_SETUP.md section "
             "6). For production, tell an engineer."
+        )
+    if "DOME_STRIPE_SECRET_KEY" in found:
+        steps.append(
+            "In Stripe > **Developers** > **API keys**, choose **Roll key** in the secret key's menu, and paste the "
+            "new key only as the Environment secret `DOME_STRIPE_SECRET_KEY` of the environment it belongs to (a test "
+            "key `sk_test_...` for staging; production's key for production; docs/LAUNCH_SETUP.md section 11A)."
+        )
+    if "DOME_STRIPE_WEBHOOK_SECRET" in found:
+        steps.append(
+            "In Stripe > **Developers** > **Webhooks**, open the endpoint, roll its **Signing secret**, and paste the "
+            "new one only as the Environment secret `DOME_STRIPE_WEBHOOK_SECRET` of that endpoint's environment."
         )
     steps.append("Run Deploy again.")
     raise Stop(
@@ -1112,6 +1415,11 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
     if len(expectation) > 200 or "\n" in expectation:
         problems.append("The variable DOME_SUPPORT_RESPONSE_EXPECTATION must be one line of at most 200 characters.")
 
+    billing = read_billing(env, cfg, book)
+    problems += billing.problems
+    missing_secrets += billing.missing_secrets
+    missing_vars += billing.missing_vars
+
     next_steps: list[str] = []
     if missing_secrets:
         next_steps.append(
@@ -1134,6 +1442,7 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
             f"icon next to it). {cfg.title} keeps its data in Fly Managed Postgres: on its first deploy, tick **create "
             "the database**. Never paste the Neon address into this environment."
         )
+    next_steps += billing.next_steps
     if missing_secrets or missing_vars or problems:
         next_steps.append("Run Deploy again. Nothing was created or changed by this run.")
         raise Stop(
@@ -1154,6 +1463,7 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
         create_database=env.get("CREATE_DATABASE", "").strip().lower() == "true",
         support_url=support_url,
         support_expectation=expectation,
+        billing=billing.billing,
     )
 
 
@@ -1478,6 +1788,13 @@ class Deployer:
             raise Stop("engineer", f"Fly listed a secret of {app} without a name; nothing was generated.")
         return names
 
+    def unstage(self, app: str, names: list[str]) -> None:
+        """Remove Fly secrets with this deploy (`flyctl secrets unset --stage`: no restart until the deploy)."""
+        result = self.fly("secrets", "unset", "--stage", "-a", app, *names)
+        if not result.ok:
+            raise Stop("failed", "Fly did not remove the secrets (" + ", ".join(names) + ").")
+        self.mutated = True
+
     def stage(self, app: str, items: list[tuple[str, str]]) -> None:
         for name, value in items:
             if not importable(value):
@@ -1497,6 +1814,7 @@ class Deployer:
             check_distinct_apps(self.env, self.envs)  # before anything reads or changes an app
             inputs = read_inputs(self.env, cfg, self.book, self.summary)
             self.summary.step("Inputs", "all present")
+            self.summary.step("Billing (Stripe)", billing_step_text(inputs.billing))
             self.deploy(inputs)
         except Stop as stop:
             self.summary.headline = HEADLINES[stop.kind]
@@ -1608,9 +1926,33 @@ class Deployer:
         staged.append(("DOME_OIDC_CLIENT_SECRET", inp.client_secret))
         if database_plan in ("fallback", "external"):
             staged.append(("DATABASE_URL", inp.database_url))
+        if inp.billing.on:
+            staged += [
+                ("DOME_STRIPE_SECRET_KEY", inp.billing.secret_key),
+                ("DOME_STRIPE_WEBHOOK_SECRET", inp.billing.webhook_secret),
+            ]
         self.log("Storing secrets in Fly (staged; they reach the app with this deploy)")
         self.stage(app, staged)
         self.summary.step("DOME_OIDC_CLIENT_SECRET", "updated from GitHub")
+        if inp.billing.on:
+            self.summary.step(", ".join(STRIPE_SECRET_NAMES), "updated from GitHub")
+        # Removal: the GitHub Environment is the only source of the Stripe values, and the app refuses to start with
+        # only some of the seven, so a DOME_STRIPE_* secret an earlier deploy (or a person) left in Fly goes away when
+        # GitHub no longer has it (all of them when billing is off; any price id kept as a Fly secret when it is on,
+        # because the price ids now come with -e).
+        leftovers = [n for n in STRIPE_NAMES if n in names and n not in {name for name, _ in staged}]
+        if leftovers:
+            self.unstage(app, leftovers)
+            self.summary.step(
+                ", ".join(leftovers), "removed from Fly with this deploy (not in this GitHub Environment)"
+            )
+            if not inp.billing.on:
+                self.summary.notes.append(
+                    "Billing was switched **off** by this deploy: the Stripe secrets an earlier deploy stored in Fly "
+                    "were removed because this GitHub Environment has no `DOME_STRIPE_` values. Subscriptions that "
+                    "already exist keep running and charging at Stripe, but DoMe no longer hears about them: cancel "
+                    "them in the Stripe dashboard, or put all seven values back and run Deploy again."
+                )
 
         self.build_and_deploy(inp)
         self.ensure_one_machine(app)
@@ -1883,6 +2225,7 @@ class Deployer:
         ]
         if inp.support_expectation:
             env_args.append(f"DOME_SUPPORT_RESPONSE_EXPECTATION={inp.support_expectation}")
+        env_args += [f"{name}={value}" for name, value in inp.billing.prices]  # not secret: price ids
         config = self.write_fly_config(cfg)
         argv = [
             "flyctl",
@@ -2031,6 +2374,17 @@ class Deployer:
             if not socket_problems
             else "; ".join(socket_problems),
         )
+        reported = billing_mode_of(base)
+        if reported == inp.billing.mode:
+            self.summary.step(f"{app}.fly.dev billing (/v1/plans)", f"reports {reported}, as configured")
+        else:
+            problem = (
+                f"/v1/plans did not answer with a billing mode ({reported})"
+                if reported not in BILLING_MODE_TEXT
+                else f"/v1/plans reports billing {reported}, but this deploy configured {inp.billing.mode}"
+            )
+            problems.append(problem)
+            self.summary.step(f"{app}.fly.dev billing (/v1/plans)", problem)
         if problems:
             raise Stop(
                 "engineer",
@@ -2059,6 +2413,16 @@ class Deployer:
             self.summary.headline = f"{cfg.title} deploy finished: running at {base}; {host_result_text(cfg, report)}"
             self.summary.next_steps += host_next_steps(cfg, report, records)
             self.summary.next_steps.append(f"In Auth0, the Allowed Callback URL must be exactly {cfg.callback_url}.")
+        self.summary.next_steps += billing_next_steps(cfg, inp.billing)
+        if inp.billing.mode == "live":
+            self.summary.notes.append("**Stripe: LIVE — real charges.** Real cards are charged from now on.")
+        elif inp.billing.mode == "test" and cfg.dome_env == "production":
+            self.summary.notes.append(
+                "**Production is in Stripe Test mode**: anyone who visits can get Pro or Pro Plus with a test card, "
+                "for free. Keep this short. Before switching to Live mode, cancel every test subscription in Stripe "
+                "(Test mode) and check those accounts show Free: after the switch the live key cannot see test "
+                "subscriptions, so one left over would keep its plan (docs/LAUNCH_SETUP.md section 11A, step 8)."
+            )
         if cfg.dome_env == "production":
             self.summary.notes += ["Still not done before production can be called ready:"] + PRODUCTION_NOT_READY
 
@@ -2077,6 +2441,23 @@ class Deployer:
         if production and "strict-transport-security" not in page.headers:
             problems.append("HSTS is missing")
         return problems
+
+
+def billing_mode_of(base: str) -> str:
+    """What the running app says about billing (GET /v1/plans, public): "off", "test" or "live"; otherwise a short
+    reason. Values are never part of the answer."""
+    try:
+        result = http_get(base + "/v1/plans")
+    except HttpFailure as exc:
+        return f"no answer: {exc.kind}"
+    body = result.json() if result.status == 200 else None
+    if not isinstance(body, dict):
+        return f"HTTP {result.status}"
+    mode = body.get("billing_mode")
+    enabled = body.get("billing_enabled")
+    if mode not in BILLING_MODE_TEXT or not isinstance(enabled, bool) or enabled != (mode != "off"):
+        return "an unexpected answer"
+    return str(mode)
 
 
 def login_problems(base: str, cfg: EnvConfig, client_id: str, authorization_endpoint: str) -> list[str]:
@@ -2272,6 +2653,11 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
                     external_database_down_step(envs["staging"])
                     + " Production keeps running, but no new version reaches it until staging works again."
                 )
+        billing = billing_mode_of(base)
+        summary.step(
+            "Billing (Stripe)",
+            f"**{BILLING_MODE_TEXT[billing]}**" if billing in BILLING_MODE_TEXT else f"unknown (/v1/plans: {billing})",
+        )
         try:
             app_addresses = set(resolve(f"{app}.fly.dev"))
         except OSError:

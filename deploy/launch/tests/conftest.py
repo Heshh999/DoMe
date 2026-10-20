@@ -40,6 +40,23 @@ NEON_DB_ROTATED = NEON_DB.replace(NEON_PASSWORD, NEON_PASSWORD_ROTATED)
 ISSUER_HOST = "domeremote-staging.us.auth0.com"
 CLIENT_ID = "AbCdEf0123456789AbCdEf0123456789"
 GH_TOKEN = "ghs_" + "FakeJobToken0123456789abcdefABCDEF"
+# Fake Stripe values, assembled at run time so no line looks like a real Stripe secret to a scanner.
+STRIPE_TEST_KEY = "sk_" + "test_" + "51FakeStripeTestKey0123456789abcdefABCDEFghij"
+STRIPE_LIVE_KEY = "sk_" + "live_" + "51FakeStripeLiveKey0123456789abcdefABCDEFghij"
+STRIPE_WEBHOOK_SECRET = "whsec_" + "FakeSigningSecret0123456789abcdefAB"
+STRIPE_PRICES = {
+    "DOME_STRIPE_PRICE_PRO_MONTHLY": "price_1FakeProMonthly0001",
+    "DOME_STRIPE_PRICE_PRO_ANNUAL": "price_1FakeProAnnual00002",
+    "DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY": "price_1FakePlusMonthly003",
+    "DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL": "price_1FakePlusAnnual0004",
+    "DOME_STRIPE_PRICE_TOPUP": "price_1FakeTopUp000000005",
+}
+
+
+def stripe_env(key: str = STRIPE_TEST_KEY, webhook: str = STRIPE_WEBHOOK_SECRET, **prices: str) -> dict[str, str]:
+    """All seven Stripe values as the deploy step receives them (``prices`` overrides single price variables)."""
+    return {"DOME_STRIPE_SECRET_KEY": key, "DOME_STRIPE_WEBHOOK_SECRET": webhook, **STRIPE_PRICES, **prices}
+
 
 SECURE_HEADERS = {
     "content-type": "text/html; charset=utf-8",
@@ -98,6 +115,10 @@ class FakeWeb:
     ) -> None:
         body = {"status": "ok", "version": "0.1.0", "commit": commit, "database": "ok", "forwarded_client": forwarded}
         self.json(base + "/healthz", body, headers=headers)
+
+    def plans(self, base: str, mode: str = "off") -> None:
+        """The public GET /v1/plans of cloud-api (routes/plans.py), reduced to the billing fields."""
+        self.json(base + "/v1/plans", {"billing_enabled": mode != "off", "billing_mode": mode, "plans": []})
 
     def page(self, base: str, *, robots: bool = True, hsts: bool = False) -> None:
         headers = dict(SECURE_HEADERS)
@@ -301,17 +322,19 @@ class World:
         summary = summary_path.read_text() if summary_path.exists() else ""
         return Run(code, out.getvalue(), summary)
 
-    def staging_ready_web(self, app: str = "domeremote-staging", *, commit: str = SHA) -> None:
+    def staging_ready_web(self, app: str = "domeremote-staging", *, commit: str = SHA, billing: str = "off") -> None:
         self.web.discovery()
         self.web.healthz(f"https://{app}.fly.dev", commit=commit)
+        self.web.plans(f"https://{app}.fly.dev", billing)
         self.web.page(f"https://{app}.fly.dev")
         self.web.login(f"https://{app}.fly.dev", "https://staging.domeremote.com/v1/auth/callback")
         self.web.websockets[f"{app}.fly.dev"] = 401
 
-    def production_ready_web(self) -> None:
+    def production_ready_web(self, billing: str = "off") -> None:
         """Staging healthy with this commit (production's precondition) and a healthy production fly.dev."""
         self.staging_ready_web(commit=SHA)
         self.web.healthz("https://domeremote-production.fly.dev")
+        self.web.plans("https://domeremote-production.fly.dev", billing)
         self.web.page("https://domeremote-production.fly.dev", robots=True, hsts=True)
         self.web.login("https://domeremote-production.fly.dev", "https://domeremote.com/v1/auth/callback")
         self.web.websockets["domeremote-production.fly.dev"] = 401
@@ -353,6 +376,11 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         "VITE_DOME_SUPPORT_URL": "mailto:support@domeremote.com",
         "DOME_SUPPORT_RESPONSE_EXPECTATION": "",
         "REPO_LEVEL_SECRETS": "",
+        # what deploy.yml hands over when the GitHub Environment has no Stripe values: empty strings
+        "DOME_STRIPE_SECRET_KEY": "",
+        "DOME_STRIPE_WEBHOOK_SECRET": "",
+        **{name: "" for name in STRIPE_PRICES},
+        "STRIPE_SECRETS_AS_VARIABLES": "",
         "GH_TOKEN": GH_TOKEN,
     }
     web = FakeWeb()

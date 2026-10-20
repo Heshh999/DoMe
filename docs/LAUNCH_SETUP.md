@@ -138,8 +138,9 @@ It must be an **Environment secret** of that environment, never a **repository s
 under Settings > **Secrets and variables** > **Actions** > **Repository secrets**). GitHub gives a
 repository secret to every workflow run without asking you, so your approval would not protect it. A
 repository secret is **not** reported as missing: instead, the Deploy button refuses to run at all
-while a repository secret named `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET` or `DATABASE_URL` exists,
-and tells you to delete it and make a new token.
+while a repository secret named `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET`, `DATABASE_URL`,
+`DOME_STRIPE_SECRET_KEY` or `DOME_STRIPE_WEBHOOK_SECRET` exists, and tells you to delete it and make a
+new one.
 
 ## 5. Auth0 for staging *(per vendor docs, not yet exercised)*
 
@@ -314,11 +315,10 @@ never reach DoMe. Until the values below are in place, DoMe sells nothing: the B
 today.
 
 > **Honest status (2026-10-20).** DoMe's payment code is written and tested against a stand-in for Stripe,
-> **never against Stripe itself**. Your first test-mode run on staging is the real test. Steps 1 and 2
-> are already done (you set up the Stripe sandbox and the five prices on 2026-10-20). **Steps 6 to 8
-> also need the Deploy button to pass these values to Fly; that part is not built yet.** Paste the
-> values when you are ready, but expect the staging summary to keep saying billing is off until an
-> engineer tells you the Deploy button carries them.
+> **never against Stripe itself**. The Deploy button now carries the Stripe values to Fly (tested against a
+> stand-in for Fly, never against the real one). Your first test-mode run on staging (steps 6 and 7) is the
+> real test of both. Steps 1 and 2 are already done (you set up the Stripe sandbox and the five prices on
+> 2026-10-20).
 
 **Cost.** Stripe has no monthly fee. For each successful charge on a US card it keeps **2.9% + $0.30**,
 plus **0.7%** of subscription payments for Stripe Billing (the subscription feature DoMe uses); cards from
@@ -328,8 +328,14 @@ nothing is charged and no fee is taken. Example: of a $2.99 AI top-up, Stripe ke
 in `docs/COST_MODEL.md` §3.
 
 **Test mode first.** Stripe has a **Test mode** (also called a sandbox) where no real money moves and
-test card numbers work. Use it on staging. Only after staging works do you repeat the steps in
-**Live mode** for production.
+test card numbers work. Staging only ever uses Test mode: the Deploy button refuses a live key there.
+Production accepts both, so you can try production in Test mode first (step 8); every Deploy summary
+says which one runs: **"Stripe: TEST MODE — no real charges"** or **"Stripe: LIVE — real charges"**.
+
+**All seven values or none.** Payments need exactly seven values in a GitHub Environment: two
+**secrets** and five **variables**. With none, payments stay off. With only some, or with a value that
+cannot be right (a `pk_` key, a product id instead of a price id, a live key on staging), the Deploy
+button stops before changing anything and says which name to fix.
 
 1. **Account.** Sign in at https://dashboard.stripe.com and switch the dashboard to **Test mode**
    (a toggle or a "Sandbox" label at the top). *Done 2026-10-20.*
@@ -338,42 +344,101 @@ test card numbers work. Use it on staging. Only after staging works do you repea
    - "DoMe Pro": recurring **$9.99 monthly** and recurring **$99.99 yearly** (two prices on one product)
    - "DoMe Pro Plus": recurring **$24.99 monthly** and recurring **$249.99 yearly**
    - "DoMe AI top-up" (100 requests): **one-time** **$2.99**
-   Your prices include tax ("inclusive"); keep it that way, and leave **Stripe Tax** off. Open each
-   price and copy its id: it starts with `price_`. You need five ids. *Done 2026-10-20 (the founder
-   holds the five ids).*
+   Your prices include tax ("inclusive"); keep it that way, and leave **Stripe Tax** off (the Deploy
+   button never switches it on). Open each price and copy its id: it starts with `price_` (not the
+   product's id, which starts with `prod_`). You need five ids. *Done 2026-10-20 (the founder holds the
+   five ids).*
 3. **Secret key.** **Developers** > **API keys** > **Secret key** > **Reveal**. In test mode it starts
-   with `sk_test_`. Treat it like a password (section 1).
-4. **Webhook.** **Developers** > **Webhooks** > **Add endpoint**:
-   - Endpoint URL: `https://staging.domeremote.com/v1/billing/webhook`
-   - Events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   with `sk_test_`. Treat it like a password (section 1). The **Publishable key** (`pk_test_...`) on the
+   same page is **not** the one: DoMe does not use it, and the Deploy button refuses it.
+4. **Webhook** (how Stripe tells DoMe that someone paid). Staging must already be live at
+   https://staging.domeremote.com (section 9). In Stripe (Test mode): **Developers** > **Webhooks** >
+   **Add destination** (older dashboards: **Add endpoint**):
+   - **Events from**: **Your account**. Leave the API version as Stripe suggests.
+   - **Events**: search for and tick each of these nine:
+     `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
      `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`,
      `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`,
-     `invoice.payment_action_required`
-   - Save, then copy the endpoint's **Signing secret** (starts with `whsec_`). It is a password too.
+     `invoice.payment_action_required`. Also tick `charge.refunded`, `charge.dispute.created`,
+     `charge.dispute.updated` and `charge.dispute.closed`: DoMe changes nothing for these four, but
+     records them so an engineer hears about refunds and disputes. Tick nothing else (other events are
+     ignored).
+   - **Destination type**: **Webhook endpoint**. **Endpoint URL**: exactly
+     `https://staging.domeremote.com/v1/billing/webhook`. Save (**Create destination**).
+   - On the new endpoint's page, **Signing secret** > **Reveal**, and keep it for step 6. It starts
+     with `whsec_` and is a password too.
+   Staging sleeps when nobody uses it; Stripe's first delivery wakes it, and Stripe tries again by itself
+   if that first one is slow.
 5. **Customer portal.** **Settings** > **Billing** > **Customer portal**: allow customers to update
    their payment method, cancel **at the end of the billing period**, and switch between the four
    subscription prices (DoMe Pro and DoMe Pro Plus, monthly and yearly). Do not allow pausing.
-6. **Where to paste.** GitHub > your repository > **Settings** > **Environments** > **staging**:
-   - **Environment secrets**: `DOME_STRIPE_SECRET_KEY` (the `sk_test_…` key) and
-     `DOME_STRIPE_WEBHOOK_SECRET` (the `whsec_…` secret). Never as repository secrets, never anywhere
-     else.
-   - **Environment variables**: `DOME_STRIPE_PRICE_PRO_MONTHLY`, `DOME_STRIPE_PRICE_PRO_ANNUAL`,
-     `DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY`, `DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL`,
-     `DOME_STRIPE_PRICE_TOPUP` (the five `price_…` ids; "ANNUAL" is the yearly price).
-   All seven or none: DoMe refuses to start with only some of them, so a typo can never half-switch
-   payments on. A live key (`sk_live_…`) is refused on staging.
-7. **Try it on staging** (once the Deploy button carries the values). Run **Deploy** for staging. Sign
-   in at https://staging.domeremote.com, open **Billing**: it should say **"Test mode: no real
-   charges"**. Choose DoMe Pro, pay on Stripe's page with card `4242 4242 4242 4242`, any future
-   date, any 3-digit CVC. Back in DoMe the page says "Pending activation" and turns to **Pro** within
-   a minute. Then choose **Manage subscription**, cancel, and check the Billing page shows the end date.
-   Tell the engineer what you saw; that run is what lets DoMe call payments "tested with Stripe".
-8. **Only then production.** Switch the Stripe dashboard to **Live mode** and repeat steps 2 to 6 there:
-   new live prices (same amounts), the live secret key (`sk_live_…`), a second webhook endpoint
-   `https://domeremote.com/v1/billing/webhook` with its own `whsec_…` secret, the portal settings, and
-   paste them into the GitHub **production** environment. Real cards are charged from then on.
-9. **With no values** (today): nothing can be bought, the Billing page says upgrading is not available
-   yet, the website keeps "Coming at paid launch", and nobody's plan changes.
+6. **Paste the seven values into GitHub (staging).** Open
+   https://github.com/Heshh999/DoMe/settings/environments (repository **Settings** > **Environments**)
+   and click **staging**.
+   - Under **Environment secrets**, click **Add environment secret** twice (names exactly as written,
+     capital letters and underscores):
+
+     | Name | Value |
+     | --- | --- |
+     | `DOME_STRIPE_SECRET_KEY` | the secret key from step 3 (`sk_test_...`) |
+     | `DOME_STRIPE_WEBHOOK_SECRET` | the signing secret from step 4 (`whsec_...`) |
+
+     After each one, click **Add secret**. They must be **Environment secrets** of **staging**: never
+     repository secrets (the Deploy button refuses to run while one exists) and never **variables**
+     (variables are not hidden; the Deploy button refuses that too, and the key must then be rolled).
+   - Under **Environment variables**, click **Add environment variable** five times, then **Add
+     variable** after each:
+
+     | Name | Value: the `price_...` id of |
+     | --- | --- |
+     | `DOME_STRIPE_PRICE_PRO_MONTHLY` | DoMe Pro, $9.99 monthly |
+     | `DOME_STRIPE_PRICE_PRO_ANNUAL` | DoMe Pro, $99.99 yearly |
+     | `DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY` | DoMe Pro Plus, $24.99 monthly |
+     | `DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL` | DoMe Pro Plus, $249.99 yearly |
+     | `DOME_STRIPE_PRICE_TOPUP` | DoMe AI top-up, $2.99 one-time |
+
+     ("ANNUAL" is the yearly price.) Price ids are not secret; the five must all be different.
+7. **Deploy staging and try it.**
+   1. https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml > **Run workflow**: **environment:
+      staging**, **action: deploy** > **Run workflow**, and approve it as in section 7.
+   2. In the run's **Summary**, the row **Billing (Stripe)** must say **"Stripe: TEST MODE — no real
+      charges"**, and the row **billing (/v1/plans)** "reports test, as configured". **What to do next**
+      repeats the webhook address and the events of step 4: compare them with Stripe. If the run stopped
+      instead, the sentence under the headline says which value to fix (section 14).
+   3. Sign in at https://staging.domeremote.com and open **Billing**: it says **"Test mode: no real
+      charges"**. Choose DoMe Pro and pay on Stripe's page with the test card **`4242 4242 4242 4242`**,
+      any future expiry date, any 3-digit CVC, any name and postcode. Back in DoMe the page says
+      "Pending activation" and turns to **Pro** within a minute.
+   4. Choose **Manage subscription**, cancel, and check the Billing page shows the end date.
+   5. In Stripe (Test mode) > **Developers** > **Webhooks** > your endpoint, the deliveries should show as
+      succeeded (200). Tell the engineer what you saw; that run is what lets DoMe call payments "tested
+      with Stripe".
+   Pro Plus and the AI top-up are not offered while the assistant is off; that is expected.
+8. **Production.** Same steps, in the GitHub **production** environment, with the webhook endpoint
+   **`https://domeremote.com/v1/billing/webhook`** (production must already be live, section 11). You can
+   do it in two rounds:
+   - **First in Test mode (optional).** Paste the Test mode values (the same `sk_test_...` key and the five
+     test `price_...` ids; a **second** Test mode webhook endpoint for `https://domeremote.com/v1/billing/webhook`
+     with its own `whsec_...`) into **production**, run Deploy for production, and check the summary says
+     **"Stripe: TEST MODE — no real charges"**. While it does, **anyone** who visits domeremote.com can get
+     Pro with the test card, for free, so keep this short.
+   - **Then Live mode.** First, in Stripe (Test mode) > **Customers** or **Subscriptions**, cancel every
+     test subscription made on production **immediately**, and check those accounts' Billing page says
+     Free. (After the switch DoMe uses the live key, which cannot see test subscriptions: one left over
+     would keep its plan, and only an engineer can fix that.) Then switch the Stripe dashboard to **Live
+     mode** and repeat steps 2 to 5 there: new live prices (same amounts, tax-inclusive), the live secret
+     key (`sk_live_...`), a live webhook endpoint `https://domeremote.com/v1/billing/webhook` with its own
+     `whsec_...`, and the portal settings. In GitHub > **production**, click the pencil next to each of
+     the seven values and replace it with the live one (all seven: test and live prices, keys and signing
+     secrets never mix). Run Deploy for production: the summary must say **"Stripe: LIVE — real
+     charges"**. Real cards are charged from then on.
+9. **Switching payments off again, or with no values** (today). Delete all seven values from that GitHub
+   environment and run Deploy: the Deploy button also removes the two Stripe secrets from Fly, the summary
+   says **"Stripe: off"** and notes that billing was switched off. Nothing can be bought, the Billing page
+   says upgrading is not available yet, and the website keeps "Coming at paid launch". Subscriptions that
+   already exist keep running and charging at Stripe, but DoMe no longer hears about them: cancel them in
+   Stripe first. Deleting only some of the seven stops the next Deploy instead ("Payments are half set
+   up").
 
 ## 12. Redirects and DNSSEC *(per vendor docs, not yet exercised)*
 
@@ -428,11 +493,23 @@ yourself even when the headline says "needs an engineer".
 | The summary says | What to do |
 | --- | --- |
 | "Some values this deploy needs are missing or not usable" | Add exactly the names listed, on the tab it names. Check they are under Settings > **Environments** > the right environment, on the right tab (**secrets** vs **variables**). |
-| "... exist as repository secrets" | Delete them under Settings > **Secrets and variables** > **Actions** > **Repository secrets**. For `FLY_API_TOKEN`: revoke that token on the Fly Tokens page, create a new one, and paste it only as an **Environment secret** (section 4). For `DOME_OIDC_CLIENT_SECRET`: rotate it in Auth0 and paste the new one as an Environment secret. For `DATABASE_URL`: reset the password in Neon (section 6) and paste the new address only as the **staging** Environment secret. Run Deploy again. |
+| "... exist as repository secrets" | Delete them under Settings > **Secrets and variables** > **Actions** > **Repository secrets**. For `FLY_API_TOKEN`: revoke that token on the Fly Tokens page, create a new one, and paste it only as an **Environment secret** (section 4). For `DOME_OIDC_CLIENT_SECRET`: rotate it in Auth0 and paste the new one as an Environment secret. For `DATABASE_URL`: reset the password in Neon (section 6) and paste the new address only as the **staging** Environment secret. For `DOME_STRIPE_SECRET_KEY`: in Stripe > **Developers** > **API keys**, **Roll key**, and paste the new key only as an Environment secret. For `DOME_STRIPE_WEBHOOK_SECRET`: in Stripe > **Developers** > **Webhooks** > the endpoint, roll the **Signing secret**, and paste the new one only as an Environment secret (section 11A, step 6). Run Deploy again. |
 | "The GitHub Environment ... does not exist yet" or "... is not protected yet" | Set that environment up exactly as in section 3; the summary lists which setting is wrong. Run Deploy again. |
 | "Staging keeps its data in a free Neon database, and its address ... is missing" | Do section 6, steps 3 and 4, then run Deploy for staging again. |
 | "... is Neon's pooled address", "... is not a database connection string", "... does not include `sslmode=require`", "... does not include `channel_binding=require`", "... has stars where the password should be", "... contains a space, a quote or #", "... has an unreadable port number" or "... is missing its user name, password, host or database name" | In Neon > **Connect**, turn **Connection pooling** off, copy with the **copy** button, and paste it over the staging secret `DATABASE_URL` (section 6, steps 3 and 4). Run Deploy again. |
 | "The production Environment secret `DATABASE_URL` is a Neon address" | Delete `DATABASE_URL` from GitHub > Settings > Environments > **production** > **Environment secrets** (the bin icon next to it). Production keeps its data in Fly's database (section 11); the Neon address belongs only to staging. Run Deploy again. |
+| "Payments are half set up in the ... environment: ... missing" | Payments need all seven Stripe values or none. Either add the names listed (the two `DOME_STRIPE_SECRET_KEY` / `DOME_STRIPE_WEBHOOK_SECRET` under **Environment secrets**, the `DOME_STRIPE_PRICE_...` ones under **Environment variables**; section 11A, step 6), or delete every `DOME_STRIPE_` value from that environment to keep payments off. Run Deploy again. Nothing was changed. |
+| "`DOME_STRIPE_SECRET_KEY` in the staging environment is a **live** key" | Staging only ever uses Stripe's Test mode. Switch the Stripe dashboard to **Test mode**, copy the secret key there (`sk_test_...`, section 11A step 3) and paste it over the staging secret. The live key belongs only in **production**. |
+| "... is Stripe's **publishable** key", "... holds the webhook's signing secret", "... is not a Stripe secret key" or "... is too short to be a whole Stripe key" | `DOME_STRIPE_SECRET_KEY` must be the **Secret key** from Stripe > **Developers** > **API keys** > **Reveal** (`sk_test_...` or `sk_live_...`), copied with the copy button; the `pk_...` key and the `whsec_...` secret go elsewhere (section 11A, steps 3 and 4). |
+| "`DOME_STRIPE_WEBHOOK_SECRET` must be the webhook endpoint's **Signing secret**" or "... holds a Stripe API key, not the webhook's signing secret" | Copy the **Signing secret** (`whsec_...`) of the right endpoint: Stripe > **Developers** > **Webhooks** > the endpoint the summary names > **Signing secret** > **Reveal** (section 11A, step 4). |
+| "`DOME_STRIPE_...` contains a space, a quote or #" | Copy the value again with Stripe's copy button and paste it over the old one. |
+| "... holds a product id (`prod_...`), not a price id", "... is not a Stripe price id" or "... hold the same price id" | In Stripe > **Product catalog**, open the product, click the price named in the summary and copy its id (`price_...`). Each of the five variables needs a different price (section 11A, step 6). |
+| "The variable `DOME_STRIPE_PRICE_...` holds a Stripe secret instead of a price id" | Variables are not hidden, so that key or signing secret must be replaced: follow the summary (Stripe **Roll key**, or roll the webhook's **Signing secret**), paste the new one under **Environment secrets**, and put the `price_...` id in the variable. |
+| "`DOME_STRIPE_SECRET_KEY` (or `DOME_STRIPE_WEBHOOK_SECRET`) is saved as an Environment **variable**" | Roll it in Stripe as the summary says, add the new value under **Environment secrets** with the same name, and delete the **variable** (bin icon). Run Deploy again. |
+| "Fly did not remove the secrets (DOME_STRIPE_...)" | Fly did not do that step; nothing was deployed. Run Deploy again; if it repeats, share the run link with an engineer. |
+| "/v1/plans reports billing ..., but this deploy configured ..." or "/v1/plans did not answer with a billing mode" | Share the run link with an engineer. |
+| Note: "Billing was switched **off** by this deploy" | Expected only if you deleted all seven Stripe values on purpose (section 11A, step 9). Existing subscriptions keep charging at Stripe: cancel them there, or put the seven values back and run Deploy. |
+| Note: "**Production is in Stripe Test mode**" | Expected while you try production in Test mode (section 11A, step 8). Keep it short; before Live mode, cancel every test subscription. |
 | "Staging and production would both use the Fly app ..." | GitHub > Settings > **Secrets and variables** > **Actions** > **Variables** tab: correct `FLY_STAGING_APP` or `FLY_PRODUCTION_APP` so that the two names differ (without these variables, staging is `domeremote-staging` and production is `domeremote-production`). Run Deploy again. Nothing was changed. |
 | "Production has no database yet ... about $41 a month" | If you agree, run Deploy for production again with **create the database** ticked. If the summary also says the production secret `DATABASE_URL` was not used, you can delete that secret. If it lists other Fly databases by name, do not tick: ask an engineer first. |
 | "The **create the database** tick is for production only" | Nothing to do: staging uses its Neon database and nothing was created. |
@@ -470,12 +547,16 @@ yourself even when the headline says "needs an engineer".
 | `DOME_OIDC_CLIENT_ID` | no | GitHub > Environments > ... > Environment **variables** | Auth0 > Application > Settings > Client ID |
 | `VITE_DOME_SUPPORT_URL` (optional) | no (public) | GitHub > Environments > ... > Environment **variables** | your support mailbox |
 | `DOME_SUPPORT_RESPONSE_EXPECTATION` (optional) | no | GitHub > Environments > ... > Environment **variables** | your promise, for example "within 2 business days" |
+| `DOME_STRIPE_SECRET_KEY` (optional: payments) | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret, never a variable) | Stripe > **Developers** > **API keys** > Secret key: `sk_test_...` (Test mode; the only kind staging accepts) or `sk_live_...` (Live mode, production only) |
+| `DOME_STRIPE_WEBHOOK_SECRET` (optional: payments) | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret, never a variable) | Stripe > **Developers** > **Webhooks** > the endpoint `https://staging.domeremote.com/v1/billing/webhook` (staging) or `https://domeremote.com/v1/billing/webhook` (production) > Signing secret (`whsec_...`) |
+| `DOME_STRIPE_PRICE_PRO_MONTHLY`, `DOME_STRIPE_PRICE_PRO_ANNUAL`, `DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY`, `DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL`, `DOME_STRIPE_PRICE_TOPUP` (optional: payments) | no | GitHub > Environments > staging / production > Environment **variables** | Stripe > **Product catalog** > the product > the price: its `price_...` id (Pro monthly, Pro yearly, Pro Plus monthly, Pro Plus yearly, AI top-up), from the same mode (Test or Live) as the secret key. All seven Stripe values or none (section 11A) |
 | `FLY_ORG` (optional) | no | GitHub > Environments > staging **and** production > Environment **variables** | only if not your Personal organization |
 | `FLY_STAGING_APP`, `FLY_PRODUCTION_APP` (optional) | no | GitHub > Settings > Secrets and variables > Actions > **Variables** (repository) | only if a summary says the app name is taken |
 | Session secret, entitlement signing key, production's database password | **yes** | nowhere: the Deploy button creates them inside Fly | generated during the first deploy |
 
-Not needed now: an Anthropic (AI) key (the assistant stays off until paid plans exist), Stripe keys
-(payments are not built yet).
+Not needed now: an Anthropic (AI) key (the assistant stays off; the Deploy button never sets it).
+`DOME_STRIPE_AUTOMATIC_TAX` is never set either: Stripe Tax stays off, because the prices are
+tax-inclusive (section 11A, step 2).
 
 ## 16. What is still not done before production can be called ready
 

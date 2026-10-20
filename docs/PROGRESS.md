@@ -2,6 +2,30 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-21 — The Deploy button carries Stripe: billing can be switched on from GitHub
+
+- `deploy.yml` and `dome_deploy.py` now pass the seven Stripe values to Fly (this supersedes the "not yet
+  wired" notes in the 2026-10-20 entries below). Per environment: secrets `DOME_STRIPE_SECRET_KEY` and
+  `DOME_STRIPE_WEBHOOK_SECRET`, staged into Fly through stdin and redacted; variables
+  `DOME_STRIPE_PRICE_PRO_MONTHLY`, `_PRO_ANNUAL`, `_PRO_PLUS_MONTHLY`, `_PRO_PLUS_ANNUAL`, `_TOPUP`, passed
+  with `flyctl deploy -e`. All seven or none.
+- Checked before any Fly call: key and secret shapes, a live key refused on staging, prices must be
+  `price_…`, secrets saved as variables or at repository level refused, a secret pasted into a variable
+  reported as exposed with roll steps. GitHub is the only source: every deploy unsets any `DOME_STRIPE_*`
+  Fly secret it does not stage itself, so the app can never be left half configured.
+- The summary and `status` report "Stripe: off", "TEST MODE — no real charges" or "LIVE — real charges";
+  the smoke check compares `GET /v1/plans` with what was configured. Production in test mode carries a
+  warning (anyone can take Pro with a test card), and the guide says to cancel test subscriptions before
+  going live. `DOME_STRIPE_AUTOMATIC_TAX` is never passed: Stripe Tax stays off and prices stay
+  tax-inclusive, per the founder's decision.
+- `LAUNCH_SETUP.md` §11A rewritten as an exact click path, with webhook URLs
+  (`https://staging.domeremote.com/v1/billing/webhook`, `https://domeremote.com/v1/billing/webhook`) and
+  the 13 event types; §14 and §15 rows; `deploy/README.md`, `BILLING.md`, cloud-api README.
+- Tests run: `deploy/launch` 258 passed (52 new in `test_deploy_billing.py`); ruff, mypy, actionlint
+  clean. **Evidence: unit-tested against the fake flyctl; not yet run against Fly.io or Stripe.**
+- Next: the founder adds the values to **staging** in test mode, creates the staging webhook, deploys and
+  buys Pro with Stripe's test card; that run is the first sandbox-provider evidence.
+
 ## 2026-10-20 — Billing (Stripe), protocol 1.3, signed-release pipeline and Screen view Phase 0 built; review fixes applied
 
 What was built (nothing of it is released; production still sells nothing and AI stays off there):
