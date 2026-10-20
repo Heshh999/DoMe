@@ -2,6 +2,22 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-20 — Real sign-up and password-reset emails (Auth0 + Resend), founder-run
+
+- The founder added the sending domain `mail.domeremote.com` in Resend (DNS records written into
+  Cloudflare by Resend's Cloudflare integration, domain **Verified**), created a sending-only API key
+  scoped to that domain, and connected it under Auth0 **Branding > Email Provider** with From
+  `DoMe Remote <no-reply@mail.domeremote.com>`. Auth0's **Send Test Email** arrived.
+- Auth0's built-in test provider is no longer in the path, so verification and password-reset mail is
+  real for the first time. `LAUNCH_SETUP.md` §16 records it as done, with the limits of Resend's free
+  plan (3,000/month, 100/day).
+- **Gap left open, deliberately:** DoMe does not refuse sign-in for an unverified address. `oidc.py`
+  reads the `email` claim and never `email_verified`, so an account can be created with an address the
+  person does not control. It matters little today (linking a PC still needs the PC), but it should be
+  closed before real customers; the founder decides, because the change can lock out an existing
+  unverified account.
+- Evidence: **founder-run on the live tenant**; nothing in this repository changed except these notes.
+
 ## 2026-10-20 — Screen view (#52) designed: design brief + ADR-0002 (nothing built, nothing run)
 
 - `docs/design/screen-view.md` and `docs/adr/0002-screen-view-transport.md` written through a

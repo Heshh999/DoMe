@@ -418,7 +418,12 @@ summary lists them again until an engineer closes them:
 - an outside uptime monitor on https://domeremote.com/healthz that alerts you;
 - the database backup retention, written down in `docs/OPERATIONS.md`;
 - a support contact (`VITE_DOME_SUPPORT_URL`);
-- an Auth0 email provider, and Google sign-in either off or with your own keys;
+- ~~an Auth0 email provider~~ **done 2026-10-20**: Resend on the verified sending domain
+  `mail.domeremote.com`, From `DoMe Remote <no-reply@mail.domeremote.com>`, connected under Auth0
+  **Branding > Email Provider**; Auth0's test email arrived. Resend's free plan allows 3,000 emails a
+  month and at most 100 a day [vendor page, October 2026]. Still open: Google sign-in either off or with
+  your own keys, and DoMe does not yet refuse sign-in for an unverified address
+  (`cloud-api/dome_api/auth/oidc.py` reads `email` but never `email_verified`);
 - signing in yourself on production (the button cannot test sign-in);
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).
