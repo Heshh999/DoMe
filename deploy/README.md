@@ -136,8 +136,11 @@ guide. In short:
    `cloud-api/dome_api/auth/oidc.py` sends). Keycloak or another compliant issuer also works.
 4. **Cloudflare**: the DNS records each Deploy summary prints, as **DNS only**; the redirects and DNSSEC
    below.
-5. **Stripe**: not now (Phase C is not implemented; `DOME_STRIPE_*` are declared and ignored).
-   **Anthropic key**: not now (the assistant stays off; every plan's AI allowance is 0 until task #51).
+5. **Stripe**: billing is built (`docs/BILLING.md`; integration-tested with a fake Stripe, not
+   sandbox-provider-tested), but the Deploy button does not yet pass `DOME_STRIPE_*` to Fly, so billing
+   stays off on both environments (`docs/LAUNCH_SETUP.md` section 11A).
+   **Anthropic key**: not now (the assistant stays off: the workflow never sets `DOME_AI_*`; the protocol 1.3
+   allowances describe the plans, and the website labels them "Not switched on yet").
 6. **Windows code signing, Chrome Web Store, support mailbox** are release prerequisites outside
    this directory (`docs/SECURITY.md` T12, `docs/HANDOFF.md`).
 
@@ -294,7 +297,7 @@ Founder-pasted values are **GitHub Environment** secrets and variables (Settings
 | `FLY_ORG`, `VITE_DOME_SUPPORT_URL`, `DOME_SUPPORT_RESPONSE_EXPECTATION` | GitHub Environment variables, optional | founder | Fly organization (default `personal`); support contact (public, build-time); support promise | press Deploy |
 | `FLY_STAGING_APP`, `FLY_PRODUCTION_APP` | repository variables, optional | founder, only if a default app name is taken | overrides `launch/environments.toml` | a new name is a new app |
 | `DOME_TRUSTED_PROXIES`, `DOME_CLIENT_IP_HEADER` | `fly.toml` `[env]` | repository | client addresses, below | none |
-| `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET` | — | nobody yet | Phase C only; unused today | — |
+| `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET`, `DOME_STRIPE_PRICE_*` | GitHub Environment secrets / variables (`docs/LAUNCH_SETUP.md` 11A) | founder | billing is built (`docs/BILLING.md`), but the Deploy button does not yet pass these to Fly, so billing stays off | — |
 | `DOME_AI_ANTHROPIC_API_KEY` | — | nobody yet | the AI assistant stays off (`DOME_AI_ENABLED` unset); the workflow never sets any `DOME_AI_*` or `ANTHROPIC_*` variable | — |
 
 Non-secret configuration shared by both environments lives in `fly.toml` `[env]` and is documented

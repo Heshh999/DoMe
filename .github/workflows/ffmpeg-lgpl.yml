@@ -1,0 +1,305 @@
+# FFmpeg LGPL wheel (Screen view spike, roadmap #52; design §5.5 and §19 WP0.1). A SPIKE: it produces a
+# candidate PyAV wheel and the evidence about it. It publishes nothing, changes no file in the repository
+# (pc-agent/pyproject.toml and uv.lock are untouched) and nothing it builds ships.
+#
+# What it does: builds FFmpeg n8.1.3 (pinned to its commit) as LGPL-2.1-or-later shared DLLs under MSYS2
+# MINGW64 with only the components Screen view needs (design §5.5: the `lavfi` input device, the filters
+# ddagrab scale_d3d11 hwdownload format scale aresample testsrc color, plus buffer/buffersink and
+# abuffer/abuffersink which FFmpeg always builds, the encoders h264_mf libvpx_vp8 libopus, exactly one decoder wrapped_avframe; no network, no protocols,
+# no demuxers, nothing GPL, version3 or non-free); checks configure's own summary; compiles PyAV 17.1.0
+# (sdist pinned by SHA-256) against it with MSVC; repairs the wheel with delvewheel; runs
+# pc-agent/packaging/licence_gate.py on it (DLL allow-list, import and export scans, configure flags,
+# licence strings, the exact decoder and encoder sets); then, in a fresh venv with aiortc 1.15.0,
+# decodes one `lavfi` testsrc frame as NV12 through the new wheel, encodes one VP8 frame and imports
+# aiortc. Uploads the wheel with SHA256SUMS, and the logs (always): configure summary, config.log,
+# build log, DLL listing, licence-report.json, a THIRD_PARTY_NOTICES draft and the smoke results.
+#
+# What it does not prove: the runner is a GPU-less Windows Server image without an interactive desktop,
+# so the hardware H.264 encoder (h264_mf, hw_encoding=1) and Desktop Duplication (ddagrab) are tried and
+# REPORTED, not required. Those, and every number in the design's go/no-go gate (§18), come only from the
+# founder's own PC (the WP0.2 device round). The notices file is a draft inventory, not reviewed by counsel.
+#
+# Why these versions (research recorded 2026-10-20):
+# - aiortc 1.15.0 requires av>=14,<18 and encodes VP8 and Opus through PyAV codec contexts
+#   (CodecContext.create("libvpx", "w") / ("libopus", "w")), so this FFmpeg must carry libvpx and libopus.
+# - PyAV 17.1.0 is the newest release aiortc accepts; its own PyPI wheels were built from FFmpeg 8.1.1
+#   (pyav-ffmpeg 8.1.1-2, scripts/ffmpeg-latest.json at tag v17.1.0), so FFmpeg 8.1.x is PyAV's own pairing.
+#   Those stock wheels are configured with --enable-libx264/--enable-libx265 (GPL): not shippable.
+# - The build pattern follows pyav-ffmpeg's Windows build (MSYS2 MINGW64 gcc for FFmpeg, MSVC for PyAV,
+#   delvewheel), not its flags. vcpkg's ffmpeg port (no way to express this component list) and
+#   media-autobuild_suite (interactive, GPL-prone defaults) were rejected.
+# - FFmpeg 8.x has no libpostproc any more, so there is no --disable-postproc (configure would reject an
+#   unknown option); the gate still refuses any DLL or export that looks like it (R1, R4).
+#
+# No secrets are used, and the token is read-only. Actions are pinned to the commit of a release tag
+# (re-checked with `git ls-remote --tags` on 2026-10-20); the comment carries the tag. Build tools that
+# pip fetches for PyAV's isolated build (setuptools, Cython) resolve at run time; the pip log records them.
+#
+# To run it: GitHub › Actions › 'FFmpeg LGPL wheel (Screen view spike)' › Run workflow › main. It takes
+# about an hour. The wheel and the logs appear under Artifacts at the bottom of the run page.
+
+name: FFmpeg LGPL wheel (Screen view spike)
+
+on:
+  workflow_dispatch: # by hand only (Actions tab › "FFmpeg LGPL wheel" › Run workflow); no inputs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ffmpeg-lgpl-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"        # same as ci.yml / windows-installer.yml
+  PYTHON_VERSION: "3.12"       # pc-agent requires <3.13
+  FFMPEG_TAG: "n8.1.3"         # the line PyAV 17.1 was built against (pyav-ffmpeg 8.1.1-2); newest point release on 2026-10-20
+  FFMPEG_COMMIT: "1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7"  # git ls-remote --tags, 2026-10-20
+  PYAV_VERSION: "17.1.0"       # newest release aiortc 1.15.0 accepts (av<18)
+  PYAV_SDIST_SHA256: "7f1e71ff621b66253333926f948e00faae11d855b2442133c65128bca64cdeb3"  # pypi.org/pypi/av/17.1.0/json, 2026-10-20
+  PYAV_LOCAL_VERSION: "17.1.0+lgpl.ffmpeg8.1.3"  # PEP 440 local label; satisfies av<18 and names the build
+  DELVEWHEEL_VERSION: "1.13.2"
+  AIORTC_VERSION: "1.15.0"
+  PEFILE_VERSION: "2024.8.26"  # the licence gate reads import and export tables with it
+  FFMPEG_PREFIX: "C:\\ffmpeg-lgpl"
+  FORCE_COLOR: "1"
+
+jobs:
+  wheel:
+    name: FFmpeg (LGPL) + PyAV wheel, licence gate, smoke test
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: MSYS2 MINGW64 with gcc, nasm, pkgconf, libvpx and opus
+        id: msys2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: MINGW64      # the environment pyav-ffmpeg uses for the wheels PyAV itself ships
+          # A fresh, updated MSYS2 rather than the image's C:\msys64: installing packages against a stale
+          # package database is a partial upgrade. The minimal PATH (the default) keeps the runner's own
+          # tools (Strawberry Perl's pkg-config, Git's utilities) out of FFmpeg's configure.
+          release: true
+          update: true
+          install: >-
+            base-devel git
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-libvpx mingw-w64-x86_64-opus
+
+      - name: Record the libvpx and opus packages (version and licence, for the notices)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          pacman -Qi mingw-w64-x86_64-libvpx mingw-w64-x86_64-opus | tee logs/pacman-qi.txt
+
+      - name: Get FFmpeg (the tag must still point at the pinned commit)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone --quiet --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+          actual="$(git -C ffmpeg-src rev-parse HEAD)"
+          if [ "$actual" != "$FFMPEG_COMMIT" ]; then
+            echo "FFmpeg tag $FFMPEG_TAG is commit $actual, not the pinned $FFMPEG_COMMIT: refusing to build"
+            exit 1
+          fi
+          echo "FFmpeg $FFMPEG_TAG = $actual" | tee logs/ffmpeg-source.txt
+
+      - name: Configure FFmpeg (LGPL-2.1+, the §5.5 component list)
+        shell: msys2 {0}
+        working-directory: ffmpeg-src
+        env:
+          FFMPEG_PREFIX_MSYS: /c/ffmpeg-lgpl  # FFMPEG_PREFIX as MSYS2 spells it
+        # --disable-autodetect keeps zlib, iconv, lzma, schannel, the GPU vendor SDKs and the rest out, so
+        # d3d11va and mediafoundation (both normally autodetected) are enabled by name; --disable-iconv also
+        # stops the libc iconv probe that --disable-autodetect leaves on. avformat, avdevice, avfilter,
+        # swscale and swresample stay: PyAV links all seven libraries and lavfi is an avformat input device.
+        # buffer/buffersink (lavfi and PyAV's Graph) and abuffer/abuffersink (the Phase 2 audio path) are always
+        # built and cannot be named here (configure answers "did not match anything"; the gate fails on that
+        # warning); the gate's R10 and the smoke test check them in the built library. aresample is the Phase 2
+        # audio path; testsrc and color are for CI and --self-test only.
+        run: |
+          set -euo pipefail
+          if ! ./configure \
+            --prefix="$FFMPEG_PREFIX_MSYS" --target-os=mingw32 --arch=x86_64 \
+            --enable-shared --disable-static \
+            --disable-gpl --disable-nonfree --disable-version3 \
+            --disable-autodetect --disable-iconv --disable-network \
+            --disable-programs --disable-doc \
+            --disable-everything \
+            --disable-protocols --disable-demuxers --disable-muxers --disable-parsers --disable-bsfs \
+            --disable-hwaccels --disable-outdevs \
+            --enable-d3d11va --enable-mediafoundation \
+            --enable-libvpx --enable-libopus \
+            --enable-indev=lavfi \
+            --enable-decoder=wrapped_avframe \
+            --enable-encoder=h264_mf --enable-encoder=libvpx_vp8 --enable-encoder=libopus \
+            --enable-filter=ddagrab --enable-filter=scale_d3d11 --enable-filter=hwdownload \
+            --enable-filter=format --enable-filter=scale --enable-filter=aresample \
+            --enable-filter=testsrc --enable-filter=color \
+            > ../logs/ffmpeg-configure.log 2>&1; then
+            cat ../logs/ffmpeg-configure.log
+            cp ffbuild/config.log ../logs/config.log || true
+            echo "FFmpeg configure failed"
+            exit 1
+          fi
+          cat ../logs/ffmpeg-configure.log
+          cp ffbuild/config.log ../logs/config.log
+
+      - name: Check configure's summary (licence, network off, exact component lists, no ignored option)
+        run: |
+          uv run --no-project python -I pc-agent\packaging\licence_gate.py configure-summary logs\ffmpeg-configure.log
+          if ($LASTEXITCODE -ne 0) { throw "the FFmpeg configure summary failed the licence gate (exit code $LASTEXITCODE)" }
+
+      - name: Build and install FFmpeg
+        shell: msys2 {0}
+        working-directory: ffmpeg-src
+        timeout-minutes: 90
+        env:
+          FFMPEG_PREFIX_MSYS: /c/ffmpeg-lgpl
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)" > ../logs/ffmpeg-build.log 2>&1 || { tail -n 200 ../logs/ffmpeg-build.log; exit 1; }
+          make install >> ../logs/ffmpeg-build.log 2>&1 || { tail -n 200 ../logs/ffmpeg-build.log; exit 1; }
+          # configure installs the .lib import libraries next to the DLLs (bin); MSVC looks for them in LIB,
+          # so they move to lib (the same fix pyav-ffmpeg applies).
+          mkdir -p "$FFMPEG_PREFIX_MSYS/lib"
+          shopt -s nullglob
+          libs=("$FFMPEG_PREFIX_MSYS"/bin/*.lib)
+          if [ "${#libs[@]}" -gt 0 ]; then mv "${libs[@]}" "$FFMPEG_PREFIX_MSYS/lib/"; fi
+          for name in avcodec avdevice avfilter avformat avutil swresample swscale; do
+            if [ ! -f "$FFMPEG_PREFIX_MSYS/lib/$name.lib" ]; then echo "missing import library $name.lib"; exit 1; fi
+          done
+          # expected: avcodec-62 avdevice-62 avfilter-11 avformat-62 avutil-60 swresample-6 swscale-9
+          ls -l "$FFMPEG_PREFIX_MSYS"/bin/*.dll "$FFMPEG_PREFIX_MSYS"/lib/*.lib | tee ../logs/ffmpeg-dlls.txt
+
+      - name: Get the PyAV sdist (SHA-256 pinned) and stamp the local version
+        run: |
+          New-Item -ItemType Directory -Force -Path sdist, pyav-src | Out-Null
+          $sdist = "sdist\av-$env:PYAV_VERSION.tar.gz"
+          curl.exe --fail --silent --show-error --location --proto '=https' --output $sdist "https://files.pythonhosted.org/packages/source/a/av/av-$env:PYAV_VERSION.tar.gz"
+          if ($LASTEXITCODE -ne 0) { throw "downloading the PyAV sdist failed (exit code $LASTEXITCODE)" }
+          $hash = (Get-FileHash -LiteralPath $sdist -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:PYAV_SDIST_SHA256) { throw "av-$env:PYAV_VERSION.tar.gz has SHA-256 $hash, expected $env:PYAV_SDIST_SHA256" }
+          & "$env:SystemRoot\System32\tar.exe" -xf $sdist -C pyav-src
+          if ($LASTEXITCODE -ne 0) { throw "extracting the PyAV sdist failed (exit code $LASTEXITCODE)" }
+          # The version lives in av/about.py (pyproject.toml reads it from there: dynamic = ["version"]). A
+          # silent no-op here would build a wheel that calls itself the stock 17.1.0, so a miss fails the step.
+          $root = "pyav-src\av-$env:PYAV_VERSION"
+          $about = Join-Path $root 'av\about.py'
+          $old = "__version__ = `"$env:PYAV_VERSION`""
+          $text = Get-Content -LiteralPath $about -Raw
+          if (-not $text.Contains($old)) { throw "$about does not contain $old" }
+          $text.Replace($old, "__version__ = `"$env:PYAV_LOCAL_VERSION`"") | Set-Content -LiteralPath $about -NoNewline -Encoding utf8
+          $pyproject = Join-Path $root 'pyproject.toml'
+          $static = "version = `"$env:PYAV_VERSION`""
+          $ptext = Get-Content -LiteralPath $pyproject -Raw
+          if ($ptext.Contains($static)) {
+            $ptext.Replace($static, "version = `"$env:PYAV_LOCAL_VERSION`"") | Set-Content -LiteralPath $pyproject -NoNewline -Encoding utf8
+          }
+          Write-Host "PyAV sdist verified (SHA-256 $hash); version stamped $env:PYAV_LOCAL_VERSION"
+
+      - name: Compile PyAV against it with MSVC
+        env:
+          # PyAV's setup.py uses bare library names on Windows; the compiler's INCLUDE and LIB supply the paths
+          # (the way PyAV's own CI builds). setuptools' vcvarsall adds the Visual Studio paths after these.
+          INCLUDE: ${{ env.FFMPEG_PREFIX }}\include
+          LIB: ${{ env.FFMPEG_PREFIX }}\lib
+        run: |
+          uv venv .venv-build --python $env:PYTHON_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "uv venv failed (exit code $LASTEXITCODE)" }
+          uv pip install --python .venv-build\Scripts\python.exe pip "delvewheel==$env:DELVEWHEEL_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "installing pip and delvewheel failed (exit code $LASTEXITCODE)" }
+          .\.venv-build\Scripts\python.exe -m pip wheel "pyav-src\av-$env:PYAV_VERSION" --no-deps --wheel-dir dist\raw --log logs\pyav-build.log
+          if ($LASTEXITCODE -ne 0) { throw "building the PyAV wheel failed (exit code $LASTEXITCODE)" }
+          $raw = @(Get-ChildItem -Path dist\raw -Filter 'av-*.whl')
+          if ($raw.Count -ne 1) { throw "expected one wheel in dist\raw, found $($raw.Count)" }
+          if (-not $raw[0].Name.StartsWith("av-$env:PYAV_LOCAL_VERSION-")) { throw "the wheel is $($raw[0].Name), not version $env:PYAV_LOCAL_VERSION" }
+          Write-Host "built $($raw[0].Name)"
+
+      - name: Repair the wheel with delvewheel (vendors the DLLs into av.libs)
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        # The default name mangling and the av.libs folder are kept: PyInstaller's contrib hook-av.py collects
+        # site-packages/av.libs as it is. Expected in av.libs: the seven FFmpeg DLLs, libvpx-1, libopus-0,
+        # libgcc_s_seh-1 and libwinpthread-1, and nothing else (the licence gate enforces that).
+        run: |
+          $raw = @(Get-ChildItem -Path dist\raw -Filter 'av-*.whl')[0].FullName
+          $paths = "$env:FFMPEG_PREFIX\bin;$env:MSYS2_LOCATION\mingw64\bin"
+          .\.venv-build\Scripts\delvewheel.exe show --add-path $paths $raw | Tee-Object -FilePath logs\delvewheel-show.txt
+          if ($LASTEXITCODE -ne 0) { throw "delvewheel show failed (exit code $LASTEXITCODE)" }
+          .\.venv-build\Scripts\delvewheel.exe repair --add-path $paths --wheel-dir dist\wheel $raw
+          if ($LASTEXITCODE -ne 0) { throw "delvewheel repair failed (exit code $LASTEXITCODE)" }
+
+      - name: Licence gate (pc-agent/packaging/licence_gate.py)
+        run: |
+          uv venv .venv-gate --python $env:PYTHON_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "uv venv failed (exit code $LASTEXITCODE)" }
+          $wheel = @(Get-ChildItem -Path dist\wheel -Filter 'av-*.whl')
+          if ($wheel.Count -ne 1) { throw "expected one wheel in dist\wheel, found $($wheel.Count)" }
+          # aiortc's av<18,>=14 must resolve to this wheel's local version (PEP 440), not to PyPI's GPL build.
+          uv pip install --python .venv-gate\Scripts\python.exe $wheel[0].FullName "pefile==$env:PEFILE_VERSION" "aiortc==$env:AIORTC_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "installing the wheel, pefile and aiortc failed (exit code $LASTEXITCODE)" }
+          $py = '.\.venv-gate\Scripts\python.exe'
+          & $py -I pc-agent\packaging\licence_gate.py collect --wheel-env .venv-gate --out logs\licence-report.json
+          if ($LASTEXITCODE -ne 0) { throw "licence_gate.py collect failed (exit code $LASTEXITCODE)" }
+          & $py -I pc-agent\packaging\licence_gate.py notices logs\licence-report.json --pacman logs\pacman-qi.txt --ffmpeg-commit $env:FFMPEG_COMMIT --out logs\THIRD_PARTY_NOTICES.draft.txt
+          if ($LASTEXITCODE -ne 0) { throw "licence_gate.py notices failed (exit code $LASTEXITCODE)" }
+          & $py -I pc-agent\packaging\licence_gate.py check logs\licence-report.json
+          if ($LASTEXITCODE -ne 0) { throw "the wheel failed the licence gate (exit code $LASTEXITCODE)" }
+
+      - name: Smoke test the wheel (lavfi testsrc -> NV12, VP8 encode, aiortc import)
+        timeout-minutes: 10
+        run: |
+          .\.venv-gate\Scripts\python.exe -I pc-agent\packaging\licence_gate.py smoke --expect-version $env:PYAV_LOCAL_VERSION --log logs\smoke.log
+          if ($LASTEXITCODE -ne 0) { throw "a required smoke check failed (exit code $LASTEXITCODE)" }
+
+      - name: SHA256SUMS and the run summary
+        run: |
+          $wheel = @(Get-ChildItem -Path dist\wheel -Filter 'av-*.whl')[0]
+          $hash = (Get-FileHash -LiteralPath $wheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText((Join-Path $wheel.DirectoryName 'SHA256SUMS'), "$hash  $($wheel.Name)`n", [System.Text.Encoding]::ASCII)
+          $report = Get-Content -LiteralPath logs\licence-report.json -Raw | ConvertFrom-Json
+          $summary = @(
+            '## FFmpeg LGPL wheel (Screen view spike)',
+            '',
+            "- Wheel: ``$($wheel.Name)``, SHA-256 ``$hash``",
+            "- FFmpeg $env:FFMPEG_TAG, commit ``$env:FFMPEG_COMMIT``",
+            "- Decoders: $($report.decoders -join ', ')",
+            "- Encoders: $($report.encoders -join ', ')",
+            '- Input device: lavfi',
+            '',
+            '```',
+            (Get-Content -LiteralPath logs\smoke.log -Raw).TrimEnd(),
+            '```',
+            '',
+            'Spike output: not shipped, not device-tested.'
+          )
+          $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload the wheel and SHA256SUMS
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dome-av-wheel-lgpl
+          path: |
+            dist/wheel/*.whl
+            dist/wheel/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffmpeg-lgpl-logs
+          path: logs/
+          if-no-files-found: warn
+          retention-days: 30

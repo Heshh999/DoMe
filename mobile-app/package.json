@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsx scripts/check-bundle.ts",
+    "build": "tsx scripts/check-release.ts && vite build && tsx scripts/check-bundle.ts",
     "preview": "vite preview",
     "gen:validators": "tsx scripts/gen-validators.ts",
     "gen:icons": "node scripts/make-icons.mjs",

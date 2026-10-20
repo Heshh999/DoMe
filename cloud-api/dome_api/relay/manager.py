@@ -505,13 +505,18 @@ class ConnectionManager:
         return out
 
     async def plan_enabled_controller_ids(self, db: AsyncSession, account_id: uuid.UUID, plan: Plan) -> set[uuid.UUID]:
-        """The controllers that count as enabled under the plan: the most recently seen
-        ``max_controllers`` live controllers (plans.json downgrade_policy.default_selection)."""
+        """The controllers that count as enabled under the plan: the ones the owner chose after a downgrade
+        (``plan_selected_at``, PUT /v1/account/plan-selection) first, then the most recently seen, up to
+        ``max_controllers`` (plans.json downgrade_policy.default_selection)."""
         rows = (
             await db.execute(
                 select(Controller.id)
                 .where(Controller.account_id == account_id, Controller.revoked_at.is_(None))
-                .order_by(Controller.last_seen_at.desc().nulls_last(), Controller.created_at.asc())
+                .order_by(
+                    Controller.plan_selected_at.desc().nulls_last(),
+                    Controller.last_seen_at.desc().nulls_last(),
+                    Controller.created_at.asc(),
+                )
                 .limit(plan.max_controllers)
             )
         ).scalars()
@@ -544,6 +549,14 @@ class ConnectionManager:
         if assertion is not None:
             frame["entitlement_assertion"] = assertion
         return frame
+
+    async def push_account_snapshots(self, account_id: uuid.UUID) -> int:
+        """Fresh snapshots to every online PC of the account (a plan change, a device selection)."""
+        pushed = 0
+        for conn in list(self.agents.values()):
+            if conn.account_id == account_id and not conn.closed and await self.push_grants_snapshot(conn.pc_id):
+                pushed += 1
+        return pushed
 
     async def push_grants_snapshot(self, pc_id: uuid.UUID) -> bool:
         conn = self.agent_for(pc_id)

@@ -76,6 +76,8 @@ async def patch_pc(pc_id: str, request: Request, auth: Auth, db: DB, svc: Svc) -
             if await count_enabled_pcs(db, account.id, exclude=pc.id) >= plan.max_enabled_pcs:
                 raise ApiError(403, "DEVICE_LIMIT_REACHED")
         pc.enabled = bool(body["enabled"])
+        if pc.enabled:
+            pc.plan_disabled_at = None  # the owner's own choice replaces the plan's
         changed_enabled = True
         events.record(
             db,

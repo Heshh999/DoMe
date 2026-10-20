@@ -227,10 +227,11 @@ tests for validation, cancellation mid-run and a failing step; then record as in
 
 | Evidence now | Tag |
 | --- | --- |
-| Not released and not implemented (Phase E). Allowances are 0 in `plans.json`; `DOME_AI_ENABLED=false`; no provider adapter, no microphone code. The deterministic parser's injection tests are the only related evidence (`mobile-app/test/intents.test.ts` "injection resistance"). | not applicable (not released) |
+| Built (assistant step 1) but **not released**: `DOME_AI_ENABLED` is off in production. Allowances follow the protocol 1.3 model (`plans.json`: `ai_taste_requests` 10 on Free; `ai_window` / `ai_week` 30 / 120 on Pro and 90 / 300 on Pro Plus; refusal `AI_ALLOWANCE_EXHAUSTED{reason, resets_at}`). The provider adapter exists and is integration-tested with a scripted fake provider and an HTTP-level stub of the provider's API (`cloud-api/tests/test_assistant_*.py`); prompt-injection and invalid-output handling are integration-tested there; the phone's push-to-talk, permission and fallback paths are unit-tested (`mobile-app/test/assistant.test.ts`, `test/components/AssistantPage.test.tsx`) along with the deterministic parser's injection tests (`mobile-app/test/intents.test.ts`). | integration-tested / unit-tested; not live-tested against the real provider; not iPhone-tested |
 
-**Outstanding:** gated on a Phase E decision; the fallbacks must be tested on a real iPhone before any
-pricing copy mentions AI or voice.
+**Outstanding:** switching the assistant on is a founder decision; the fallbacks must be tested on a real
+iPhone before it is switched on for customers. Until then the website lists the AI allowances only with a
+"Not switched on yet" label (`GET /v1/plans` `ai_enabled`).
 
 ### Scenario 16 — Installer, startup-at-login, native-host registration, update verification, uninstall and supported-version negotiation are exercised on supported Windows/browser versions
 

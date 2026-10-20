@@ -100,14 +100,14 @@ def test_binding_window_and_tampering() -> None:
 
 
 def test_batches_are_stamped_with_the_version_that_defined_them() -> None:
-    """rules.command_version_stamping: a 1.2 phone still reaches a 1.1 PC, and a 1.0 stamp is refused."""
+    """rules.command_version_stamping: a 1.3 phone still reaches a 1.1 PC, and a 1.0 stamp is refused."""
     key, kid, record = _controller()
     payload = _batch([])
     assert payload["protocol_version"] == INPUT_BATCH_PROTOCOL_VERSION == "1.1"
     assert load_registry().get("input.session_start").since == INPUT_BATCH_PROTOCOL_VERSION
     env = sign_payload(key, dumps_compact(payload))  # type: ignore[arg-type]
     verify_and_parse_input_batch(env.to_dict(), lambda k: record if k == kid else None)
-    for stamp in ("1.0", "1.3", "2.1"):
+    for stamp in ("1.0", "1.4", "2.1"):
         env = sign_payload(key, dumps_compact({**payload, "protocol_version": stamp}))  # type: ignore[arg-type]
         with pytest.raises(ProtocolError) as exc:
             verify_and_parse_input_batch(env.to_dict(), lambda k: record if k == kid else None)

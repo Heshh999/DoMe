@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dome_protocol import load_registry
 
 from dome_agent import cli
 from dome_agent.control import ControlClient, ControlError
@@ -119,7 +120,7 @@ async def test_diagnostics_bundle_is_redacted(harness: AgentHarness) -> None:
 
 def test_cli_version_and_status_without_agent(settings: Settings, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["version"]) == 0
-    assert "protocol 1.2" in capsys.readouterr().out
+    assert f"protocol {load_registry().protocol_version}" in capsys.readouterr().out
     assert cli.main(["--state-dir", str(settings.state_dir), "status"]) == 0
     out = capsys.readouterr().out
     assert "not running" in out and "linked: False" in out

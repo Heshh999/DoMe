@@ -64,9 +64,10 @@ class AssistantConfig:
     reported_deadline_seconds: int  # what GET /v1/assistant tells the phone (it aborts 5 s after it)
     reserve_micro_usd: int
     ceiling_micro_usd: int
-    failed_turns_per_period: int
-    dev_grant_interpretations: int
+    failed_turns_per_period: int  # per weekly window (the variable keeps its name)
+    dev_grant_interpretations: int  # raises the 5-hour and the weekly window alike (development/test)
     dev_grant_cost_cap_cents: int
+    billing_enabled: bool = False  # a top-up balance is spendable only while top-ups can be bought
     turn_rate_limit: RateLimit | None = None  # None: the plan's ai_turn_rate_limit
     clock: Callable[[], datetime] = utcnow
     disconnect_poll_seconds: float = 0.5
@@ -86,15 +87,22 @@ class AssistantConfig:
             failed_turns_per_period=settings.ai_failed_turns_per_period,
             dev_grant_interpretations=settings.ai_dev_grant_interpretations,
             dev_grant_cost_cap_cents=settings.ai_dev_grant_cost_cap_cents,
+            billing_enabled=settings.billing_enabled,
         )
 
     def limits(self, plan: Plan) -> Limits:
-        """Effective per-account limits: max(plan value, development grant) (§1.5)."""
+        """Effective per-account limits (rules.ai_allowance): the plan's taste; window and week requests as
+        max(plan value, development grant) (§1.5); the cost cap likewise; top-ups spendable only on a plan that allows
+        them while billing is on and the assistant is configured, so nobody is sold requests they cannot use."""
         return Limits(
-            interpretations=max(plan.ai_interpretations_per_period, self.dev_grant_interpretations),
-            cost_cap_micro_usd=max(plan.ai_cost_cap_cents_per_period, self.dev_grant_cost_cap_cents)
-            * MICRO_USD_PER_CENT,
+            taste=plan.ai_taste_requests,
+            window_requests=max(plan.ai_window.requests, self.dev_grant_interpretations),
+            week_requests=max(plan.ai_week.requests, self.dev_grant_interpretations),
+            window_hours=plan.ai_window.length_hours,
+            week_hours=plan.ai_week.length_hours,
+            cost_cap_micro_usd=max(plan.ai_cost_cap_cents_per_week, self.dev_grant_cost_cap_cents) * MICRO_USD_PER_CENT,
             failed_turns=self.failed_turns_per_period,
+            topup_allowed=plan.ai_topup_allowed and self.billing_enabled and self.enabled,
         )
 
 
@@ -205,7 +213,7 @@ class AssistantService:
         reason: str | None = None
         if not self.configured:
             reason = "not_configured"
-        elif limits.interpretations == 0:
+        elif not limits.has_allowance:
             reason = "not_in_plan"
         elif view.exhausted is not None:
             reason = "allowance_exhausted"
@@ -226,7 +234,7 @@ class AssistantService:
 
     # ----- consent --------------------------------------------------------------------------------------------------
     async def give_consent(self, db: AsyncSession, account: Account) -> dict[str, Any]:
-        if not self.configured or self.config.limits(plan_for(account.plan)).interpretations == 0:
+        if not self.configured or not self.config.limits(plan_for(account.plan)).has_allowance:
             raise ApiError(403, "AI_NOT_AVAILABLE")
         account.assistant_consent_version = CONSENT_VERSION
         account.assistant_consented_at = utcnow()
@@ -302,7 +310,7 @@ class AssistantService:
         if account.assistant_consent_version != CONSENT_VERSION:
             raise ApiError(403, "AI_CONSENT_REQUIRED")
         limits = self.config.limits(plan)
-        if limits.interpretations == 0:
+        if not limits.has_allowance:
             raise ApiError(403, "AI_NOT_AVAILABLE")
         user_json = build_user_json(body, text, recent)
         client_turn_id = uuid.UUID(str(body["turn_id"]))
@@ -460,6 +468,7 @@ class AssistantService:
             "handoff": outcome.handoff,
             "steps": [dict(step) for step in outcome.steps],
             "charged": status == "answered",
+            "charged_from": reservation.source if status == "answered" else None,
             "allowance": view.body(),
         }
         return rest_response(self.validate_responses, "assistant_turn_response", response)  # type: ignore[no-any-return]

@@ -8,8 +8,8 @@ const RESULTS_TAB = { ...TAB, tab_token: "BBBBBBBBBBBBBBBBBBBBBB", script_attach
 
 describe("registry", () => {
   it("loads a consistent action registry", () => {
-    expect(PROTOCOL_VERSION).toBe("1.2");
-    expect(REGISTRY_VERSION).toBe("1.2");
+    expect(PROTOCOL_VERSION).toBe("1.3");
+    expect(REGISTRY_VERSION).toBe("1.3");
     const start = registry.get("input.session_start");
     expect(capabilitySatisfied(start, ["keyboard"])).toBe(true);
     expect(capabilitySatisfied(start, ["media"])).toBe(false);
@@ -74,7 +74,10 @@ describe("registry", () => {
 
   it("negotiates versions", () => {
     expect(protocolCompatible("1.0", ["1.2"])).toBe(true);
+    expect(protocolCompatible("1.2", ["1.3"])).toBe(true); // a 1.2 agent keeps talking to a 1.3 relay
+    expect(protocolCompatible("1.3", ["1.3"])).toBe(true);
     expect(protocolCompatible("1.3", ["1.2"])).toBe(false);
+    expect(protocolCompatible("1.4", ["1.3"])).toBe(false);
     expect(protocolCompatible("2.0", ["1.2"])).toBe(false);
     expect(protocolCompatible("x", ["1.0"])).toBe(false);
     expect(protocolCompatible("1.0\n", ["1.0"])).toBe(false);

@@ -1,0 +1,89 @@
+install prefix            /tmp/x
+source path               .
+C compiler                x86_64-w64-mingw32-gcc
+C library                 mingw64
+host C compiler           gcc
+host C library            glibc
+ARCH                      x86 (generic)
+big-endian                no
+runtime cpu detection     yes
+standalone assembly       yes
+x86 assembler             nasm
+MMX enabled               yes
+MMXEXT enabled            yes
+SSE enabled               yes
+SSSE3 enabled             yes
+AESNI enabled             yes
+CLMUL enabled             yes
+AVX enabled               yes
+AVX2 enabled              yes
+AVX-512 enabled           yes
+AVX-512ICL enabled        yes
+XOP enabled               yes
+FMA3 enabled              yes
+FMA4 enabled              yes
+i686 features enabled     yes
+CMOV is fast              yes
+EBX available             yes
+EBP available             yes
+debug symbols             yes
+strip symbols             yes
+optimize for size         no
+optimizations             yes
+static                    no
+shared                    yes
+network support           no
+threading support         w32threads
+safe bitstream reader     yes
+texi2html enabled         no
+perl enabled              yes
+pod2man enabled           yes
+makeinfo enabled          no
+makeinfo supports HTML    no
+experimental features     yes
+xmllint enabled           yes
+
+External libraries:
+libopus                 libvpx                  mediafoundation
+
+External libraries providing hardware acceleration:
+d3d11va
+
+Libraries:
+avcodec                 avformat                swscale
+avdevice                avutil
+avfilter                swresample
+
+Programs:
+
+Enabled decoders:
+wrapped_avframe
+
+Enabled encoders:
+h264_mf                 libopus                 libvpx_vp8
+
+Enabled hwaccels:
+
+Enabled parsers:
+
+Enabled demuxers:
+
+Enabled muxers:
+
+Enabled protocols:
+
+Enabled filters:
+aresample               format                  scale_d3d11
+color                   hwdownload              testsrc
+ddagrab                 scale
+
+Enabled bsfs:
+
+Enabled indevs:
+lavfi
+
+Enabled outdevs:
+
+License: LGPL version 2.1 or later
+
+WARNING: x86_64-w64-mingw32-pkg-config not found, library detection may fail.

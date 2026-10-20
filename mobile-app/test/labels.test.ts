@@ -85,6 +85,22 @@ describe("recovery steps and help categories", () => {
     expect(recoverySteps("FULLSCREEN_UNSUPPORTED", fromAgent)[0]).toBe("Try Maximize instead.");
   });
 
+  it("billing codes go to Billing help, with steps that point at Manage subscription", () => {
+    for (const code of ["BILLING_PAST_DUE", "BILLING_NOT_AVAILABLE", "BILLING_PROVIDER_ERROR", "ALREADY_SUBSCRIBED", "CHECKOUT_PROCESSING", "PLAN_NOT_AVAILABLE", "BILLING_NO_CUSTOMER", "TOPUP_NOT_ALLOWED", "TOPUP_BALANCE_LIMIT", "PLAN_SELECTION_CLOSED", "PLAN_SELECTION_INVALID", "ENTITLEMENT_PENDING", "DEVICE_LIMIT_REACHED"]) {
+      expect(supportCategoryFor(code)).toBe("billing");
+    }
+    expect(recoverySteps("BILLING_PAST_DUE")[0]).toBe("Open Billing and choose Manage subscription to update your card.");
+    expect(recoverySteps("ALREADY_SUBSCRIBED").join(" ")).toMatch(/Manage subscription/);
+    // a paid page being confirmed: never "nothing was charged" (the first payment may be real), never a second page
+    expect(recoverySteps("CHECKOUT_PROCESSING").join(" ")).toMatch(/Nothing more was charged/);
+    expect(recoverySteps("PLAN_SELECTION_CLOSED").join(" ")).toMatch(/under Devices/);
+    for (const code of ["TOPUP_NOT_ALLOWED", "TOPUP_BALANCE_LIMIT", "BILLING_NOT_AVAILABLE", "BILLING_PROVIDER_ERROR", "PLAN_NOT_AVAILABLE"]) expect(recoverySteps(code).join(" ")).toMatch(/nothing was charged/i);
+    expect(recoverySteps("PLAN_SELECTION_INVALID")).toHaveLength(2);
+    // the contract's messages are what the page shows
+    expect(errorMessage({ code: "TOPUP_NOT_ALLOWED" })).toBe("Top-ups are available on DoMe Pro and Pro Plus while the subscription is active.");
+    expect(errorMessage({ code: "ALREADY_SUBSCRIBED" })).toBe("You already have a subscription. Manage it from Billing.");
+  });
+
   it("window errors go to Apps help, search and extension errors to media help", () => {
     expect(supportCategoryFor("WINDOW_STATE_UNCHANGED")).toBe("apps");
     expect(supportCategoryFor("FULLSCREEN_UNSUPPORTED")).toBe("apps");

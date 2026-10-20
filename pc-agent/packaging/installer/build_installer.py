@@ -22,18 +22,33 @@ Steps:
 
 By default this is a DEVELOPMENT build: its Setup accepts ``/ApiUrl=https://...`` (a staging server) and
 ``/ExtensionId=<32 a-p>`` (a development browser add-on) and remembers a staging address for upgrades.
-``--release`` builds a Setup that accepts neither and always writes https://domeremote.com; it is refused
-while ``dome_agent.bridge.manifest.PRODUCTION_EXTENSION_IDS`` is empty (a release Setup would otherwise
-re-register whatever development add-on an earlier test install left on the PC). ``--pyinstaller-only``
-stops after step 3 (it also works on Linux, to check the spec).
+``--release`` builds a Setup that accepts neither and always writes https://domeremote.com. A release is
+never unsigned: ``--release`` needs ``--sign-artifact-signing`` or ``--sign-thumbprint`` and ``--publisher``.
+While ``dome_agent.bridge.manifest.PRODUCTION_EXTENSION_IDS`` is empty (no store listing yet) ``--release``
+also needs ``--without-browser-addon`` (``/DNoAddon``): Setup then registers no browser bridge and says
+that YouTube control in Chrome or Edge is not part of this version (a release Setup must never re-register
+a development add-on left on the PC by a test install). ``--pyinstaller-only`` stops after step 3 (it
+also works on Linux, to check the spec).
 
-Signing (not wired into CI yet): ``--sign-thumbprint`` (or ``SIGN_THUMBPRINT``) names a code-signing
-certificate already in the user's certificate store by its SHA-1 thumbprint; Inno then signs DoMe.exe,
-dome-native-host.exe, Setup and the uninstaller with signtool and an RFC 3161 timestamp, and this
-script checks every signature with ``signtool verify /pa``. No password ever appears on a command line.
+Signing goes through Inno Setup's ``SignTool`` directive, so one command signs DoMe.exe,
+dome-native-host.exe, Setup and the uninstaller:
+
+* ``--sign-artifact-signing METADATA_JSON --dlib Azure.CodeSigning.Dlib.dll``: Azure Artifact Signing
+  (formerly Trusted Signing) through signtool's ``/dlib``/``/dmdf`` with Microsoft's RFC 3161 timestamp
+  (the certificates live 3 days, so the timestamp is what keeps a signature valid). Authentication is
+  the dlib's own (in the release workflow: the Azure CLI login of an OIDC token). Used by
+  ``.github/workflows/release.yml``.
+* ``--sign-thumbprint`` (or ``SIGN_THUMBPRINT``): a certificate already in the user's certificate store,
+  by its SHA-1 thumbprint.
+
+After ISCC every signature is checked with ``signtool verify /pa /v`` (exit code 0 and "Successfully
+verified"); ``signed=true`` is reported only then. No password or key ever appears on a command line.
+A release build also writes ``latest.json`` (the version information the agent's update check and the
+website read; signed afterwards by ``packaging/release/release_files.py sign``) and ``RELEASE-NOTES.md``.
 
 Results for GitHub Actions: ``GITHUB_OUTPUT`` gets version, setup (absolute path), sha256, signed,
-build_tag and artifact_name; ``GITHUB_STEP_SUMMARY`` gets a short note.
+build_tag and artifact_name, and for a release also manifest, browser_addon and publisher;
+``GITHUB_STEP_SUMMARY`` gets a short note.
 """
 
 from __future__ import annotations
@@ -41,13 +56,18 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 PC_AGENT = Path(__file__).resolve().parents[2]
 REPO = PC_AGENT.parent
@@ -56,6 +76,14 @@ ISS = PC_AGENT / "packaging" / "installer" / "DoMe.iss"
 ICON = REPO / "brand" / "exports" / "windows" / "dome.ico"
 MANIFEST_MODULE = PC_AGENT / "dome_agent" / "bridge" / "manifest.py"
 TIMESTAMP_URL = "http://timestamp.digicert.com"
+# Azure Artifact Signing's timestamp service (vendor docs, how-to-signing-integrations, read 2026-10-20).
+ARTIFACT_SIGNING_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
+DEFAULT_REPO = "Heshh999/DoMe"
+REPO_RE = re.compile(r"\A[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}\Z")
+# SignTool for the Artifact Signing dlib must come from Windows SDK 10.0.22621 or later (the 20348 SDK is
+# not supported, per the same vendor page).
+MIN_SIGNTOOL_SDK_BUILD = 22621
+NO_ADDON_NOTE = "not included in this version (no store listing yet)"
 VERSION_RE = re.compile(r"\A\d+\.\d+\.\d+\Z")
 THUMBPRINT_RE = re.compile(r"\A[0-9A-Fa-f]{40}\Z")
 LABEL_RE = re.compile(r"[^A-Za-z0-9._/+-]")
@@ -192,12 +220,367 @@ def append(env_name: str, text: str) -> None:
             fh.write(text)
 
 
+@dataclass(frozen=True)
+class Signing:
+    """How Inno signs: the ``/Sdomesign=`` command and the BUILD-INFO.txt line once verified."""
+
+    kind: str  # "artifact-signing" or "thumbprint"
+    command: str
+    note: str
+
+
+def sign_tool_command(
+    kind: str,
+    *,
+    signtool: str,
+    thumbprint: str | None = None,
+    dlib: str | None = None,
+    metadata: str | None = None,
+    verbose: bool = False,
+) -> str:
+    """The value of ISCC's ``/Sdomesign=``. ``$q`` is a quote and ``$f`` the quoted file Inno signs."""
+    for path in (signtool, dlib or "", metadata or ""):
+        if "$" in path or '"' in path:
+            raise ValueError(f"a signing path may not contain $ or a quote: {path}")
+    if kind == "thumbprint":
+        if not thumbprint or not THUMBPRINT_RE.match(thumbprint):
+            raise ValueError("a 40-character SHA-1 thumbprint is needed")
+        return f"$q{signtool}$q sign /sha1 {thumbprint} /fd sha256 /tr {TIMESTAMP_URL} /td sha256 $f"
+    if kind == "artifact-signing":
+        if not dlib or not metadata:
+            raise ValueError("Artifact Signing needs the dlib and the metadata file")
+        noisy = " /v /debug" if verbose else ""
+        return (
+            f"$q{signtool}$q sign{noisy} /fd SHA256 /tr {ARTIFACT_SIGNING_TIMESTAMP_URL} /td SHA256 "
+            f"/dlib $q{dlib}$q /dmdf $q{metadata}$q $f"
+        )
+    raise ValueError(f"unknown signing kind: {kind}")
+
+
+def signtool_sdk_build(signtool: str) -> int | None:
+    """The Windows SDK build of a ``...\\Windows Kits\\10\\bin\\10.0.NNNNN.0\\x64\\signtool.exe`` path."""
+    match = re.search(r"[\\/]10\.0\.(\d{5})\.\d+[\\/]", signtool)
+    return int(match.group(1)) if match else None
+
+
+def iscc_command(
+    *,
+    iscc: str,
+    version: str,
+    build_number: str,
+    build_tag: str,
+    app: Path,
+    out_dir: Path,
+    release: bool,
+    no_addon: bool = False,
+    sign_command: str | None = None,
+) -> list[str]:
+    """The ISCC command line. A development build without signing is exactly what windows-installer.yml
+    has always run."""
+    cmd = [
+        iscc,
+        f"/DAppVersion={version}",
+        f"/DBuildNumber={build_number}",
+        f"/DBuildTag={build_tag} (build {build_number})",
+        f"/DAppFiles={app}",
+        f"/DOutputDir={out_dir}",
+        f"/DBrandIcon={ICON}",
+    ]
+    if not release:
+        cmd.append("/DDevParams")
+    if no_addon:
+        cmd.append("/DNoAddon")
+    if sign_command:
+        cmd += ["/DSign", f"/Sdomesign={sign_command}"]
+    cmd.append(str(ISS))
+    return cmd
+
+
+Runner = Callable[..., "subprocess.CompletedProcess[str]"]
+
+
+def verify_signatures(signtool: str, paths: Sequence[Path], *, run: Runner = subprocess.run) -> list[str]:
+    """Problems with the Authenticode signatures of ``paths`` (empty when ``signtool verify /pa /v`` exits
+    0 and says "Successfully verified" for every file)."""
+    problems: list[str] = []
+    for path in paths:
+        out = run([signtool, "verify", "/pa", "/v", str(path)], capture_output=True, text=True, errors="replace")
+        if out.returncode != 0 or "Successfully verified" not in (out.stdout or ""):
+            tail = ((out.stdout or "") + (out.stderr or "")).strip()[-600:]
+            problems.append(f"{path.name}: signtool verify exit code {out.returncode}: {tail}")
+        else:
+            print(f"signature verified: {path}")
+    return problems
+
+
+def manifest_urls(repo: str, version: str) -> tuple[str, str]:
+    """The installer's download address and the release page of ``vX.Y.Z``."""
+    base = f"https://github.com/{repo}/releases"
+    return f"{base}/download/v{version}/DoMe-Setup-{version}.exe", f"{base}/tag/v{version}"
+
+
+def write_manifest(
+    out_dir: Path,
+    *,
+    version: str,
+    setup: Path,
+    digest: str,
+    size: int,
+    publisher: str,
+    browser_addon: bool,
+    repo: str,
+    now: datetime,
+) -> Path:
+    """``latest.json`` (schema 1): what the agent's update check and the website's Download page read once
+    it is signed. ``published_at`` is the UTC time the build wrote it, just before it is signed (the GitHub
+    release appears minutes later). Keys sorted, two-space indent, one trailing newline: the signature
+    covers these exact bytes."""
+    url, page = manifest_urls(repo, version)
+    if setup.name != f"DoMe-Setup-{version}.exe":
+        raise ValueError(f"unexpected installer name {setup.name}")
+    obj: dict[str, Any] = {
+        "browser_addon": browser_addon,
+        "product": "DoMe for Windows",
+        "published_at": now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "publisher": publisher,
+        "release_page": page,
+        "schema": 1,
+        "sha256": digest,
+        "size": size,
+        "url": url,
+        "version": version,
+    }
+    path = out_dir / "latest.json"
+    path.write_bytes((json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8"))
+    return path
+
+
+def human_size(size: int) -> str:
+    return f"{size / 1_000_000:.0f} MB"
+
+
+# Smart App Control (Windows 11) checks every file Windows loads; only DoMe.exe, the browser helper, Setup and the
+# uninstaller are signed, not the bundled libraries (docs/SECURITY.md T12). The same words as the Download page.
+SMART_APP_CONTROL_NOTE = (
+    "- Not yet verified on Windows 11 PCs with Smart App Control on; if it blocks DoMe, do not turn it off. "
+    "See docs/WINDOWS_INSTALL.md (Smart App Control) for what to do."
+)
+
+
+def write_release_notes(
+    out_dir: Path,
+    *,
+    version: str,
+    setup: Path,
+    digest: str,
+    size: int,
+    publisher: str,
+    browser_addon: bool,
+    repo: str,
+    method: str = "Azure Artifact Signing",
+) -> Path:
+    """``RELEASE-NOTES.md``, the GitHub release's text (it stays editable after publishing: an acceptance
+    record from a real PC is added there by hand)."""
+    addon = (
+        "- YouTube control in Chrome or Edge: included.\n"
+        if browser_addon
+        else "- YouTube control in Chrome or Edge: **not included in this version.** Everything else in DoMe is "
+        "included; a later version adds it.\n"
+    )
+    text = (
+        f"# DoMe for Windows {version}\n\n"
+        f"- File: `{setup.name}` ({human_size(size)}, {size} bytes)\n"
+        f"- SHA-256: `{digest}`\n"
+        f"- Signed for Windows by **{publisher}** through {method}. Windows may still show "
+        "\"Windows protected your PC\" while this version is new: check that the publisher name is "
+        f"{publisher} before you continue. DoMe never asks you to turn off antivirus or other protection.\n"
+        f"{SMART_APP_CONTROL_NOTE}\n"
+        f"{addon}"
+        f"- How to install, check the file and uninstall: https://github.com/{repo}/blob/HEAD/docs/WINDOWS_INSTALL.md\n\n"
+        "## What was tested\n\n"
+        "Tested: install, upgrade, uninstall and the signatures on GitHub's Windows Server runner "
+        "(administrator, UAC off). Not tested on this run: any Windows 10/11 PC as a standard user.\n"
+    )
+    path = out_dir / "RELEASE-NOTES.md"
+    path.write_bytes(text.encode("utf-8"))
+    return path
+
+
+def build_info(
+    *,
+    setup: Path,
+    version: str,
+    build_tag: str,
+    build_number: str,
+    commit: str,
+    built_from: str,
+    source: str,
+    digest: str,
+    kind: str,
+    signed_note: str,
+    addon_note: str,
+) -> str:
+    return (
+        f"{setup.name}\nversion: {version}\nbuild: {build_tag} (build {build_number})\ncommit: {commit}\n"
+        f"{built_from}{source}sha256: {digest}\nkind: {kind}\nsignature: {signed_note}\n"
+        f"browser add-on: {addon_note}\n"
+        "note: every test build of the same version (X.Y.Z) can replace any other; this file tells them apart\n"
+    )
+
+
+def finish(
+    *,
+    out_dir: Path,
+    setup: Path,
+    app: Path,
+    version: str,
+    build_tag: str,
+    build_number: str,
+    commit: str,
+    release: bool,
+    no_addon: bool,
+    signing: Signing | None,
+    signtool: str,
+    publisher: str,
+    repo: str,
+    now: datetime,
+    run: Runner = subprocess.run,
+) -> int:
+    """Everything after ISCC: verify the signatures, then write SHA256SUMS, BUILD-INFO.txt and (release)
+    latest.json and RELEASE-NOTES.md, and report to GitHub Actions."""
+    if signing is not None:
+        problems = verify_signatures(signtool, [setup, app / "DoMe.exe", app / "dome-native-host.exe"], run=run)
+        if problems:
+            return fail("a signature did not verify, so nothing is reported as signed:\n  " + "\n  ".join(problems))
+    digest = sha256(setup)
+    size = setup.stat().st_size
+    (out_dir / "SHA256SUMS").write_bytes(f"{digest}  {setup.name}\n".encode("ascii"))
+    if release:
+        kind = "release build without the browser add-on" if no_addon else "release build"
+    else:
+        kind = "development build (accepts /ApiUrl= and /ExtensionId=)"
+    if signing is None:
+        signed_note = "NOT signed: Windows SmartScreen will warn (development build)"
+    else:
+        signed_note = signing.note
+    if no_addon:
+        addon_note = NO_ADDON_NOTE
+    elif release:
+        addon_note = f"included (production id {', '.join(production_extension_ids())})"
+    else:
+        addon_note = "development build (the add-on given by /ExtensionId=, or one already registered on the PC)"
+    merged = label(os.environ.get("GITHUB_SHA", ""))
+    built_from = (
+        f"built from: {merged} (GitHub's test merge of this pull request into its target branch)\n"
+        if merged and merged != commit
+        else ""
+    )
+    event, branch = label(os.environ.get("BUILD_EVENT", "")), label(os.environ.get("BUILD_BRANCH", ""))
+    source = f"source: {event or 'local build'}{f' on branch {branch}' if branch else ''}\n"
+    info = build_info(
+        setup=setup,
+        version=version,
+        build_tag=build_tag,
+        build_number=build_number,
+        commit=commit,
+        built_from=built_from,
+        source=source,
+        digest=digest,
+        kind=kind,
+        signed_note=signed_note,
+        addon_note=addon_note,
+    )
+    (out_dir / "BUILD-INFO.txt").write_bytes(info.encode("utf-8"))
+    print(info)
+    outputs = (
+        f"version={version}\nsetup={setup}\nsha256={digest}\nsigned={'true' if signing else 'false'}\n"
+        f"build_tag={build_tag}\nartifact_name=DoMe-Setup-{build_tag}\n"
+    )
+    summary = (
+        f"### DoMe Setup {build_tag} (build {build_number})\n\n"
+        f"- File: `{setup.name}`\n- SHA-256: `{digest}`\n- Kind: {kind}\n- Signature: {signed_note}\n"
+    )
+    if release:
+        common: dict[str, Any] = {
+            "version": version,
+            "setup": setup,
+            "digest": digest,
+            "size": size,
+            "publisher": publisher,
+            "browser_addon": not no_addon,
+            "repo": repo,
+        }
+        manifest = write_manifest(out_dir, now=now, **common)
+        method = "Azure Artifact Signing" if signing and signing.kind == "artifact-signing" else "a code-signing certificate"
+        write_release_notes(out_dir, method=method, **common)
+        outputs += f"manifest={manifest}\nbrowser_addon={'false' if no_addon else 'true'}\npublisher={publisher}\n"
+        summary += f"- Browser add-on: {addon_note}\n- Version information: `{manifest.name}` (not signed yet)\n"
+    append("GITHUB_OUTPUT", outputs)
+    append("GITHUB_STEP_SUMMARY", summary)
+    return 0
+
+
+def check_options(args: argparse.Namespace, production_ids: tuple[str, ...]) -> str | None:
+    """Why these options cannot build anything (None when they can)."""
+    thumbprint = str(args.sign_thumbprint).strip()
+    artifact = args.sign_artifact_signing
+    if thumbprint and artifact:
+        return "choose one signing option: --sign-artifact-signing or --sign-thumbprint, not both"
+    if thumbprint and not THUMBPRINT_RE.match(thumbprint):
+        return "--sign-thumbprint must be a 40-character SHA-1 thumbprint"
+    if artifact and not args.dlib:
+        return "--sign-artifact-signing needs --dlib (Azure.CodeSigning.Dlib.dll from Microsoft.ArtifactSigning.Client)"
+    if args.dlib and not artifact:
+        return "--dlib is only used with --sign-artifact-signing"
+    if not REPO_RE.match(args.repo):
+        return "--repo must be OWNER/REPO"
+    publisher = str(args.publisher or "")
+    if publisher and (len(publisher) > 200 or any(ord(ch) < 32 or ord(ch) == 127 or ch == '"' for ch in publisher)):
+        return "--publisher must be the certificate's name: at most 200 characters, no quotes or control characters"
+    if args.without_browser_addon and not args.release:
+        return "--without-browser-addon is only for --release (a development build takes /ExtensionId= instead)"
+    if not args.release or args.pyinstaller_only:
+        return None
+    if not thumbprint and not artifact:
+        return (
+            "--release needs --sign-artifact-signing or --sign-thumbprint: DoMe never publishes an unsigned release "
+            "build (development builds stay unsigned; drop --release)"
+        )
+    if not publisher.strip():
+        return "--release needs --publisher: the certificate's name, exactly as Windows will show it"
+    if args.without_browser_addon and production_ids:
+        return "--without-browser-addon: the production add-on id exists in PRODUCTION_EXTENSION_IDS; drop the flag"
+    if not production_ids and not args.without_browser_addon:
+        return (
+            "--release needs the production browser add-on id in dome_agent/bridge/manifest.py "
+            "(PRODUCTION_EXTENSION_IDS is empty). Without it a release Setup would keep re-registering a "
+            "development add-on left on the PC by a test install; or pass --without-browser-addon to ship a "
+            "release without YouTube control."
+        )
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--iscc", default=None, help="ISCC.exe (default: ISCC env, iscc on PATH, Inno Setup 6)")
     parser.add_argument("--sign-thumbprint", default=os.environ.get("SIGN_THUMBPRINT", ""))
+    parser.add_argument(
+        "--sign-artifact-signing",
+        metavar="METADATA_JSON",
+        default=None,
+        help="sign with Azure Artifact Signing: the dlib's metadata.json (endpoint, account, certificate profile)",
+    )
+    parser.add_argument("--dlib", default=None, help="Azure.CodeSigning.Dlib.dll (with --sign-artifact-signing)")
+    parser.add_argument("--sign-verbose", action="store_true", help="signtool /v /debug (noisy in Inno's log)")
     parser.add_argument("--signtool", default=None, help="signtool.exe (default: the newest Windows 10 SDK one)")
+    parser.add_argument("--publisher", default="", help="the certificate's name as Windows shows it (release)")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="OWNER/REPO for the release addresses in latest.json")
     parser.add_argument("--release", action="store_true", help="a Setup without /ApiUrl= and /ExtensionId=")
+    parser.add_argument(
+        "--without-browser-addon",
+        action="store_true",
+        help="release only, while there is no store listing: register no browser bridge (/DNoAddon)",
+    )
     parser.add_argument("--pyinstaller-only", action="store_true", help="stop after checking the PyInstaller folder")
     parser.add_argument("--skip-pyinstaller", action="store_true", help="reuse an existing dist/DoMe folder")
     parser.add_argument("--build-number", default=os.environ.get("GITHUB_RUN_NUMBER", "0"))
@@ -206,15 +589,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     version = read_version()
-    if args.release and not args.pyinstaller_only and not production_extension_ids():
-        return fail(
-            "--release needs the production browser add-on id in dome_agent/bridge/manifest.py "
-            "(PRODUCTION_EXTENSION_IDS is empty). Without it a release Setup would keep re-registering a "
-            "development add-on left on the PC by a test install."
-        )
+    problem = check_options(args, production_extension_ids() if args.release else ())
+    if problem:
+        return fail(problem)
     thumbprint = str(args.sign_thumbprint).strip()
-    if thumbprint and not THUMBPRINT_RE.match(thumbprint):
-        return fail("--sign-thumbprint must be a 40-character SHA-1 thumbprint")
     build_number = str(min(int(args.build_number), 65535)) if str(args.build_number).isdigit() else "0"
     commit = git_commit()
     build_tag = f"{version}+{commit[:7]}" if commit != "unknown" else version
@@ -235,61 +613,61 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = dist / "installer"
     shutil.rmtree(out_dir, ignore_errors=True)
     iscc = args.iscc or default_iscc()
-    cmd = [
-        iscc,
-        f"/DAppVersion={version}",
-        f"/DBuildNumber={build_number}",
-        f"/DBuildTag={build_tag} (build {build_number})",
-        f"/DAppFiles={app}",
-        f"/DOutputDir={out_dir}",
-        f"/DBrandIcon={ICON}",
-    ]
-    if not args.release:
-        cmd.append("/DDevParams")
     signtool = args.signtool or default_signtool()
-    if thumbprint:
-        sign = f"$q{signtool}$q sign /sha1 {thumbprint} /fd sha256 /tr {TIMESTAMP_URL} /td sha256 $f"
-        cmd += ["/DSign", f"/Sdomesign={sign}"]
-    cmd.append(str(ISS))
+    publisher = str(args.publisher).strip()
+    signing: Signing | None = None
+    if args.sign_artifact_signing:
+        sdk = signtool_sdk_build(signtool)
+        if sdk is not None and sdk < MIN_SIGNTOOL_SDK_BUILD:
+            return fail(f"{signtool} is from Windows SDK build {sdk}; Artifact Signing needs {MIN_SIGNTOOL_SDK_BUILD}+")
+        command = sign_tool_command(
+            "artifact-signing",
+            signtool=signtool,
+            dlib=str(Path(args.dlib).resolve()),
+            metadata=str(Path(args.sign_artifact_signing).resolve()),
+            verbose=args.sign_verbose,
+        )
+        who = f', publisher "{publisher}"' if publisher else ""
+        signing = Signing("artifact-signing", command, f"Azure Artifact Signing{who}, timestamped")
+    elif thumbprint:
+        command = sign_tool_command("thumbprint", signtool=signtool, thumbprint=thumbprint)
+        who = f', publisher "{publisher}"' if publisher else ""
+        signing = Signing("thumbprint", command, f"signed with certificate {thumbprint.upper()}{who}, timestamped")
+    if signing is not None:
+        print(f"signtool: {signtool}")
+    cmd = iscc_command(
+        iscc=iscc,
+        version=version,
+        build_number=build_number,
+        build_tag=build_tag,
+        app=app,
+        out_dir=out_dir,
+        release=args.release,
+        no_addon=args.without_browser_addon,
+        sign_command=signing.command if signing else None,
+    )
     print("+ " + " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
     setup = out_dir / f"DoMe-Setup-{version}.exe"
     if not setup.is_file():
         return fail(f"ISCC finished but {setup} does not exist")
-    if thumbprint:
-        for signed_file in (setup, app / "DoMe.exe", app / "dome-native-host.exe"):
-            subprocess.run([signtool, "verify", "/pa", str(signed_file)], check=True)
-    digest = sha256(setup)
-    (out_dir / "SHA256SUMS").write_bytes(f"{digest}  {setup.name}\n".encode("ascii"))
-    kind = "release build" if args.release else "development build (accepts /ApiUrl= and /ExtensionId=)"
-    signed_note = "signed" if thumbprint else "NOT signed: Windows SmartScreen will warn (development build)"
-    merged = label(os.environ.get("GITHUB_SHA", ""))
-    built_from = (
-        f"built from: {merged} (GitHub's test merge of this pull request into its target branch)\n"
-        if merged and merged != commit
-        else ""
+    return finish(
+        out_dir=out_dir,
+        setup=setup,
+        app=app,
+        version=version,
+        build_tag=build_tag,
+        build_number=build_number,
+        commit=commit,
+        release=args.release,
+        no_addon=args.without_browser_addon,
+        signing=signing,
+        signtool=signtool,
+        publisher=publisher,
+        repo=args.repo,
+        now=datetime.now(UTC),
     )
-    event, branch = label(os.environ.get("BUILD_EVENT", "")), label(os.environ.get("BUILD_BRANCH", ""))
-    source = f"source: {event or 'local build'}{f' on branch {branch}' if branch else ''}\n"
-    info = (
-        f"{setup.name}\nversion: {version}\nbuild: {build_tag} (build {build_number})\ncommit: {commit}\n"
-        f"{built_from}{source}sha256: {digest}\nkind: {kind}\nsignature: {signed_note}\n"
-        "note: every test build of the same version (X.Y.Z) can replace any other; this file tells them apart\n"
-    )
-    (out_dir / "BUILD-INFO.txt").write_bytes(info.encode("ascii"))
-    print(info)
-    append(
-        "GITHUB_OUTPUT",
-        f"version={version}\nsetup={setup}\nsha256={digest}\nsigned={'true' if thumbprint else 'false'}\n"
-        f"build_tag={build_tag}\nartifact_name=DoMe-Setup-{build_tag}\n",
-    )
-    append(
-        "GITHUB_STEP_SUMMARY",
-        f"### DoMe Setup {build_tag} (build {build_number})\n\n"
-        f"- File: `{setup.name}`\n- SHA-256: `{digest}`\n- Kind: {kind}\n- Signature: {signed_note}\n",
-    )
-    return 0
 
 
 if __name__ == "__main__":

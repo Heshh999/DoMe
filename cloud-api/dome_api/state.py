@@ -15,6 +15,7 @@ from dome_api.settings import Settings
 
 if TYPE_CHECKING:
     from dome_api.assistant.service import AssistantService
+    from dome_api.billing.service import BillingService
     from dome_api.relay.manager import ConnectionManager
     from dome_api.relay.router import RateLimiters
 
@@ -43,3 +44,5 @@ class Services:
     support_ticket_limiter: SlidingWindowLimiter
     # the AI assistant (docs/design/assistant.md): config and provider are replaceable for tests
     assistant: AssistantService
+    # billing (docs/BILLING.md): the only writer of accounts.plan; config and provider are replaceable for tests
+    billing: BillingService

@@ -2,7 +2,9 @@
 
 Issued only for plans that carry one (``Plan.issues_entitlement_assertion``); the default plan
 returns ``None`` and the agent treats that as "Free immediately". Claims are validated against
-``schemas/entitlement.schema.json`` before signing so the agent's verifier and ours agree.
+``schemas/entitlement.schema.json`` before signing so the agent's verifier and ours agree. The ``plan``
+claim is ``Plan.entitlement_plan_id`` (``pro`` for every paid plan: the schema's enum is unchanged by
+protocol 1.3 and Pro Plus has the same PC-facing limits as Pro).
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ class EntitlementSigner:
             "iss": self.issuer,
             "sub": str(account_id),
             "pc": str(pc_id),
-            "plan": plan.id,
+            "plan": plan.entitlement_plan_id,
             "limits": plan.entitlement_limits(),
             "iat": iat,
             "exp": iat + self.lifetime,

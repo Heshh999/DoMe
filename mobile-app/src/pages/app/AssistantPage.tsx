@@ -16,6 +16,7 @@ import { TalkButton, type TalkState } from "../../components/TalkButton.tsx";
 import { Button, inputClass, Notice } from "../../components/ui.tsx";
 import { VoiceNoticeSheet } from "../../components/VoiceNoticeSheet.tsx";
 import { aiErrorText, aiUsable, MAX_TEXT } from "../../lib/assistant.ts";
+import { requestsLeft, warningText } from "../../lib/billing.ts";
 import type { RecognitionProblem } from "../../lib/speech.ts";
 import { useAssistantStore, type ChatChip } from "../../store/assistant.ts";
 import { useDevicesStore } from "../../store/devices.ts";
@@ -232,6 +233,9 @@ export function AssistantPage() {
   const aiOn = consented && prefs.useAi;
   const exhausted = aiBlocked?.code === "AI_ALLOWANCE_EXHAUSTED" || aiBlocked?.code === "AI_SPEND_LIMIT_REACHED" || (aiOn && (status?.unavailable_reason === "allowance_exhausted" || status?.unavailable_reason === "spend_limit"));
   const banner = !exhausted ? null : aiBlocked ? aiErrorText(aiBlocked, allowance) : status?.unavailable_reason === "spend_limit" ? aiErrorText({ code: "AI_SPEND_LIMIT_REACHED" }, allowance) : aiErrorText({ code: "AI_ALLOWANCE_EXHAUSTED", ...(allowance?.exhausted ? { reason: allowance.exhausted } : {}) }, allowance);
+  // from 80 % of the 5-hour window or the week: a quiet warning with the refresh time (lib/billing.ts)
+  const warning = !exhausted && aiOn && allowance ? warningText(allowance) : null;
+  const left = allowance ? requestsLeft(allowance) : null;
 
   return (
     <div className="space-y-4">
@@ -243,10 +247,10 @@ export function AssistantPage() {
             <p className="mt-0.5 truncate text-[13px] text-text-muted">{prefs.butlerName}, your AI butler</p>
           </div>
         </div>
-        {aiOn && allowance ? (
-          <Link to="/app/settings" className="tap inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left: open Settings`}>
+        {aiOn && allowance && left !== null ? (
+          <Link to="/app/settings" className="tap inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3 text-xs font-semibold" aria-label={allowance.exhausted || exhausted ? "AI limit reached: open Settings" : `${left} AI requests left: open Settings`}>
             <Icon name="sparkle" size={14} className="text-accent" />
-            {allowance.exhausted || exhausted ? "Limit reached" : `${Math.max(0, allowance.limit - allowance.used)} AI requests left`}
+            {allowance.exhausted || exhausted ? "Limit reached" : `${left} AI requests left`}
           </Link>
         ) : null}
       </header>
@@ -254,6 +258,10 @@ export function AssistantPage() {
       {banner ? (
         <Notice tone="warning" title="AI butler paused">
           <p>{banner}</p>
+        </Notice>
+      ) : warning ? (
+        <Notice tone="warning" title="AI requests running low">
+          <p>{warning}</p>
         </Notice>
       ) : null}
 

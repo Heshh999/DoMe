@@ -27,7 +27,11 @@ figure on the vendor page before relying on it; prices change.
   phones, PWA assets) is.
 - Identity is delegated to an OIDC issuer (Auth0 or Keycloak); billing to Stripe. Both scale with
   accounts, not with commands.
-- There is no AI cost until the Phase E gate (both plan allowances are 0).
+- AI costs nothing **today** only because the assistant is switched off in production
+  (`DOME_AI_ENABLED` is not set). The protocol 1.3 plan contract grants AI requests (Free a one-time
+  taste of 10; Pro 30 per 5-hour window and 120 a week; Pro Plus 90 and 300), the AI provider is chosen,
+  and each plan carries a weekly cost cap (`ai_cost_cap_cents_per_week`: 100 / 500 / 1,000 cents). At
+  the cap the AI cost of one paid account exceeds its price (§8).
 - Manual touchpad/keyboard (protocol 1.1, Free) is the only **streaming** traffic. While a phone
   is actively controlling the cursor, the relay receives and verifies one small signed batch per
   animation-frame flush, and forwards it to the PC. It stores nothing per batch. Its cost is relay
@@ -54,7 +58,7 @@ figure on the vendor page before relying on it; prices change.
 | Email: Resend | Free 3,000/mo (100/day); Pro $20/mo for 50,000 | [resend.com/pricing](https://resend.com/pricing.md) | — |
 | Email: Postmark | Free 100/mo; Basic $15/mo for 10,000 (+$1.80/1k) | [postmarkapp.com](https://postmarkapp.com/blog/new-we-made-pro-and-platform-tier-features-accessible-to-lower-volume-email-plans) via [automationatlas](https://automationatlas.io/answers/postmark-pricing-explained-2026/) | Alternative, not in base case |
 | Email: Amazon SES | $0.10 per 1,000 outbound; 3,000/mo free in the first year | [aws.amazon.com/ses/pricing](https://aws.amazon.com/ses/pricing/) | Alternative |
-| Windows code signing | Azure Trusted Signing (Artifact Signing) ≈ $9.99/mo (US/CA/EU/UK organisations; individuals US/CA only); OV certificate $129–300/yr; EV $349–400+/yr | [learn.microsoft.com code-signing-options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options) and [codenote.net](https://codenote.net/en/posts/windows-desktop-app-code-signing-distribution-japan-2026/) | Microsoft states EV no longer buys immediate SmartScreen reputation |
+| Windows code signing | Azure Artifact Signing (formerly Trusted Signing; renamed January 2026): **Basic $9.99/mo**, 5,000 signatures, $0.005 each beyond; Premium $99.99/mo (100,000 signatures, 10 certificate profiles); billed from account creation, **not pro-rated**; Public Trust for individuals in the US/CA, organizations in 12 listed countries (US, CA, EU, UK, AU, NZ, JP, KR, SG, CH, NO, IL); identity validation 1–20 business days. A DoMe release uses 4 signatures. OV certificate $129–300/yr and EV $349–400+/yr remain the alternatives | [Artifact Signing pricing](https://azure.microsoft.com/en-us/pricing/details/artifact-signing/), [devclass on the rename and prices](https://devclass.com/2026/01/14/code-signing-windows-apps-may-be-easier-and-more-secure-with-new-azure-artifact-service/), [quickstart](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart), [FAQ](https://learn.microsoft.com/en-us/azure/artifact-signing/faq), [SmartScreen reputation](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation), [code-signing-options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options); looked up 2026-10-20 (Microsoft pages read through their public sources on github.com) | Microsoft states EV no longer buys SmartScreen reputation; plan: Basic, individual identity (`docs/LAUNCH_SETUP.md` §17) |
 | Chrome Web Store | $5 one-time developer registration | [developer.chrome.com register](https://developer.chrome.com/docs/webstore/register) (amount via [spcast.eu](https://www.spcast.eu/en/browser-plugin/registration-in-the-chrome-web-store-developer-dashboard)) | One-time; not in monthly tables |
 | Microsoft Edge Add-ons | Free registration | [learn.microsoft.com create-dev-account](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/create-dev-account) | — |
 | Apple | Not applicable: the phone client is a PWA, no App Store membership | — | A native app later would need the developer programme |
@@ -102,10 +106,12 @@ $5.92, Managed Postgres) are the planning model for growth, not the launch confi
 | Input | Value | Basis |
 | --- | --- | --- |
 | Monthly active account (MAA) | An account whose agent connected at least once in the month | definition |
-| Pro price | $5.99/month, $49.99/year | `plans.json pricing_defaults`, experiment only |
+| Pro price | Scenarios below use the 2026-10-08 inputs $5.99/month, $49.99/year. **Launch prices (2026-10-20, `plans.json pricing_defaults`): Pro $9.99/month, $99.99/year; Pro Plus $24.99/month, $249.99/year; AI top-up $2.99 for 100 requests.** All tax-inclusive (founder decision), so sales tax, if Stripe Tax is ever enabled, comes out of these amounts | `plans.json pricing_defaults`; ARPA, contribution, scenarios and the calculator are **not yet recomputed** at the launch prices |
 | Interval mix | 70 % monthly, 30 % annual | assumption |
 | Recognised revenue per Pro account (ARPA) | 0.7 × 5.99 + 0.3 × 49.99 / 12 = **$5.44/month** | computed |
-| Payment fees per Pro account | monthly: 5.99 × (2.9 % + 0.7 %) + 0.30 = $0.516; annual: (49.99 × 3.6 % + 0.30) / 12 = $0.175; blended **$0.41/month** | computed from the Stripe row |
+| Payment fees per Pro account | at $5.99/$49.99: monthly 5.99 × (2.9 % + 0.7 %) + 0.30 = $0.516; annual (49.99 × 3.6 % + 0.30) / 12 = $0.175; blended **$0.41/month**. At the launch price $9.99/$99.99: monthly 9.99 × 3.6 % + 0.30 = $0.66; annual (99.99 × 3.6 % + 0.30) / 12 = $0.32; blended (70/30) **$0.56/month** | computed from the Stripe row (card 2.9 % + $0.30, Billing 0.7 %) |
+| Payment fees per Pro Plus account | monthly 24.99 × 3.6 % + 0.30 = $1.20; annual (249.99 × 3.6 % + 0.30) / 12 = $0.77; blended (70/30) **$1.07/month** | computed from the Stripe row |
+| Payment fee per AI top-up | one-off Checkout payment, no Billing fee: 2.99 × 2.9 % + 0.30 = **$0.39**, about 13 % of the $2.99 | computed from the Stripe row; the $0.30 fixed part dominates at this price |
 | Refund allowance | 2 % of recognised revenue ($0.11/Pro/month) | assumption |
 | Dispute allowance | 0.2 % of Pro accounts per month × $15 = $0.03/Pro/month | assumption |
 | PC online hours | 12 h/day per enabled PC; Pro accounts average 1.5 PCs | assumption |
@@ -117,7 +123,7 @@ $5.92, Managed Postgres) are the planning model for growth, not the launch confi
 | Support | 2 % of MAA contact support monthly, 10 minutes each: founder time, not cash (100 MAA → 0.3 h; 1,000 → 3.3 h; 10,000 → 33 h/month) | assumption |
 | Staging | one 1 GB machine, kept running | assumption; could be stopped between deploys |
 | Monitoring | Grafana Cloud free + Better Stack free at every tier; Sentry Developer free at 100 MAA, Team $26 from 1,000 | assumption |
-| AI | $0 (allowances are 0 until Phase E). Sensitivity in §8 | `plans.json` |
+| AI | $0 today: the assistant is off in production. Once switched on, between the real per-request cost (**not yet verified**: not priced against the provider's bill) and the weekly cap per account: Free 100 cents a week (only the 10-request taste, once), Pro 500 cents ≈ $21.7/month, Pro Plus 1,000 cents ≈ $43.3/month at the cap. Sensitivity in §8 | `plans.json` (protocol 1.3) |
 | Touchpad/keyboard batch rate cap | 40 batches/s per phone, burst 80; identical on Free and Pro | `plans.json input_rate_limit`, `version.json limits.input_batches_per_second` |
 | Typical batch rate during active use | 10–20 batches/s while a finger is moving or text is being typed; about 1/s (empty keepalive) while the touchpad screen is open and idle; 0 when the screen is closed | assumption: the PWA flushes at most once per animation frame (up to 60 Hz on iPhone) and sends a keepalive about every second (`mobile-app/src/lib/input.ts`); active-use rate **not measured on a device** |
 | Input frame size | ≈ 0.65 KB keepalive, ≈ 0.7 KB one motion event, ≈ 0.77 KB motion + click, ≈ 3.6 KB for a full 64-event batch; relay → agent adds ≈ 0.1 KB of routing metadata | computed on 2026-10-09 by building and signing frames with `shared/python` (`build_input_batch_payload`, `sign_payload`); compact JSON, ES256 envelope |
@@ -157,7 +163,7 @@ plan, IdP MAU), which is why the fixed tiers above differ.
 
 | Component | $/month |
 | --- | --- |
-| Payment fees (blended) | 0.41 |
+| Payment fees (blended, at the 2026-10-08 $5.99 input; launch-price figures in §3) | 0.41 |
 | Refund allowance | 0.11 |
 | Dispute allowance | 0.03 |
 | Egress/database budget (up to 5 PCs) | 0.01 |
@@ -268,11 +274,18 @@ responsiveness is never a paid lever, so touchpad traffic is a Free-account cost
   $4.17 and fees to $0.18. Contribution per Pro account stays between $3.9 and $5.4.
 - **Refunds and disputes.** Doubling both allowances costs $0.14/Pro/month; at 1,000 Pro accounts
   that is $140/month.
-- **AI (Phase E, if released).** Provider prices are not modelled here because no provider is chosen.
-  A fully used allowance of 250 interpretations + 30 transcription minutes is likely to cost well
-  under $1 per Pro account per month at current list prices of mainstream providers, but that is an
-  unsourced assumption and must be priced with the chosen provider before any allowance is promised.
-  The operator spending ceiling in `docs/BILLING.md` §10 bounds the downside.
+- **AI (protocol 1.3 allowances; off in production today).** The provider is chosen and the plan
+  contract grants AI requests: Free a one-time taste of 10; Pro 30 per 5-hour window, up to 120 a week;
+  Pro Plus 90 and 300. Each plan has a weekly cost cap (`ai_cost_cap_cents_per_week`): Free 100 cents,
+  Pro 500 cents (≈ $21.7 a month at 52/12 weeks), Pro Plus 1,000 cents (≈ $43.3 a month). **At the cap
+  the worst-case AI cost of one paid account per month is above its price** ($9.99 Pro, $24.99 Pro Plus)
+  before payment fees and hosting, so a heavy user at the cap is a loss. The caps are a safety backstop,
+  not the expected cost: the expected cost per request, and therefore per account, is **not yet
+  verified** (not priced against a real provider bill; the assistant has never run in production). Before
+  the assistant is switched on for paying customers, price a typical request with the provider, then
+  either lower the weekly caps to keep the worst case below the price or accept the loss knowingly. The
+  operator's monthly spending ceiling (`DOME_AI_MONTHLY_CEILING_CENTS`, `docs/BILLING.md` §10) bounds the
+  total across all accounts; it does not protect the margin of one account.
 - **Free-tier dependence.** The base case uses free tiers for monitoring and email at small scale.
   Removing every free tier (Sentry Team $26, Resend Pro $20, Better Stack Responder $29) adds $75/month
   at 100 MAA. Free tiers are convenient, not a plan.

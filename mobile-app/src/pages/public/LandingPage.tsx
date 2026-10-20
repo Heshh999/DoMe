@@ -6,6 +6,7 @@ import { Film } from "../../components/film/Film.tsx";
 import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { FREE_SCREEN_VIEW_MINUTES, planById, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { paidPlansLine, useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 
 const FREE = planById("free");
 const PRO = planById("pro");
@@ -173,6 +174,7 @@ function PhonePicture() {
 const SECTION = "mx-auto max-w-6xl px-5 lg:px-8";
 
 export function LandingPage() {
+  const availability = useBillingAvailability();
   return (
     <div>
       <section className="relative overflow-x-clip">
@@ -318,7 +320,7 @@ export function LandingPage() {
               Free today. Pro and Pro Plus when they’re worth it.
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">
-              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, unlimited Screen view when it ships, and more AI butler time. Both arrive at paid launch.
+              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, unlimited Screen view when it ships, and more AI butler time. {paidPlansLine(availability)}
             </p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">

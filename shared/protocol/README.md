@@ -85,6 +85,28 @@ builder (`buildCommandPayload`) stamps `since`; `buildConfirmationPayload` requi
 `commandProtocolVersion`. Validation error messages name the path and the failed keyword, never
 the offending value.
 
+## Protocol 1.3 — plans and billing (2026-10-20)
+
+Additive MINOR: three plans (Free, Pro, Pro Plus), Stripe billing bodies for the PWA, and AI allowances measured in a
+5-hour and a weekly window instead of a calendar month. No frame, signed payload, action, result or bridge op changed,
+so 1.2 agents and extensions are unaffected: they announce ≤ 1.2, the entitlement assertion's `plan` claim stays `pro`
+for every paid plan (`entitlement.schema.json` is unchanged) and cloud-api answers `plan: "pro"` in
+`agent_entitlement_response` for Pro Plus too. Deploy the cloud (relay + PWA) first. Explained in `docs/BILLING.md`.
+
+| Addition or change | Where |
+| --- | --- |
+| `protocol_version` and `registry_version` 1.3 (no action changes) | `version.json`, `actions.json` |
+| Plan `pro_plus`; per plan `ai_taste_requests`, `ai_window{hours, requests}`, `ai_week{days, requests}`, `ai_topup_allowed`, `ai_cost_cap_cents_per_week` (replacing `ai_interpretations_per_period` and `ai_cost_cap_cents_per_period`); `pricing_defaults{currency, plans{pro, pro_plus}, topup}` is the single source of the displayed prices | `plans.json` |
+| Rule `ai_allowance`: one AI request is one charged turn; windows start at the first request while none is open; window, then week, then top-up balance; `AI_ALLOWANCE_EXHAUSTED{reason, resets_at}` | `version.json → rules` |
+| `plan_id` gains `pro_plus`; new `paid_plan_id`, `billing_interval`, `billing_mode`, `price_pair`, `pricing`, `allowance_bucket`, `subscription_state` | `schemas/rest.schema.json` |
+| Changed bodies: `plans_response` (`pricing`, `billing_enabled`, `billing_mode`, `ai_enabled`: whether the AI assistant can be used, so the website labels the AI allowances honestly), `assistant_allowance` (kind `none`/`taste`/`windows`, `taste`, `window`, `week`, `topup`, `exhausted`, `resets_at`, `warn_at_percent` 80), `assistant_turn_response.charged_from` | `schemas/rest.schema.json` |
+| New PWA bodies: `billing_checkout_request`, `billing_checkout_response`, `billing_portal_response`, `billing_webhook_response`, `billing_status_response` (with `checkout_plans`: the paid plans buyable now; no `pro_plus` while the assistant is off), `plan_selection_request`, `plan_selection_response` | `schemas/rest.schema.json` |
+| Errors `BILLING_NOT_AVAILABLE`, `BILLING_PROVIDER_ERROR`, `BILLING_WEBHOOK_INVALID`, `ALREADY_SUBSCRIBED`, `CHECKOUT_PROCESSING` (a page is being created, or was paid and is being confirmed: never a second page), `PLAN_NOT_AVAILABLE` (Pro Plus while the assistant is off), `BILLING_NO_CUSTOMER`, `TOPUP_NOT_ALLOWED`, `TOPUP_BALANCE_LIMIT`, `PLAN_SELECTION_CLOSED`, `PLAN_SELECTION_INVALID` (REST only); `AI_ALLOWANCE_EXHAUSTED` reworded (no "month") | `errors.json` |
+| Allowance arithmetic and refresh wording cases shared by cloud-api and the phone | `fixtures/ai-window-cases.json` |
+
+Library helpers: no helper changes. `PlanId` in `shared/ts` admits `pro_plus` through the regenerated
+`src/generated/rest.ts`; `Registry.plan()` in `shared/python` reads the new plan as any other.
+
 ## AI assistant, step 1 — REST additions without a version bump (2026-10-11)
 
 PWA-only endpoints (`docs/PROTOCOL.md` §19, design brief `docs/design/assistant.md`); `protocol_version`

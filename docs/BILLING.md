@@ -1,302 +1,364 @@
 # DoMe billing, entitlements and customer lifecycle
 
-Status: **design for Phase C, written against the schema that cloud-api's migration 0001 already
-creates.** The parts marked *implemented* exist in the repository today and are integration-tested
-on Linux; everything marked *planned* is not written yet. No Stripe call, webhook handler or
-subscription state transition exists in the code. Prices and limits are design assumptions from
-`shared/protocol/plans.json`, not validated pricing.
+Status (2026-10-20): **built in cloud-api and tested against an in-memory stand-in for Stripe; never run
+against Stripe itself.** Checkout, the Customer Portal, AI top-ups, the webhook, the subscription state
+machine, grace, the downgrade selection, the reconciler and the account-deletion cancellation function exist
+in `cloud-api/dome_api/billing/` and are integration-tested on Linux with real PostgreSQL and the fake provider
+(`cloud-api/dome_api/billing/fake_provider.py`). The Stripe adapter is unit-tested without the network. Nothing
+has been sandbox-provider-tested: the founder's first Stripe test-mode run on staging is the next step
+(`docs/LAUNCH_SETUP.md` "Stripe (payments)"). Production has no Stripe values, so billing there is **off**:
+nothing can be bought and everyone stays on Free.
 
-Evidence tags used below: `unit-tested`, `integration-tested` (Linux, real PostgreSQL, real OIDC
-through `tools/dev-idp`, simulated agents/controllers), `sandbox-provider-tested` (none yet),
-`not yet verified`.
+Evidence tags used below: `unit-tested`, `integration-tested (fake provider)` (Linux, real PostgreSQL, real
+OIDC through `tools/dev-idp`, simulated agents/phones, `FakeStripe` signing its deliveries exactly the way
+Stripe does), `sandbox-provider-tested` (none yet), `not implemented`, `not yet verified`.
 
-## 1. What exists now versus what is planned
+## 1. What exists now
 
-| Area | Implemented now | Evidence | Planned (Phase C) |
-| --- | --- | --- | --- |
-| Plan catalogue | `shared/protocol/plans.json` loaded by `cloud-api/dome_api/plans.py`, the only place limits are read; `GET /v1/plans` returns plans, display prices and `billing_enabled` (currently `false`) | integration-tested | Same file; Stripe price ids come from `DOME_STRIPE_PRICE_MONTHLY` / `DOME_STRIPE_PRICE_ANNUAL` |
-| `accounts.plan` | Column exists, defaults to `free`; nothing in the code changes it (tests switch it with SQL) | integration-tested | Written only by the subscription state machine |
-| Database tables | `subscriptions`, `billing_events`, `usage_periods`, `layouts`, `routines`, `support_diagnostics`, `pending_deletions`, `operator_users`, `operator_audit` are created empty by migration 0001 (`cloud-api/dome_api/db/alembic/versions/0001_initial.py`) | integration-tested (migration runs in every test session; `alembic check` clean) | Rows written by Phase C code |
-| Device limits | `max_enabled_pcs` enforced transactionally at link approval and PC enable (`SELECT … FOR UPDATE` on the account row); `max_controllers` enforced transactionally at pairing claim | integration-tested | Re-evaluated on every plan change |
-| Plan-disabled devices | `grants_snapshot.pc_enabled` and per-controller `status: plan_disabled` computed per `downgrade_policy.default_selection` (`most_recently_seen`); relay refuses routing with `PC_PLAN_DISABLED` / `CONTROLLER_PLAN_DISABLED`; agent refuses independently; local grants are never revoked | integration-tested (relay), unit-tested (agent) | Explicit customer selection endpoint and the 14-day window |
-| Entitlement assertions | EdDSA (Ed25519) JWS, 1 h lifetime, claims per `schemas/entitlement.schema.json`, bound to `account_id` + `pc_id`, served by `POST /v1/agent/entitlement` and inside every `grants_snapshot` for plans that issue one; JWKS at `/.well-known/dome-jwks.json` | integration-tested (cloud-api), unit-tested (agent verification, 80 % refresh, 72 h grace only on network error/5xx) | Issued for `pro` once the state machine sets the plan |
-| Agent-side gate | Routine steps (`origin.kind == "routine"`) require `routine_allowed` and a verified assertion with `routines: true`, else `ENTITLEMENT_REQUIRED`; "editing client state cannot unlock Pro" is tested end to end | integration-tested | Layout/routine CRUD that produces such steps |
-| PWA | Billing page shows the current plan, limits and the planned price with "not available yet"; Routines page is a disabled preview | unit-tested (component tests) | Checkout button, portal link, pending-activation state, downgrade selection UI |
-| Stripe | `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET`, price-id variables are declared and validated as settings; nothing uses them | — | Checkout session, Customer Portal session, webhook endpoint, reconciliation job |
-| Usage periods | Table only; AI allowances are `0` in both plans | — | Phase E, after the AI release gate |
-| Operator interface | Tables only (`operator_users`, `operator_audit`) | — | Phase C/D |
-| Account deletion | Not implemented (no endpoint) | — | Deletion flow with `pending_deletions` fallback |
-
-Nothing below has been sandbox-provider-tested. The first Phase C task is to run the lifecycle
-against Stripe test mode with test clocks and record the evidence in `docs/ACCEPTANCE.md`.
+| Area | What it does | Evidence |
+| --- | --- | --- |
+| Plan catalogue | `shared/protocol/plans.json` (protocol 1.3): Free, Pro, Pro Plus; `pricing_defaults` is the only place display prices live; `GET /v1/plans` returns plans, `pricing`, `billing_enabled`, `billing_mode` and `ai_enabled` (whether the assistant can be used, so the website labels AI allowances honestly) | integration-tested (`test_entitlement_and_misc.py`, `test_billing_settings.py::test_plans_endpoint_reports_billing_mode`) |
+| Configuration | Seven values switch billing on: `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET`, `DOME_STRIPE_PRICE_PRO_MONTHLY`, `_PRO_ANNUAL`, `_PRO_PLUS_MONTHLY`, `_PRO_PLUS_ANNUAL`, `_TOPUP`. All or none: a partial set refuses start-up and names the missing variables (never values); a live key refuses start-up outside production | unit-tested (`test_billing_settings.py`) |
+| Checkout | `POST /v1/billing/checkout {plan, interval}` → a Stripe-hosted page; one open page per account is reused | integration-tested (fake provider) |
+| Customer Portal | `POST /v1/billing/portal {}` → Stripe's portal for card, interval, plan changes, invoices, cancellation | integration-tested (fake provider) |
+| AI top-up | `POST /v1/billing/topup {}` → a one-off hosted page for 100 AI requests; credited once from a verified paid Checkout | integration-tested (fake provider) |
+| Webhook | `POST /v1/billing/webhook`: signature over the raw body, deduplication, synchronous processing, retries | integration-tested (fake provider) |
+| State machine | `billing/state.py::apply()` is the only writer of `accounts.plan` | integration-tested (fake provider) |
+| Grace and downgrade selection | 7-day grace after a failed payment; `GET/PUT /v1/account/plan-selection` within 14 days of a downgrade | integration-tested (fake provider) |
+| Reconciler | Hourly pass in the API process; `dome-api --billing-reconcile` runs one pass by hand | integration-tested (fake provider) |
+| Account deletion | `BillingService.cancel_for_account_deletion()` with a `pending_deletions` retry | integration-tested (fake provider); the `DELETE /v1/account` route is **not implemented** |
+| Stripe adapter | `billing/stripe_provider.py` on the official `stripe` SDK 16.x (`*_async` methods, SDK retries off, 10 s timeout) | unit-tested against the SDK's own signature helper and object models (`test_billing_stripe_adapter.py`); **sandbox-provider-tested: not yet** |
+| Disputes, refunds, trials | Recorded as `ignored` with a `billing.needs_operator` warning (disputes, refunds); no trial is configured | **not implemented** |
+| PWA | Billing page states, pricing page "Available now" when `billing_enabled` (mobile-app, built separately) | unit-tested (component tests in `mobile-app`) |
 
 ## 2. Plan contract
 
 From `plans.json` (design assumptions, editable without code changes):
 
-| | DoMe Free | DoMe Pro |
-| --- | --- | --- |
-| Enabled PCs | 1 | 5 |
-| Paired controllers | 2 | 5 |
-| Custom layouts | no | yes |
-| Routines | no | yes, ≤ 10 steps, ≤ 60 s |
-| AI interpretations / transcription minutes per period | 0 | 0 until the Phase E gate (cost model evaluates 250 / 30) |
-| Manual command rate limit | 120/min, burst 30 | same |
-| Coalescable (slider) rate limit | 360/min, burst 60 | same |
-| Display price | — | US$5.99/month or US$49.99/year (`pricing_defaults`; live amounts come from the Stripe price objects) |
+| | DoMe Free | DoMe Pro | DoMe Pro Plus |
+| --- | --- | --- | --- |
+| Enabled PCs / paired phones | 1 / 2 | 5 / 5 | 5 / 5 |
+| Custom layouts, routines | no | yes (routines ≤ 10 steps, ≤ 60 s) | yes (same) |
+| AI requests | one-time taste of 10, never renews | 30 per 5-hour window, 120 per weekly window | 90 per 5-hour window, 300 per weekly window |
+| AI top-ups | no | yes | yes |
+| AI cost backstop (internal) | 100 ¢ per weekly window | 500 ¢ per weekly window | 1000 ¢ per weekly window |
+| Price (`pricing_defaults`) | $0 | $9.99 / month or $99.99 / year | $24.99 / month or $249.99 / year |
+| AI top-up | — | 100 requests for $2.99, one-off | same |
 
-Policy values also in `plans.json`: `downgrade_policy.selection_window_days = 14`,
-`default_selection = most_recently_seen`, `billing_grace.past_due_grace_days = 7`,
-`billing_grace.agent_offline_assertion_grace_hours = 72`, `entitlement_assertion.lifetime_seconds = 3600`.
+Prices are in US dollars. The Stripe prices the founder created are **tax-inclusive** (founder decision,
+2026-10-20): any sales tax is part of the amount, never added on top, and Stripe Tax is off
+(`DOME_STRIPE_AUTOMATIC_TAX=false`). The amounts charged are those of the Stripe price objects; the founder keeps
+them equal to `pricing_defaults`.
 
-Rules that hold on every plan: authentication, TLS, revocation, emergency stop, security events,
-session management and permission controls are never gated. A plan limit is never a revocation.
+Policy values also in `plans.json`: `downgrade_policy.selection_window_days = 14`, `default_selection =
+most_recently_seen`, `billing_grace.past_due_grace_days = 7`, `billing_grace.agent_offline_assertion_grace_hours =
+72`, `entitlement_assertion.lifetime_seconds = 3600`.
+
+**The PC sees "pro" for every paid plan.** The entitlement assertion's `plan` claim and
+`agent_entitlement_response.plan` are `pro` for Pro and Pro Plus alike (`Plan.entitlement_plan_id`): the
+installed agents validate against a schema that knows only `free` and `pro`, and Pro Plus has exactly Pro's
+PC-facing limits. The real plan id is in `GET /v1/session` and `GET /v1/account/billing`.
+
+Rules that hold on every plan: authentication, TLS, revocation, emergency stop, security events, session
+management and permission controls are never gated. A plan limit is never a revocation.
 
 ## 3. Records
 
-Columns are those of `cloud-api/dome_api/db/models.py`.
+Columns are those of `cloud-api/dome_api/db/models.py` (migration `0004_billing.py`). No billing column holds an
+email, card data or a raw webhook payload: provider ids, states, counts and timestamps only.
 
-- `subscriptions` — one row per account at most for `provider = stripe`: `provider_customer_id`,
-  `provider_subscription_id` (unique), `price_id`, `plan`, `state`, `current_period_start/end`,
-  `cancel_at_period_end`, `grace_until`, `created_at`, `updated_at`. The row is the backend's cache
-  of the provider's authoritative state plus DoMe's own grace decision.
-- `billing_events` — durable webhook receipt: `provider_event_id` (unique → deduplication),
-  `event_type`, `account_id` (nullable: an event may arrive before it can be attributed),
-  `received_at`, `processed_at`, `status` (`received` → `processed` | `ignored` | `failed`), `error`,
-  `payload_digest`. The raw payload is **not** stored; the handler re-fetches the object from Stripe.
-- `usage_periods` — per account and `period_start` (unique): used and reserved counters for AI
-  interpretations and transcription seconds (Phase E).
-- `pending_deletions` — one per account (unique): `provider_cancel_state`, `attempts`, `last_error`,
-  `completed_at`. Exists so a failed provider call never makes the product claim a deletion it did not
-  finish.
-- `operator_audit` — every operator action with `target_account_id` and redacted `detail`.
+- `subscriptions` — the account's live row (partial unique index `uq_subscriptions_live_account`: one row per
+  account whose `state <> 'canceled'`) plus older canceled rows. Provider ids, `price_id`, `plan`, `interval`,
+  `state` (checked against the eight states of §4.1), period, `cancel_at_period_end`, `grace_until`,
+  `provider_checkout_session_id` (unique), `checkout_idempotency_key`, `checkout_expires_at`, `provider_status`,
+  `provider_synced_at`.
+- `billing_events` — the webhook receipt: `provider_event_id` (unique, deduplication), `event_type`, `kind`
+  (`subscription` / `checkout` / `other`), `provider_object_id`, `account_id` (null until attributed), `status`
+  (`received` → `processed` | `ignored` | `failed`), `attempts`, `error` (a short code), `payload_digest`
+  (SHA-256 of the raw body). The raw payload is never stored.
+- `usage_windows`, `ai_balances`, `topup_purchases` — AI allowance accounting (§10).
+- `accounts.plan_changed_at`, `pcs.plan_disabled_at`, `controllers.plan_selected_at` — the downgrade selection
+  (§8).
+- `pending_deletions` — a provider cancellation that has not succeeded yet (§11).
+- `usage_periods` — the calendar-month table of the first AI build; kept, **no longer written**.
 - `accounts.plan` — the single derived value the rest of the system reads (`plans.py` → relay snapshot,
-  entitlement issuance, limit checks). It is written only by the state machine in §4.
+  entitlement issuance, limit checks). It is written only by `billing/state.py::apply()`.
 
-## 4. Subscription → entitlement state machine (planned)
+## 4. Subscription → entitlement state machine
 
 ### 4.1 Subscription states (`subscriptions.state`)
 
-| State | Meaning | Provider status it mirrors |
+| State | Meaning | From Stripe's subscription status |
 | --- | --- | --- |
-| `none` | No subscription row, or the row is historical | — |
-| `checkout_pending` | A Checkout Session was created for this account and has not completed; nothing is unlocked | Checkout Session `open` |
-| `incomplete` | Subscription created but the first payment has not succeeded | `incomplete` |
-| `trialing` | Only if a trial is ever configured (none is planned at launch) | `trialing` |
+| `checkout_pending` | DoMe created a hosted page; nothing is unlocked | (our own row) |
+| `incomplete` | Subscription created, first payment not through (for example 3-D Secure pending) | `incomplete` |
+| `trialing` | Only if a trial is ever configured (none is) | `trialing` |
 | `active` | Paid for the current period | `active` |
-| `cancel_scheduled` | Active, `cancel_at_period_end = true`; access continues to `current_period_end` | `active` + `cancel_at_period_end` |
-| `past_due` | A renewal failed; inside `past_due_grace_days` (`grace_until` set) | `past_due` |
-| `unpaid` | Grace exhausted or provider gave up retrying | `unpaid` |
-| `canceled` | Ended (by customer, by dunning, by refund policy or by deletion) | `canceled` / `incomplete_expired` |
-| `disputed` | A chargeback is open on the latest invoice | `active` with an open dispute |
+| `cancel_scheduled` | Active until `current_period_end`, then ends | `active` + `cancel_at_period_end` |
+| `past_due` | A payment failed; Pro or Pro Plus kept until `grace_until` | `past_due` |
+| `unpaid` | Grace ended (DoMe's sweep) or Stripe stopped retrying | `unpaid`, `paused`; or `past_due` after `grace_until` |
+| `canceled` | Ended | `canceled`, `incomplete_expired`, anything unknown |
 
-### 4.2 Derived entitlement (`accounts.plan` plus a UI-only flag)
+### 4.2 Plan and the label the phone shows
 
-| Subscription state | `accounts.plan` | Entitlement assertion issued | UI label |
-| --- | --- | --- | --- |
-| `none`, `checkout_pending`, `incomplete`, `unpaid`, `canceled` | `free` | no (`assertion: null`) | Free (checkout_pending shows "Pending activation") |
-| `trialing`, `active`, `cancel_scheduled` | `pro` | yes | Pro (cancel_scheduled shows the end date) |
-| `past_due` (before `grace_until`) | `pro` | yes | Pro, "Payment problem, update your card by <date>" |
-| `past_due` (after `grace_until`) | transition to `unpaid` by the reconciliation timer | — | — |
-| `disputed` | `free` while open | no | "Access paused while a payment dispute is open" |
+| Subscription state | `accounts.plan` | `entitlement_state` (session and Billing page) |
+| --- | --- | --- |
+| no row | `free` | `free` |
+| `checkout_pending` with a hosted page that can still be paid | `free` | `pending` (a page that was never created or has expired: `free`) |
+| `incomplete` | `free` | `pending` |
+| `active`, `trialing` | the paid plan | `active` |
+| `cancel_scheduled` | the paid plan | `canceling` |
+| `past_due` before `grace_until` | the paid plan | `past_due` |
+| `unpaid`, `canceled` (row updated within 30 days) | `free` | `expired` (older: `free`) |
 
-The relay and the agent read only `accounts.plan` (through `plans.py`) and the assertion. There is
-no second place where the plan is decided.
+Evidence: integration-tested (fake provider), `test_billing_lifecycle.py::test_entitlement_state_mapping_in_session_document`.
 
-### 4.3 Transitions
+A price id that `DOME_STRIPE_PRICE_*` does not name (a subscription made by hand in the dashboard, a Portal switch to
+another product, any other product on the same Stripe account) **grants no paid plan**: the row follows the
+subscription's state with the default plan, so the account stays Free and shows no DoMe subscription, the Portal stays
+reachable, and the warning `billing.unknown_price` carries the account id only, for the operator to fix the
+configuration (`test_unknown_price_grants_no_paid_plan_and_logs_the_account_only`). A paid plan is granted only for a
+configured price.
 
-Every transition runs inside one database transaction that locks the account row
-(`SELECT … FOR UPDATE`, the same pattern the device-limit checks use), writes `subscriptions`,
-writes `accounts.plan`, appends a `security_events` row of kind `plan_changed` (actor `system`,
-detail `{from, to, reason}`) and, after commit, pushes a fresh `grants_snapshot` to every connected
-agent of the account (`ConnectionManager.push_grants_snapshot`, implemented) so plan-disabled
-devices and entitlement assertions change within one round trip.
+### 4.3 How a change is applied
 
-| From | To | Trigger | Side effects |
-| --- | --- | --- | --- |
-| `none` | `checkout_pending` | `POST /v1/billing/checkout` (session + CSRF) | Create/lookup Stripe Customer bound to `account_id` (idempotency key `checkout:<account_id>:<price_id>`); store `provider_customer_id`; return the hosted Checkout URL |
-| `checkout_pending` | `active` | `checkout.session.completed` **and** the fetched subscription is `active` | Set `provider_subscription_id`, `price_id`, period, plan `pro`; push snapshot |
-| `checkout_pending` | `incomplete` | Fetched subscription is `incomplete` | Plan stays `free`; UI "Pending activation" |
-| `checkout_pending` | `none` | Checkout expired (`checkout.session.expired`) or 24 h reconciliation sweep | Row deleted |
-| `incomplete` | `active` | `invoice.paid` → fetch shows `active` | Plan `pro` |
-| `incomplete` | `canceled` | `incomplete_expired` | — |
-| `active` | `active` | `invoice.paid` (renewal) | Update period; no plan change |
-| `active` | `cancel_scheduled` | `customer.subscription.updated` with `cancel_at_period_end = true` (customer used the Portal) | UI shows end date; access unchanged |
-| `cancel_scheduled` | `active` | Same event with `cancel_at_period_end = false` (customer resumed) | — |
-| `active` / `cancel_scheduled` | `past_due` | `invoice.payment_failed` → fetch shows `past_due` | `grace_until = max(now, current_period_end) + past_due_grace_days`; plan stays `pro`; email "payment failed" |
-| `past_due` | `active` | `invoice.paid` | Clear `grace_until` |
-| `past_due` | `unpaid` | Reconciliation timer passes `grace_until`, or provider reports `unpaid` | Plan `free`; downgrade selection window opens (§8) |
-| `unpaid` | `active` | Provider reports `active` again (customer paid the open invoice) | Plan `pro`; plan-disabled devices re-enabled if within limits |
-| any paid state | `canceled` | `customer.subscription.deleted` (period end reached after cancel, or dunning ended) | Plan `free`; selection window opens; settings retained |
-| `active` | `disputed` | `charge.dispute.created` on the latest invoice | Plan `free`; operator alert |
-| `disputed` | `active` | `charge.dispute.closed` with status `won` | Plan `pro` |
-| `disputed` | `canceled` | `charge.dispute.closed` with status `lost` | Subscription canceled at the provider immediately |
-| any | `canceled` | Account deletion (§11) | Provider subscription canceled immediately, no proration refund by default |
+**A webhook never sets a state from its payload.** Every handled event leads to a fetch of the object as Stripe
+has it now (the subscription, or the Checkout Session), and `state.apply()` maps that onto §4.1/§4.2. Duplicate,
+delayed and out-of-order deliveries therefore converge (`test_out_of_order_deliveries_converge`, all 24 orders of
+created / completed / paid / deleted).
 
-Rule: **a webhook never sets a state directly.** It marks the event received and schedules a
-"refresh subscription `<id>`" job that fetches the subscription and latest invoice from Stripe and
-applies the table above to what the provider says *now*. Out-of-order, duplicate and delayed events
-therefore converge on the same result (§6).
+**Fetch and apply are serialised per account.** The subscription is fetched inside the same transaction that applies
+it, after a per-account advisory lock (`pg_advisory_xact_lock`), so two handlers (two webhooks, or a webhook and the
+reconciler) apply in the order they fetched and an older snapshot can never land after a newer one
+(`test_fetch_and_apply_are_serialised_per_account`). In addition, `canceled` is final for a subscription id: a
+snapshot of the same subscription that says anything else is ignored, because Stripe never reactivates a canceled
+subscription (`test_a_stale_active_snapshot_never_reactivates_a_canceled_subscription`).
 
-## 5. Checkout and portal (planned)
+`apply()` runs in one transaction with the lock order accounts → subscriptions → PCs/controllers →
+security events. It writes the row and `accounts.plan`; when the plan changed it appends a `plan_changed` security
+event (actor `system`, detail `{from, to, reason, subscription_state}`) and the log line `billing.transition`.
+When the limits shrink it sets `accounts.plan_changed_at`, disables the PCs beyond `max_enabled_pcs` (the most
+recently seen stay; `plan_disabled_at` set) and leaves controllers to the relay's dynamic selection. When they
+grow it re-enables plan-disabled PCs up to the limit (never a PC the owner disabled by hand) and clears
+`plan_changed_at`. After the commit, every online PC of the account gets a fresh `grants_snapshot` with its new
+assertion (`test_checkout_completed_activates_pro_and_pushes_snapshot_with_assertion`).
 
-- `POST /v1/billing/checkout {interval: "monthly" | "annual"}` — requires a session, CSRF header and
-  exact `Origin` like every state-changing route. The price id is taken from the server allowlist
-  (`DOME_STRIPE_PRICE_*`); the request carries no amount, currency or price. One Checkout Session is
-  created per account with an idempotency key; a second call while one is open returns the same URL.
-  If the account already has an `active`/`past_due`/`cancel_scheduled` row the call returns 409
-  `ALREADY_SUBSCRIBED` and the Portal URL instead, so duplicate subscriptions cannot be created.
-- `POST /v1/billing/portal` — creates a Customer Portal session for the stored
-  `provider_customer_id`; the Portal handles card updates, interval changes, invoices and cancellation.
-  Cancelling never requires contacting support.
-- The Checkout `success_url` lands on `/app/billing?checkout=return`. The page shows "Pending
-  activation — we are confirming your payment" until `GET /v1/session` reports `plan: pro`. **Nothing
-  is unlocked from the return URL** (spec §14).
-- Card data never touches DoMe; Stripe-hosted pages only.
-- Trials: not configured. If one is introduced later, `trialing` maps to Pro and the first failed
-  charge after the trial goes through the `incomplete` path.
+An event about an **ended** subscription of the account (Stripe redelivering late) never touches the plan while a
+newer subscription is live, and a second live subscription paid outside DoMe's own pages is logged
+(`billing.second_subscription`) and left to the operator
+(`test_late_events_of_an_ended_subscription_never_touch_the_new_one`).
 
-## 6. Webhook intake, deduplication and reconciliation (planned)
+`accounts.plan` is reached only from: verified webhook processing, the reconciler's provider fetch, a provider fetch
+of a pending page that turned out to be paid (on `GET /v1/account/billing` or a second checkout, §5), the grace sweep,
+and account-deletion cancellation. Never from a request body or a Checkout return URL
+(`test_return_url_unlocks_nothing`).
 
-1. `POST /v1/billing/webhook` reads the **raw body** (≤ 64 KiB, larger bodies are refused with 413
-   before parsing), verifies `Stripe-Signature` with `DOME_STRIPE_WEBHOOK_SECRET` and a 5-minute
-   tolerance, and rejects anything else with 400. The route is exempt from session/CSRF checks and,
-   like the agent routes, refuses any `Origin` header.
-2. Inside one transaction: `INSERT INTO billing_events (provider_event_id, event_type, payload_digest,
-   status='received')`. A unique-constraint conflict means a duplicate delivery: respond 200 and stop.
-   The response is sent only after commit (`Depends(scope="function")`, the same fix applied to the
-   REST routes in DECISIONS #18).
-3. Attribution: `customer` / `subscription` ids on the event are mapped to `account_id` through
-   `subscriptions`; unknown ids are stored with `account_id = NULL`, `status = ignored`,
-   `error = "unattributed"` and surfaced to operators (a customer created outside the product, or a
-   webhook from the wrong Stripe account).
-4. Processing is asynchronous (an in-process worker in the single-process deployment, ADR-0001 D1)
-   and idempotent: the worker fetches the current subscription + latest invoice (+ open disputes) and
-   applies §4.3. `processed_at`/`status` are written when done; exceptions set `status = failed` with
-   the redacted error and the event is retried with backoff up to 5 times.
-5. Event types handled: `checkout.session.completed`, `checkout.session.expired`,
-   `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`,
-   `charge.refunded`, `charge.dispute.created|closed`. Everything else is recorded as `ignored`.
-6. Reconciliation job (hourly, and on demand from the operator interface): for every `subscriptions`
-   row not in `none`/`canceled`, fetch the provider subscription and re-apply §4.3; for every
-   `checkout_pending` older than 24 h, expire it; for every account with `plan = pro` and no live
-   subscription row, or `plan = free` with an `active` row, write an `entitlement_mismatch` operator
-   item. Discrepancies, failed events and unattributed events form the **operator failure queue**
-   (`billing_events.status in (failed, ignored)` plus `operator_audit` entries). Operators can re-run an
-   event or a reconciliation but cannot set a plan by hand without an audited reason.
+**Grace.** The first failed payment DoMe learns of sets `grace_until = now + 7 days` once; later failure notices do
+not move it (`test_failed_payment_enters_grace_keeps_pro_then_unpaid_free_after_grace`). The anchor is the notice,
+not `current_period_end`, because at a failed renewal Stripe has already moved the period to the new, unpaid one.
+After the deadline the hourly sweep sets `unpaid` → Free, and a later fetch that still says `past_due` keeps it
+`unpaid`. A payment inside the grace returns the row to `active` and clears the deadline
+(`test_payment_recovery_in_grace_returns_active_and_clears_grace`).
+
+## 5. Checkout, Portal and top-up
+
+All three are PWA routes: session cookie, `X-DoMe-CSRF`, exact `Origin`; at most 10 page creations per account per
+hour (`DOME_RATE_BILLING_REQUESTS_PER_HOUR`); every response `Cache-Control: no-store`. Without the Stripe values
+each answers 503 `BILLING_NOT_AVAILABLE`.
+
+- `POST /v1/billing/checkout {plan: pro|pro_plus, interval: monthly|annual}`. The price comes from the server's
+  allowlist; the body carries no price, amount or currency (unknown fields are 400). A Stripe Customer is created
+  once per account (idempotency key `customer:<account_id>`; the email goes to Stripe for receipts and is never
+  logged). The `checkout_pending` row, its idempotency key and the page's expiry are committed before Stripe is
+  called. A second call while the page is open returns **the same page**; a different choice gets its own page, and
+  the old page is closed at Stripe first, so two pages can never both be paid. A request that arrives while another
+  is still creating the page (a double tap, two tabs; no session id yet, within 30 seconds) replays the same
+  idempotency key and expiry, so Stripe answers with the same page; a different choice in that moment gets 409
+  `CHECKOUT_PROCESSING` (`test_concurrent_checkouts_create_one_page`). A stored page that Stripe reports
+  **complete** (paid, the webhook not processed yet) is never followed by a second page: its subscription is fetched
+  and applied at once and the call answers 409 `ALREADY_SUBSCRIBED`, or `CHECKOUT_PROCESSING` while Stripe has not
+  created the subscription yet (`test_a_paid_page_whose_webhook_is_late_is_never_sold_twice`). An account with a
+  live subscription gets 409 `ALREADY_SUBSCRIBED` (detail `{portal_available}`). A Stripe failure is 502
+  `BILLING_PROVIDER_ERROR` and nothing shows as pending. Pages expire after `DOME_BILLING_CHECKOUT_PENDING_HOURS`
+  (default and maximum 24, Stripe's limit), the same value the reconciler waits before asking about a page.
+- **Pro Plus only while the assistant is on.** Pro Plus differs from Pro only in AI requests, so, as with top-ups,
+  `checkout(plan=pro_plus)` is refused with 403 `PLAN_NOT_AVAILABLE` (detail `{plan, reason: "ai_off"}`) while
+  `DOME_AI_ENABLED` is off; Pro is still sold. `billing_status_response.checkout_plans` lists what can be bought
+  now, and the Billing page shows only those (`test_pro_plus_is_not_sold_while_the_assistant_is_off`).
+- Return URLs: `/app/billing?checkout=return&session_id={CHECKOUT_SESSION_ID}` and `?checkout=cancel`; top-ups
+  `?topup=return…` / `?topup=cancel`; the Portal returns to `/app/billing`. The query string is informational:
+  the server never reads it, the phone polls `GET /v1/session` and `GET /v1/account/billing`.
+- `POST /v1/billing/portal {}` — needs a Stripe customer (404 `BILLING_NO_CUSTOMER` otherwise).
+- `POST /v1/billing/topup {}` — allowed only when the plan has `ai_topup_allowed`, the subscription is `active`,
+  `trialing`, `cancel_scheduled` or `past_due` inside the grace, **and the assistant is switched on**
+  (`DOME_AI_ENABLED`), so nobody buys requests they cannot use (403 `TOPUP_NOT_ALLOWED`). Refused with 409
+  `TOPUP_BALANCE_LIMIT` when the balance plus pending pages would pass 1000 requests. Never automatic.
+- `GET /v1/account/billing` — everything the Billing page shows (`billing_status_response`); works with billing
+  off (`subscription: null`, nothing available). While the account waits on a page that can still be paid, it asks
+  Stripe about that page once; a page that was paid is applied at once and `checkout_available` is false. An open
+  page does not hide the offer, so a customer who left the page can come back to it.
+
+Card data never touches DoMe; only Stripe-hosted pages. Trials: not configured.
+
+Evidence: integration-tested (fake provider), `test_billing_checkout.py`, `test_billing_topup.py`.
+
+## 6. Webhook intake, deduplication and reconciliation
+
+1. `POST /v1/billing/webhook` refuses any `Origin` header (403; a browser page can never call it), needs no
+   session, refuses a body over 64 KiB (413): a declared `Content-Length` is checked first and a chunked body is
+   counted while it streams, so nothing past the cap is buffered (`test_a_chunked_body_over_the_cap_is_refused_while_it_streams`); it verifies `Stripe-Signature` over the raw
+   bytes with `DOME_STRIPE_WEBHOOK_SECRET` and a 300-second tolerance (400 `BILLING_WEBHOOK_INVALID` otherwise).
+   Without the secret it answers 503.
+2. A `billing_events` row (`received`) is committed. A second delivery of the same event id is acknowledged as
+   `{received: true, duplicate: true, status: "duplicate"}` and does nothing — unless the earlier attempt
+   `failed`, in which case the redelivery is processed again (one claimant wins).
+3. Processing is **synchronous inside the request** (a deliberate simplification of the earlier worker design):
+   - `checkout.session.completed` / `checkout.session.async_payment_succeeded` → fetch the session; subscription
+     mode → fetch the subscription and `apply()`; a paid top-up → credit once.
+   - `checkout.session.expired` → drop the pending row / mark the top-up purchase expired.
+   - `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`,
+     `invoice.payment_action_required` → fetch the subscription and `apply()`.
+   - `charge.dispute.*`, `charge.refunded` → `ignored`, `error = operator_action`, warning `billing.needs_operator`.
+   - anything else → `ignored`, `unhandled_type`. An object DoMe cannot attribute to a live account (another
+     Stripe account, a dashboard experiment, a deleted account) → `ignored`, `unattributed`.
+   Attribution uses DoMe's own metadata (`dome_account_id`) or the customer/subscription ids of rows DoMe wrote.
+4. A processing error marks the row `failed`, `attempts + 1`, and answers 500 so Stripe redelivers.
+5. The reconciler (hourly; `DOME_BILLING_RECONCILE_INTERVAL_SECONDS`) in one pass: asks Stripe about every
+   `checkout_pending` row and pending top-up older than `DOME_BILLING_CHECKOUT_PENDING_HOURS` before touching it. A
+   page that was paid while every webhook failed (for example a wrong `DOME_STRIPE_WEBHOOK_SECRET`, which answers each
+   delivery 400, so no receipt row exists to retry) is applied, or its top-up credited, and logged as
+   `billing.webhook_missed` (account id only); a page that is expired, or open past its expiry, is dropped; a page
+   still payable, or one Stripe cannot be asked about right now, is kept for the next pass
+   (`test_reconciler_recovers_a_paid_checkout_whose_webhooks_never_arrived`,
+   `test_reconciler_keeps_a_page_it_cannot_ask_about_and_one_still_payable`,
+   `test_reconciler_credits_a_paid_topup_whose_webhooks_never_arrived`). It also ends exhausted grace; retries `failed` rows with fewer
+   than 5 attempts and `received` rows older than 10 minutes; retries pending deletions; and re-fetches up to 200
+   live subscriptions, logging `billing.entitlement_mismatch` when `accounts.plan` disagreed. It runs in the single
+   API process (ADR-0001); a second process would run its own pass, which is safe because every step is
+   idempotent.
+
+Logs carry event types, codes, account ids, plan names and counts; never an email, a body, a signature or a
+Stripe object id (`test_webhook_logs_carry_no_email_or_body` also searches every table).
+
+Evidence: integration-tested (fake provider), `test_billing_webhook.py`.
 
 ## 7. Proration policy (proposed, founder decision)
 
 | Change | Effect | Stripe setting |
 | --- | --- | --- |
-| Monthly → annual | Immediately; unused monthly time is credited against the annual invoice | `proration_behavior = create_prorations`, invoice now |
-| Annual → monthly | At the end of the annual period (no mid-term refund) | Subscription schedule phase change at `current_period_end` |
+| Monthly → annual, Pro → Pro Plus | Immediately; unused time is credited | Portal, `proration_behavior = create_prorations` |
+| Annual → monthly, Pro Plus → Pro | At the end of the paid period (no mid-term refund) | Portal "at period end" |
 | Cancel | At period end; access continues until then; no partial refund | Portal cancellation, `cancel_at_period_end` |
-| Immediate cancel with refund | Only by operator action for a documented reason (refund policy §9) | `cancel_now` + refund |
 
-The Portal is configured to offer exactly these options so the Portal and the state machine cannot
-disagree.
+Plan and interval changes happen only in the Portal; the app has no in-app switch. Whatever the Portal does, the
+next `customer.subscription.updated` is fetched and applied like any other change.
 
 ## 8. Grace, cancellation and downgrade
 
-**Payment failure.** `past_due_grace_days = 7`: a failed renewal keeps Pro for seven days past the
-period end while Stripe retries (smart retries, then the final attempt). The customer is told the
-date on the Billing page and by email. After the grace the subscription is `unpaid` → Free.
+**Payment failure.** Seven days of the paid plan from the first failed payment (§4.3); the Billing page shows the
+date.
 
-**Provider outage.** The backend keeps issuing assertions from its own `accounts.plan`; a Stripe
-outage changes nothing until a webhook or reconciliation says otherwise. On the PC, a verified Pro
-assertion is honoured for at most `agent_offline_assertion_grace_hours = 72` after `exp` **only** when
-the refresh fails with a network error or 5xx (unit-tested); a `200 {assertion: null}` is Free
-immediately.
+**Provider outage.** The backend keeps issuing assertions from its own `accounts.plan`; a Stripe outage changes
+nothing until a webhook or the reconciler says otherwise. On the PC, a verified paid assertion is honoured for at
+most 72 hours after `exp` only when the refresh fails with a network error or 5xx (unit-tested in pc-agent).
 
-**Cancellation.** The Billing page says, before the customer confirms in the Portal: "Pro stays on
-until <current_period_end>. After that your account returns to Free: 1 PC and 2 phones stay enabled,
-your layouts and routines are kept but cannot run, and you can re-subscribe at any time." Nothing is
-deleted.
+**Cancellation.** Pro or Pro Plus stays on until `current_period_end`; then the account returns to Free: 1 PC and
+2 phones stay enabled, layouts and routines are kept but cannot run, and re-subscribing is possible at any time.
+Nothing is deleted.
 
-**Downgrade selection (14-day window, `plans.json`).** When the plan becomes `free` with more than
-`max_enabled_pcs` enabled PCs or more than `max_controllers` live controllers:
+**Downgrade selection.** When a change lowers the limits, `accounts.plan_changed_at` is set and for 14 days:
 
-- Implemented now: controllers are selected automatically by `last_seen_at` descending (ties by
-  `created_at`), the rest are `plan_disabled` in every snapshot; `pcs.enabled` is a stored flag, so
-  Phase C must set `enabled = false` on the PCs beyond the limit using the same ordering.
-- Planned: `GET /v1/account/plan-selection` lists the candidates with the deadline
-  (`plan_changed_at + selection_window_days`), `PUT /v1/account/plan-selection {pc_ids, controller_ids}`
-  (session + CSRF, sizes checked against the plan, ownership checked) applies the choice
-  transactionally and pushes snapshots. Until the customer chooses, and after the window closes, the
-  default selection stands. Changing the selection later is allowed by disabling one device and
-  enabling another (the existing `PATCH /v1/pcs/{id}` path already enforces the limit).
-- Revocation (`DELETE /v1/controllers/{id}`, `DELETE /v1/grants/{id}`, `DELETE /v1/pcs/{id}`, the PC's
-  local `revoke_controller` and local "Disable remote control") works for every device regardless of
-  plan state (integration-tested).
-- Re-upgrade re-enables devices up to the Pro limits, restoring the previous selection where it still
-  fits.
+- `GET /v1/account/plan-selection` lists every PC and phone with `selected`, `last_seen`, the plan's limits, `open`
+  and `deadline`.
+- `PUT /v1/account/plan-selection {pc_ids, controller_ids}` (session + CSRF) checks sizes against the plan and
+  ownership (400 `PLAN_SELECTION_INVALID`), enables/disables PCs, marks the chosen phones, records
+  `plan_selection_applied`, and pushes snapshots. After the window: 409 `PLAN_SELECTION_CLOSED`; changes are made
+  under Devices (`PATCH /v1/pcs/{id}` already enforces the limit).
+- Until the owner chooses, the most recently seen devices stay enabled. Revocation and emergency stop work for
+  every device regardless of plan.
+- Re-upgrading re-enables plan-disabled PCs up to the new limit and closes the window.
 
-## 9. Refunds and disputes (proposed policy, needs founder review)
+Evidence: integration-tested (fake provider),
+`test_cancel_at_period_end_then_deleted_downgrades_opens_selection_and_defaults_apply` (3 PCs, 4 phones, Pro →
+Free), `test_reupgrade_restores_plan_disabled_pcs_and_clears_window`.
 
-- Refund requests within 14 days of the first charge are granted by an operator through Stripe
-  (`charge.refunded` arrives) and the subscription is canceled immediately; otherwise cancellation at
-  period end applies and no partial refund is made. Jurisdictions with statutory withdrawal rights
-  (for example EU consumer law) may require more: **founder/legal input needed**.
-- A `charge.refunded` event alone does not change the plan (operators refund for many reasons); the
-  operator action that issued the refund decides whether to cancel. A full refund of the current
-  period without cancellation is flagged by reconciliation as a mismatch.
-- A dispute (`charge.dispute.created`) pauses Pro at once (state `disputed` → Free) because the funds
-  are contested; devices beyond Free limits become plan-disabled, nothing is deleted. `won` restores
-  Pro; `lost` cancels. The customer sees a plain explanation on the Billing page and an email. Stripe's
-  dispute fee (US$15 in the pricing sources used by `docs/COST_MODEL.md`) is a cost of doing business
-  and is in the cost model as an allowance.
+## 9. Refunds and disputes (not implemented; proposed policy, needs founder review)
 
-## 10. Usage periods and AI allowances (Phase E, planned)
+- Refunds are issued by the founder in the Stripe dashboard. `charge.refunded` is recorded and logged for the
+  operator; it does not change the plan. If the subscription is canceled at the same time, the subscription
+  events do that.
+- Disputes are recorded and logged (`billing.needs_operator`); access is not paused automatically. A `disputed`
+  state is not built.
+- Refund wording per jurisdiction (for example EU withdrawal rights) needs founder/legal input.
 
-Both plans have `0` allowances today and the AI provider adapter is not built. When enabled:
+## 10. AI windows and top-ups
 
-- A usage period is one calendar month anchored to the subscription's start day (annual subscribers
-  get 12 monthly periods; a full year's allowance is never granted at once). `usage_periods` has one
-  row per `(account_id, period_start)`.
-- Reserve → call provider → settle: `ai_interpretations_reserved` is incremented atomically
-  (`UPDATE … WHERE used + reserved < allowance`) before the call; on success the reservation moves
-  to `used`; on provider error, timeout or customer cancel the reservation is released and nothing is
-  charged to the customer. Units are never deducted for requests a product error prevented from
-  being submitted.
-- No automatic overage. At exhaustion the UI falls back to typed deterministic commands and says so.
-- An operator spending ceiling per period stops all AI calls when reached.
+Replaces the calendar-month usage period of the first AI build. One AI request is one **charged** assistant turn
+(`answered`); failed, declined and invalid turns are never charged. Everyday commands the phone understands by
+itself never count. Whether AI is offered at all is a separate server setting (`DOME_AI_ENABLED`, off in
+production).
 
-## 11. Account deletion (planned)
+- **Windows start at the first request.** When none is open, a request opens a 5-hour window `[now, now + 5 h)`
+  and a weekly window `[now, now + 7 d)`, independently. A new one opens at the next request after the previous
+  ended. Nothing resets on a calendar. A request needs room in both.
+- **Order.** Taste (Free: 10, never renews) — or window and week (paid plans) — else the top-up balance (paid plans
+  only), else refused with `AI_ALLOWANCE_EXHAUSTED {reason: taste|window|week|cost_cap|failures, resets_at}`.
+  When the window and the week are both full (on Pro, four full windows of 30 use up the week's 120), the reason
+  named is the bucket that clears later, so `resets_at` is when a request really works again, never the window's
+  earlier end (fixture cases "window and week both full", "both full, the week ends before the window").
+  `charged_from` in the turn response says which paid for it.
+- **Backstops per weekly window.** The internal cost cap (`ai_cost_cap_cents_per_week`) and the failed-turn limit
+  (`DOME_AI_FAILED_TURNS_PER_PERIOD`, the period now being the weekly window) apply to every turn, including
+  top-up turns. The operator's spending ceiling stays per calendar month.
+- **Top-ups.** 100 requests for $2.99. The balance never expires and is kept across a downgrade, but is spendable
+  only on a plan with `ai_topup_allowed`; on Free it waits until the next paid plan
+  (`test_topup_not_spendable_after_downgrade_but_kept`). Credited exactly once per paid Checkout, whether Stripe
+  sends `completed`, `async_payment_succeeded` or both (`test_topup_checkout_completed_credits_exactly_once`).
+- **Accounting.** Reserve before the provider call, settle after, in one transaction per step: `ai_balances` (one
+  row per account: taste used/reserved, top-up remaining/reserved) is locked `FOR UPDATE` by every reservation,
+  settlement and credit of that account, so an account's AI accounting is serialised while other accounts are
+  unaffected. `usage_windows` (`kind` window/week, start, end, requests used/reserved, cost used/reserved, failed
+  turns). `topup_purchases` (Checkout session id unique, requests, amount, currency, `pending` / `credited` /
+  `expired` / `failed`). `assistant_turns.source` and `window_start` record where each turn was charged.
 
-`DELETE /v1/account` (session + CSRF + re-authentication through the OIDC issuer within the last
-5 minutes) runs, in order:
+Evidence: integration-tested, `cloud-api/tests/test_assistant_metering.py` (window opening, each exhaustion
+reason, ordering, concurrency, the shared fixture `shared/protocol/fixtures/ai-window-cases.json`),
+`test_assistant_routes.py`, `test_billing_topup.py`.
 
-1. Revoke every session (closing its controller sockets), every PC credential and access token
-   (closing agent sockets with `revoked{account_deleted}`), every controller and grant. This is the
-   same code the existing revocation routes use.
-2. Cancel the provider subscription immediately (`cancel_now`). If the call fails, insert a
-   `pending_deletions` row (`provider_cancel_state = pending`, `attempts`, `last_error`), alert
-   operators, and tell the customer "Your data is removed; we are still confirming the subscription
-   cancellation with our payment provider" — never a false "done".
-3. Soft-delete the account (`accounts.deleted_at`), which hides it from sign-in; the OIDC subject is
-   kept hashed so a re-registration does not inherit anything.
-4. A daily job hard-deletes rows that cascade from `accounts` after 30 days (the window exists so an
-   accidental deletion can be reversed by support with the customer's confirmation), except the
-   records in `docs/DATA_RETENTION.md` that are retained for an identified reason
-   (`billing_events` and invoice references for tax/accounting, `operator_audit`).
-5. Local data on the PC and the phone is the customer's: the agent sees `revoked` and discards its
-   credential; the uninstall steps in `pc-agent/README.md` remove the rest.
+## 11. Account deletion (function only)
 
-## 12. Verification plan (none of it done yet)
+`BillingService.cancel_for_account_deletion(db, account_id)` cancels the Stripe subscription at once and applies
+`canceled` → Free. If Stripe fails, a `pending_deletions` row records the attempt (`attempts`, `last_error`) and
+the result is `pending`, never a false "done"; the reconciler retries until it succeeds. Webhooks about a deleted
+account change nothing. Evidence: integration-tested (fake provider),
+`test_account_deletion_cancels_or_records_pending_then_retries`.
+
+**Not implemented:** the `DELETE /v1/account` route with OIDC re-authentication, session/credential revocation and
+the 30-day hard delete. Until it exists, deletion is a support request.
+
+## 12. Verification
 
 | Check | Method | Status |
 | --- | --- | --- |
-| Checkout → `active`, renewal, failed payment → grace → unpaid, cancel at period end, resume | Stripe test clocks in test mode; assert `subscriptions.state`, `accounts.plan`, snapshot push | not yet verified |
-| Duplicate, out-of-order and delayed webhooks | Replay recorded events in shuffled order with duplicates; final state identical | not yet verified |
-| Webhook signature, oversized body, wrong account | 400/413 and `ignored` rows | not yet verified |
-| Downgrade selection and defaults | Integration test: 3 PCs + 4 controllers on Pro → Free; snapshots show the right `plan_disabled` set; selection endpoint changes it | partly: the default selection path is integration-tested today |
-| Client state cannot unlock Pro | Existing `tests/test_e2e_security.py` scenario (13) | integration-tested |
-| Deletion with a failing provider call | Fault-injected Stripe client; `pending_deletions` row and operator alert | not yet verified |
-| Live charge | Never by default; requires founder-enabled live keys and a separate checklist | not applicable yet |
+| Checkout → active, Pro Plus, renewal, failed payment → grace → unpaid, recovery, cancel at period end → Free, re-upgrade | `cloud-api/tests/test_billing_checkout.py`, `test_billing_lifecycle.py` with the fake provider and an injected clock | integration-tested (fake provider) |
+| Duplicate, out-of-order and failed webhooks; serialised fetch-and-apply; a paid page never sold twice; missed webhooks recovered by the reconciler; signature, size (declared and chunked), Origin; no email or body in logs or tables | `test_billing_webhook.py` | integration-tested (fake provider) |
+| Top-ups: who may buy, credit once, balance cap, spending order, kept on Free | `test_billing_topup.py` | integration-tested (fake provider) |
+| AI windows and the shared fixture | `test_assistant_metering.py`, shared/python and shared/ts contract tests | integration-tested / unit-tested |
+| Start-up refusals (partial set, live key outside production, renamed variables, fake outside dev/test) | `test_billing_settings.py` | unit-tested |
+| Stripe adapter: SDK-made signatures, tampered or stale bodies, id and period normalisation, Checkout parameters, errors without the key | `test_billing_stripe_adapter.py` | unit-tested |
+| Migration 0004 down and up | `test_billing_migration.py`, `alembic check` | integration-tested |
+| The same lifecycle against Stripe test mode (card 4242…, test clocks for renewal and failed payment, Stripe CLI or dashboard redeliveries) | founder on staging, `docs/LAUNCH_SETUP.md` "Stripe (payments)" | **not yet verified** |
+| Live charge | founder-enabled live keys, separate checklist | not applicable yet |
 
 ## 13. Open founder decisions
 
-Currency and tax handling (Stripe Tax or not), the legal entity and business details on invoices,
-refund wording per jurisdiction, whether a trial is offered, the exact Portal features enabled, and
-the live price ids. Generated copy does not prove legal compliance.
+- **Tax:** prices are tax-inclusive and Stripe Tax is off (decided 2026-10-20). Turning Stripe Tax on later means
+  tax comes out of the charge; revisit before enabling.
+- **Portal features:** which changes the Portal offers (§7 proposes them).
+- **Top-up expiry:** built as "never expires"; the founder may choose otherwise.
+- **Refund and withdrawal wording** per jurisdiction; Terms update.
+- **Pro Plus positioning:** same device limits as Pro; three times Pro's AI requests per 5-hour window (90 vs 30)
+  and 2.5 times per week (300 vs 120). Not sold while the assistant is off (§5).
+- Business details on invoices; whether a trial is ever offered.
+
+Generated copy does not prove legal compliance.

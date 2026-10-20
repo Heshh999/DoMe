@@ -61,8 +61,8 @@ describe("check-bundle", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("pnpm build runs it after vite build", () => {
+  it("pnpm build runs it after vite build, and the signed-release check (scripts/check-release.ts) before it", () => {
     const pkg = JSON.parse(readFileSync(resolve(__dirname, "../package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(pkg.scripts.build).toBe("vite build && tsx scripts/check-bundle.ts");
+    expect(pkg.scripts.build).toBe("tsx scripts/check-release.ts && vite build && tsx scripts/check-bundle.ts");
   });
 });

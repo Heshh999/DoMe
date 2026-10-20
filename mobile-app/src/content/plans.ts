@@ -1,14 +1,31 @@
 /**
  * Plan content for the website: Free, Pro and Pro Plus with their prices, device counts, Screen view and
- * AI butler allowances, and the plain-words rules of the allowance. These are the owner's decisions for
- * the pricing page and FAQ (content only): the live metering, the Stripe prices and the contract's limits
- * (shared/protocol/plans.json → `PLANS`) are separate work. Device counts for Free and Pro are read from
- * the contract so the website and the app never disagree about them.
+ * AI butler allowances, and the plain-words rules of the allowance, for the pricing page, the FAQ and
+ * the Billing page. Device counts, prices and AI figures are read from the contract
+ * (shared/protocol/plans.json → `PLANS`) so the website, the app and the server never disagree; the
+ * taglines, minutes and rules are content.
  *
- * Honesty: only Free exists today. Pro and Pro Plus are shown with the status "Coming at paid launch"
- * and Screen view is "Coming" wherever it appears. Nothing here is a claim that it can be bought.
+ * Honesty: only Free exists today. Pro and Pro Plus are shown with the status "Coming at paid launch",
+ * Screen view, custom layouts and routines are "Coming" wherever they appear, and every AI allowance carries
+ * "Not switched on yet" while the server says the assistant is off (GET /v1/plans `ai_enabled`). Nothing here is a claim that it can be bought: the
+ * pricing page and the Billing page ask the server (GET /v1/plans, GET /v1/account/billing) whether
+ * checkout exists before they offer one.
+ *
+ * Prices, the top-up and the AI figures are read from the contract (protocol 1.3): plans.json's
+ * `pricing_defaults` and each plan's `ai_taste_requests` / `ai_window` / `ai_week`, so the website, the
+ * Billing page and GET /v1/plans show one set of figures (test/public/plans.test.ts pins them). Prices
+ * are tax-inclusive by the founder's decision (docs/PROGRESS.md 2026-10-20): the amount shown is the
+ * amount charged.
  */
 import { PLANS } from "@dome/protocol";
+
+const PRICING = PLANS.pricing_defaults;
+
+/** A paid plan's display price from the contract's `pricing_defaults`. */
+function contractPrice(id: "pro" | "pro_plus"): PlanPrice {
+  const p = PRICING.plans[id];
+  return { monthlyCents: p.monthly_cents, annualCents: p.annual_cents };
+}
 
 export type PlanId = "free" | "pro" | "pro_plus";
 
@@ -21,6 +38,13 @@ export const COMING_AT_PAID_LAUNCH = "Coming at paid launch";
 export const SCREEN_VIEW_STATUS = "Coming";
 /** Point-and-talk / click by name is planned, not built. */
 export const POINT_AND_TALK_STATUS = "Planned";
+/**
+ * Custom remote layouts and saved routines: in the plan contract, not built yet (docs/PRODUCT_AND_PLANS.md). "Coming",
+ * never "at paid launch": paid plans can go on sale before they exist.
+ */
+export const LAYOUTS_STATUS = "Coming";
+/** Beside every AI allowance while the server says the assistant cannot be used (GET /v1/plans `ai_enabled`). */
+export const AI_OFF_STATUS = "Not switched on yet";
 
 export interface PlanPrice {
   monthlyCents: number;
@@ -58,6 +82,8 @@ export interface PlanContent {
 export interface Highlight {
   text: string;
   status?: string;
+  /** An AI allowance: the page adds AI_OFF_STATUS while the assistant is switched off. */
+  ai?: boolean;
 }
 
 /** The 5-hour window in hours and the weekly window in days. */
@@ -66,9 +92,9 @@ export const WEEK_DAYS = 7;
 /** The app warns when this share of a window's allowance is used. */
 export const WARN_AT_PERCENT = 80;
 /** The optional top-up on Pro and Pro Plus: never automatic. */
-export const TOP_UP = { requests: 100, priceCents: 299 } as const;
+export const TOP_UP: { readonly requests: number; readonly priceCents: number } = { requests: PRICING.topup.requests, priceCents: PRICING.topup.price_cents };
 /** Free's one-time taste of the AI butler. */
-export const FREE_TASTE_REQUESTS = 10;
+export const FREE_TASTE_REQUESTS: number = PLANS.plans.free.ai_taste_requests;
 /** Free's Screen view allowance, in minutes per 5-hour window. */
 export const FREE_SCREEN_VIEW_MINUTES = 10;
 /** Everyday commands DoMe understands by itself: free, unlimited, never counted, on every plan. */
@@ -76,6 +102,17 @@ export const EVERYDAY_EXAMPLES = ["pause", "volume 40", "open Spotify"] as const
 
 const free = PLANS.plans.free;
 const pro = PLANS.plans.pro;
+const proPlus = PLANS.plans.pro_plus;
+
+/** A paid plan's AI allowance: the contract's window and week; minutes are content (requests ÷ 2). */
+function paidAi(id: "pro" | "pro_plus"): AiAllowance {
+  const plan = PLANS.plans[id];
+  const window = plan.ai_window.requests;
+  const week = plan.ai_week.requests;
+  return { perWindow: { requests: window, minutes: window / 2 }, perWeek: { requests: week, minutes: week / 2 } };
+}
+const PRO_AI = paidAi("pro");
+const PRO_PLUS_AI = paidAi("pro_plus");
 
 /** US dollars from cents, the way the website shows them: "$0", "$9.99", "$99.99" (never "$0.00"). */
 export function usd(cents: number): string {
@@ -99,8 +136,8 @@ export function aiSummary(ai: AiAllowance): string {
   return "";
 }
 
-const topUpLine: Highlight = { text: `Optional top-up: ${TOP_UP.requests} extra AI requests for ${usd(TOP_UP.priceCents)}, only when you choose` };
-const layoutsLine: Highlight = { text: `Custom remote layouts and saved routines of up to ${pro.routine_max_steps} steps, at paid launch` };
+const topUpLine: Highlight = { text: `Optional top-up: ${TOP_UP.requests} extra AI requests for ${usd(TOP_UP.priceCents)}, only when you choose`, ai: true };
+const layoutsLine: Highlight = { text: `Custom remote layouts and saved routines of up to ${pro.routine_max_steps} steps`, status: LAYOUTS_STATUS };
 const screenViewUnlimited: Highlight = { text: "Screen view: unlimited", status: SCREEN_VIEW_STATUS };
 
 export const PLAN_CONTENT: readonly PlanContent[] = [
@@ -120,7 +157,7 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
       { text: "Full remote control: YouTube, media, volume, approved apps, lock and power, touchpad, keyboard and typed commands" },
       { text: `${free.max_enabled_pcs} PC and up to ${free.max_controllers} phones` },
       { text: "Everyday commands without AI: unlimited, always" },
-      { text: `AI butler: a one-time taste of ${FREE_TASTE_REQUESTS} requests` },
+      { text: `AI butler: a one-time taste of ${FREE_TASTE_REQUESTS} requests`, ai: true },
       { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window`, status: SCREEN_VIEW_STATUS },
     ],
   },
@@ -130,27 +167,27 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     displayName: pro.display_name,
     tagline: "More PCs, unlimited Screen view once it ships, and a real allowance for the AI butler.",
     status: { kind: "coming", label: COMING_AT_PAID_LAUNCH },
-    price: { monthlyCents: 999, annualCents: 9999 },
+    price: contractPrice("pro"),
     pcs: pro.max_enabled_pcs,
     phones: pro.max_controllers,
     screenView: "Unlimited",
-    ai: { perWindow: { requests: 30, minutes: 15 }, perWeek: { requests: 120, minutes: 60 } },
+    ai: PRO_AI,
     topUp: true,
-    highlights: [{ text: "Everything in Free" }, { text: `Up to ${pro.max_enabled_pcs} PCs and ${pro.max_controllers} phones` }, { text: `AI butler: ${aiSummary({ perWindow: { requests: 30, minutes: 15 }, perWeek: { requests: 120, minutes: 60 } })}` }, screenViewUnlimited, layoutsLine, topUpLine],
+    highlights: [{ text: "Everything in Free" }, { text: `Up to ${pro.max_enabled_pcs} PCs and ${pro.max_controllers} phones` }, { text: `AI butler: ${aiSummary(PRO_AI)}`, ai: true }, screenViewUnlimited, layoutsLine, topUpLine],
   },
   {
     id: "pro_plus",
     name: "Pro Plus",
-    displayName: "DoMe Pro Plus",
+    displayName: proPlus.display_name,
     tagline: `For people who talk to their PC all day: three times Pro’s AI requests per ${WINDOW_HOURS}-hour window.`,
     status: { kind: "coming", label: COMING_AT_PAID_LAUNCH },
-    price: { monthlyCents: 2499, annualCents: 24999 },
-    pcs: pro.max_enabled_pcs,
-    phones: pro.max_controllers,
+    price: contractPrice("pro_plus"),
+    pcs: proPlus.max_enabled_pcs,
+    phones: proPlus.max_controllers,
     screenView: "Unlimited",
-    ai: { perWindow: { requests: 90, minutes: 45 }, perWeek: { requests: 300, minutes: 150 } },
+    ai: PRO_PLUS_AI,
     topUp: true,
-    highlights: [{ text: "Everything in Pro" }, { text: `Up to ${pro.max_enabled_pcs} PCs and ${pro.max_controllers} phones` }, { text: `AI butler: ${aiSummary({ perWindow: { requests: 90, minutes: 45 }, perWeek: { requests: 300, minutes: 150 } })}` }, screenViewUnlimited, layoutsLine, topUpLine],
+    highlights: [{ text: "Everything in Pro" }, { text: `Up to ${proPlus.max_enabled_pcs} PCs and ${proPlus.max_controllers} phones` }, { text: `AI butler: ${aiSummary(PRO_PLUS_AI)}`, ai: true }, screenViewUnlimited, layoutsLine, topUpLine],
   },
 ];
 
@@ -170,5 +207,5 @@ export const AI_RULES = {
   taste: `Free includes a one-time taste of ${FREE_TASTE_REQUESTS} AI requests, so you can try the butler before deciding. It does not renew.`,
   topUp: `On Pro and Pro Plus you can add ${TOP_UP.requests} AI requests for ${usd(TOP_UP.priceCents)} when you run out. You choose to buy a top-up; nothing is ever added or charged automatically.`,
   privacy: "The AI never sees your screen: no screenshots, no pictures. Nothing is recorded, and your speech and search words are not stored.",
-  billing: "Prices are in US dollars, before tax. Billing runs through the DoMe web app (Stripe) when paid plans launch.",
+  billing: "Prices are in US dollars and are the full amount you pay (any tax is included). Billing runs through the DoMe web app (Stripe) when paid plans launch.",
 } as const;

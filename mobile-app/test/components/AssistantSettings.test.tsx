@@ -25,7 +25,8 @@ import { freshStorage, installDialogPolyfill, jsonResponse, makeRuntime, OFFICE_
 
 installDialogPolyfill();
 
-const ALLOWANCE: rest.AssistantAllowance = { limit: 300, used: 5, period_start: "2026-10-01T00:00:00Z", period_end: "2026-11-01T00:00:00Z", exhausted: null };
+const ALLOWANCE: rest.AssistantAllowance = { kind: "windows", taste: null, window: { limit: 300, used: 5, starts_at: TS, ends_at: "2099-01-01T15:00:00.000Z" }, week: { limit: 1200, used: 5, starts_at: TS, ends_at: "2099-01-07T10:00:00.000Z" }, topup: { balance: 0, allowed: true }, exhausted: null, resets_at: null, warn_at_percent: 80 };
+const TASTE: rest.AssistantAllowance = { kind: "taste", taste: { limit: 10, used: 5 }, window: null, week: null, topup: { balance: 0, allowed: false }, exhausted: null, resets_at: null, warn_at_percent: 80 };
 const NO_CONSENT: rest.AssistantStatusResponse = { available: true, unavailable_reason: null, provider: "fake", turn_deadline_seconds: 20, consent_version: "2026-10-11", consent: null, allowance: ALLOWANCE };
 const CONSENTED: rest.AssistantStatusResponse = { ...NO_CONSENT, consent: { version: "2026-10-11", given_at: TS } };
 const V = (name: string, lang: string): VoiceLike => ({ name, lang, voiceURI: `uri:${name}` });
@@ -106,28 +107,42 @@ describe("status and consent", () => {
     if (reason !== "spend_limit") expect(screen.queryByRole("button", { name: "Turn on the AI butler…" })).toBeNull();
   });
 
-  it("a paid plan keeps the monthly allowance line with its renewal date", async () => {
+  it("a paid plan's line names both windows and the next refresh; it turns amber from 80 % of either", async () => {
     useSessionStore.setState((st) => ({ session: st.session ? { ...st.session, plan: "pro" } : st.session }));
+    const quiet = card();
+    const line = await screen.findByText(/^5 of 300 used in this 5-hour window · 5 of 1200 this week · refreshes /);
+    expect(line).not.toHaveClass("text-warning");
+    expect(screen.queryByText(/month/)).toBeNull();
+    quiet.unmount();
+    status = { ...NO_CONSENT, allowance: { ...ALLOWANCE, window: { ...ALLOWANCE.window!, used: 240 } } };
     card();
-    expect(await screen.findByText(/^5 of 300 used this month · renews /)).toBeInTheDocument();
+    expect(await screen.findByText(/^240 of 300 used in this 5-hour window/)).toHaveClass("text-warning");
   });
 
-  it("allowance exhausted names the limit", async () => {
-    status = { ...NO_CONSENT, available: false, unavailable_reason: "allowance_exhausted", allowance: { ...ALLOWANCE, used: 300, exhausted: "requests" } };
+  it("allowance exhausted names the limit and when it refreshes", async () => {
+    status = { ...NO_CONSENT, available: false, unavailable_reason: "allowance_exhausted", allowance: { ...ALLOWANCE, window: { ...ALLOWANCE.window!, used: 300 }, exhausted: "window", resets_at: ALLOWANCE.window!.ends_at } };
     card();
-    expect(await screen.findByText(/You've used this month's 300 AI requests\. Renews/)).toBeInTheDocument();
+    expect(await screen.findByText(/You've used this 5-hour window's 300 AI requests\. Refreshes /)).toBeInTheDocument();
+  });
+
+  it("a top-up balance is named on the line", async () => {
+    status = { ...NO_CONSENT, allowance: { ...ALLOWANCE, topup: { balance: 100, allowed: true } } };
+    card();
+    expect(await screen.findByText(/· 100 top-up requests available$/)).toBeInTheDocument();
   });
 
   it("Turn on: the consent text, then POST with the pinned version and CSRF; this phone uses AI and shows the Ask tab", async () => {
-    card();
     // the harness session is on Free, whose AI is a one-time taste: the line never promises a renewal
-    expect(await screen.findByText("5 of 300 AI requests to try used")).toBeInTheDocument();
-    expect(screen.queryByText(/renews/)).toBeNull();
+    status = { ...NO_CONSENT, allowance: TASTE };
+    card();
+    expect(await screen.findByText("5 of 10 AI requests to try used")).toBeInTheDocument();
+    expect(screen.queryByText(/renews|refreshes/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Turn on the AI butler…" }));
     const sheet = screen.getByRole("dialog", { name: "Turn on the AI butler?" });
     expect(sheet).toHaveTextContent("Claude, an AI model made by Anthropic");
     expect(sheet).toHaveTextContent("Never sent: audio, your screen, the list of apps on your PC");
-    expect(sheet).toHaveTextContent("300 requests a month");
+    expect(sheet).toHaveTextContent("Allowance: a one-time taste of 10 requests; it does not renew.");
+    expect(sheet).not.toHaveTextContent(/monthly|a month/);
     expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
     await userEvent.click(within(sheet).getByRole("button", { name: "Turn on" }));
     await waitFor(() => expect(useAssistantStore.getState().prefs.useAi).toBe(true));

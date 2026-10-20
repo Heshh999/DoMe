@@ -5,12 +5,19 @@
  */
 import type { rest } from "@dome/protocol";
 
-import { renewalDate } from "../lib/assistant.ts";
+import { WEEK_DAYS, WINDOW_HOURS } from "../content/plans.ts";
 import { Sheet } from "./Sheet.tsx";
 import { Button, Notice } from "./ui.tsx";
 
 /** rest.schema.json `assistant_consent_version` (the text below). */
 export const CONSENT_VERSION: rest.AssistantConsentVersion = "2026-10-11";
+
+/** The allowance in the terms, from the server's body (protocol 1.3): the windows, Free's taste, or nothing known yet. */
+function allowanceTerms(a: rest.AssistantAllowance | null): string {
+  if (a?.kind === "windows" && a.window && a.week) return `${a.window.limit} requests per ${WINDOW_HOURS}-hour window, up to ${a.week.limit} every ${WEEK_DAYS} days; the app shows when each refreshes.`;
+  if (a?.kind === "taste" && a.taste) return `a one-time taste of ${a.taste.limit} requests; it does not renew.`;
+  return "shown in Settings once it is known.";
+}
 
 export function AssistantConsentSheet({ open, allowance, busy, error, onAccept, onClose }: { open: boolean; allowance: rest.AssistantAllowance | null; busy: boolean; error: string | null; onAccept(): void; onClose(): void }) {
   return (
@@ -24,10 +31,10 @@ export function AssistantConsentSheet({ open, allowance, busy, error, onAccept, 
           <strong className="text-text">Never sent:</strong> audio, your screen, the list of apps on your PC or the names it shows for them, player names, video or window titles, the words of commands DoMe handled by itself, anything typed with the Touchpad keyboard, your clipboard or files.
         </p>
         <p>Your iPhone turns your voice into text first; Apple may process that on its servers.</p>
-        <p>DoMe does not store what you say or what the assistant answers. It keeps counts (requests and tokens) to apply your monthly allowance. Anthropic's API data terms apply to the text it receives.</p>
+        <p>DoMe does not store what you say or what the assistant answers. It keeps counts (requests and tokens) to apply your allowance. Anthropic's API data terms apply to the text it receives.</p>
         <p>Everything the assistant suggests is shown on this phone and sent by this phone. Simple actions such as pausing or changing the volume run straight away; opening or switching apps, full screen and locking the PC wait for your tap on Run; shutting down, restarting, sleeping and closing apps ask you to confirm. Buttons and typed commands keep working without the assistant.</p>
         <p>
-          <strong className="text-text">Allowance:</strong> {allowance ? `${allowance.limit} requests a month, renewing ${renewalDate(allowance.period_end)}.` : "shown in Settings once it is known."} Requests DoMe understands by itself are free and don't count.
+          <strong className="text-text">Allowance:</strong> {allowanceTerms(allowance)} Requests DoMe understands by itself are free and don't count.
         </p>
       </div>
       {error ? (

@@ -341,6 +341,17 @@ founder-driven; then:
    Then read the figures in `mobile-app/src/content/plans.ts` from the contract (keep the "Coming at paid
    launch" labels until paid launch) and update `docs/BILLING.md`, `COST_MODEL.md` and
    `PRODUCT_AND_PLANS.md`. Everyday commands DoMe understands by itself never count, on any plan.
+   **Built (2026-10-20, protocol 1.3, migration 0004), not released:** the three plans, the 5-hour and
+   weekly windows with the taste and top-ups, Stripe Checkout / Portal / webhook / reconciler
+   (`docs/BILLING.md`), the Billing page and the pricing page's live states. Evidence: **integration-tested
+   with a fake Stripe** (`cloud-api/tests/test_billing_*.py`); the Stripe adapter unit-tested; **not
+   sandbox-provider-tested**; AI is off in production, so the AI allowances show "Not switched on yet" and
+   Pro Plus is not sold. **Next (founder):** `docs/LAUNCH_SETUP.md` section 11A steps 3 to 6 on staging
+   (secret key, webhook, portal, the seven values into the GitHub `staging` environment). **Next
+   (engineer):** make the Deploy button pass `DOME_STRIPE_*` to Fly, then the founder's 11A step 7 test-mode
+   run, which is what lets billing be called sandbox-provider-tested; price a typical AI request before the
+   assistant is switched on (`docs/COST_MODEL.md` §8: at the weekly cap a paid account costs more than it
+   pays).
 2. **Screen view (#52)**: the PC's screen live on the phone with tap to click, two-finger scroll, a
    floating mini view, PC sound with mute and a TV-style remote for full-screen apps, as the website and
    film describe it. **Designed, not built (2026-10-20):** `docs/design/screen-view.md` (22 sections:
@@ -353,7 +364,14 @@ founder-driven; then:
    of four research reports, three competing designs, a judge and a 15-finding adversarial review, all
    applied. Build order: WP-0 "Coming" card → Phase 0 spikes and the go/no-go gate (LGPL FFmpeg wheel,
    `screen-probe`, counsel on H.264, Cloudflare TURN pricing check) → Phase 1 beta → Phase 2 sound, mini
-   view, TV remote. Nothing is recorded and the AI never sees the stream. When it ships, change
+   view, TV remote. **Phase 0 status (2026-10-20):** the WP-0 "Coming" card is built (unit-tested in jsdom,
+   not iPhone-tested); `.github/workflows/ffmpeg-lgpl.yml` is written but **has never run**; its licence
+   gate `pc-agent/packaging/licence_gate.py` is unit-tested on Linux, now against real FFmpeg n8.1.3
+   configure output (the review found the workflow would always fail: `buffer`/`buffersink`/`abuffer`/
+   `abuffersink` cannot be selected and configure only warns; fixed, and an ignored option is now a gate
+   failure); `dome_agent/screen/probe.py` is a skeleton with no capture or encode code (its `gate` command
+   works; `matrix` says it is not written yet). **Next:** run `ffmpeg-lgpl.yml` by hand (Actions > Run
+   workflow) and read its gate and smoke results; then the WP0.2 device round on the founder's PC. Nothing is recorded and the AI never sees the stream. When it ships, change
    `SCREEN_VIEW_STATUS` and every "in development" line together (`mobile-app/DECISIONS.md` 63).
 3. **AI butler step 2: click by name (#42)**: "click that" / "click Subscribe" acts on a control found by
    its Windows accessibility name, shown on the phone and confirmed before it runs. The owner ruled out
@@ -376,7 +394,14 @@ founder-driven; then:
    production extension id in the release build; Authenticode signing (most likely Azure Trusted
    Signing) in a separate protected job; an Inno Setup commercial licence before paid launch; an updater
    with signature verification (`docs/SECURITY.md` T12). The Download page says "not yet published" until
-   signing exists.
+   signing exists. **Release pipeline built (2026-10-20), never run:** `.github/workflows/release.yml`
+   (Azure Artifact Signing in the protected `release` environment, an Ed25519-signed `latest.json`, both
+   verify steps now hash the installer itself), the update check (`dome_agent/update_check.py`, not yet
+   wired to the tray) and the Download page's signed-release states, whose signature is now checked by the
+   build itself (`mobile-app/scripts/check-release.ts`). Smart App Control on a signed build: **not yet
+   verified** (the bundled libraries are unsigned; `docs/SECURITY.md` T12). **Next (founder):**
+   `docs/LAUNCH_SETUP.md` section 17 steps 1 to 6 (signing account, OIDC, the `release` environment with
+   the default branch only, the update key; a first run without publishing), then step 7.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;

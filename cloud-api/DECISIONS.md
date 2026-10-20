@@ -330,3 +330,47 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     used: it is PgBouncer in transaction mode, and psycopg 3 prepares statements server-side after 5 runs on
     a connection; the Deploy button refuses that host. `pool_pre_ping` is required, not optional: Neon closes
     every connection when its compute suspends after about 5 idle minutes.
+69. **Protocol 1.3 keeps the PC's view of plans at `free` / `pro`.** The entitlement assertion's `plan` claim and
+    `agent_entitlement_response.plan` are `Plan.entitlement_plan_id`: `pro` for Pro and Pro Plus. Installed agents
+    validate both against a 1.2 schema whose plan enum is `[free, pro]` and gate routines on `plan == "pro"`;
+    Pro Plus has exactly Pro's PC-facing limits, so nothing on the PC needs the difference. The real plan id is in
+    `GET /v1/session` and `GET /v1/account/billing`. `entitlement.schema.json` is unchanged.
+70. **`accounts.plan` has one writer: `billing/state.py::apply()`**, reached from verified webhook processing, the
+    reconciler's provider fetch, the grace sweep and account-deletion cancellation. It always maps the object as the
+    provider has it *now* (fetched), never an event payload, so duplicates and any delivery order converge. Lock
+    order in one transaction: accounts → subscriptions → pcs/controllers → security_events; snapshots are pushed
+    after the commit.
+71. **Webhooks are processed synchronously in the request**, after the receipt row is committed. A failure marks the
+    row `failed` and answers 500 so Stripe redelivers; a redelivery of a `failed` event reclaims it (one claimant wins,
+    an `UPDATE … WHERE status = 'failed'`), while any other repeat is acknowledged as a duplicate. The hourly
+    reconciler retries `failed` rows (fewer than 5 attempts) and `received` rows older than 10 minutes. This replaces
+    the worker of the earlier BILLING design: same convergence, nothing to run separately, fully testable.
+72. **Billing is all-or-nothing.** `billing_enabled` needs the secret key, the webhook secret and all five price ids;
+    a partial set, a live key outside production, the fake provider in staging/production or the old
+    `DOME_STRIPE_PRICE_MONTHLY` / `_ANNUAL` with a value refuse start-up, naming variables, never values.
+    `billing_mode` (`off` / `test` / `live`, by key prefix; the fake is `test`) is public so the PWA can say
+    "Test mode: no real charges".
+73. **AI allowances are rolling windows that open at the first request** (`rules.ai_allowance`): a 5-hour and a
+    weekly `usage_windows` row per account, the taste and the top-up balance on one `ai_balances` row that every
+    reservation, settlement and credit locks `FOR UPDATE`. Order: taste, or window + week, else top-up (paid plans,
+    billing on, assistant configured), else `AI_ALLOWANCE_EXHAUSTED{reason, resets_at}`. The cost cap and the
+    failed-turn limit live on the weekly row; the operator ceiling stays monthly.
+74. **Grace runs seven days from the first failed payment DoMe learns of**, set once. Not `current_period_end`: at a
+    failed renewal Stripe has already moved the period to the new, unpaid one. A grace the sweep ended stays ended
+    while Stripe still reports `past_due` (the row stays `unpaid`).
+75. **A `checkout_pending` row with no hosted page, or a page past its expiry, is shown as `free`**, not
+    `pending`: a failed page creation must not tell the customer a payment is being confirmed.
+76. **Top-ups are sold only when they can be used**: a plan with `ai_topup_allowed`, a subscription in good standing,
+    billing on and the assistant configured. Pending pages count toward the 1000-request cap. A paid top-up is
+    credited exactly once (the purchase row flips to `credited` under the account's balance lock), whichever of
+    `completed` / `async_payment_succeeded` arrives first.
+77. **The Stripe SDK is `stripe` 16.0** (`>=16.0,<17`), its `*_async` methods with SDK retries off and a 10-second
+    `HTTPXClient` timeout. SDK objects are no longer mappings in this major version, so metadata is read with
+    `to_dict()` (unit-tested). Webhook signatures are checked with `stripe.Webhook.construct_event`; the fake provider
+    implements the same scheme and the tests cross-check both ways.
+78. **One subscription per account, defended at both ends.** A Checkout for a different plan or interval first
+    expires the account's open page at Stripe (`expire_checkout`), so two pages can never both be paid. In
+    `apply()`, an event about an *ended* subscription of the account never touches the plan while a newer row is
+    live (canceled is final at Stripe), and a second live subscription made outside DoMe's pages is logged
+    (`billing.second_subscription`) and ignored: the row DoMe follows stays authoritative and the operator refunds or
+    cancels the other in the dashboard.

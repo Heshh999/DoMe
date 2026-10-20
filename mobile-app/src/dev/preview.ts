@@ -114,11 +114,6 @@ const GRANT_ROW: rest.Grant = { id: GRANT, controller_id: CONTROLLER, pc_id: PC,
 const OTHER_GRANT_ROW: rest.Grant = { id: OTHER_GRANT, controller_id: OTHER_CONTROLLER, pc_id: PC, capabilities: ["status", "media", "volume"], created_at: "2026-09-20T09:12:00.000Z" };
 
 function assistantStatus(): rest.AssistantStatusResponse {
-  const start = new Date();
-  start.setUTCDate(1);
-  start.setUTCHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setUTCMonth(end.getUTCMonth() + 1);
   return {
     available: true,
     unavailable_reason: null,
@@ -127,9 +122,8 @@ function assistantStatus(): rest.AssistantStatusResponse {
     consent_version: "2026-10-11",
     consent: { version: "2026-10-11", given_at: CREATED },
     // Free's one-time taste (10 requests, 4 used → "6 AI requests left" on Ask, "4 of 10 AI requests to try used"
-    // in Settings), as the website sells it; the period fields are required by the contract until the metering
-    // task (#51) replaces them, and allowanceLine() shows no renewal on Free
-    allowance: { limit: 10, used: 4, period_start: start.toISOString(), period_end: end.toISOString(), exhausted: null },
+    // in Settings), as the website sells it: no window, no refresh, no top-up (protocol 1.3 assistant_allowance)
+    allowance: { kind: "taste", taste: { limit: 10, used: 4 }, window: null, week: null, topup: { balance: 0, allowed: false }, exhausted: null, resets_at: null, warn_at_percent: 80 },
   };
 }
 

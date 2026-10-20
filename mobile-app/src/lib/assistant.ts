@@ -19,6 +19,7 @@ import { useDevicesStore } from "../store/devices.ts";
 import { isFresh, useLiveStore } from "../store/live.ts";
 import { ApiError } from "./api.ts";
 import { buildAssistantContext } from "./assistantContext.ts";
+import { limitExplanation, lowerFirst, refreshText } from "./billing.ts";
 import { actionPhrase, certainly, cleanText, CONNECTION_DROPPED, DECLINED, planSpeech, powerCancelSpeech, recentClarifyLine, recentOwnerNote, recentPlanLine, recentText, RECENT_AI_ERROR, RECENT_HANDOFF, RECENT_UNKNOWN, runPrompt, screenForMessage, speakable, SWITCHED_PC, TAP_YOUR_CHOICE, UNKNOWN_SCREEN, voiceForAiError, voiceForMessage, type Persona } from "./butlerSpeech.ts";
 import { intentContext as liveIntentContext, previewStep, type LiveView, type PlanRun, type StepPreview } from "./commandPlan.ts";
 import type { CommandRecord } from "./commands.ts";
@@ -138,27 +139,6 @@ export function aiUsable(s: Pick<AssistantState, "status" | "prefs" | "aiBlocked
   return !!st && st.available && st.consent?.version === st.consent_version && s.prefs.useAi && s.aiBlocked === null;
 }
 
-/** The allowance a limit refers to, renewing on the local date of period_end. */
-export function renewalDate(periodEnd: string): string {
-  const d = new Date(periodEnd);
-  return Number.isNaN(d.getTime()) ? "next month" : d.toLocaleDateString(undefined, { day: "numeric", month: "long" });
-}
-
-/** Which limit stopped AI turns, in one sentence, then when it renews (spec §13; docs/design/assistant.md §1.4). */
-export function limitExplanation(reason: string | undefined, allowance: rest.AssistantAllowance | null): string {
-  const renews = allowance ? ` Renews ${renewalDate(allowance.period_end)}.` : "";
-  switch (reason) {
-    case "requests":
-      return `You've used this month's ${allowance ? `${allowance.limit} ` : ""}AI requests.${renews}`;
-    case "cost_cap":
-      return `This month's AI requests needed more processing than your plan includes.${renews}`;
-    case "failures":
-      return `Too many AI requests failed this month, so the assistant is paused to protect your allowance.${renews}`;
-    default:
-      return "";
-  }
-}
-
 const RELEASE_CHANNEL: string | undefined = import.meta.env.VITE_DOME_RELEASE_CHANNEL;
 
 /** Why the assistant cannot be used on this account (null: it can). */
@@ -177,22 +157,15 @@ export function unavailableText(status: rest.AssistantStatusResponse): string | 
   }
 }
 
-/**
- * "5 of 300 used this month · renews 1 November"; on Free, "4 of 10 AI requests to try used": the website sells
- * Free's AI as a one-time taste, so the line never promises that it renews. Until the metering task (#51) replaces
- * the monthly allowance, paid plans keep the monthly wording.
- */
-export function allowanceLine(a: rest.AssistantAllowance, plan?: rest.PlanId | null): string {
-  if (plan === "free") return `${a.used} of ${a.limit} AI requests to try used`;
-  return `${a.used} of ${a.limit} used this month · renews ${renewalDate(a.period_end)}`;
-}
-
-/** After a named limit: what still works (the contract's message would name the limit and its renewal again). */
+/** After a named limit: what still works (the contract's message would name the limit and its refresh again). */
 const STILL_WORKS = "Buttons, typed commands and simple voice commands still work.";
 
-/** Explanation of an AI error code for the conversation and the banner: the limit when it is known, else the contract's message. */
+/**
+ * Explanation of an AI error code for the conversation and the banner: the limit when it is known (lib/billing.ts
+ * `limitExplanation`, with the error's own resets_at when the server sent one), else the contract's message.
+ */
 export function aiErrorText(block: AiBlock, allowance: rest.AssistantAllowance | null): string {
-  const limit = block.code === "AI_ALLOWANCE_EXHAUSTED" ? limitExplanation(block.reason ?? allowance?.exhausted ?? undefined, allowance) : "";
+  const limit = block.code === "AI_ALLOWANCE_EXHAUSTED" ? limitExplanation(block.reason ?? allowance?.exhausted ?? undefined, allowance, { resetsAt: block.resetsAt ?? null }) : "";
   if (limit) return `${limit} ${STILL_WORKS}`;
   return ERRORS[block.code]?.user_message ?? errorMessage({ code: block.code });
 }
@@ -566,8 +539,9 @@ export function createAssistantController(deps: AssistantDeps): AssistantControl
       const allowance = s().allowance;
       const known = code.startsWith("AI_") || code === "RATE_LIMITED" || code === "NETWORK";
       const explanation = code === "NETWORK" ? "I can't reach DoMe's service right now." : known ? aiErrorText(block, allowance) : ERRORS.AI_UNAVAILABLE!.user_message;
-      const periodEnd = allowance?.period_end ?? resetsAt;
-      const renews = periodEnd && !Number.isNaN(Date.parse(periodEnd)) ? renewalDate(periodEnd) : null;
+      // the voice says when the limit refreshes the way the screen does ("today at 2 pm"), never a date the phone invents
+      const resets = resetsAt ?? allowance?.resets_at ?? null;
+      const renews = resets && !Number.isNaN(Date.parse(resets)) ? lowerFirst(refreshText(resets)).replace(/^refreshes /, "") : null;
       const voice = voiceForAiError(known ? code : "AI_UNAVAILABLE", { reason: reason ?? allowance?.exhausted ?? undefined, renews });
       // the error is the whole answer; only a part the parser did understand is added ("I understood … but not …")
       const screen = parserMessage === null ? explanation : `${explanation} ${screenForMessage(parserMessage)}`;
@@ -575,7 +549,7 @@ export function createAssistantController(deps: AssistantDeps): AssistantControl
       remember(text, RECENT_AI_ERROR);
       return;
     }
-    const ai = { charged: response.charged };
+    const ai = { charged: response.charged, chargedFrom: response.charged_from };
     switch (response.mode) {
       case "act": {
         // The reply is ignored: what happens is announced from the validated steps and their real results.

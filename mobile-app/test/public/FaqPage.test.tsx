@@ -2,12 +2,32 @@
  * The FAQ keeps every honest answer and adds the AI butler, limits, Screen view, screen/speech privacy, plans,
  * top-ups and cancelling. The screen answers say "no screenshots" and the speech answer says "never records".
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FAQ_GROUPS } from "../../src/content/faq.tsx";
+import type { rest } from "@dome/protocol";
+
+import { FAQ_GROUPS, faqGroups } from "../../src/content/faq.tsx";
+import { api, ApiError } from "../../src/lib/api.ts";
+import type { BillingAvailability } from "../../src/lib/useBillingAvailability.ts";
 import { FaqPage } from "../../src/pages/public/FaqPage.tsx";
+
+let plans: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  // the page asks GET /v1/plans once; by default it fails, so the static answers stay
+  plans = vi.spyOn(api, "plans").mockRejectedValue(new ApiError(0, "NETWORK", "offline", true));
+});
+afterEach(() => plans.mockRestore());
+
+/** One answer's text for a given server answer, rendered outside the page. */
+function answerFor(availability: BillingAvailability | null, q: string): string {
+  const entry = faqGroups(availability)
+    .flatMap((g) => g.entries)
+    .find((e) => e.q === q)!;
+  return typeof entry.a === "string" ? entry.a : renderToStaticMarkup(<MemoryRouter>{entry.a}</MemoryRouter>).replace(/<[^>]+>/g, "");
+}
 
 const questions = FAQ_GROUPS.flatMap((g) => g.entries.map((e) => e.q));
 
@@ -84,4 +104,49 @@ describe("FAQ", () => {
     expect(privacy.length).toBeGreaterThanOrEqual(2);
     for (const l of privacy) expect(l).toHaveAttribute("href", "/privacy");
   });
+
+  it("states prices as tax included everywhere, never before tax", () => {
+    for (const availability of [null, { selling: true, mode: "live", aiEnabled: true } as const]) {
+      const text = faqGroups(availability)
+        .flatMap((g) => g.entries)
+        .map((e) => (typeof e.a === "string" ? e.a : renderToStaticMarkup(<MemoryRouter>{e.a}</MemoryRouter>)))
+        .join(" ");
+      expect(text).not.toMatch(/before tax/);
+    }
+    expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/in US dollars, tax included \(the price shown is the amount charged\)/);
+    expect(answerFor(null, "What do Pro and Pro Plus include?")).not.toMatch(/at paid launch\. The difference/);
+    expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/layouts and saved routines when they arrive \(both are still coming\)/);
+  });
+
+  it("follows the server: static wording until it answers, how to subscribe once it sells, and Pro Plus only with the AI butler on", async () => {
+    const off = null;
+    const sellingAiOff: BillingAvailability = { selling: true, mode: "live", aiEnabled: false };
+    const sellingAiOn: BillingAvailability = { selling: true, mode: "live", aiEnabled: true };
+    const buy = "Can I buy Pro or Pro Plus today?";
+    expect(answerFor(off, buy)).toMatch(/^Not yet\. Only Free exists today/);
+    // the AI butler is off in production: the taste is not promised as usable today
+    expect(answerFor(off, buy)).toMatch(/once the AI butler is switched on for DoMe accounts \(it is not yet\)/);
+    expect(answerFor(sellingAiOff, buy)).toMatch(/^Yes: Pro can be bought from Billing/);
+    expect(answerFor(sellingAiOff, buy)).toMatch(/Pro Plus goes on sale once the AI butler is switched on/);
+    expect(answerFor(sellingAiOn, buy)).toMatch(/^Yes: Pro and Pro Plus can be bought from Billing/);
+    expect(answerFor(sellingAiOn, buy)).toMatch(/so you can try the butler first/);
+    for (const a of [sellingAiOff, sellingAiOn]) {
+      expect(answerFor(a, buy)).not.toMatch(/Not yet|nothing can be bought/);
+      expect(answerFor(a, "What do Pro and Pro Plus include?")).toMatch(/Subscribe from Billing in the DoMe web app/);
+      expect(answerFor(a, "How do I cancel?")).not.toMatch(/once paid plans launch/);
+    }
+    expect(answerFor(off, "How do I cancel?")).toMatch(/once paid plans launch/);
+
+    // the page itself asks the server and switches its answers
+    const sold: rest.PlansResponse = { plans: {}, pricing: { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } }, billing_enabled: true, billing_mode: "live", ai_enabled: false };
+    plans.mockResolvedValue(sold);
+    const { container } = render(
+      <MemoryRouter initialEntries={["/faq"]}>
+        <FaqPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(container.textContent).toContain("Yes: Pro can be bought from Billing"));
+    expect(container.textContent).not.toContain("nothing can be bought in this version");
+  });
 });
+

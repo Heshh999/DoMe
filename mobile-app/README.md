@@ -151,13 +151,17 @@ Check an export by pulling frames:
 `ffmpeg -ss 17.6 -i dome-demo-1080p.mp4 -frames:v 1 frame.png` (each scene's `still` time is in
 `timeline.ts`).
 
-## Plan content (`src/content/plans.ts`, `src/lib/pricing.ts`; DECISIONS 62–63)
+## Plan content (`src/content/plans.ts`, `src/lib/pricing.ts`; DECISIONS 62–65)
 
-Free / Pro / Pro Plus as static copy: the owner's decisions of 2026-10-12, not yet metered or sold.
+Free / Pro / Pro Plus: the owner's decisions of 2026-10-12, now read from the contract (protocol 1.3,
+`plans.json` `pricing_defaults` and the plans' `ai_*` fields) with the same figures as literal fallbacks,
+and a drift test (`test/public/plans.test.ts`) that fails if content and contract ever disagree. Whether
+the paid plans can be bought is not content: the pricing page and the FAQ ask `GET /v1/plans` and the
+Billing page asks `GET /v1/account/billing` (see "Billing" below).
 
 | | Free | Pro | Pro Plus |
 | --- | --- | --- | --- |
-| Status | "Available now" (chip) | "Coming at paid launch" (status line, not a button) | same as Pro |
+| Status | "Available now" (chip) | "Coming at paid launch" (status line, not a button) until the server reports `billing_enabled`; then "Available now" + "Sign in to subscribe" → `/app/billing` (+ "Test mode" in Stripe test mode) | same as Pro |
 | Price (USD, before tax) | $0 | $9.99 / month or $99.99 / year | $24.99 / month or $249.99 / year |
 | PCs / phones | 1 / 2 | 5 / 5 | 5 / 5 |
 | Screen view ("Coming") | 10 minutes per 5-hour window | unlimited | unlimited |
@@ -170,6 +174,52 @@ Free / Pro / Pro Plus as static copy: the owner's decisions of 2026-10-12, not y
   `POINT_AND_TALK_STATUS` ("Planned").
 - Readers: the pricing page and its comparison table (`lib/pricing.ts → pricingGroups()`), the FAQ, the
   home page's plan teaser, the film's scene 5 and `/demo`, the in-app Billing page and `ProExplanation`.
+
+## Billing (`src/pages/app/BillingPage.tsx`, `src/lib/billing.ts`, `src/lib/api.ts`; docs/BILLING.md; DECISIONS 64–65)
+
+Protocol 1.3 (#51). Everything about the customer's own plan comes from the server, never from a URL:
+`GET /v1/account/billing` (`billing_enabled`, `billing_mode`, plan, entitlement state, the subscription row,
+what can be bought, the top-up, an open downgrade selection) and `GET /v1/session` (plan and limits).
+States of the page, each component-tested (`test/components/BillingPage.test.tsx`):
+
+- **Billing off** (`billing_enabled: false`, production today, or an older server without the endpoint):
+  the plan card, the limits, "Upgrading is not available yet" with the website's prices, a link to
+  `/pricing`, no buttons.
+- **Test mode** (`billing_mode: "test"`): a "Test mode: no real charges" pill on the plan card and above
+  every purchase button.
+- **Free with checkout**: Pro and Pro Plus cards with the server's prices, a monthly/yearly switch, the AI
+  line (+ "Not switched on yet" while `GET /v1/assistant` says `not_configured`), one "Continue to payment"
+  each → `POST /v1/billing/checkout {plan, interval}` → the browser leaves for the server's `checkout_url`
+  (https only; `browserNavigation.assign`, replaceable in tests). Errors show the contract's message for the
+  code (`BILLING_NOT_AVAILABLE`, `ALREADY_SUBSCRIBED` re-reads the status, `RATE_LIMITED`,
+  `BILLING_PROVIDER_ERROR`) and never claim a purchase.
+- **Returned from Stripe** (`?checkout=return|cancel`, `?topup=return|cancel`, informational only; dropped
+  from the URL at once): "Pending activation" / "Top-up pending" while the page polls the session and the
+  billing status (or the allowance) every 3 s for at most 2 minutes, stops when the server says
+  `active`/`past_due` (or the top-up balance grew), then says "Still confirming…" without unlocking anything.
+- **Paid**: the subscription state's copy (`billingStateCopy`: active, cancel scheduled with the end date,
+  past due with the grace date, pending, unpaid, canceled), "Renews / Ends {date} · billed monthly/yearly",
+  "Manage subscription" → `POST /v1/billing/portal` → `portal_url` (plan changes, interval, card and
+  cancellation live in Stripe's portal; `BILLING_NO_CUSTOMER` renders its message); the **AI requests** card
+  with `allowanceSummary`, progress bars for the 5-hour window and the week (amber from 80 %, red when
+  full) and the refresh time; "Add 100 AI requests for $2.99" only when the server's `topup.allowed`
+  (`POST /v1/billing/topup`), with "You choose when; nothing is added or charged automatically."; a kept
+  balance on Free is explained as usable again on a paid plan.
+- **Downgrade selection** (`selection.open`): checkbox lists of PCs and phones from
+  `GET /v1/account/plan-selection`, capped at the plan's limits, "Save" → `PUT`; `PLAN_SELECTION_CLOSED`
+  links to Devices, `PLAN_SELECTION_INVALID` shows its message; after the window one line says the default
+  (most recently used) applies.
+
+`lib/billing.ts` is pure and unit-tested against the shared fixture `fixtures/ai-window-cases.json`
+(`test/billing.test.ts`): `refreshText` ("Refreshes today at 2 pm" / "tomorrow at 9 am" / "Saturday at
+2 pm" / "27 October at 2 pm" / "Does not renew", in the viewer's zone), `bucketLevel` (warn at ≥ 80 %),
+`allowanceSummary` (Settings and Billing line), `limitExplanation` (taste / window / week / cost cap /
+failures, with the error's own `resets_at`), `warningText` (the Ask page's 80 % banner), `requestsLeft`
+(the Ask chip), `billingStateCopy`, `billingErrorText`. The Ask page tags a turn paid from a top-up
+("used a top-up", `charged_from`), and the butler's voice says when a limit refreshes the way the screen
+does. No wording says "month" any more. Evidence: unit-tested and component-tested in jsdom against the
+contract's validators; not yet exercised against a Stripe-backed server (the founder's test-mode run,
+docs/LAUNCH_SETUP.md "Stripe").
   One module means they cannot disagree.
 - Device counts and routine limits are read from the contract (`PLANS` from `@dome/protocol`, i.e.
   `shared/protocol/plans.json`), which the server enforces. The contract has no Pro Plus plan yet, so Pro
@@ -447,8 +497,11 @@ installed). `test/film/` — `timeline` (scene boundaries, stills, chips and the
 captions silent until played, the end card's real links, the storyboard under reduced motion, export
 mode, the vertical layout), `DemoPage` (query flags, export mode) and `LandingPage` (the film right after
 the hero, Screen view listed as Coming, the plan teaser). Autoplay-in-view is not covered: jsdom has no
-IntersectionObserver, so it was only looked at in a browser. Also `components/BillingPage` (the website's prices
-and "coming at paid launch", no purchase control), `previewRoutes` (every preview route exists, every
+IntersectionObserver, so it was only looked at in a browser. Also `components/BillingPage` (every state of the
+Billing page: off, test mode, the four purchase paths and the redirect, the return from Stripe that polls and
+never unlocks by itself, the two-minute bound, paid copy and the portal, the AI card and the top-up, the
+downgrade selection and its errors), `billing` (the shared fixture's refresh wording in New York, the 80 %
+level, the lines, the state copy, the error text), `previewRoutes` (every preview route exists, every
 `/app` page is covered, the offline PC answers PC_OFFLINE) and `styles-bars` (bar fills ≥ 0.9 in both
 themes, the no-`backdrop-filter` fallback, tinted icon wells).
 

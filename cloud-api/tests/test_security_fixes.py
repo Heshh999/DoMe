@@ -163,11 +163,24 @@ def test_create_app_wires_the_client_ip_header_and_the_canonical_host(settings: 
     assert options["SecurityHeadersMiddleware"]["canonical_host"] == fly.public_host == fly.public_origin.split("//")[1]
 
 
+BILLING_OFF = {
+    "billing_provider": "",
+    "stripe_secret_key": "",
+    "stripe_webhook_secret": "",
+    "stripe_price_pro_monthly": "",
+    "stripe_price_pro_annual": "",
+    "stripe_price_pro_plus_monthly": "",
+    "stripe_price_pro_plus_annual": "",
+    "stripe_price_topup": "",
+}
+
+
 def _settings_base(settings: Settings) -> dict[str, Any]:
     base = settings.model_dump()
     base["session_secret"] = settings.session_secret.get_secret_value()
     base["oidc_client_secret"] = settings.oidc_client_secret.get_secret_value()
     base.update(ai_enabled=False, ai_provider="", ai_dev_grant_interpretations=0, ai_dev_grant_cost_cap_cents=0)
+    base.update(**BILLING_OFF)
     return base
 
 
@@ -193,8 +206,9 @@ def test_settings_refuse_wildcard_and_require_proxies_outside_development(settin
     base = settings.model_dump()
     base["session_secret"] = settings.session_secret.get_secret_value()
     base["oidc_client_secret"] = settings.oidc_client_secret.get_secret_value()
-    # the suite's fake AI provider and development grants are refused outside development/test (test_settings.py)
+    # the suite's fake AI and billing providers and development grants are refused outside development/test
     base.update(ai_enabled=False, ai_provider="", ai_dev_grant_interpretations=0, ai_dev_grant_cost_cap_cents=0)
+    base.update(**BILLING_OFF)
     with pytest.raises(ValidationError, match="spoof"):
         Settings(**{**base, "trusted_proxies": "*"})
     with pytest.raises(ValidationError, match="not an IP address"):

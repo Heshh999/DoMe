@@ -194,7 +194,7 @@ export function supportCategoryFor(code: string | null | undefined): "connection
   if (code.startsWith("EXTENSION_") || code.startsWith("TARGET_") || code.startsWith("TAB_") || code.startsWith("SEARCH_") || code === "BROWSER_NOT_RUNNING" || code === "UNSUPPORTED_CONTEXT" || code === "ACTIVATION_REQUIRED") return "media";
   if (code.startsWith("APP_") || code.startsWith("WINDOW_") || code.startsWith("FULLSCREEN_") || code === "CLOSE_REFUSED" || code === "FOCUS_DENIED") return "apps";
   if (code.startsWith("POWER_") || code.startsWith("CONFIRMATION_")) return "power";
-  if (code.startsWith("ENTITLEMENT_") || code.startsWith("BILLING_") || code.endsWith("_PLAN_DISABLED") || code === "DEVICE_LIMIT_REACHED") return "billing";
+  if (code.startsWith("ENTITLEMENT_") || code.startsWith("BILLING_") || code.startsWith("TOPUP_") || code.startsWith("PLAN_SELECTION_") || code === "ALREADY_SUBSCRIBED" || code === "CHECKOUT_PROCESSING" || code === "PLAN_NOT_AVAILABLE" || code.endsWith("_PLAN_DISABLED") || code === "DEVICE_LIMIT_REACHED") return "billing";
   if (code === "UNAUTHENTICATED" || code === "FORBIDDEN") return "account";
   return "other";
 }
@@ -336,7 +336,25 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
     case "ENTITLEMENT_PENDING":
       return ["Your payment is being confirmed. Pro features unlock automatically once it is verified.", "No action is needed; check Billing in a few minutes."];
     case "BILLING_PAST_DUE":
-      return ["Update the payment method from Billing to keep DoMe Pro.", "Free features keep working in the meantime."];
+      return ["Open Billing and choose Manage subscription to update your card.", "Free features keep working in the meantime."];
+    case "ALREADY_SUBSCRIBED":
+      return ["You already have a subscription.", "Open Billing and choose Manage subscription to change the plan or the card."];
+    case "CHECKOUT_PROCESSING":
+      return ["A payment page is being prepared, or your payment is being confirmed. Nothing more was charged.", "Wait a minute, then open Billing again; it updates by itself once the payment is verified."];
+    case "PLAN_NOT_AVAILABLE":
+      return ["Pro Plus adds only AI requests, and the AI butler is not switched on yet, so it is not sold yet. Nothing was charged.", "Choose Pro instead, or come back once the AI butler is on."];
+    case "TOPUP_NOT_ALLOWED":
+      return ["Top-ups are for DoMe Pro and Pro Plus while the subscription is active.", "Nothing was charged."];
+    case "TOPUP_BALANCE_LIMIT":
+      return ["Your account already holds the most top-up requests it can.", "Use some first; nothing was charged."];
+    case "PLAN_SELECTION_CLOSED":
+      return ["The time to choose here has passed; the most recently used devices stayed enabled.", "Enable and disable devices under Devices instead."];
+    case "PLAN_SELECTION_INVALID":
+      return ["Pick no more PCs and phones than your plan allows, from your own devices.", "Then save again."];
+    case "BILLING_NOT_AVAILABLE":
+      return ["Payments aren't available on this DoMe service yet. Nothing was charged.", "Everything you use today stays free."];
+    case "BILLING_PROVIDER_ERROR":
+      return ["Our payment provider didn't answer. Nothing was charged.", "Try again in a moment."];
     case "PC_PLAN_DISABLED":
     case "CONTROLLER_PLAN_DISABLED":
     case "DEVICE_LIMIT_REACHED":

@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from dome_protocol import format_rfc3339
 
 from dome_api.assistant import metering
 from dome_api.assistant.catalogue import CONSENT_VERSION, OUTPUT_SCHEMA, SYSTEM_TEXT
@@ -107,10 +108,11 @@ def ledger(env: Env, account_id: str) -> list[dict[str, Any]]:
 
 
 def usage(env: Env, account_id: str) -> dict[str, int]:
+    """The account's newest weekly window (rules.ai_allowance): requests, cost and failed turns live there."""
     rows = sql(
         env.database_url,
-        "SELECT ai_interpretations_used, ai_interpretations_reserved, ai_cost_used_micro_usd, ai_cost_reserved_micro_usd, "
-        "ai_failed_turns FROM usage_periods WHERE account_id = %s ORDER BY period_start DESC LIMIT 1",
+        "SELECT requests_used, requests_reserved, cost_used_micro_usd, cost_reserved_micro_usd, failed_turns "
+        "FROM usage_windows WHERE account_id = %s AND kind = 'week' ORDER BY window_start DESC LIMIT 1",
         (account_id,),
     )
     if not rows:
@@ -141,14 +143,19 @@ async def test_status_shapes(env: Env, assistant: AssistantService, alice: Brows
     assert status["available"] is True and status["unavailable_reason"] is None
     assert status["provider"] == "fake" and status["turn_deadline_seconds"] == 20
     assert status["consent_version"] == CONSENT_VERSION and status["consent"] is None
-    assert status["allowance"]["limit"] == 50 and status["allowance"]["used"] == 0
-    assert status["allowance"]["exhausted"] is None
+    allowance = status["allowance"]
+    assert allowance["kind"] == "windows" and allowance["window"]["limit"] == 50 and allowance["window"]["used"] == 0
+    assert allowance["week"]["limit"] == 50 and allowance["window"]["starts_at"] is None  # no window open yet
+    assert allowance["exhausted"] is None and allowance["resets_at"] is None and allowance["warn_at_percent"] == 80
+    assert allowance["topup"] == {"balance": 0, "allowed": False}  # Free may not spend top-ups
     configure(assistant, enabled=False)
     status = await alice.get("/v1/assistant", schema="assistant_status_response")
     assert (status["available"], status["unavailable_reason"], status["provider"]) == (False, "not_configured", "none")
-    configure(assistant, enabled=True, dev_grant_interpretations=0)  # Free and Pro are 0 until the Phase E gate
+    configure(assistant, enabled=True, dev_grant_interpretations=0)  # without the grant Free has its one-time taste
     status = await alice.get("/v1/assistant", schema="assistant_status_response")
-    assert (status["available"], status["unavailable_reason"]) == (False, "not_in_plan")
+    assert (status["available"], status["unavailable_reason"]) == (True, None)
+    assert status["allowance"]["kind"] == "taste" and status["allowance"]["taste"] == {"limit": 10, "used": 0}
+    assert status["allowance"]["window"] is None and status["allowance"]["week"] is None
     async with httpx.AsyncClient(base_url=env.origin) as anon:
         assert (await anon.get("/v1/assistant")).status_code == 401
 
@@ -187,7 +194,7 @@ async def test_consent_requires_csrf_origin_and_the_current_version(
         r = await alice.request("POST", "/v1/assistant/consent", bad, expect=400)
         assert error_of(r)["code"] == "MALFORMED_MESSAGE"
     await alice.request("DELETE", "/v1/assistant/consent", csrf=False, expect=403)
-    configure(assistant, dev_grant_interpretations=0)
+    configure(assistant, enabled=False)
     r = await alice.request("POST", "/v1/assistant/consent", body, expect=403)
     assert error_of(r)["code"] == "AI_NOT_AVAILABLE"
 
@@ -221,11 +228,12 @@ async def test_turn_when_ai_is_off_or_not_in_plan(env: Env, assistant: Assistant
     configure(assistant, enabled=False)
     assert error_of(await turn(alice, expect=403))["code"] == "AI_NOT_AVAILABLE"
     configure(assistant, enabled=True, dev_grant_interpretations=0)
-    assert error_of(await turn(alice, expect=403))["code"] == "AI_NOT_AVAILABLE"
+    out = (await turn(alice)).json()  # without the grant, Free's one-time taste pays
+    assert out["charged"] is True and out["charged_from"] == "taste" and out["allowance"]["taste"]["used"] == 1
     assistant.provider = None
     configure(assistant, dev_grant_interpretations=50)
     assert error_of(await turn(alice, expect=403))["code"] == "AI_NOT_AVAILABLE"
-    assert ledger(env, alice.account_id) == []
+    assert len(ledger(env, alice.account_id)) == 1
 
 
 async def test_turn_requires_csrf_and_a_strict_body(assistant: AssistantService, alice: Browser) -> None:
@@ -312,7 +320,9 @@ async def test_act_turn_happy_path(env: Env, assistant: AssistantService, alice:
     assert out["turn_id"] == body["turn_id"] and out["mode"] == "act"
     assert out["steps"] == [{"action": "windows.set_volume", "params": {"value": 50}}]
     assert out["reply"] == "" and out["choices"] == [] and out["handoff"] == "none"  # the phone speaks real results
-    assert out["charged"] is True and out["allowance"]["used"] == 1 and out["allowance"]["limit"] == 50
+    assert out["charged"] is True and out["charged_from"] == "window"
+    assert out["allowance"]["window"]["used"] == 1 and out["allowance"]["window"]["limit"] == 50
+    assert out["allowance"]["week"]["used"] == 1 and out["allowance"]["window"]["starts_at"] is not None
     [row] = ledger(env, alice.account_id)
     assert row["client_turn_id"] == body["turn_id"] and row["status"] == "answered" and row["charged"] is True
     assert (row["input_tokens"], row["output_tokens"], row["cache_read_tokens"]) == (210, 95, 3600)
@@ -352,7 +362,7 @@ async def test_answer_decline_and_ask_are_charged(
     script(assistant, outcome)
     out = (await turn(alice)).json()
     assert out["mode"] == mode and out["handoff"] == handoff and out["charged"] is True and out["steps"] == []
-    assert out["reply"] and out["allowance"]["used"] == 1
+    assert out["reply"] and out["allowance"]["window"]["used"] == 1 and out["charged_from"] == "window"
 
 
 async def test_invalid_outputs_get_the_fixed_question_uncharged(
@@ -377,7 +387,7 @@ async def test_invalid_outputs_get_the_fixed_question_uncharged(
             "steps": [],
             "charged": False,
         }
-        assert out["allowance"]["used"] == 0
+        assert out["allowance"]["window"]["used"] == 0 and out["charged_from"] is None
     rows = ledger(env, alice.account_id)
     assert [r["status"] for r in rows] == ["invalid_output"] * 4 and not any(r["charged"] for r in rows)
     assert all(r["cost_micro_usd"] > 0 for r in rows)  # the tokens were billed, so they are metered
@@ -563,14 +573,15 @@ async def test_each_limit_is_named_and_another_account_still_reserves(
         await consent(b)
     # T4: one account's induced timeouts stop at its own cost cap; the shared ceiling is untouched
     month = far_month()
-    configure(assistant, clock=lambda: month, dev_grant_cost_cap_cents=50, deadline_seconds=0.2)
-    script(assistant, FakeHang(30), FakeHang(30))
-    await turn(alice, expect=504)
-    await turn(alice, expect=504)
+    # Free's weekly cap is 100 cents (plans.json), four full reservations of $0.25
+    configure(assistant, clock=lambda: month, dev_grant_cost_cap_cents=0, deadline_seconds=0.2)
+    script(assistant, FakeHang(30), FakeHang(30), FakeHang(30), FakeHang(30))
+    for _ in range(4):
+        await turn(alice, expect=504)
     r = await turn(alice, expect=429)
     err = error_of(r)
     assert err["code"] == "AI_ALLOWANCE_EXHAUSTED" and err["detail"]["reason"] == "cost_cap"
-    assert err["detail"]["resets_at"].endswith("-01T00:00:00.000Z")
+    assert err["detail"]["resets_at"] == format_rfc3339(month + timedelta(days=7))  # the weekly window's end
     status = await alice.get("/v1/assistant", schema="assistant_status_response")
     assert status["unavailable_reason"] == "allowance_exhausted" and status["allowance"]["exhausted"] == "cost_cap"
     await turn(bob)
@@ -580,14 +591,18 @@ async def test_each_limit_is_named_and_another_account_still_reserves(
     await turn(bob)
     await turn(bob)
     assert error_of(await turn(bob, expect=429))["detail"]["reason"] == "failures"
-    # requests: the month's interpretations are used
+    # the development grant raises the window and the week alike, so both are full together: the reason named is
+    # the one that clears later (the week), and its end is when a request works again, never the window's earlier end
     configure(assistant, failed_turns_per_period=20, dev_grant_interpretations=2)
     await turn(carol)
     await turn(carol)
     r = await turn(carol, expect=429)
-    assert error_of(r)["detail"]["reason"] == "requests"
+    assert error_of(r)["detail"]["reason"] == "week"
     allowance = (await carol.get("/v1/assistant", schema="assistant_status_response"))["allowance"]
-    assert (allowance["used"], allowance["limit"], allowance["exhausted"]) == (2, 2, "requests")
+    assert (allowance["window"]["used"], allowance["window"]["limit"], allowance["exhausted"]) == (2, 2, "week")
+    assert allowance["week"]["used"] == allowance["week"]["limit"] == 2
+    assert error_of(r)["detail"]["resets_at"] == allowance["week"]["ends_at"] == allowance["resets_at"]
+    assert allowance["week"]["ends_at"] > allowance["window"]["ends_at"]
 
 
 async def test_operator_ceiling_across_accounts(
@@ -607,15 +622,28 @@ async def test_operator_ceiling_across_accounts(
     assert usage(env, bob.account_id).get("reserved", 0) == 0
 
 
-async def test_period_rollover_with_an_injected_clock(env: Env, assistant: AssistantService, alice: Browser) -> None:
+async def test_window_rollover_with_an_injected_clock(env: Env, assistant: AssistantService, alice: Browser) -> None:
+    """The 5-hour window opens at the first turn and ends five hours later; the next turn after that opens a new one
+    (rules.ai_allowance). Nothing resets on a calendar."""
     await consent(alice)
     year = next(_years)
-    configure(assistant, clock=lambda: datetime(year, 1, 31, 23, 0, tzinfo=UTC), dev_grant_interpretations=1)
-    await turn(alice)
-    assert error_of(await turn(alice, expect=429))["detail"]["resets_at"] == f"{year}-02-01T00:00:00.000Z"
-    configure(assistant, clock=lambda: datetime(year, 2, 1, 0, 1, tzinfo=UTC))
+    first = datetime(year, 1, 31, 23, 0, tzinfo=UTC)
+    configure(assistant, clock=lambda: first, dev_grant_interpretations=1)
     out = (await turn(alice)).json()
-    assert out["allowance"]["used"] == 1 and out["allowance"]["period_start"] == f"{year}-02-01T00:00:00.000Z"
+    assert out["allowance"]["window"]["starts_at"] == format_rfc3339(first)
+    assert out["allowance"]["window"]["ends_at"] == format_rfc3339(first + timedelta(hours=5))
+    assert out["allowance"]["week"]["ends_at"] == format_rfc3339(first + timedelta(days=7))
+    # window and week both hold one request (the development grant): both are full, and the reset named is the
+    # week's, the later one; the window's end would be a false promise
+    err = error_of(await turn(alice, expect=429))
+    assert (err["detail"]["reason"], err["detail"]["resets_at"]) == ("week", format_rfc3339(first + timedelta(days=7)))
+    configure(assistant, clock=lambda: first + timedelta(hours=5, minutes=1))  # the window ended; the week has 0 room
+    err = error_of(await turn(alice, expect=429))
+    assert (err["detail"]["reason"], err["detail"]["resets_at"]) == ("week", format_rfc3339(first + timedelta(days=7)))
+    configure(assistant, clock=lambda: first + timedelta(days=7, minutes=1))
+    out = (await turn(alice)).json()
+    assert out["allowance"]["window"]["used"] == 1 and out["allowance"]["week"]["used"] == 1
+    assert out["allowance"]["window"]["starts_at"] == format_rfc3339(first + timedelta(days=7, minutes=1))
 
 
 async def test_sweeper_repairs_a_lost_turn(env: Env, assistant: AssistantService, alice: Browser) -> None:
@@ -682,7 +710,7 @@ async def test_words_never_reach_logs_or_tables(
         )
     )
     text_columns = {name for name, kind in columns.items() if kind in ("text", "character varying", "jsonb", "json")}
-    assert text_columns == {"status", "model_served", "provider_request_id"}
+    assert text_columns == {"status", "model_served", "provider_request_id", "source"}
 
 
 async def test_prompt_injection_through_the_words_stays_inside_the_registry(
@@ -725,7 +753,7 @@ async def test_alice_turns_never_touch_bob(env: Env, assistant: AssistantService
     await consent(bob)
     for _ in range(3):
         await turn(alice)
-    assert (await bob.get("/v1/assistant"))["allowance"]["used"] == 0
+    assert (await bob.get("/v1/assistant"))["allowance"]["window"]["used"] == 0
     assert ledger(env, bob.account_id) == [] and len(ledger(env, alice.account_id)) == 3
 
 

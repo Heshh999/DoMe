@@ -1,0 +1,30 @@
+{
+  "$comment": "Allowance arithmetic (rules.ai_allowance) shared by cloud-api (tests/test_assistant_metering.py) and the phone (lib/billing.ts refreshText + allowance helpers). Times are UTC. display_new_york is the phone's refresh wording formatted in America/New_York for the given now.",
+  "window_hours": 5,
+  "week_days": 7,
+  "warn_at_percent": 80,
+  "cases": [
+    { "name": "first request opens both windows", "now": "2026-10-24T13:00:00Z", "open_window": null, "open_week": null,
+      "expect": { "window_ends_at": "2026-10-24T18:00:00Z", "week_ends_at": "2026-10-31T13:00:00Z" } },
+    { "name": "window full, week has room", "now": "2026-10-24T15:00:00Z", "limits": { "window": 30, "week": 120 }, "used": { "window": 30, "week": 30 }, "topup_balance": 0,
+      "window_ends_at": "2026-10-24T18:00:00Z", "week_ends_at": "2026-10-31T13:00:00Z",
+      "expect": { "source": null, "exhausted": "window", "resets_at": "2026-10-24T18:00:00Z", "display_new_york": "Refreshes today at 2 pm" } },
+    { "name": "window full but a top-up pays", "now": "2026-10-24T15:00:00Z", "limits": { "window": 30, "week": 120 }, "used": { "window": 30, "week": 30 }, "topup_balance": 5, "topup_allowed": true,
+      "expect": { "source": "topup", "exhausted": null } },
+    { "name": "week full, window has room", "now": "2026-10-30T20:30:00Z", "limits": { "window": 30, "week": 120 }, "used": { "window": 3, "week": 120 }, "topup_balance": 0,
+      "window_ends_at": "2026-10-31T01:30:00Z", "week_ends_at": "2026-10-31T13:00:00Z",
+      "expect": { "source": null, "exhausted": "week", "resets_at": "2026-10-31T13:00:00Z", "display_new_york": "Refreshes tomorrow at 9 am" } },
+    { "name": "window and week both full", "now": "2026-10-30T20:30:00Z", "limits": { "window": 30, "week": 120 }, "used": { "window": 30, "week": 120 }, "topup_balance": 0,
+      "window_ends_at": "2026-10-31T01:30:00Z", "week_ends_at": "2026-10-31T13:00:00Z",
+      "expect": { "source": null, "exhausted": "week", "resets_at": "2026-10-31T13:00:00Z", "display_new_york": "Refreshes tomorrow at 9 am" } },
+    { "name": "both full, the week ends before the window", "now": "2026-10-31T12:00:00Z", "limits": { "window": 30, "week": 120 }, "used": { "window": 30, "week": 120 }, "topup_balance": 0,
+      "window_ends_at": "2026-10-31T15:00:00Z", "week_ends_at": "2026-10-31T13:00:00Z",
+      "expect": { "source": null, "exhausted": "window", "resets_at": "2026-10-31T15:00:00Z", "display_new_york": "Refreshes today at 11 am" } },
+    { "name": "warning at 80 percent", "limits": { "window": 30 }, "used": { "window": 24 }, "expect": { "warn": true } },
+    { "name": "no warning at 79 percent", "limits": { "window": 90 }, "used": { "window": 71 }, "expect": { "warn": false } },
+    { "name": "weekday wording within six days", "now": "2026-10-20T10:00:00Z", "resets_at": "2026-10-24T18:00:00Z", "expect": { "display_new_york": "Refreshes Saturday at 2 pm" } },
+    { "name": "half hour keeps its minutes", "now": "2026-10-20T10:00:00Z", "resets_at": "2026-10-20T22:30:00Z", "expect": { "display_new_york": "Refreshes today at 6:30 pm" } },
+    { "name": "a week or more away names the date", "now": "2026-10-20T10:00:00Z", "resets_at": "2026-10-27T18:00:00Z", "expect": { "display_new_york": "Refreshes 27 October at 2 pm" } },
+    { "name": "taste never refreshes", "taste": { "limit": 10, "used": 10 }, "expect": { "exhausted": "taste", "resets_at": null, "display_new_york": "Does not renew" } }
+  ]
+}

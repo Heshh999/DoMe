@@ -1,11 +1,12 @@
 /**
  * Frequently asked questions (src/content/faq.tsx), grouped by topic: each group is a card of disclosure
- * rows, with a sticky jump list on wide screens. The page draws its own container (it is a "wide" page).
+ * rows, with a sticky jump list on wide screens. The plan answers follow what the server says (GET /v1/plans). The page draws its own container (it is a "wide" page).
  */
 import { Link } from "react-router";
 
 import { Icon } from "../../components/icons.tsx";
-import { FAQ_GROUPS, type FaqGroup } from "../../content/faq.tsx";
+import { faqGroups, type FaqGroup } from "../../content/faq.tsx";
+import { useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 import { PublicIcon } from "./publicIcons.tsx";
 
 function GroupIcon({ name }: { name: FaqGroup["icon"] }) {
@@ -16,6 +17,8 @@ function GroupIcon({ name }: { name: FaqGroup["icon"] }) {
 const LINK = "font-semibold text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-current";
 
 export function FaqPage() {
+  // the plan answers follow GET /v1/plans (checkout, AI switched on); until it answers, today's static wording
+  const groups = faqGroups(useBillingAvailability());
   return (
     <div className="mx-auto max-w-6xl px-5 py-12 lg:px-8 lg:py-16">
       <header className="dome-page-intro animate-rise">
@@ -27,7 +30,7 @@ export function FaqPage() {
       <div className="grid gap-10 lg:grid-cols-[14rem_1fr] lg:gap-14">
         <nav aria-label="Topics" className="dome-jump hidden lg:block">
           <ul className="sticky top-24 space-y-0.5">
-            {FAQ_GROUPS.map((g) => (
+            {groups.map((g) => (
               <li key={g.id}>
                 <a href={`#${g.id}`}>
                   <span className="dome-well dome-well-xs mr-3">
@@ -41,7 +44,7 @@ export function FaqPage() {
         </nav>
 
         <div className="space-y-12">
-          {FAQ_GROUPS.map((g) => (
+          {groups.map((g) => (
             <section key={g.id} id={g.id} aria-labelledby={`faq-${g.id}`}>
               <div className="flex items-center gap-3">
                 <span className="dome-well">

@@ -13,7 +13,7 @@ from dome_api.auth.sessions import clear_session_cookie, create_session, set_ses
 from dome_api.db.models import Account
 from dome_api.errors import ApiError
 from dome_api.logging import get_logger
-from dome_api.plans import catalog, plan_for
+from dome_api.plans import plan_for
 from dome_api.security import events
 from dome_api.security.tokens import ip_hash
 from dome_api.util import client_ip, rest_response, ts_required, utcnow
@@ -87,7 +87,7 @@ async def callback(
 
 
 @router.get("/session")
-async def session_document(auth: Auth, svc: Svc) -> Any:
+async def session_document(auth: Auth, db: DB, svc: Svc) -> Any:
     plan = plan_for(auth.account.plan)
     body = {
         "account": {
@@ -98,7 +98,7 @@ async def session_document(auth: Auth, svc: Svc) -> Any:
         },
         "csrf_token": auth.session.csrf_token,
         "plan": plan.id,
-        "entitlement_state": catalog().entitlement_state_for(plan),
+        "entitlement_state": await svc.billing.entitlement_state(db, auth.account.id),
         "limits": plan.session_limits(),
         "protocol_version": svc.registry.protocol_version,
     }

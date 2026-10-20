@@ -2,6 +2,7 @@
 
     python smoke_test.py bridge --app-dir DIR --version X.Y.Z --log-dir LOGS [--allow-this-pc]
     python smoke_test.py full --setup DoMe-Setup-X.Y.Z.exe --version X.Y.Z --log-dir LOGS [--allow-this-pc]
+        [--release --publisher NAME [--browser-addon]]
 
 ``bridge`` (Windows or Linux) runs the PyInstaller folder: ``DoMe version``, the native host without an
 agent (one ``AGENT_NOT_RUNNING`` frame, exit 1), ``DoMe run --headless`` with a temporary state folder, a
@@ -16,6 +17,17 @@ upgrade over the running tray; an upgrade while DoMe will not quit (Setup must s
 a refused downgrade; a refused ``/ApiUrl=http://``; an uninstall over the running tray that keeps the
 data; an install with a staging address and no extension id, an upgrade that keeps that address; an
 uninstall with ``/REMOVEDATA``; and an install plus uninstall that must leave no empty state folder.
+``full --release`` tests a signed release Setup (``build_installer.py --release``) instead: it skips the
+development-only phases (the development extension id, the staging address and its upgrade, the refused
+``/ApiUrl=http://``) and checks that ``/ApiUrl=`` and ``/ExtensionId=`` are ignored (``https://domeremote.com``
+stays, no development add-on is registered); without ``--browser-addon`` (a release built with
+``--without-browser-addon``) no browser bridge may be registered at all; and right after the first install it
+checks the Authenticode signatures of Setup, the installed ``DoMe.exe``, ``dome-native-host.exe`` and
+``unins000.exe``: status Valid, signer ``CN=<--publisher>``, a timestamp. That needs the runner to trust
+Microsoft's "Identity Verification Root CA 2020" (Windows fetches it through its automatic root update);
+a ``NotTrusted`` or ``UnknownError`` status fails the test, and the engineer investigates with
+``certutil -verify -urlfetch``. The order of the phases is :func:`phase_plan` (unit-tested on Linux, so the
+release run cannot silently lose its signature checks).
 After every Setup or uninstaller run no process may be left running from the install folder (the process
 list itself must be readable and hold this script, or the test fails); after every phase no DoMe program
 may have written ``logs\\crash.log``; and the DoMe.exe commands Setup and the uninstaller run must show
@@ -439,11 +451,79 @@ def pe_icon_resources(path: Path) -> set[bytes] | None:
 # ----- full mode --------------------------------------------------------------------------------------------------
 
 
+def signer_matches(subject: str, publisher: str) -> bool:
+    """Does a certificate subject (``CN=Jane Doe, O=Jane Doe, L=..., C=US``) name ``publisher`` as its CN?"""
+    if not publisher:
+        return False
+    cn = re.search(r'(?:^|,\s*)CN=("(?:[^"]|"")*"|[^,]*)', subject)
+    if cn is None:
+        return False
+    value = cn.group(1).strip()
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1].replace('""', '"')
+    return value == publisher
+
+
+DEV_PHASES = [
+    "preflight",
+    "install",
+    "cli",
+    "bridge",
+    "tray",
+    "upgrade",
+    "not_quitting",
+    "downgrade",
+    "insecure_url",
+    "uninstall_keep",
+    "staging",
+    "keeps_address",
+    "removedata",
+    "no_empty_state",
+]
+RELEASE_PHASES = [
+    "preflight",
+    "install",
+    "signatures",
+    "cli",
+    "bridge",
+    "tray",
+    "upgrade",
+    "not_quitting",
+    "downgrade",
+    "ignored_params",
+    "uninstall_keep",
+    "reinstall",
+    "removedata",
+    "no_empty_state",
+]
+
+
+def phase_plan(release: bool) -> list[str]:
+    """The phases of ``full``, in order: a release build skips the development-only ones and adds the
+    signature checks right after the first install."""
+    return list(RELEASE_PHASES if release else DEV_PHASES)
+
+
+
 class Machine:
     """The current Windows user's DoMe paths, and running Setup / the uninstaller."""
 
-    def __init__(self, setup: Path, version: str, report: Report) -> None:
+    def __init__(
+        self,
+        setup: Path,
+        version: str,
+        report: Report,
+        *,
+        release: bool = False,
+        publisher: str = "",
+        browser_addon: bool = False,
+    ) -> None:
         local = Path(os.environ["LOCALAPPDATA"])
+        self.release = release
+        self.publisher = publisher
+        # Is a browser bridge registered after an install? A development build: yes (the test extension id
+        # it is given); a release: only when it was built with the production add-on id.
+        self.host = browser_addon if release else True
         self.app = local / "Programs" / "DoMe"
         self.state = local / "DoMe"
         self.lnk = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "DoMe.lnk"
@@ -453,6 +533,7 @@ class Machine:
         self.env = clean_env()
         self.own: list[subprocess.Popen[Any]] = []
         self.parents_before: dict[str, bool] = {}
+        self.tray: subprocess.Popen[bytes] | None = None
 
     @property
     def dome(self) -> Path:
@@ -535,6 +616,8 @@ class Machine:
         return str(data.get("api_url")) if isinstance(data, dict) else "<invalid>"
 
     def check_installed(self, host: bool, run: bool, api: str) -> None:
+        """``host`` True: the browser bridge is registered (a development build: for the test extension id;
+        a release with the add-on: for its production ids only); False: no registration at all."""
         r = self.report
         for rel in (
             "DoMe.exe",
@@ -573,6 +656,11 @@ class Machine:
                     str(value),
                 )
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            origins = manifest.get("allowed_origins")
+            if self.release:
+                origins_ok = isinstance(origins, list) and bool(origins) and TEST_ORIGIN not in origins
+            else:
+                origins_ok = origins == [TEST_ORIGIN]
             r.check(
                 "manifest: name, type, path, origins",
                 manifest.get("name") == "com.dome.agent"
@@ -580,11 +668,12 @@ class Machine:
                 and os.path.normcase(str(manifest.get("path")))
                 == os.path.normcase(str(self.app / "dome-native-host.exe"))
                 and Path(str(manifest.get("path"))).exists()
-                and manifest.get("allowed_origins") == [TEST_ORIGIN],
+                and origins_ok,
                 json.dumps(manifest),
             )
         else:
             r.check("browser bridge not registered", not reg_key_exists(CHROME_KEY) and not reg_key_exists(EDGE_KEY))
+            r.check("no native host manifest", not manifest_path.exists())
         run_value = reg_value(RUN_KEY, "DoMe")
         if run:
             r.check(
@@ -594,6 +683,33 @@ class Machine:
             )
         else:
             r.check("no start at login", run_value is None, str(run_value))
+
+    def check_signatures(self) -> None:
+        """Authenticode: Valid, signed by ``CN=<publisher>``, timestamped (the certificates live 3 days)."""
+        files = [self.setup, self.dome, self.app / "dome-native-host.exe", self.app / "unins000.exe"]
+        for path in files:
+            escaped = str(path).replace("'", "''")
+            out = powershell(
+                f"Get-AuthenticodeSignature -LiteralPath '{escaped}' | Select-Object "
+                "@{n='Status';e={[string]$_.Status}},StatusMessage,"
+                "@{n='Subject';e={$_.SignerCertificate.Subject}},"
+                "@{n='TimeStamper';e={$_.TimeStamperCertificate.Subject}} | ConvertTo-Json -Compress"
+            )
+            try:
+                info = json.loads(out.stdout.strip() or "{}")
+            except ValueError:
+                info = {}
+            if not isinstance(info, dict):
+                info = {}
+            subject = str(info.get("Subject") or "")
+            self.report.check(
+                f"signature of {path.name}: Valid, CN={self.publisher}, timestamped",
+                info.get("Status") == "Valid"
+                and signer_matches(subject, self.publisher)
+                and bool(info.get("TimeStamper")),
+                f"status {info.get('Status')!r} ({info.get('StatusMessage')!r}); subject {subject!r}; "
+                f"timestamp {info.get('TimeStamper')!r}; exit code {out.returncode}; {out.stderr.strip()[:300]}",
+            )
 
     def check_icons(self) -> None:
         images = ico_images(BRAND_ICON)
@@ -642,10 +758,12 @@ class Machine:
         ]
 
 
-def full(setup: Path, version: str, report: Report) -> None:
+def full(
+    setup: Path, version: str, report: Report, *, release: bool = False, publisher: str = "", browser_addon: bool = False
+) -> None:
     if sys.platform != "win32":
         raise SmokeError("full mode runs on Windows only")
-    m = Machine(setup, version, report)
+    m = Machine(setup, version, report, release=release, publisher=publisher, browser_addon=browser_addon)
     try:
         _full_phases(m, report)
     finally:
@@ -654,7 +772,13 @@ def full(setup: Path, version: str, report: Report) -> None:
 
 
 def _full_phases(m: Machine, report: Report) -> None:
-    version = m.version
+    kind = "release build" if m.release else "development build"
+    report.note(f"testing a {kind}: phases {', '.join(phase_plan(m.release))}")
+    for name in phase_plan(m.release):
+        PHASES[name](m, report)
+
+
+def _phase_preflight(m: Machine, report: Report) -> None:
     report.phase("0 preflight: nothing of DoMe on this runner")
     report.check("no install folder", not m.app.exists())
     report.check("no uninstall entry", not reg_key_exists(UNINSTALL_KEY))
@@ -670,8 +794,14 @@ def _full_phases(m: Machine, report: Report) -> None:
         f"notification area (explorer.exe running): {'yes' if explorer else 'NO - the tray icon cannot be seen here'}"
     )
 
-    report.phase("1 install: start at login, development extension id")
-    rc, log = m.run_setup("1-install", "/MERGETASKS=startatlogin", f"/ExtensionId={TEST_ID}")
+
+def _phase_install(m: Machine, report: Report) -> None:
+    if m.release:
+        report.phase("1 install: start at login (a release build takes no extension id)")
+        rc, log = m.run_setup("1-install", "/MERGETASKS=startatlogin")
+    else:
+        report.phase("1 install: start at login, development extension id")
+        rc, log = m.run_setup("1-install", "/MERGETASKS=startatlogin", f"/ExtensionId={TEST_ID}")
     # The runner has UAC off, so Setup's token is not "elevated through UAC" and Setup may run DoMe.exe;
     # if this ever fails, Setup refused to install (DoMe.iss ElevatedThroughUac) and nothing below can pass.
     elevation = re.search(r"Administrator: \d; elevation type: \d+; elevated through UAC: \d", log)
@@ -681,10 +811,26 @@ def _full_phases(m: Machine, report: Report) -> None:
         elevation.group(0) if elevation else "no elevation line in the Setup log",
     )
     report.check("Setup exit code 0", rc == 0, str(rc))
-    m.check_installed(host=True, run=True, api=DEFAULT_API)
+    if m.release and not m.host:
+        report.check(
+            "the log says this version does not include the browser add-on",
+            "this version of DoMe does not include the browser add-on" in log,
+        )
+        report.check("Setup did not run DoMe.exe install-native-host", "Running DoMe.exe install-native-host" not in log)
+    m.check_installed(host=m.host, run=True, api=DEFAULT_API)
     m.check_icons()
     m.check_no_crash("1")
 
+
+def _phase_signatures(m: Machine, report: Report) -> None:
+    report.phase(f"1s signatures: Setup and the installed programs, signed by {m.publisher}")
+    if not m.publisher:
+        raise SmokeError("a release build is tested with --publisher (the name its certificate must carry)")
+    m.check_signatures()
+
+
+def _phase_cli(m: Machine, report: Report) -> None:
+    version = m.version
     report.phase("2 the installed command line")
     out = run_cli(m.dome, ["version"], m.env)
     report.check(
@@ -703,10 +849,14 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("state.sqlite3 created", (m.state / "state.sqlite3").exists())
     m.check_no_crash("2")
 
-    bridge(m.app, version, report, allow_this_pc=False)
 
+def _phase_bridge(m: Machine, report: Report) -> None:
+    bridge(m.app, m.version, report, allow_this_pc=False)
+
+
+def _phase_tray(m: Machine, report: Report) -> None:
     report.phase("4 the tray (DoMe.exe alone) and a second launch")
-    tray = m.start_tray("tray")
+    m.tray = m.start_tray("tray")
     out = run_cli(m.dome, [], m.env)
     report.check(
         "second launch: exit 0, 'already running'",
@@ -715,7 +865,12 @@ def _full_phases(m: Machine, report: Report) -> None:
     )
     m.check_no_crash("4")
 
+
+def _phase_upgrade(m: Machine, report: Report) -> None:
     report.phase("5 upgrade over the running tray")
+    tray = m.tray
+    if tray is None:
+        raise SmokeError("phase 5 needs the tray of phase 4")
     m.marker.write_text("installed by phase 1", encoding="ascii")
     rc, log = m.run_setup("5-upgrade")
     report.check("Setup exit code 0", rc == 0, str(rc))
@@ -730,10 +885,12 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("the tray quit cleanly (exit 0)", tray_rc == 0, str(tray_rc))
     report.check("no Windows error report for the tray", not m.wer_reports(tray.pid))
     report.check("the old runtime folder was replaced", not m.marker.exists())
-    m.check_installed(host=True, run=True, api=DEFAULT_API)
+    m.check_installed(host=m.host, run=True, api=DEFAULT_API)
     report.check("state.sqlite3 kept", (m.state / "state.sqlite3").exists())
     m.check_no_crash("5")
 
+
+def _phase_not_quitting(m: Machine, report: Report) -> None:
     report.phase("6 upgrade while DoMe does not quit: Setup must change nothing")
     m.marker.write_text("installed by phase 5", encoding="ascii")
     with hold_agent_mutex():
@@ -747,29 +904,63 @@ def _full_phases(m: Machine, report: Report) -> None:
         "DoMe.exe uninstall-native-host exited with code 0" in log,
     )
     again = log.find("registering the browser bridge of the installed DoMe again")
-    report.check(
-        "Setup registered the browser bridge again (then DoMe.exe install-native-host exited with code 0)",
-        again >= 0 and log.find("DoMe.exe install-native-host exited with code 0", again) > again,
-    )
-    report.check("browser bridge registered again", reg_key_exists(CHROME_KEY) and reg_key_exists(EDGE_KEY))
+    if m.host:
+        report.check(
+            "Setup registered the browser bridge again (then DoMe.exe install-native-host exited with code 0)",
+            again >= 0 and log.find("DoMe.exe install-native-host exited with code 0", again) > again,
+        )
+        report.check("browser bridge registered again", reg_key_exists(CHROME_KEY) and reg_key_exists(EDGE_KEY))
+    else:
+        # nothing was registered before, so nothing may be registered now (install-native-host has no id)
+        report.check(
+            "still no browser bridge registered",
+            not reg_key_exists(CHROME_KEY) and not reg_key_exists(EDGE_KEY),
+        )
     m.check_no_crash("6")
 
+
+def _phase_downgrade(m: Machine, report: Report) -> None:
     report.phase("7 downgrade refused")
     reg_set(UNINSTALL_KEY, "DisplayVersion", "99.0.0")
     try:
         rc, log = m.run_setup("7-downgrade")
     finally:
-        reg_set(UNINSTALL_KEY, "DisplayVersion", version)
+        reg_set(UNINSTALL_KEY, "DisplayVersion", m.version)
     report.check("Setup refuses", rc != 0 and "Refusing to downgrade" in log, str(rc))
     report.check("the installation is unchanged", m.marker.exists())
     m.check_no_crash("7")
 
+
+def _phase_insecure_url(m: Machine, report: Report) -> None:
     report.phase("8 /ApiUrl=http:// refused")
     rc, log = m.run_setup("8-insecure-url", "/ApiUrl=http://insecure.example.test")
     report.check("Setup refuses", rc != 0 and "Refused /ApiUrl" in log, str(rc))
     report.check("server address unchanged", m.server_address() == DEFAULT_API, m.server_address())
     m.check_no_crash("8")
 
+
+def _phase_ignored_params(m: Machine, report: Report) -> None:
+    report.phase("8r a release build ignores /ApiUrl= and /ExtensionId=")
+    rc, log = m.run_setup("8-ignored-params", f"/ApiUrl={STAGING_API}", f"/ExtensionId={TEST_ID}")
+    report.check("Setup exit code 0", rc == 0, str(rc))
+    report.check(
+        "the log says both were ignored",
+        "Ignored /ApiUrl=: this Setup is a release build" in log
+        and "Ignored /ExtensionId=: this Setup is a release build" in log,
+    )
+    report.check(f"server address still {DEFAULT_API}", m.server_address() == DEFAULT_API, m.server_address())
+    m.check_installed(host=m.host, run=True, api=DEFAULT_API)
+    if not m.host:
+        report.check(
+            "no development add-on registered (no NativeMessagingHosts key, no com.dome.agent.json)",
+            not reg_key_exists(CHROME_KEY)
+            and not reg_key_exists(EDGE_KEY)
+            and not (m.state / "com.dome.agent.json").exists(),
+        )
+    m.check_no_crash("8r")
+
+
+def _phase_uninstall_keep(m: Machine, report: Report) -> None:
     report.phase("9 uninstall over the running tray, keeping the data")
     tray = m.start_tray("tray before uninstall")
     reg_set(APPROVED_KEY, "DoMe", bytes([3]) + bytes(11))  # what Task Manager writes when it disables an entry
@@ -787,6 +978,8 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("data kept: state.sqlite3", (m.state / "state.sqlite3").exists())
     m.check_no_crash("9")
 
+
+def _phase_staging(m: Machine, report: Report) -> None:
     report.phase("10 install with a staging address and no extension id")
     rc, log = m.run_setup("10-staging", f"/ApiUrl={STAGING_API}/")
     report.check("Setup exit code 0", rc == 0, str(rc))
@@ -803,12 +996,25 @@ def _full_phases(m: Machine, report: Report) -> None:
     report.check("data kept: state.sqlite3", (m.state / "state.sqlite3").exists())
     m.check_no_crash("10")
 
+
+def _phase_keeps_address(m: Machine, report: Report) -> None:
     report.phase("11 an upgrade keeps the staging address")
     rc, _log = m.run_setup("11-keeps-address")
     report.check("Setup exit code 0", rc == 0, str(rc))
     report.check("server address kept", m.server_address() == STAGING_API, m.server_address())
     m.check_no_crash("11")
 
+
+def _phase_reinstall(m: Machine, report: Report) -> None:
+    report.phase("10r install again over the kept data")
+    rc, _log = m.run_setup("10-reinstall")
+    report.check("Setup exit code 0", rc == 0, str(rc))
+    m.check_installed(host=m.host, run=False, api=DEFAULT_API)
+    report.check("data kept: state.sqlite3", (m.state / "state.sqlite3").exists())
+    m.check_no_crash("10r")
+
+
+def _phase_removedata(m: Machine, report: Report) -> None:
     report.phase("12 uninstall with /REMOVEDATA")
     m.check_no_crash("before 12")  # /REMOVEDATA deletes the logs folder
     rc, log = m.run_uninstall("12-removedata", "/REMOVEDATA")
@@ -817,6 +1023,8 @@ def _full_phases(m: Machine, report: Report) -> None:
     m.check_removed()
     report.check("state folder removed", not m.state.exists())
 
+
+def _phase_no_empty_state(m: Machine, report: Report) -> None:
     report.phase("13 install and uninstall without ever starting DoMe: no empty state folder")
     rc, _log = m.run_setup("13-install")
     report.check("Setup exit code 0", rc == 0, str(rc))
@@ -829,6 +1037,27 @@ def _full_phases(m: Machine, report: Report) -> None:
         not m.state.exists(),
         str(list(m.state.rglob("*"))[:20]) if m.state.exists() else "",
     )
+
+
+PHASES: dict[str, Callable[[Machine, Report], None]] = {
+    "preflight": _phase_preflight,
+    "install": _phase_install,
+    "signatures": _phase_signatures,
+    "cli": _phase_cli,
+    "bridge": _phase_bridge,
+    "tray": _phase_tray,
+    "upgrade": _phase_upgrade,
+    "not_quitting": _phase_not_quitting,
+    "downgrade": _phase_downgrade,
+    "insecure_url": _phase_insecure_url,
+    "ignored_params": _phase_ignored_params,
+    "uninstall_keep": _phase_uninstall_keep,
+    "staging": _phase_staging,
+    "keeps_address": _phase_keeps_address,
+    "reinstall": _phase_reinstall,
+    "removedata": _phase_removedata,
+    "no_empty_state": _phase_no_empty_state,
+}
 
 
 def copy_logs(report: Report) -> None:
@@ -848,6 +1077,9 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--app-dir", type=Path, required=True)
     f = sub.add_parser("full", help="DESTRUCTIVE: install, check, upgrade and uninstall DoMe for this user")
     f.add_argument("--setup", type=Path, required=True)
+    f.add_argument("--release", action="store_true", help="a signed release build (build_installer.py --release)")
+    f.add_argument("--publisher", default="", help="release: the name the signatures must carry (CN=...)")
+    f.add_argument("--browser-addon", action="store_true", help="release: built with the production add-on id")
     for p in (b, f):
         p.add_argument("--version", required=True)
         p.add_argument("--log-dir", type=Path, required=True)
@@ -866,7 +1098,22 @@ def main(argv: list[str] | None = None) -> int:
                     "Actions; pass --allow-this-pc to run it here anyway."
                 )
                 return 1
-            full(args.setup.resolve(), args.version, report)
+            if args.release and not args.publisher.strip():
+                report.line("REFUSED: --release needs --publisher, the name the signatures must carry")
+                report.close()
+                return 1
+            if args.browser_addon and not args.release:
+                report.line("REFUSED: --browser-addon is only for --release")
+                report.close()
+                return 1
+            full(
+                args.setup.resolve(),
+                args.version,
+                report,
+                release=args.release,
+                publisher=args.publisher.strip(),
+                browser_addon=args.browser_addon,
+            )
     except SmokeError as exc:
         report.line(f"SMOKE TEST FAILED at: {exc}")
         if args.mode == "full":

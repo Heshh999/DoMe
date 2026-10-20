@@ -85,5 +85,31 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     `cache_creation` breakdown.
 18. **Single process.** `in_flight`, the per-account turn buckets and the sweeper are in memory per process
     (ADR-0001 D1). The reservations themselves are in PostgreSQL and stay exact under any number of processes.
-19. **The usage period is the calendar month in UTC** for every plan and billing interval; when billing anchors periods
-    to the subscription, only `metering.period_for()` changes.
+19. **AI windows are rolling, not tied to the subscription** (protocol 1.3): a 5-hour and a weekly window open at
+    the account's first request while none is open, on every plan and billing interval. A plan change mid-window
+    keeps the open windows and applies the new plan's limits to them from the next request. The operator ceiling
+    stays per calendar month in UTC. `usage_periods` (the calendar-month table) is no longer written.
+
+## Billing (Phase C)
+
+20. **Never run against Stripe.** Everything is integration-tested with `FakeStripe`, which signs exactly as Stripe
+    does (`tests/test_billing_stripe_adapter.py` cross-checks it with the SDK's own helper). The real request shapes
+    (Checkout parameters, the invoice's subscription under `parent.subscription_details`, the period on the
+    subscription item) follow the pinned `stripe` 16.0 SDK's models and must be confirmed by the founder's first
+    test-mode run on staging (`docs/LAUNCH_SETUP.md` 11A).
+21. **Disputes and refunds are not handled.** `charge.dispute.*` and `charge.refunded` are recorded as `ignored` with a
+    `billing.needs_operator` warning; access is not paused and nothing is canceled automatically. Trials are not
+    configured.
+22. **No `DELETE /v1/account` route.** Only `BillingService.cancel_for_account_deletion()` and its
+    `pending_deletions` retry exist; account deletion stays a support request.
+23. **Single-process reconciler.** The hourly pass runs in the API process (ADR-0001 D1). Every step is idempotent
+    (deduplicated events, fetch-then-apply, conditional updates), so a second process would only repeat work.
+24. **The Deploy button does not carry the Stripe values yet.** `deploy/` and `.github/workflows/deploy.yml` were
+    outside this build; until they pass the seven `DOME_STRIPE_*` values to Fly, staging and production run with
+    billing off whatever is pasted into GitHub.
+25. **The phone learns the plan by polling.** After Checkout the PWA polls `GET /v1/session` and
+    `GET /v1/account/billing`; there is no push to the phone, so activation shows within the poll interval of the
+    webhook, not instantly.
+26. **A second subscription made outside DoMe is left to the operator.** Only reachable by paying a page DoMe did not
+    create (for example one made in the Stripe dashboard): it is logged as `billing.second_subscription` and gives no
+    entitlement; refund or cancel it in Stripe.

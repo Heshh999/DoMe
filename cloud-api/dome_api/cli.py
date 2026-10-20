@@ -16,6 +16,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dome-api", description="DoMe cloud API and relay")
     parser.add_argument("--reload", action="store_true", help="development auto-reload")
     parser.add_argument("--skip-migrations", action="store_true", help="do not run alembic upgrade head first")
+    parser.add_argument(
+        "--billing-reconcile",
+        action="store_true",
+        help="run one billing reconciliation pass (docs/BILLING.md §6) and exit instead of serving",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -29,6 +34,14 @@ def main(argv: list[str] | None = None) -> int:
         log.info("migrations.start")
         upgrade_to_head(settings.database_url)
         log.info("migrations.done")
+    if args.billing_reconcile:
+        import asyncio
+
+        from dome_api.main import reconcile_once
+
+        counts = asyncio.run(reconcile_once(settings))
+        print(" ".join(f"{k}={v}" for k, v in counts.items()))
+        return 0
     host, port = settings.bind_host_port
     log.info(
         "serve",

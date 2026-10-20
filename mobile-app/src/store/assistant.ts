@@ -93,8 +93,8 @@ export type ChatItem =
       text: string;
       /** What was spoken (the voice copy may differ from the screen text). "" = nothing to say. */
       spoken: string;
-      /** From an AI turn: whether it counted towards the allowance. null = handled on the phone. */
-      ai: { charged: boolean } | null;
+      /** From an AI turn: whether it counted towards the allowance, and from which bucket. null = handled on the phone. */
+      ai: AiCharge | null;
       chips: ChatChip[];
       touchpad: boolean;
       /** Speech did not start in time: the bubble offers "Tap to hear". */
@@ -115,7 +115,7 @@ export type ChatItem =
       /** After a search: the results, as local "play the Nth video" chips. */
       results: ChatChip[];
       /** The plan came from an AI turn. */
-      ai: { charged: boolean } | null;
+      ai: AiCharge | null;
       /** After a power step: the owner's tap on its Cancel button. */
       cancel?: PowerCancelState;
     };
@@ -128,7 +128,13 @@ export interface RecentLine {
   at: number;
 }
 
-/** Why AI turns stop until the status changes (an error code, with the limit's reason and renewal when known). */
+/** An AI turn's charge: whether it counted, and from which bucket (the taste, the windows or a top-up). */
+export interface AiCharge {
+  charged: boolean;
+  chargedFrom?: rest.AssistantTurnResponse["charged_from"];
+}
+
+/** Why AI turns stop until the status changes (an error code, with the limit's reason and refresh time when known). */
 export interface AiBlock {
   code: string;
   reason?: string;

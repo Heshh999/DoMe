@@ -295,19 +295,29 @@ is in `docs/BILLING.md` §8 and is **not yet verified** in any form. What exists
 
 If a customer reports a payment problem before Phase C ships, no charge can have been made by DoMe.
 
-## 8. AI quota exhausted (Phase E, not implemented)
+## 8. AI allowance used up (protocol 1.3)
 
-DoMe has **no AI feature**: `plans.json` fixes `ai_interpretations_per_period` and
-`ai_transcription_minutes_per_period` at 0 for both plans, `DOME_AI_ENABLED` defaults to false, no
-provider adapter exists and `errors.json` has no AI quota code yet. Typed commands are parsed
-deterministically on the phone (`intents.ts`) and never leave the device as free text.
+**State today.** The AI butler (step 1) is built, but `DOME_AI_ENABLED` is **off in production**, so no
+customer can use it there; the website lists the allowances with "Not switched on yet". Where it is on
+(staging, the test kit), the allowance model of protocol 1.3 applies (`plans.json`, `docs/BILLING.md` §10):
+Free has a one-time taste of 10 requests (`ai_taste_requests`, never renews); Pro has 30 requests per
+5-hour window and 120 per week, Pro Plus 90 and 300 (`ai_window` / `ai_week`; each window starts at the
+first request, nothing resets on a calendar). On Pro and Pro Plus a top-up balance pays once a window or
+the week is full. The old `ai_interpretations_per_period` field no longer exists.
 
-Planned behaviour when Phase E ships (from `docs/PRODUCT_AND_PLANS.md` §3.2 and spec §13): explicit
-consent, a metered allowance per usage period (`usage_periods` table exists, empty), a clear "AI
-allowance used up — typed commands keep working" state, and a fallback to the deterministic parser.
-Until then there is nothing to recover from; if a customer asks why "AI" did not understand them,
-the answer is that no AI is involved and the Command page's clarification is the parser asking for
-a more specific instruction.
+**What the phone shows.** A refused turn answers `AI_ALLOWANCE_EXHAUSTED` with `{reason, resets_at}`:
+`taste` ("does not renew"), `window` or `week` (with the refresh time, "Refreshes Saturday at 2 pm"; when
+both are full the later one is named), `cost_cap` or `failures` (the weekly backstops). Everyday commands
+the phone understands by itself never count and keep working, and so do the touchpad and keyboard.
+
+**Steps.** Wait for the refresh time shown; on Pro or Pro Plus buy a top-up from Billing if it is offered
+(only while billing and the assistant are on); on Free the taste does not come back. If the time shown has
+passed and turns are still refused, write a support request with the reference number (§22).
+
+Evidence: integration-tested in cloud-api (`tests/test_assistant_metering.py`, `test_assistant_routes.py`,
+`test_billing_topup.py`) with a fake provider; the phone's wording is unit-tested against the shared fixture
+`shared/protocol/fixtures/ai-window-cases.json`. Not live-tested against the real provider, not
+iPhone-tested.
 
 ## 9. Microphone permission denied (Phase E, not implemented)
 
@@ -625,7 +635,7 @@ built by GitHub Actions for testers (`docs/WINDOWS_INSTALL.md` "The installer");
 | Problem | Steps |
 | --- | --- |
 | Windows SmartScreen or antivirus warns about a development build | Development builds are unsigned (`docs/WINDOWS_INSTALL.md` §9). Do not disable antivirus, SmartScreen or any other protection; release builds will be signed. Use a development build only on a machine you control. |
-| Windows says **Smart App Control** blocked DoMe or DoMe-Setup | Do not turn Smart App Control off: once it is off, Windows cannot turn it back on without resetting the PC. Keep using the test kit (`testkit/README.md`) on that PC until DoMe is signed. |
+| Windows says **Smart App Control** blocked DoMe or DoMe-Setup | Do not turn Smart App Control off: once it is off, Windows cannot turn it back on without resetting the PC. Keep using the test kit (`testkit/README.md`) on that PC. A signed DoMe may still be blocked by Smart App Control, because its bundled libraries are not signed (`docs/SECURITY.md` T12); whether a signed release runs with Smart App Control on is not yet verified. |
 | `DoMe-Setup` says it "was started with Run as administrator, so nothing was installed" | Close the message, then double-click `DoMe-Setup` again, without **Run as administrator**. DoMe is installed for your own Windows account and must never run with administrator rights. |
 | `DoMe-Setup` says "DoMe is still running and did not close, so Setup changed nothing" | Right-click the DoMe icon next to the clock → **Quit DoMe**, then run Setup again. Setup never closes DoMe by force. If there is no icon, sign out of Windows and back in, then run Setup again. |
 | `DoMe-Setup` says "A newer version of DoMe … is already installed" | Setup does not install an older version number over a newer one. To go back, uninstall DoMe first (Settings → Apps; answer **No** to keep your settings), then run the older Setup. Test builds that share a version number (all of them are 0.1.0 today) are not ordered: any of them installs over any other, and `BUILD-INFO.txt` says which build you have. |

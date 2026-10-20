@@ -2,6 +2,70 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-20 — Billing (Stripe), protocol 1.3, signed-release pipeline and Screen view Phase 0 built; review fixes applied
+
+What was built (nothing of it is released; production still sells nothing and AI stays off there):
+
+- **Plans and billing (#51), protocol 1.3, migration 0004.** Free / Pro / Pro Plus; AI requests in a 5-hour
+  and a weekly window with Free's one-time taste and $2.99 top-ups; Stripe Checkout, Customer Portal,
+  webhook, hourly reconciler and account-deletion cancellation (`cloud-api/dome_api/billing/`,
+  `docs/BILLING.md`); the Billing page and the pricing page's live states. Evidence: **integration-tested
+  with a fake Stripe** (real PostgreSQL); the Stripe adapter **unit-tested** against the SDK; **not
+  sandbox-provider-tested** (the Deploy button does not pass `DOME_STRIPE_*` to Fly yet).
+- **Signed Windows release pipeline.** `.github/workflows/release.yml` (Azure Artifact Signing in the
+  protected `release` environment, Ed25519-signed `latest.json`), the agent's update check, and the
+  Download page's signed-release states. Evidence: **unit-tested**; `release.yml` **not yet run**.
+- **Screen view Phase 0 (#52).** The WP-0 "Coming" card (**unit-tested** in jsdom, not iPhone-tested);
+  `.github/workflows/ffmpeg-lgpl.yml` (**not yet run**); its licence gate (**unit-tested** on Linux);
+  `screen/probe.py`, a skeleton with no capture or encode code (**not yet verified** on a device).
+
+Review round applied the same day (29 findings; one partly declined):
+
+- **Billing correctness.** A paid page whose webhook is late is never sold again: checkout and the Billing
+  status ask Stripe about the stored page and apply its subscription (no second subscription); the
+  reconciler asks Stripe before dropping a stale page or top-up, so a payment whose webhooks all failed
+  (wrong signing secret) is applied (`billing.webhook_missed`); fetch-and-apply serialised per account with
+  an advisory lock, and `canceled` final per subscription, so a stale snapshot can never reactivate or
+  downgrade an account; concurrent checkouts replay one idempotency key and expiry (one page); the
+  webhook body cap counts a chunked body while it streams; the page lifetime is
+  `DOME_BILLING_CHECKOUT_PENDING_HOURS` (1 to 24); an unknown Stripe price grants no paid plan (logged with
+  the account id only); Pro Plus is not sold while the assistant is off (`PLAN_NOT_AVAILABLE`). New
+  REST-only codes `CHECKOUT_PROCESSING`, `PLAN_NOT_AVAILABLE` and fields `plans_response.ai_enabled`,
+  `billing_status_response.checkout_plans`, inside the unreleased 1.3 MINOR.
+- **Honest reset time.** When the window and the week are both full, the reason and `resets_at` are the
+  later one (new fixture cases in `shared/protocol/fixtures/ai-window-cases.json`; cloud-api, shared and
+  phone agree).
+- **Website honesty.** Layouts and routines say "Coming" (never "at paid launch"); every AI allowance says
+  "Not switched on yet" until `GET /v1/plans` says AI is on; the FAQ says prices are tax included; the
+  landing page and FAQ follow `billing_enabled` (`lib/useBillingAvailability.ts`); the Download page says
+  "everything else in DoMe is included" and that Smart App Control is not yet verified; the build refuses
+  an unsigned `windows-release.json` (`scripts/check-release.ts`, first step of `pnpm build`).
+- **Release integrity.** `release_files.py verify --setup` hashes the installer itself in both verify steps.
+- **FFmpeg build blocker.** n8.1.3's configure cannot select `buffer`/`buffersink`/`abuffer`/`abuffersink`
+  (always built) and only warns, so the gate's filter check failed on every run. The four flags are gone,
+  the gate fails on any "did not match anything" warning (C5) and checks the graph filters in the built
+  library (R10, smoke); its tests now run against captured n8.1.3 configure output; more x265, openh264,
+  fdk-aac, version3 and non-free cases.
+- **Docs.** `WINDOWS_INSTALL.md` / `TROUBLESHOOTING.md` no longer imply signing fixes Smart App Control;
+  `LAUNCH_SETUP.md` §11A gives Stripe's costs, §17 keeps one approval rule (only the founder publishes,
+  with Run workflow on the default branch; no `v*` tag rule) and an exact PowerShell folder;
+  `COST_MODEL.md` models the 1.3 AI caps (at the cap a paid account costs more than it pays; per-request
+  cost **not yet verified**); `PRODUCT_AND_PLANS.md`, `ACCEPTANCE.md`, `TROUBLESHOOTING.md` §8,
+  `deploy/README.md` and the cloud-api README brought up to date.
+- Declined in part: hiding the Subscribe buttons for the whole life of an open (unpaid) page would lock a
+  customer who left Stripe's page out of buying for up to 24 hours; instead the server asks Stripe whether
+  the page was paid and hides them only then.
+
+Run (Linux, this session): cloud-api `pytest` against real PostgreSQL 458 passed, 1 skipped; pc-agent `pytest`
+826 passed, 3 skipped; mobile-app `vitest` 1330 passed, 1 skipped, plus typecheck, lint and `pnpm build`
+(with the release check); shared/python 303 passed; shared/ts 144 passed; browser-extension 155 passed; ruff and mypy clean in cloud-api
+and pc-agent. Not run: the cross-component `tests/` suite, any GitHub workflow, Stripe test mode, a
+Windows or iPhone device.
+
+Next: founder steps in `docs/LAUNCH_SETUP.md` §11A (Stripe on staging) and §17 (signing and the first
+release run); an engineer makes the Deploy button pass `DOME_STRIPE_*`; run `ffmpeg-lgpl.yml` by hand
+(`docs/HANDOFF.md` items 1, 2 and 4).
+
 ## 2026-10-20 — Stripe sandbox set up by the founder; prices are tax-**inclusive** by the founder's decision
 
 - Stripe account `domeremote` created, sandbox (test mode) in use. Prebuilt Checkout chosen as the

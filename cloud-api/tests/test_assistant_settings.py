@@ -141,11 +141,16 @@ def test_fake_provider_and_dev_grants_only_in_development_and_test(clean_env: py
 
 
 def test_a_cost_cap_below_one_reservation_refuses_start_up(clean_env: pytest.MonkeyPatch) -> None:
-    text = refused("cost cap", **{**ANTHROPIC_ON, "ai_dev_grant_cost_cap_cents": 24})  # 240 000 µUSD < 250 000
-    assert "plan 'free'" in text
-    make(**{**ANTHROPIC_ON, "ai_dev_grant_cost_cap_cents": 25})
-    make(**{**ANTHROPIC_ON, "ai_dev_grant_cost_cap_cents": 0, "ai_dev_grant_interpretations": 0})  # no allowance: fine
-    refused("cost cap", **{**ANTHROPIC_ON, "ai_dev_grant_cost_cap_cents": 50, "ai_turn_reserve_micro_usd": 600_000})
+    """Every plan has an AI allowance (Free's taste, the windows), so every plan's weekly cost cap must hold one turn
+    reservation; the development grant raises the cap, never lowers it."""
+    no_grant = {**ANTHROPIC_ON, "ai_dev_grant_cost_cap_cents": 0}
+    text = refused("cost cap", **{**no_grant, "ai_turn_reserve_micro_usd": 1_000_001})  # Free's 100 cents are below
+    assert "plan 'free'" in text and "ai_cost_cap_cents_per_week" in text and "1000001" not in text
+    make(**{**no_grant, "ai_turn_reserve_micro_usd": 1_000_000})  # 100 cents hold exactly one reservation
+    make(**{**no_grant, "ai_turn_reserve_micro_usd": 1_000_001, "ai_dev_grant_cost_cap_cents": 101})  # raised
+    refused("cost cap", **{**no_grant, "ai_turn_reserve_micro_usd": 1_000_001, "ai_dev_grant_cost_cap_cents": 100})
+    make(**{**ANTHROPIC_ON, "ai_dev_grant_cost_cap_cents": 24})  # the plan caps cover the default reservation
+    make(**{**no_grant, "ai_enabled": False, "ai_turn_reserve_micro_usd": 1_000_001})  # checked only when on
 
 
 def test_a_reservation_below_the_worst_case_turn_refuses_start_up(clean_env: pytest.MonkeyPatch) -> None:

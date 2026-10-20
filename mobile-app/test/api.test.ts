@@ -153,10 +153,10 @@ describe("REST client", () => {
 });
 
 describe("assistant endpoints (docs/design/assistant.md §1.2)", () => {
-  const ALLOWANCE = { limit: 300, used: 5, period_start: "2026-10-01T00:00:00Z", period_end: "2026-11-01T00:00:00Z", exhausted: null };
+  const ALLOWANCE = { kind: "windows", taste: null, window: { limit: 300, used: 5, starts_at: TS, ends_at: TS }, week: { limit: 1200, used: 5, starts_at: TS, ends_at: TS }, topup: { balance: 0, allowed: true }, exhausted: null, resets_at: null, warn_at_percent: 80 };
   const STATUS = { available: true, unavailable_reason: null, provider: "fake", turn_deadline_seconds: 20, consent_version: "2026-10-11", consent: null, allowance: ALLOWANCE };
   const TURN: rest.AssistantTurnRequest = { turn_id: UUID, source: "speech", text: "it's a little quiet in here", recent: [], context: { persona: { name: "DoMe" }, pc_connection: "online", playback: { youtube: "none", media: "none" } } };
-  const REPLY = { turn_id: UUID, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.set_volume", params: { value: 50 } }], charged: true, allowance: { ...ALLOWANCE, used: 6 } };
+  const REPLY = { turn_id: UUID, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.set_volume", params: { value: 50 } }], charged: true, charged_from: "window", allowance: { ...ALLOWANCE, window: { ...ALLOWANCE.window, used: 6 } } };
 
   function server(status: number, body: unknown) {
     const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -210,10 +210,22 @@ describe("assistant endpoints (docs/design/assistant.md §1.2)", () => {
     await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
     server(200, { ...REPLY, reply: "bad\u202e" });
     await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    // protocol 1.3: charged_from is required, and the allowance names its windows, taste, top-up and what is exhausted
+    const withoutSource: Record<string, unknown> = { ...REPLY };
+    delete withoutSource.charged_from;
+    server(200, withoutSource);
+    await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    server(200, { ...REPLY, charged: false, charged_from: null, allowance: { ...ALLOWANCE, exhausted: "window", resets_at: TS } });
+    await expect(api.assistantTurn(TURN)).resolves.toMatchObject({ charged: false, charged_from: null });
+    server(200, { ...REPLY, allowance: { ...ALLOWANCE, exhausted: "requests" } });
+    await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    server(200, { ...REPLY, allowance: { limit: 300, used: 6, period_start: TS, period_end: TS, exhausted: null } });
+    await expect(api.assistantTurn(TURN)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
   });
 
   it.each([
-    [429, "AI_ALLOWANCE_EXHAUSTED", { resets_at: "2026-11-01T00:00:00Z", reason: "requests" }],
+    [429, "AI_ALLOWANCE_EXHAUSTED", { resets_at: "2026-11-01T00:00:00Z", reason: "window" }],
+    [429, "AI_ALLOWANCE_EXHAUSTED", { resets_at: null, reason: "taste" }],
     [502, "AI_UNAVAILABLE", { reason: "timeout" }],
     [503, "AI_SPEND_LIMIT_REACHED", undefined],
     [409, "AI_BUSY", undefined],
@@ -235,5 +247,103 @@ describe("assistant endpoints (docs/design/assistant.md §1.2)", () => {
     const p = api.assistantTurn(TURN, abort.signal);
     abort.abort();
     await expect(p).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("billing endpoints (docs/BILLING.md; protocol 1.3)", () => {
+  const PRICING = { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } };
+  const STATUS = { billing_enabled: true, billing_mode: "test", plan: "pro", entitlement_state: "active", subscription: { state: "active", plan: "pro", interval: "monthly", current_period_end: TS, cancel_at_period_end: false, grace_until: null, checkout_expires_at: null }, checkout_available: false, checkout_plans: [], portal_available: true, pricing: PRICING, topup: { allowed: true, balance_requests: 0, requests: 100, price_cents: 299 }, selection: null };
+  const CHECKOUT = { kind: "subscription", checkout_url: "https://checkout.stripe.test/c/pay/cs_test_1", session_id: "cs_test_1", expires_at: TS };
+
+  it("GET /v1/account/billing validates the status body; pro_plus is a plan", async () => {
+    configureApi({ fetchImpl: async () => respond(200, STATUS) });
+    expect((await api.billing()).portal_available).toBe(true);
+    configureApi({ fetchImpl: async () => respond(200, { ...STATUS, plan: "pro_plus", subscription: { ...STATUS.subscription, plan: "pro_plus", state: "cancel_scheduled", cancel_at_period_end: true } }) });
+    expect((await api.billing()).plan).toBe("pro_plus");
+    configureApi({ fetchImpl: async () => respond(200, { ...STATUS, plan: "gold" }) });
+    await expect(api.billing()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    configureApi({ fetchImpl: async () => respond(200, { ...STATUS, subscription: { ...STATUS.subscription, state: "paused" } }) });
+    await expect(api.billing()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    configureApi({ fetchImpl: async () => respond(200, { ...STATUS, extra: true }) });
+    await expect(api.billing()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+  });
+
+  it("POST /v1/billing/checkout validates the request before sending and the hosted-page answer after; the URL must be https", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    configureApi({
+      csrfToken: "tok",
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return respond(200, CHECKOUT);
+      },
+    });
+    const r = await api.billingCheckout({ plan: "pro_plus", interval: "annual" });
+    expect(r.checkout_url).toBe(CHECKOUT.checkout_url);
+    expect(calls[0]!.url).toBe("/v1/billing/checkout");
+    expect(calls[0]!.init.method).toBe("POST");
+    expect((calls[0]!.init.headers as Record<string, string>)["X-DoMe-CSRF"]).toBe("tok");
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ plan: "pro_plus", interval: "annual" });
+    await expect(api.billingCheckout({ plan: "free", interval: "monthly" } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    await expect(api.billingCheckout({ plan: "pro", interval: "weekly" } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    expect(calls).toHaveLength(1);
+    configureApi({ csrfToken: "tok", fetchImpl: async () => respond(200, { ...CHECKOUT, checkout_url: "http://checkout.stripe.test/c/pay/cs_test_1" }) });
+    await expect(api.billingCheckout({ plan: "pro", interval: "monthly" })).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    configureApi({ csrfToken: "tok", fetchImpl: async () => respond(503, { error: { code: "BILLING_NOT_AVAILABLE", message: "Payments aren't available yet. Nothing was charged.", retryable: false } }) });
+    await expect(api.billingCheckout({ plan: "pro", interval: "monthly" })).rejects.toMatchObject({ status: 503, code: "BILLING_NOT_AVAILABLE" });
+  });
+
+  it("POST /v1/billing/portal and /topup send an empty JSON object with CSRF and validate their answers", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    configureApi({
+      csrfToken: "tok",
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return url.endsWith("/portal") ? respond(200, { portal_url: "https://billing.stripe.test/p/session/x" }) : respond(200, { ...CHECKOUT, kind: "topup" });
+      },
+    });
+    expect((await api.billingPortal()).portal_url).toBe("https://billing.stripe.test/p/session/x");
+    expect((await api.billingTopup()).kind).toBe("topup");
+    for (const c of calls) {
+      expect(c.init.method).toBe("POST");
+      expect(c.init.body).toBe("{}");
+      expect((c.init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+      expect((c.init.headers as Record<string, string>)["X-DoMe-CSRF"]).toBe("tok");
+    }
+    expect(calls.map((c) => c.url)).toEqual(["/v1/billing/portal", "/v1/billing/topup"]);
+    configureApi({ csrfToken: "tok", fetchImpl: async () => respond(200, { portal_url: "http://billing.stripe.test/p" }) });
+    await expect(api.billingPortal()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    configureApi({ csrfToken: null });
+    await expect(api.billingTopup()).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+  });
+
+  it("GET and PUT /v1/account/plan-selection validate both ways; PUT needs CSRF", async () => {
+    const SELECTION = { open: true, deadline: TS, plan: "free", limits: { max_enabled_pcs: 1, max_controllers: 2 }, pcs: [{ id: UUID, name: "Office PC", selected: true, last_seen: TS }], controllers: [{ id: UUID, display_name: "Phone", selected: true, last_seen: null }] };
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    configureApi({
+      csrfToken: "tok",
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return respond(200, SELECTION);
+      },
+    });
+    expect((await api.planSelection()).pcs[0]!.name).toBe("Office PC");
+    const put = await api.putPlanSelection({ pc_ids: [UUID], controller_ids: [UUID] });
+    expect(put.open).toBe(true);
+    expect(calls[1]!.init.method).toBe("PUT");
+    expect((calls[1]!.init.headers as Record<string, string>)["X-DoMe-CSRF"]).toBe("tok");
+    await expect(api.putPlanSelection({ pc_ids: ["not-a-uuid"], controller_ids: [] } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    await expect(api.putPlanSelection({ pc_ids: [UUID, UUID], controller_ids: [] } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    expect(calls).toHaveLength(2);
+    configureApi({ csrfToken: "tok", fetchImpl: async () => respond(200, { ...SELECTION, plan: "gold" }) });
+    await expect(api.planSelection()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+  });
+
+  it("GET /v1/plans carries the pricing shape and the billing mode", async () => {
+    configureApi({ fetchImpl: async () => respond(200, { plans: {}, pricing: PRICING, billing_enabled: false, billing_mode: "off", ai_enabled: false }) });
+    const p = await api.plans();
+    expect(p.billing_mode).toBe("off");
+    expect(p.pricing.topup.price_cents).toBe(299);
+    configureApi({ fetchImpl: async () => respond(200, { plans: {}, pricing: { currency: "USD", monthly_cents: 599, annual_cents: 4999 }, billing_enabled: false }) });
+    await expect(api.plans()).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
   });
 });

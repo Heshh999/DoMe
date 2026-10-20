@@ -32,7 +32,28 @@ export type Capability = "status" | "media" | "volume" | "apps" | "lock" | "powe
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "plan_id".
  */
-export type PlanId = "free" | "pro";
+export type PlanId = "free" | "pro" | "pro_plus";
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "paid_plan_id".
+ */
+export type PaidPlanId = "pro" | "pro_plus";
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_interval".
+ */
+export type BillingInterval = "monthly" | "annual";
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_mode".
+ */
+export type BillingMode = "off" | "test" | "live";
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "subscription_state".
+ */
+export type SubscriptionState =
+  "checkout_pending" | "incomplete" | "trialing" | "active" | "cancel_scheduled" | "past_due" | "unpaid" | "canceled";
 /**
  * Words the owner said or typed, or a line DoMe spoke. Printable text: no control characters, no format characters (bidi overrides, zero-width), no line or paragraph separators.
  *
@@ -60,6 +81,30 @@ export type AssistantConsentVersion = "2026-10-11";
  */
 export interface DoMeRESTBodiesThatCrossComponentBoundaries {
   [k: string]: unknown | undefined;
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "price_pair".
+ */
+export interface PricePair {
+  monthly_cents: number;
+  annual_cents: number;
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "pricing".
+ */
+export interface Pricing {
+  currency: string;
+  plans: {
+    pro: PricePair;
+    pro_plus: PricePair;
+  };
+  topup: {
+    requests: number;
+    price_cents: number;
+    max_balance_requests: number;
+  };
 }
 /**
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
@@ -517,19 +562,174 @@ export interface SecurityEventsResponse {
   events: SecurityEvent[];
 }
 /**
- * GET /v1/plans (public): plans.json content plus the configured display prices
+ * GET /v1/plans (public): plans.json content, display prices, whether checkout exists and in which Stripe mode, and whether the AI assistant is switched on (ai_enabled false: AI allowances are listed but cannot be used yet)
  *
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "plans_response".
  */
 export interface PlansResponse {
   plans: {};
-  pricing: {
-    currency: string;
-    monthly_cents: number;
-    annual_cents: number;
-  };
+  pricing: Pricing;
   billing_enabled: boolean;
+  billing_mode: BillingMode;
+  ai_enabled: boolean;
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_checkout_request".
+ */
+export interface BillingCheckoutRequest {
+  plan: PaidPlanId;
+  interval: BillingInterval;
+}
+/**
+ * POST /v1/billing/checkout and /v1/billing/topup: a Stripe-hosted page to redirect to. Nothing is unlocked by returning from it.
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_checkout_response".
+ */
+export interface BillingCheckoutResponse {
+  kind: "subscription" | "topup";
+  checkout_url: string;
+  session_id: string;
+  expires_at: Timestamp;
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_portal_response".
+ */
+export interface BillingPortalResponse {
+  portal_url: string;
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_webhook_response".
+ */
+export interface BillingWebhookResponse {
+  received: boolean;
+  duplicate: boolean;
+  status: "processed" | "ignored" | "failed" | "duplicate";
+}
+/**
+ * GET /v1/account/billing: everything the Billing page shows about the account's own plan. subscription is null when no subscription row is live.
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "billing_status_response".
+ */
+export interface BillingStatusResponse {
+  billing_enabled: boolean;
+  billing_mode: BillingMode;
+  plan: PlanId;
+  entitlement_state: "free" | "active" | "pending" | "past_due" | "canceling" | "expired";
+  subscription: null | {
+    state: SubscriptionState;
+    plan: PaidPlanId;
+    interval: null | BillingInterval;
+    current_period_end: null | Timestamp;
+    cancel_at_period_end: boolean;
+    grace_until: null | Timestamp;
+    checkout_expires_at: null | Timestamp;
+  };
+  checkout_available: boolean;
+  /**
+   * The paid plans a Free customer can buy now (empty when checkout_available is false). pro_plus is absent while the AI assistant is switched off: its AI requests are its only difference from pro.
+   *
+   * @maxItems 2
+   */
+  checkout_plans: [] | [PaidPlanId] | [PaidPlanId, PaidPlanId];
+  portal_available: boolean;
+  pricing: Pricing;
+  topup: {
+    allowed: boolean;
+    balance_requests: number;
+    requests: number;
+    price_cents: number;
+  };
+  selection: null | {
+    open: boolean;
+    deadline: Timestamp;
+  };
+}
+/**
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "plan_selection_request".
+ */
+export interface PlanSelectionRequest {
+  /**
+   * @maxItems 16
+   */
+  pc_ids:
+    | []
+    | [Uuid]
+    | [Uuid, Uuid]
+    | [Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid];
+  /**
+   * @maxItems 16
+   */
+  controller_ids:
+    | []
+    | [Uuid]
+    | [Uuid, Uuid]
+    | [Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid]
+    | [Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid];
+}
+/**
+ * GET and 200 PUT /v1/account/plan-selection: which devices stay enabled after a downgrade, and until when the choice can be made here.
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "plan_selection_response".
+ */
+export interface PlanSelectionResponse {
+  open: boolean;
+  deadline: null | Timestamp;
+  plan: PlanId;
+  limits: {
+    max_enabled_pcs: number;
+    max_controllers: number;
+  };
+  /**
+   * @maxItems 64
+   */
+  pcs: {
+    id: Uuid;
+    name: string;
+    selected: boolean;
+    last_seen: null | Timestamp;
+  }[];
+  /**
+   * @maxItems 64
+   */
+  controllers: {
+    id: Uuid;
+    display_name: string;
+    selected: boolean;
+    last_seen: null | Timestamp;
+  }[];
 }
 /**
  * POST /v1/support/tickets. `diagnostics` is the customer-reviewed, already-redacted bundle as JSON text (component versions, connection states, error codes, timing only); the server passes it through its redactor again before storing. Never contains pairing material, credentials, typed text, media titles or URLs.
@@ -699,17 +899,36 @@ export interface AssistantStep {
   app?: string;
 }
 /**
- * exhausted says which limit stops new turns this period (null while turns are possible); requests: the interpretations are used, cost_cap: the internal per-account cost cap is reached, failures: too many failed turns.
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "allowance_bucket".
+ */
+export interface AllowanceBucket {
+  limit: number;
+  used: number;
+  starts_at: null | Timestamp;
+  ends_at: null | Timestamp;
+}
+/**
+ * kind: none (no AI on this plan), taste (Free's one-time requests), windows (a 5-hour and a weekly window). starts_at/ends_at are null while no window is open (the next request opens one). used counts charged turns only. exhausted names what stops a new turn: taste, window, week, cost_cap or failures; resets_at is when that bucket ends (null for taste). topup.balance is spendable only while topup.allowed.
  *
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "assistant_allowance".
  */
 export interface AssistantAllowance {
-  limit: number;
-  used: number;
-  period_start: Timestamp;
-  period_end: Timestamp;
-  exhausted: null | ("requests" | "cost_cap" | "failures");
+  kind: "none" | "taste" | "windows";
+  taste: null | {
+    limit: number;
+    used: number;
+  };
+  window: null | AllowanceBucket;
+  week: null | AllowanceBucket;
+  topup: {
+    balance: number;
+    allowed: boolean;
+  };
+  exhausted: null | ("taste" | "window" | "week" | "cost_cap" | "failures");
+  resets_at: null | Timestamp;
+  warn_at_percent: 80;
 }
 /**
  * 200 POST /v1/assistant/turn. In mode act the phone ignores reply and announces the validated steps and their real results itself.
@@ -732,6 +951,7 @@ export interface AssistantTurnResponse {
   steps: [] | [AssistantStep] | [AssistantStep, AssistantStep] | [AssistantStep, AssistantStep, AssistantStep];
   charged: boolean;
   allowance: AssistantAllowance;
+  charged_from: null | ("taste" | "window" | "topup");
 }
 /**
  * POST /v1/assistant/consent (session + CSRF)

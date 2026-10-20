@@ -43,9 +43,10 @@ async def test_entitlement_free_is_null_and_pro_verifies_against_jwks(
     assert claims["limits"]["max_enabled_pcs"] == 5 and claims["limits"]["routines"] is True
     assert 3500 <= claims["exp"] - claims["iat"] <= 3600 and abs(claims["iat"] - time.time()) < 30
     assert claims["iss"] == env.settings.effective_api_url
-    # the session document and the agent snapshot reflect the plan
+    # the session document and the agent snapshot reflect the plan; entitlement_state comes from the subscription
+    # row (none here: the plan was switched by SQL), see tests/test_billing_lifecycle.py for the six values
     s = await alice.get("/v1/session", schema="session_response")
-    assert s["plan"] == "pro" and s["entitlement_state"] == "active" and s["limits"]["max_controllers"] == 5
+    assert s["plan"] == "pro" and s["entitlement_state"] == "free" and s["limits"]["max_controllers"] == 5
     await linked_agent.connect()
     assert linked_agent.snapshot is not None and "entitlement_assertion" in linked_agent.snapshot
     jwt.decode(linked_agent.snapshot["entitlement_assertion"], keyset, algorithms=["EdDSA"])
@@ -100,8 +101,17 @@ async def test_plans_endpoint_is_public_and_central(env: Env) -> None:
     body = r.json()
     SCHEMAS.validate_rest("plans_response", body)
     assert body["plans"]["free"]["max_enabled_pcs"] == 1 and body["plans"]["pro"]["max_controllers"] == 5
-    assert body["pricing"] == {"currency": "USD", "monthly_cents": 599, "annual_cents": 4999}
-    assert body["billing_enabled"] is False
+    assert body["plans"]["pro_plus"]["ai_window"] == {"hours": 5, "requests": 90}
+    assert body["pricing"] == {
+        "currency": "USD",
+        "plans": {
+            "pro": {"monthly_cents": 999, "annual_cents": 9999},
+            "pro_plus": {"monthly_cents": 2499, "annual_cents": 24999},
+        },
+        "topup": {"requests": 100, "price_cents": 299, "max_balance_requests": 1000},
+    }
+    # the suite runs with the fake provider: checkout exists, in test mode (test_billing_settings.py covers "off")
+    assert body["billing_enabled"] is True and body["billing_mode"] == "test"
     assert not any(k.startswith("$") for k in body["plans"]["pro"])
 
 

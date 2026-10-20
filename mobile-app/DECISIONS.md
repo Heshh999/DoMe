@@ -522,6 +522,12 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     monthly AI allowance; `docs/BILLING.md`, `docs/COST_MODEL.md` and `docs/PRODUCT_AND_PLANS.md` keep the
     old experiment price; Settings words Free's allowance as "N of 10 AI requests to try used" (no renewal
     promised) and paid plans keep the monthly wording (`allowanceLine`).
+    *Resolved 2026-10-20 (#51, protocol 1.3):* `plans.json` now carries Pro Plus, `pricing_defaults` for both
+    paid plans and the top-up, and the `ai_taste_requests` / `ai_window` / `ai_week` / `ai_topup_allowed`
+    fields; `plans.ts` reads its prices, device counts and AI figures from there (its literals stay as
+    fallbacks and a drift test pins the equality), `allowanceLine` is gone and every allowance surface uses
+    `lib/billing.ts` (decision 65). `COMING_AT_PAID_LAUNCH` remains the static default: the pricing page and
+    the FAQ flip to "Available now" only when `GET /v1/plans` reports `billing_enabled`.
 
 63. **Honesty labels are shared constants, shown wherever a feature appears.** The product's promise is
     honest results, so no surface presents a planned feature as available. Today: Free "Available now"
@@ -538,3 +544,33 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     the labels and the absence of recording, screenshot or AI-vision claims. When Screen view or
     point-and-talk ships, change the constant, the copy that says "in development" and those tests
     together.
+
+64. **The Billing page shows only what the server says, and a return from Stripe unlocks nothing.** Every
+    state of the page (off, test mode, buyable, pending, paid, past due, canceling, expired, downgrade
+    selection) is derived from `GET /v1/account/billing` and `GET /v1/session`; the plan is never read from
+    the Checkout return URL. `?checkout=return` and `?topup=return` only tell the page to say "pending" and
+    to poll the server every 3 s for at most two minutes, stopping as soon as the server reports the change
+    or the bound is reached ("Still confirming…"); the query is dropped from the URL at once. Purchase
+    buttons exist only when the server reports `billing_enabled` and `checkout_available` / `portal_available`
+    / `topup.allowed`, so a server without Stripe keys keeps today's "Upgrading is not available yet" page
+    with no button at all. The browser only ever navigates to an `https://` URL the server returned (the
+    contract pins the pattern; the page checks again), through `browserNavigation.assign` so tests can
+    observe it. Errors render the contract's `user_message` for the code and never a success. Stripe's test
+    mode is labelled on every surface that could start a payment. Plan changes, the monthly/yearly switch,
+    card updates and cancellation happen in Stripe's Customer Portal, not in the app: one path, fewer ways
+    to be wrong about money.
+
+65. **One refresh wording, pinned by the shared fixture.** `lib/billing.ts` `refreshText` writes when an AI
+    allowance comes back in the viewer's time zone: the same calendar day → "Refreshes today at 2 pm",
+    the next day → "tomorrow at 9 am", within six days → the weekday, otherwise "27 October at 2 pm";
+    12-hour clock, minutes only when non-zero, lowercase am/pm; Free's taste → "Does not renew". The
+    cases live in `shared/protocol/fixtures/ai-window-cases.json` (formatted in America/New_York in the
+    test) so cloud-api and the phone agree on the arithmetic and the words. The same module gives the
+    Settings line (`allowanceSummary`: "2 of 30 used in this 5-hour window · 7 of 120 this week ·
+    refreshes Saturday at 2 pm", "starts with your next request" while no window is open, the top-up
+    balance at the end), the warning level (`bucketLevel`, 80 % from `warn_at_percent`), the Ask page's
+    banner (`warningText`) and chip (`requestsLeft`: the smaller room of the two windows plus a spendable
+    top-up), and `limitExplanation` for the five reasons the server can name (taste, window, week,
+    cost_cap, failures), preferring the error's own `resets_at`. The butler's voice reuses the same phrase
+    ("They refresh today at 2 pm"), so nothing on the phone says "month" or invents a date.
+

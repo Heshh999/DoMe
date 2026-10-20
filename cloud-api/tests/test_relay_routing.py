@@ -133,7 +133,7 @@ async def test_hello_is_required_and_validated(env: Env, alice: Browser) -> None
         )
     )
     err = await recv_frame(ws, "relay_to_controller")
-    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.2"]
+    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.3"]
     assert await close_code(ws) == 4000
 
 
@@ -665,7 +665,7 @@ async def test_action_stamped_below_its_since_is_refused_before_forwarding(
                 cid = await ctrl.command(pc, action, params, target, protocol_version=stamp)
                 failure = await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
                 assert failure["error"]["detail"] == {"peer": stamp, "required": "1.2"}
-        cid = await ctrl.command(pc, "app.maximize", {}, {"app_id": "notepad"}, protocol_version="1.3")
+        cid = await ctrl.command(pc, "app.maximize", {}, {"app_id": "notepad"}, protocol_version="1.4")
         await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
         await expect_nothing(online_agent.ws)  # type: ignore[arg-type]
         assert (await alice.get(f"/v1/commands?pc_id={pc}"))["commands"] == []
@@ -682,7 +682,7 @@ async def test_old_actions_stamped_1_0_or_1_1_are_still_forwarded(
     await paired.send_envelope(pc, envl)
     assert (await online_agent.serve_one())["command_id"] == cid
     assert (await paired.recv_type("result", command_id=cid))["state"] == "succeeded"
-    for stamp in ("1.0", "1.1", "1.2"):  # 1.1 phones stamp their own version on everything
+    for stamp in ("1.0", "1.1", "1.2", "1.3"):  # 1.1 phones stamp their own version on everything
         cid = await paired.command(pc, "system.ping", protocol_version=stamp)
         payload = await online_agent.serve_one()
         assert payload["command_id"] == cid and payload["protocol_version"] == stamp

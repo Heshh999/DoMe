@@ -1,4 +1,5 @@
-"""Public plan catalogue (plans.json plus configured display prices)."""
+"""Public plan catalogue (plans.json, display prices, whether checkout exists and in which Stripe mode, and whether the
+AI assistant is switched on, so the website never sells AI allowances as usable while it is off)."""
 
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ async def plans(svc: Svc) -> Any:
     body = {
         "plans": cat.public_plans(),
         "pricing": cat.pricing_defaults,
-        "billing_enabled": bool(svc.settings.stripe_secret_key.get_secret_value()),
+        "billing_enabled": svc.billing.enabled,
+        "billing_mode": svc.billing.config.mode if svc.billing.enabled else "off",
+        "ai_enabled": svc.assistant.configured,
     }
     return rest_response(svc.settings.validate_rest_responses, "plans_response", body)

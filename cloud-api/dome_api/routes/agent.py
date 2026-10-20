@@ -68,7 +68,8 @@ async def token(request: Request, _: AgentPublic, db: DB, svc: Svc) -> Any:
 async def entitlement(agent: Agent, svc: Svc) -> Any:
     plan = plan_for(agent.account.plan)
     out = {
-        "plan": plan.id,
+        # the agent's own (1.2) schema knows free and pro only: every paid plan is "pro" here, as in the assertion
+        "plan": plan.entitlement_plan_id,
         "assertion": svc.signer.assertion(agent.account.id, agent.pc.id, plan),
         "pc_enabled": bool(agent.pc.enabled),
     }

@@ -3,7 +3,8 @@
  * Windows media sessions — each with its own picker, and two clearly labelled volume controls:
  * the YouTube player volume and the Windows system volume. YouTube also has a search box whose
  * results open on the PC. A tab without a player (search results) is never controlled implicitly;
- * when picked by hand, its player buttons stay off.
+ * when picked by hand, its player buttons stay off. Below the volume controls sits, until #52 ships,
+ * a 'Screen view: Coming' card.
  */
 import { useEffect, useState, type CSSProperties } from "react";
 
@@ -14,6 +15,7 @@ import { Icon } from "../../components/icons.tsx";
 import { Artwork, PlayButton } from "../../components/NowPlaying.tsx";
 import { PcOfflineNotice } from "../../components/PcOfflineNotice.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
+import { ScreenViewComingCard } from "../../components/ScreenViewComingCard.tsx";
 import { Button, Card, IconButton, Notice, PageHeader, Segmented, Steps } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
 import { YoutubeSearch } from "../../components/YoutubeSearch.tsx";
@@ -259,6 +261,8 @@ export function RemotePage() {
       )}
 
       <VolumeSlider label="Windows volume" scopeHint="Affects every app on the PC." value={fresh && typeof volume?.value === "number" ? volume.value : null} muted={fresh ? (volume?.muted ?? null) : null} disabled={!canControl} onChange={(v) => void send("windows.set_volume", { value: v }, null, "slider")} onToggleMute={() => void send("windows.set_muted", { muted: !(volume?.muted ?? false) }, null, "button")} />
+
+      <ScreenViewComingCard />
 
       {sendError ? (
         <Notice tone="danger" title="Not sent">

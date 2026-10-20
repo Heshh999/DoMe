@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from dome_protocol import now_utc
+from dome_protocol import load_registry, now_utc
 
 from dome_agent.testing.fake_extension import FakeTab
 
@@ -291,6 +291,13 @@ async def test_commands_are_checked_against_their_action_since(harness: AgentHar
     d = await authorize(harness, controller.command("system.ping", protocol_version="1.2"))
     assert d.kind == "execute"
     d = await authorize(harness, controller.command("system.ping", protocol_version="1.3"))
+    assert d.kind == "execute"
+    # the agent's own MINOR (the registry's protocol_version) runs; one above it is refused
+    own = load_registry().protocol_version
+    d = await authorize(harness, controller.command("system.ping", protocol_version=own))
+    assert d.kind == "execute"
+    major, minor = own.split(".")
+    d = await authorize(harness, controller.command("system.ping", protocol_version=f"{major}.{int(minor) + 1}"))
     assert d.kind == "rejected" and d.error.code == "PROTOCOL_INCOMPATIBLE"
 
 

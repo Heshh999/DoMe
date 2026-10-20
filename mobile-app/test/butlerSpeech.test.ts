@@ -254,9 +254,13 @@ describe("voice copy", () => {
     expect(voiceForAiError("NETWORK")).toBe("I'm afraid I can't reach DoMe's service just now. Please try again in a moment.");
     expect(voiceForAiError("RATE_LIMITED")).toBe("Too many requests just now. Please try again in a moment.");
     expect(voiceForAiError("AI_BUSY")).toBe("I'm still answering your last request. Please try again in a moment.");
-    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "requests", renews: "1 November" })).toBe("I'm afraid this month's AI requests are used up. They renew on 1 November. I can still do the things I know by myself.");
-    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "failures", renews: "1 November" })).toBe("I'm afraid the AI assistant is paused after too many failed requests this month. It starts again on 1 November. I can still do the things I know by myself.");
-    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED")).toBe("I'm afraid this month's AI requests are used up. I can still do the things I know by myself.");
+    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "window", renews: "today at 2 pm" })).toBe("I'm afraid this window's AI requests are used up. They refresh today at 2 pm. I can still do the things I know by myself.");
+    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "week", renews: "Saturday at 2 pm" })).toBe("I'm afraid this week's AI requests are used up. They refresh Saturday at 2 pm. I can still do the things I know by myself.");
+    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "taste" })).toBe("I'm afraid your one-time taste of AI requests is used up, and it does not renew. I can still do the things I know by myself.");
+    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "cost_cap", renews: "tomorrow at 9 am" })).toBe("I'm afraid this week's AI requests needed more processing than your plan includes. It refreshes tomorrow at 9 am. I can still do the things I know by myself.");
+    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason: "failures", renews: "tomorrow at 9 am" })).toBe("I'm afraid the AI assistant is paused after too many failed requests this week. It starts again tomorrow at 9 am. I can still do the things I know by myself.");
+    expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED")).toBe("I'm afraid this window's AI requests are used up. I can still do the things I know by myself.");
+    for (const reason of ["taste", "window", "week", "cost_cap", "failures"]) expect(voiceForAiError("AI_ALLOWANCE_EXHAUSTED", { reason, renews: "today at 2 pm" })).not.toMatch(/month/i);
     expect(voiceForAiError("AI_SPEND_LIMIT_REACHED")).toMatch(/^I'm afraid the AI assistant is paused until next month\./);
     for (const code of ["AI_UNAVAILABLE", "NETWORK", "RATE_LIMITED", "AI_BUSY", "AI_ALLOWANCE_EXHAUSTED", "AI_SPEND_LIMIT_REACHED", "AI_NOT_AVAILABLE", "AI_CONSENT_REQUIRED"]) {
       expect(voiceForAiError(code)).not.toMatch(/didn't understand|another way/);

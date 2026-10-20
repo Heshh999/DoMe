@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { PLANS } from "@dome/protocol";
 
-import { aboutTime, AI_RULES, aiSummary, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, PLAN_CONTENT, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WEEK_DAYS, WINDOW_HOURS } from "../../src/content/plans.ts";
-import { AT_PAID_LAUNCH, INCLUDED, NOT_INCLUDED, pricingGroups, pricingRows } from "../../src/lib/pricing.ts";
+import { aboutTime, AI_OFF_STATUS, AI_RULES, aiSummary, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, PLAN_CONTENT, planById, LAYOUTS_STATUS, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WEEK_DAYS, WINDOW_HOURS } from "../../src/content/plans.ts";
+import { COMING, INCLUDED, NOT_INCLUDED, pricingGroups, pricingRows } from "../../src/lib/pricing.ts";
 
 describe("plan content", () => {
   it("lists Free, Pro and Pro Plus in that order with the decided prices", () => {
@@ -54,6 +54,13 @@ describe("plan content", () => {
     expect(planById("pro_plus").screenView).toBe("Unlimited");
     // the card says "Coming" next to Screen view on every plan
     for (const plan of PLAN_CONTENT) expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))?.status).toBe("Coming");
+    // every AI allowance is marked, so the page can say "Not switched on yet" beside it while AI is off
+    for (const plan of PLAN_CONTENT) expect(plan.highlights.filter((h) => h.ai).map((h) => h.text)).toEqual(plan.highlights.filter((h) => /AI /.test(h.text)).map((h) => h.text));
+    for (const plan of PLAN_CONTENT.filter((p) => p.price)) {
+      const layouts = plan.highlights.find((h) => h.text.startsWith("Custom remote layouts"))!;
+      expect(layouts.status).toBe(LAYOUTS_STATUS);
+      expect(layouts.text).not.toMatch(/paid launch/);
+    }
   });
 
   it("AI butler allowances: a one-time taste of 10 on Free; 30 per 5 h / 120 per week on Pro; 90 / 300 on Pro Plus", () => {
@@ -92,8 +99,33 @@ describe("plan content", () => {
     expect(AI_RULES.actions).toMatch(/Ask before every action/);
     expect(AI_RULES.taste).toMatch(/one-time taste of 10 AI requests/);
     expect(AI_RULES.privacy).toMatch(/never sees your screen: no screenshots/);
-    expect(AI_RULES.billing).toMatch(/US dollars, before tax/);
+    expect(AI_RULES.billing).toMatch(/US dollars and are the full amount you pay \(any tax is included\)/);
     expect(AI_RULES.billing).toMatch(/Stripe/);
+  });
+});
+
+describe("plan content follows the contract (protocol 1.3)", () => {
+  it("prices, the top-up and the AI figures equal plans.json's pricing_defaults and plan fields", () => {
+    const pricing = PLANS.pricing_defaults;
+    expect(pricing.currency).toBe("USD");
+    expect(planById("pro").price).toEqual({ monthlyCents: pricing.plans.pro.monthly_cents, annualCents: pricing.plans.pro.annual_cents });
+    expect(planById("pro_plus").price).toEqual({ monthlyCents: pricing.plans.pro_plus.monthly_cents, annualCents: pricing.plans.pro_plus.annual_cents });
+    expect(TOP_UP).toEqual({ requests: pricing.topup.requests, priceCents: pricing.topup.price_cents });
+    const plans = PLANS.plans;
+    expect(FREE_TASTE_REQUESTS).toBe(plans.free.ai_taste_requests);
+    expect(planById("pro").ai.perWindow?.requests).toBe(plans.pro.ai_window.requests);
+    expect(planById("pro").ai.perWeek?.requests).toBe(plans.pro.ai_week.requests);
+    expect(planById("pro_plus").ai.perWindow?.requests).toBe(plans.pro_plus.ai_window.requests);
+    expect(planById("pro_plus").ai.perWeek?.requests).toBe(plans.pro_plus.ai_week.requests);
+    expect([planById("pro_plus").pcs, planById("pro_plus").phones]).toEqual([plans.pro_plus.max_enabled_pcs, plans.pro_plus.max_controllers]);
+    expect(planById("pro_plus").displayName).toBe(plans.pro_plus.display_name);
+    expect(planById("pro").topUp).toBe(plans.pro.ai_topup_allowed);
+    expect(planById("free").topUp).toBe(plans.free.ai_topup_allowed);
+    expect(WINDOW_HOURS).toBe(plans.pro.ai_window.hours);
+    expect(WEEK_DAYS).toBe(plans.pro.ai_week.days);
+    // The owner's published figures (docs/PRODUCT_AND_PLANS.md): a change to plans.json must be a deliberate one.
+    expect([pricing.plans.pro.monthly_cents, pricing.plans.pro.annual_cents, pricing.plans.pro_plus.monthly_cents, pricing.plans.pro_plus.annual_cents]).toEqual([999, 9999, 2499, 24999]);
+    expect([pricing.topup.requests, pricing.topup.price_cents]).toEqual([100, 299]);
   });
 });
 
@@ -103,7 +135,11 @@ describe("pricing rows", () => {
     expect(rows.length).toBeGreaterThan(10);
     for (const r of rows) expect(Object.keys(r).sort()).toEqual(["free", "label", "pro", "proPlus"]);
     const layouts = rows.find((r) => r.label.startsWith("Custom remote layouts"))!;
-    expect(layouts).toMatchObject({ free: NOT_INCLUDED, pro: AT_PAID_LAUNCH, proPlus: AT_PAID_LAUNCH });
+    // not built yet: "Coming", never "at paid launch" (paid plans can go on sale before they exist)
+    expect(layouts).toMatchObject({ free: NOT_INCLUDED, pro: COMING, proPlus: COMING });
+    expect(COMING).toBe("Coming");
+    expect(pricingGroups().find((g) => g.rows.some((r) => r.label === layouts.label))).toMatchObject({ title: "Layouts and routines", status: LAYOUTS_STATUS });
+    expect(rows.some((r) => /paid launch/i.test(`${r.label} ${r.pro} ${r.proPlus}`))).toBe(false);
     const routines = rows.find((r) => r.label.startsWith("Saved routines"))!;
     expect(routines.label).toContain(`up to ${PLANS.plans.pro.routine_max_steps} steps`);
     const rate = rows.find((r) => r.label.startsWith("Fair-use limit"))!;
@@ -124,6 +160,9 @@ describe("pricing rows", () => {
       [NOT_INCLUDED, INCLUDED, INCLUDED],
     ]);
     expect(ai.rows[0]!.label).toBe("One-time taste to try the butler");
+    // AI is off unless the server says otherwise: the group says so; with the assistant on, no status
+    expect(ai.status).toBe(AI_OFF_STATUS);
+    expect(pricingGroups({ aiOn: true }).find((g) => g.title === "AI butler")!.status).toBeUndefined();
     expect(ai.rows[3]!.label).toBe("Top-up: 100 requests for $2.99, only when you choose");
     const everyday = groups[0]!.rows.find((r) => r.label.startsWith("Everyday commands"))!;
     expect([everyday.free, everyday.pro, everyday.proPlus]).toEqual(["Unlimited, never counted", "Unlimited, never counted", "Unlimited, never counted"]);

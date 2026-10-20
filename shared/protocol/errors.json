@@ -311,7 +311,7 @@
     },
     "AI_ALLOWANCE_EXHAUSTED": {
       "retryable": false,
-      "user_message": "You've reached this month's AI assistant limit. Buttons, typed commands and simple voice commands still work, and the limit renews next month."
+      "user_message": "You've reached your AI assistant limit for now. Buttons, typed commands and simple voice commands still work; the app shows when it refreshes."
     },
     "AI_SPEND_LIMIT_REACHED": {
       "retryable": false,
@@ -332,6 +332,50 @@
     "AI_TURN_DUPLICATE": {
       "retryable": false,
       "user_message": "That request was already sent. Ask again if you need to."
+    },
+    "BILLING_NOT_AVAILABLE": {
+      "retryable": false,
+      "user_message": "Payments aren't available yet. Nothing was charged."
+    },
+    "BILLING_PROVIDER_ERROR": {
+      "retryable": true,
+      "user_message": "Our payment provider didn't answer. Nothing was charged. Try again in a moment."
+    },
+    "BILLING_WEBHOOK_INVALID": {
+      "retryable": false,
+      "user_message": "This payment notification could not be verified."
+    },
+    "ALREADY_SUBSCRIBED": {
+      "retryable": false,
+      "user_message": "You already have a subscription. Manage it from Billing."
+    },
+    "CHECKOUT_PROCESSING": {
+      "retryable": true,
+      "user_message": "Your payment page is being prepared or your payment is being confirmed. Nothing more was charged. Check Billing again in a minute."
+    },
+    "PLAN_NOT_AVAILABLE": {
+      "retryable": false,
+      "user_message": "That plan can't be bought yet. Nothing was charged."
+    },
+    "BILLING_NO_CUSTOMER": {
+      "retryable": false,
+      "user_message": "There is no subscription to manage yet."
+    },
+    "TOPUP_NOT_ALLOWED": {
+      "retryable": false,
+      "user_message": "Top-ups are available on DoMe Pro and Pro Plus while the subscription is active."
+    },
+    "TOPUP_BALANCE_LIMIT": {
+      "retryable": false,
+      "user_message": "You already have the most top-up requests an account can hold. Use some first."
+    },
+    "PLAN_SELECTION_CLOSED": {
+      "retryable": false,
+      "user_message": "The time to choose here has passed. Enable and disable devices under Devices instead."
+    },
+    "PLAN_SELECTION_INVALID": {
+      "retryable": false,
+      "user_message": "That choice doesn't fit your plan's limits or names a device that isn't yours."
     }
   }
 }

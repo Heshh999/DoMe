@@ -32,7 +32,8 @@ const fixture = JSON.parse(readFileSync(resolve(__dirname, "../../../shared/prot
 const ALL_CAPS: rest.Grant["capabilities"] = ["status", "media", "volume", "apps", "lock", "power"];
 const GRANT: rest.Grant = { id: "66666666-6666-4666-8666-666666666666", controller_id: CONTROLLER, pc_id: PC, capabilities: ALL_CAPS, created_at: TS };
 const PLAYING: YoutubeTab = { browser_instance_id: "bi_test0001", tab_id: 1, tab_token: "dGFiLXRva2VuLTAwMDAwMD", script_attached: true, title: "Now playing", video_id: "playing1", paused: false, context: "watch", ad_showing: false, is_live: false, in_playlist: false };
-const ALLOWANCE: rest.AssistantAllowance = { limit: 300, used: 5, period_start: "2026-10-01T00:00:00Z", period_end: "2026-11-01T00:00:00Z", exhausted: null };
+const ALLOWANCE: rest.AssistantAllowance = { kind: "windows", taste: null, window: { limit: 300, used: 5, starts_at: TS, ends_at: "2099-01-01T15:00:00.000Z" }, week: { limit: 1200, used: 5, starts_at: TS, ends_at: "2099-01-07T10:00:00.000Z" }, topup: { balance: 0, allowed: true }, exhausted: null, resets_at: null, warn_at_percent: 80 };
+const used = (window: number): rest.AssistantAllowance => ({ ...ALLOWANCE, window: { ...ALLOWANCE.window!, used: window } });
 const STATUS: rest.AssistantStatusResponse = { available: true, unavailable_reason: null, provider: "fake", turn_deadline_seconds: 20, consent_version: "2026-10-11", consent: { version: "2026-10-11", given_at: TS }, allowance: ALLOWANCE };
 
 let h: RuntimeHarness;
@@ -146,7 +147,7 @@ beforeEach(async () => {
         const body = JSON.parse(init.body as string) as rest.AssistantTurnRequest;
         turns.push(body);
         if (holdTurns) return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
-        return jsonResponse(200, { turn_id: body.turn_id, mode: "answer", reply: "Very good.", choices: [], handoff: "none", steps: [], charged: true, allowance: { ...ALLOWANCE, used: 6 }, ...replies.shift() });
+        return jsonResponse(200, { turn_id: body.turn_id, mode: "answer", reply: "Very good.", choices: [], handoff: "none", steps: [], charged: true, charged_from: "window", allowance: used(6), ...replies.shift() });
       }
       return jsonResponse(500, { error: { code: "INTERNAL", message: "unexpected", retryable: false } });
     },
@@ -266,7 +267,7 @@ describe("the AI assistant", () => {
   });
 
   it("AI bubbles say whether they counted; the allowance chip follows the answers", async () => {
-    replies.push({ mode: "answer", reply: "Good evening.", charged: true }, { mode: "answer", reply: "Nothing to count.", charged: false, allowance: { ...ALLOWANCE, used: 6 } });
+    replies.push({ mode: "answer", reply: "Good evening.", charged: true }, { mode: "answer", reply: "Nothing to count.", charged: false, charged_from: null, allowance: used(6) }, { mode: "answer", reply: "From the top-up.", charged: true, charged_from: "topup", allowance: { ...used(6), topup: { balance: 99, allowed: true } } });
     renderPage();
     expect(await screen.findByText("295 AI requests left")).toBeInTheDocument();
     await speakWords("good evening to you");
@@ -277,6 +278,20 @@ describe("the AI assistant", () => {
     expect(await conversation().findByText("Nothing to count.")).toBeInTheDocument();
     expect(conversation().getByText("Nothing to count.").closest("li")).toHaveTextContent("Asked Claude · not counted");
     expect(screen.getByText(/AI on · requests DoMe can't work out go to Anthropic/)).toBeInTheDocument();
+    await speakWords("good evening once more");
+    expect(await conversation().findByText("From the top-up.")).toBeInTheDocument();
+    expect(conversation().getByText("From the top-up.").closest("li")).toHaveTextContent("Asked Claude · used a top-up");
+    // the chip counts the spendable top-up with the window's room
+    expect(screen.getByText("393 AI requests left")).toBeInTheDocument();
+  });
+
+  it("from 80 % of the window a quiet banner names the share used and when it refreshes; the chip keeps counting", async () => {
+    status = { ...STATUS, allowance: used(240) };
+    renderPage();
+    expect(await screen.findByText("AI requests running low")).toBeInTheDocument();
+    expect(screen.getByText(/^You've used 240 of 300 AI requests in this 5-hour window\. Refreshes /)).toBeInTheDocument();
+    expect(screen.getByText("60 AI requests left")).toBeInTheDocument();
+    expect(screen.queryByText("AI butler paused")).toBeNull();
   });
 
   it("model text is plain text: markup in a reply or a choice is shown, never rendered", async () => {
@@ -310,9 +325,11 @@ describe("the AI assistant", () => {
   });
 
   it.each([
-    ["the requests are used", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, used: 300, exhausted: "requests" as const } }, /You've used this month's 300 AI requests\. Renews /],
-    ["the cost cap", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, exhausted: "cost_cap" as const } }, /needed more processing than your plan includes/],
-    ["too many failures", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, exhausted: "failures" as const } }, /Too many AI requests failed this month/],
+    ["the window is used", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...used(300), exhausted: "window" as const, resets_at: ALLOWANCE.window!.ends_at } }, /^You've used this 5-hour window's 300 AI requests\. Refreshes /],
+    ["the week is used", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, week: { ...ALLOWANCE.week!, used: 1200 }, exhausted: "week" as const, resets_at: ALLOWANCE.week!.ends_at } }, /^You've used this week's 1200 AI requests\. Refreshes /],
+    ["the taste is used", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, kind: "taste" as const, taste: { limit: 10, used: 10 }, window: null, week: null, exhausted: "taste" as const } }, /^You've used your one-time taste of 10 AI requests\. It does not renew\./],
+    ["the cost cap", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, exhausted: "cost_cap" as const } }, /^This week's AI requests needed more processing than your plan includes\./],
+    ["too many failures", { ...STATUS, available: false, unavailable_reason: "allowance_exhausted" as const, allowance: { ...ALLOWANCE, exhausted: "failures" as const } }, /^Too many AI requests failed this week/],
     ["DoMe's spending limit", { ...STATUS, available: false, unavailable_reason: "spend_limit" as const }, /paused until next month because DoMe reached its AI spending limit/],
   ])("a limit reached (%s): a banner says which, the chip says Limit reached, voice without AI goes on", async (_name, st, text) => {
     status = st;

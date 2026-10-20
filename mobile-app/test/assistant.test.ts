@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ERRORS, type rest } from "@dome/protocol";
 
 import { ApiError } from "../src/lib/api.ts";
-import { aiUsable, allowanceLine, createAssistantController, limitExplanation, renewalDate, type AssistantController, type PcAccess, type TurnSource } from "../src/lib/assistant.ts";
+import { aiUsable, createAssistantController, type AssistantController, type PcAccess, type TurnSource } from "../src/lib/assistant.ts";
+import { lowerFirst, refreshText } from "../src/lib/billing.ts";
 import { HELP_SCREEN, HELP_VOICE, SWITCHED_PC, TAP_YOUR_CHOICE } from "../src/lib/butlerSpeech.ts";
 import { intentContext, previewStep, type PlanRun, type StepRun } from "../src/lib/commandPlan.ts";
 import type { CommandRecord } from "../src/lib/commands.ts";
@@ -22,7 +23,7 @@ import { DEFAULT_ASSISTANT_PREFS, useAssistantStore, type ChatItem } from "../sr
 import type { LastSearch, PcState, YoutubeTab } from "../src/store/live.ts";
 
 const TS = "2026-10-11T12:00:00.000Z";
-const ALLOWANCE: rest.AssistantAllowance = { limit: 300, used: 5, period_start: "2026-10-01T00:00:00Z", period_end: "2026-11-01T00:00:00Z", exhausted: null };
+const ALLOWANCE: rest.AssistantAllowance = { kind: "windows", taste: null, window: { limit: 300, used: 5, starts_at: "2026-10-11T10:00:00Z", ends_at: "2026-10-11T15:00:00Z" }, week: { limit: 1200, used: 5, starts_at: "2026-10-11T10:00:00Z", ends_at: "2026-10-18T10:00:00Z" }, topup: { balance: 0, allowed: true }, exhausted: null, resets_at: null, warn_at_percent: 80 };
 const STATUS: rest.AssistantStatusResponse = { available: true, unavailable_reason: null, provider: "fake", turn_deadline_seconds: 20, consent_version: "2026-10-11", consent: { version: "2026-10-11", given_at: TS }, allowance: ALLOWANCE };
 const ALL_CAPS = ["status", "media", "volume", "apps", "lock", "power"];
 const PLAYING: YoutubeTab = { browser_instance_id: "bi_test0001", tab_id: 1, tab_token: "dGFiLXRva2VuLTAwMDAwMD", script_attached: true, title: "Now playing", video_id: "playing1", paused: false, volume: 30, context: "watch", ad_showing: false, is_live: false, in_playlist: false };
@@ -186,7 +187,7 @@ function makeApi(replies: Reply[] | ((body: rest.AssistantTurnRequest, signal: A
     if (typeof replies === "function") return replies(body, signal);
     const next = replies.shift() ?? {};
     if (next instanceof Error) throw next;
-    return { turn_id: body.turn_id, mode: "answer", reply: "Very good.", choices: [], handoff: "none", steps: [], charged: true, allowance: { ...ALLOWANCE, used: 6 }, ...next } as rest.AssistantTurnResponse;
+    return { turn_id: body.turn_id, mode: "answer", reply: "Very good.", choices: [], handoff: "none", steps: [], charged: true, charged_from: "window", allowance: { ...ALLOWANCE, window: { ...ALLOWANCE.window!, used: 6 } }, ...next } as rest.AssistantTurnResponse;
   });
   return { turn, bodies };
 }
@@ -387,8 +388,8 @@ describe("AI answers", () => {
     const all = JSON.stringify(items()) + t.speaker.said.join(" ");
     expect(all).not.toContain("shut down your PC");
     expect(t.speaker.said.at(-1)).toBe("Very good. The volume is at 45 per cent.");
-    expect(plans()[0]!.ai).toEqual({ charged: true });
-    expect(useAssistantStore.getState().allowance?.used).toBe(6);
+    expect(plans()[0]!.ai).toEqual({ charged: true, chargedFrom: "window" });
+    expect(useAssistantStore.getState().allowance?.window?.used).toBe(6);
     expect(recent()).toEqual([
       ["owner", "it's a little quiet in here"],
       ["butler", "The volume is at 45 per cent."],
@@ -497,13 +498,17 @@ describe("AI errors fall back to the phone's own answer", () => {
     expect(lastButler().spoken).toBe("The assistant didn't answer, so nothing was done. Please try again, or use the buttons.");
   });
 
-  const renews = renewalDate(ALLOWANCE.period_end);
+  const RESETS = "2026-11-01T00:00:00Z";
+  const refreshes = refreshText(RESETS);
+  const when = lowerFirst(refreshes).replace(/^refreshes /, "");
   it.each([
     ["RATE_LIMITED", () => err(429, "RATE_LIMITED"), ERRORS.RATE_LIMITED!.user_message, "Too many requests just now. Please try again in a moment."],
     ["NETWORK", () => err(0, "NETWORK"), "I can't reach DoMe's service right now.", "I'm afraid I can't reach DoMe's service just now. Please try again in a moment."],
     ["AI_BUSY (no Cancel before it)", () => err(409, "AI_BUSY"), ERRORS.AI_BUSY!.user_message, "I'm still answering your last request. Please try again in a moment."],
     ["a malformed answer", () => err(200, "MALFORMED_MESSAGE"), ERRORS.AI_UNAVAILABLE!.user_message, "The assistant didn't answer, so nothing was done. Please try again, or use the buttons."],
-    ["the requests used up", () => err(429, "AI_ALLOWANCE_EXHAUSTED", { reason: "requests", resets_at: "2026-11-01T00:00:00Z" }), `You've used this month's 300 AI requests. Renews ${renews}. Buttons, typed commands and simple voice commands still work.`, `I'm afraid this month's AI requests are used up. They renew on ${renews}. I can still do the things I know by myself.`],
+    ["the window used up", () => err(429, "AI_ALLOWANCE_EXHAUSTED", { reason: "window", resets_at: RESETS }), `You've used this 5-hour window's 300 AI requests. ${refreshes}. Buttons, typed commands and simple voice commands still work.`, `I'm afraid this window's AI requests are used up. They refresh ${when}. I can still do the things I know by myself.`],
+    ["the week used up", () => err(429, "AI_ALLOWANCE_EXHAUSTED", { reason: "week", resets_at: RESETS }), `You've used this week's 1200 AI requests. ${refreshes}. Buttons, typed commands and simple voice commands still work.`, `I'm afraid this week's AI requests are used up. They refresh ${when}. I can still do the things I know by myself.`],
+    ["the taste used up", () => err(429, "AI_ALLOWANCE_EXHAUSTED", { reason: "taste", resets_at: null }), "You've used your one-time taste of AI requests. It does not renew. Buttons, typed commands and simple voice commands still work.", "I'm afraid your one-time taste of AI requests is used up, and it does not renew. I can still do the things I know by myself."],
     ["DoMe's spending limit", () => err(503, "AI_SPEND_LIMIT_REACHED"), ERRORS.AI_SPEND_LIMIT_REACHED!.user_message, "I'm afraid the AI assistant is paused until next month. I can still do the things I know by myself."],
   ])("%s: the screen and the voice give the real cause, once", async (_name, error, screen, spoken) => {
     const t = setup({ replies: [error()] });
@@ -519,18 +524,20 @@ describe("AI errors fall back to the phone's own answer", () => {
     expect(lastButler().spoken).toBe("I'm afraid I can't reach DoMe's service just now. Please try again in a moment. I understood part of that, but not all of it. The details are on the screen.");
   });
 
-  it("the limit reached says which limit and when it renews", async () => {
-    const t = setup({ replies: [err(429, "AI_ALLOWANCE_EXHAUSTED", { reason: "cost_cap", resets_at: "2026-11-01T00:00:00Z" })] });
+  it("the limit reached says which limit and when it refreshes, from the error's own resets_at; nothing says 'month'", async () => {
+    const t = setup({ replies: [err(429, "AI_ALLOWANCE_EXHAUSTED", { reason: "cost_cap", resets_at: RESETS })] });
     await say(t.controller, "it's a little quiet in here");
-    expect(lastButler().text).toContain("This month's AI requests needed more processing than your plan includes.");
-    expect(limitExplanation("requests", ALLOWANCE)).toMatch(/^You've used this month's 300 AI requests\. Renews /);
-    expect(limitExplanation("failures", ALLOWANCE)).toMatch(/^Too many AI requests failed this month/);
+    expect(lastButler().text).toBe(`This week's AI requests needed more processing than your plan includes. ${refreshes}. Buttons, typed commands and simple voice commands still work.`);
+    expect(lastButler().spoken).toBe(`I'm afraid this week's AI requests needed more processing than your plan includes. It refreshes ${when}. I can still do the things I know by myself.`);
+    expect(lastButler().text + lastButler().spoken).not.toMatch(/month/i);
+    expect(useAssistantStore.getState().aiBlocked).toEqual({ code: "AI_ALLOWANCE_EXHAUSTED", reason: "cost_cap", resetsAt: RESETS });
   });
 
-  it("the allowance line: Free's one-time taste never promises a renewal; other plans keep the monthly wording", () => {
-    expect(allowanceLine({ ...ALLOWANCE, limit: 10, used: 4 }, "free")).toBe("4 of 10 AI requests to try used");
-    expect(allowanceLine(ALLOWANCE, "pro")).toBe(`${ALLOWANCE.used} of 300 used this month · renews ${renewalDate(ALLOWANCE.period_end)}`);
-    expect(allowanceLine(ALLOWANCE)).toMatch(/ used this month · renews /);
+  it("a turn paid from a top-up is tagged so", async () => {
+    const t = setup({ replies: [{ mode: "answer", reply: "From the top-up.", charged: true, charged_from: "topup", allowance: { ...ALLOWANCE, topup: { balance: 99, allowed: true } } }] });
+    await say(t.controller, "it's a little quiet in here");
+    expect(lastButler().ai).toEqual({ charged: true, chargedFrom: "topup" });
+    expect(useAssistantStore.getState().allowance?.topup.balance).toBe(99);
   });
 
   it("AI_DECLINED speaks its message", async () => {
@@ -540,7 +547,7 @@ describe("AI errors fall back to the phone's own answer", () => {
   });
 
   it("an answer for another turn id is not trusted", async () => {
-    const t = setup({ replies: async () => ({ turn_id: "99999999-9999-4999-8999-999999999999", mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.lock", params: {} }], charged: true, allowance: ALLOWANCE }) as rest.AssistantTurnResponse });
+    const t = setup({ replies: async () => ({ turn_id: "99999999-9999-4999-8999-999999999999", mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.lock", params: {} }], charged: true, charged_from: "window", allowance: ALLOWANCE }) as rest.AssistantTurnResponse });
     await say(t.controller, "something");
     expect(plans()).toHaveLength(0);
   });
@@ -570,7 +577,7 @@ describe("waiting for the AI", () => {
         calls++;
         if (calls === 1) return new Promise((_r, reject) => signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))));
         if (calls <= 3) return Promise.reject(new ApiError(409, "AI_BUSY", "busy", true));
-        return Promise.resolve({ turn_id: _body.turn_id, mode: "answer", reply: "Here I am.", choices: [], handoff: "none", steps: [], charged: true, allowance: ALLOWANCE } as rest.AssistantTurnResponse);
+        return Promise.resolve({ turn_id: _body.turn_id, mode: "answer", reply: "Here I am.", choices: [], handoff: "none", steps: [], charged: true, charged_from: "window", allowance: ALLOWANCE } as rest.AssistantTurnResponse);
       },
     });
     const first = say(t.controller, "tell me something");
@@ -718,7 +725,7 @@ describe("switching PC during a turn", () => {
     t.opts.pcId = "pc2";
     useAssistantStore.getState().clearConversation();
   };
-  const actAnswer = (body: rest.AssistantTurnRequest): rest.AssistantTurnResponse => ({ turn_id: body.turn_id, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.set_volume", params: { value: 45 } }], charged: true, allowance: ALLOWANCE });
+  const actAnswer = (body: rest.AssistantTurnRequest): rest.AssistantTurnResponse => ({ turn_id: body.turn_id, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "windows.set_volume", params: { value: 45 } }], charged: true, charged_from: "window", allowance: ALLOWANCE });
 
   it("an AI plan for the first PC is never built or run on the PC selected when the answer arrives", async () => {
     const t: ReturnType<typeof setup> = setup({
@@ -843,7 +850,7 @@ describe("the risk rule for running without a tap", () => {
 
   it("a turn during which the page was hidden waits, and asks only once visible", async () => {
     let release!: () => void;
-    const t = setup({ replies: () => new Promise((r) => (release = () => r({ turn_id: t.api.bodies[0]!.turn_id, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "youtube.set_paused", params: { paused: true } }], charged: true, allowance: ALLOWANCE }))) });
+    const t = setup({ replies: () => new Promise((r) => (release = () => r({ turn_id: t.api.bodies[0]!.turn_id, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "youtube.set_paused", params: { paused: true } }], charged: true, charged_from: "window", allowance: ALLOWANCE }))) });
     const turn = say(t.controller, "hush the video");
     await vi.waitFor(() => expect(t.api.turn).toHaveBeenCalled());
     t.hide(true);
@@ -1000,7 +1007,7 @@ describe("T2: nothing the PC reports reaches the AI, however the conversation we
   it("'what is playing' may say the title when asked alone, but recent only says playing or paused", async () => {
     const t = setup({ pc: { results: { "youtube.get_state": { tab: { ...PLAYING, title: "Secret Title", position_seconds: 65 } } } }, replies: [{}] });
     // youtube.get_state has no typed words: it arrives as an AI step
-    t.api.turn.mockImplementationOnce(async (body) => ({ turn_id: body.turn_id, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "youtube.get_state", params: {} }], charged: true, allowance: ALLOWANCE }));
+    t.api.turn.mockImplementationOnce(async (body) => ({ turn_id: body.turn_id, mode: "act", reply: "", choices: [], handoff: "none", steps: [{ action: "youtube.get_state", params: {} }], charged: true, charged_from: "window", allowance: ALLOWANCE }));
     await say(t.controller, "what's on at the moment");
     expect(t.speaker.said.at(-1)).toBe("Playing: Secret Title, at 1:05.");
     expect(JSON.stringify(recent())).not.toContain("Secret Title");

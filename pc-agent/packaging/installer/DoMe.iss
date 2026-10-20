@@ -2,11 +2,15 @@
 ;
 ; Built by pc-agent/packaging/installer/build_installer.py, which runs:
 ;   ISCC /DAppVersion=X.Y.Z /DBuildNumber=N /DBuildTag=X.Y.Z+<commit> /DAppFiles=<pc-agent\dist\DoMe>
-;        /DOutputDir=<pc-agent\dist\installer> [/DDevParams] DoMe.iss
+;        /DOutputDir=<pc-agent\dist\installer> [/DDevParams] [/DNoAddon] [/DSign /Sdomesign=...] DoMe.iss
 ; (AppVersion comes from pc-agent/pyproject.toml.) /DDevParams makes a development build that accepts
 ; /ApiUrl= and /ExtensionId= on its command line; a release build (build_installer.py --release) accepts
-; neither. With a signing certificate build_installer.py also passes /DSign and /Sdomesign=... so Inno
-; signs DoMe.exe, dome-native-host.exe, Setup and the uninstaller (not wired into CI yet).
+; neither. /DNoAddon (build_installer.py --release --without-browser-addon, while the add-on has no store
+; listing) makes a release build that registers no browser bridge and says that YouTube control in Chrome
+; or Edge is not part of this version. When signing, build_installer.py passes /DSign and /Sdomesign=...
+; (--sign-artifact-signing: Azure Artifact Signing, used by .github/workflows/release.yml; or
+; --sign-thumbprint) so Inno signs DoMe.exe, dome-native-host.exe, Setup and the uninstaller with one
+; command; build_installer.py then checks the signatures and the release smoke test checks them again.
 ;
 ; What it does, all per user and without elevation (HKCU and %LOCALAPPDATA% only):
 ;   * refuses to run elevated through UAC ("Run as administrator"): it would start DoMe.exe, a file in a
@@ -24,8 +28,8 @@
 ;   * registers the browser bridge with DoMe.exe's own `install-native-host` (needs an extension id: a
 ;     production id baked into the build, a development build's /ExtensionId=<32 a-p>, or in a development
 ;     build the one already registered on this PC; a release build deletes that old manifest first, and
-;     build_installer.py refuses --release while there is no production id); without one it skips that
-;     part and says so;
+;     build_installer.py refuses --release while there is no production id unless the build is a /DNoAddon
+;     release, which registers nothing); without one it skips that part and says so;
 ;   * "Start DoMe when I sign in" (opt-in, unticked) runs DoMe.exe's own `start-at-login on`;
 ;   * on upgrade and uninstall it first runs `uninstall-native-host` and `quit` (the tray's Quit DoMe) so
 ;     no file is in use. It never terminates DoMe: if DoMe does not quit, Setup stops before changing
@@ -101,6 +105,10 @@ UsePreviousTasks=no
 #ifdef Sign
 SignTool=domesign
 SignedUninstaller=yes
+; Each Artifact Signing call takes seconds and the timestamp service is shared: retry, and leave a second
+; between two signing calls.
+SignToolRetryCount=3
+SignToolMinimumTimeBetween=1000
 #endif
 
 [Languages]
@@ -122,6 +130,8 @@ english.BrowserPageCaption=YouTube control
 english.BrowserPageDescription=One part of DoMe is not set up yet
 #ifdef DevParams
 english.BrowserPageText=Controlling YouTube in Chrome or Edge needs the DoMe browser add-on. The add-on is not in the Chrome or Edge store yet, so Setup could not connect it.%n%nThe rest of DoMe was installed. A later version of DoMe will set this part up.
+#elif defined(NoAddon)
+english.BrowserPageText=YouTube control in Chrome or Edge is not part of this version of DoMe. Everything else was installed. A later version adds it; there is nothing to do now.
 #else
 english.BrowserPageText=Controlling YouTube in Chrome or Edge needs the DoMe browser add-on, and Setup could not connect it.%n%nThe rest of DoMe was installed. To try again, run this Setup again.
 #endif
@@ -661,9 +671,15 @@ begin
     if DeleteFile(ExpandConstant('{localappdata}\DoMe\com.dome.agent.json')) then
       Log('Removed the browser bridge manifest of an earlier installation.');
 #endif
+#ifdef NoAddon
+    { This release has no browser add-on (no store listing yet): nothing to register. }
+    NativeHostRegistered := False;
+    Log('Browser bridge not registered: this version of DoMe does not include the browser add-on.');
+#else
     NativeHostRegistered := RunDoMe('install-native-host') = 0;
     if not NativeHostRegistered then
       Log('Browser bridge not registered (no extension id available, or install-native-host failed).');
+#endif
     if WizardIsTaskSelected('startatlogin') then
       if RunDoMe('start-at-login on') <> 0 then
         Log('Start at login could not be turned on.');

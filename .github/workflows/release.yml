@@ -1,0 +1,525 @@
+# Release (signed Windows app): builds DoMe for Windows from the default branch, signs DoMe.exe,
+# dome-native-host.exe, DoMe-Setup and its uninstaller with Azure Artifact Signing (formerly Trusted
+# Signing), signs the version information latest.json with the update key, installs and tests the SIGNED
+# Setup on a Windows runner and, only when asked, publishes a GitHub Release: draft, upload, check GitHub's
+# digest of every file, then publish. The founder's steps: docs/LAUNCH_SETUP.md section 17. How a release
+# is made and what each file is: docs/WINDOWS_INSTALL.md.
+#
+# STATUS (2026-10-20): written and statically checked (actionlint; pc-agent/tests/test_release_workflow.py).
+# It has NEVER run: the Artifact Signing account, the identity validation, the update key and the GitHub
+# Environment `release` do not exist yet. The first real run is the test.
+#
+# Shape and safety rules (pc-agent/tests/test_release_workflow.py checks them):
+# * Triggers: a pushed tag vX.Y.Z, or Run workflow by hand (version, and publish on or off). Never a pull
+#   request. The `release` environment admits only the default branch (LAUNCH_SETUP section 17 step 4), so
+#   a tag-started run stops at job "sign" without the key or the signing identity; the founder publishes
+#   with Run workflow. Every job runs only in Heshh999/DoMe. The token is read-only everywhere except "publish".
+# * Job "check" (no secrets): the version (input or tag) equals pc-agent/pyproject.toml and
+#   dome_agent.__version__; a hand-started run runs on the default branch, a tag tags a commit of the
+#   default branch; no release vX.Y.Z exists yet; an update key is pinned in dome_agent/update_check.py.
+# * Jobs "tests" and "build" run the Windows tests and PyInstaller (third-party build code) with NO secrets.
+# * Job "sign" is the only job with environment `release` (the founder approves every run there) and the
+#   only one with id-token: write. It runs no tests and no PyInstaller. It refuses at its first step when a
+#   variable or the update key is missing (never an unsigned release). Every install (Inno Setup, Microsoft's
+#   signing client, checked: SHA-256 and signed by Microsoft) happens BEFORE it signs in to Azure with this
+#   run's short-lived OIDC token (no Azure secret is stored in GitHub); one step compiles and signs all four
+#   files inside Inno Setup, build_installer.py verifies the signatures, the job signs out (always), and one
+#   later step, whose env alone holds the update key, signs latest.json.
+# * Job "smoke" (no secrets) installs the SIGNED Setup and checks every signature, the uninstaller's too.
+# * Job "publish" verifies latest.json, its signature, SHA256SUMS and BUILD-INFO.txt (signed with Azure
+#   Artifact Signing) before it creates a DRAFT release; it compares GitHub's own digest of every uploaded
+#   file with the files it verified and only then publishes. With immutable releases turned on (LAUNCH_SETUP
+#   section 17) published files can never be replaced.
+# * No `${{ }}` inside a script (values arrive through env), no tracing, no debug logging.
+#
+# Actions are pinned to the commit of a release tag, re-checked with `git ls-remote --tags` on 2026-10-20;
+# the comment carries the tag. Microsoft.ArtifactSigning.Client 1.0.146 is pinned by the SHA-256 of its
+# .nupkg as served by nuget.org (downloaded and hashed on 2026-10-20; author-signed by Microsoft Corporation).
+
+name: Release (signed Windows app)
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "X.Y.Z, must equal pc-agent/pyproject.toml"
+        type: string
+        required: true
+      publish:
+        description: "false = build, sign and test only (files stay a 30-day workflow artifact); true = also publish the GitHub Release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.11.32"      # same as ci.yml and the uv.lock files
+  PYTHON_VERSION: "3.12"     # pc-agent requires <3.13
+  FORCE_COLOR: "1"
+
+jobs:
+  check:
+    name: Version, branch, release and update key (no secrets)
+    if: github.repository == 'Heshh999/DoMe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      publish: ${{ steps.check.outputs.publish }}
+      browser_addon: ${{ steps.check.outputs.browser_addon }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the version, the branch, that no such release exists, and the pinned update key
+        id: check
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          refuse() { echo "::error::$1 See docs/LAUNCH_SETUP.md section 17."; exit 1; }
+          if [ "$EVENT_NAME" = "push" ]; then
+            [ "$REF_TYPE" = "tag" ] || refuse "A release starts from a tag vX.Y.Z or from Run workflow."
+            version="${REF_NAME#v}"
+            publish=true
+            git fetch --no-tags --quiet origin "$DEFAULT_BRANCH"
+            git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+              || refuse "The tag $REF_NAME is not on the default branch ($DEFAULT_BRANCH); releases come from it only."
+          else
+            [ "$REF_NAME" = "$DEFAULT_BRANCH" ] || refuse "Run this workflow from the default branch ($DEFAULT_BRANCH), not $REF_NAME."
+            version="$INPUT_VERSION"
+            publish="$INPUT_PUBLISH"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || refuse "The version must look like 1.2.3."
+          project="$(python3 -I -c 'import tomllib; print(tomllib.load(open("pc-agent/pyproject.toml", "rb"))["project"]["version"])')"
+          init="$(sed -n 's/^__version__ = "\([^"]*\)"$/\1/p' pc-agent/dome_agent/__init__.py)"
+          [ "$project" = "$version" ] || refuse "pc-agent/pyproject.toml says $project, this release says $version."
+          [ "$init" = "$version" ] || refuse "dome_agent.__version__ says $init, this release says $version."
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            refuse "A release v$version already exists. Raise the version for a new release."
+          fi
+          keys="$(python3 -I - <<'PY'
+          import ast, pathlib
+          tree = ast.parse(pathlib.Path("pc-agent/dome_agent/update_check.py").read_text(encoding="utf-8"))
+          for node in tree.body:
+              if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "UPDATE_PUBLIC_KEYS":
+                  print(len(ast.literal_eval(node.value)))
+          PY
+          )"
+          [ "${keys:-0}" -gt 0 ] || refuse "No update key is pinned (UPDATE_PUBLIC_KEYS in pc-agent/dome_agent/update_check.py is empty)."
+          addon="$(python3 -I -c 'import sys; sys.path.insert(0, "pc-agent/packaging/installer"); import build_installer; print("true" if build_installer.production_extension_ids() else "false")')"
+          {
+            echo "version=$version"
+            echo "publish=$publish"
+            echo "browser_addon=$addon"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### DoMe for Windows $version"
+            echo ""
+            echo "- Publish a GitHub Release: $publish"
+            echo "- Browser add-on (YouTube control): $([ "$addon" = true ] && echo included || echo 'not included in this version')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tests:
+    # The same Windows tests as windows-installer.yml (pc-agent/tests/windows_suite.txt).
+    name: pc-agent tests (Windows)
+    needs: check
+    if: github.repository == 'Heshh999/DoMe'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync
+        working-directory: pc-agent
+        run: uv sync --locked --extra dev
+
+      - name: pc-agent - mypy (Windows code paths)
+        working-directory: pc-agent
+        run: uv run mypy --config-file mypy-windows.ini
+
+      - name: pc-agent - pytest (Windows set, tests/windows_suite.txt)
+        working-directory: pc-agent
+        timeout-minutes: 15
+        run: uv run pytest -q -p no:cacheprovider '@tests/windows_suite.txt'
+
+  build:
+    name: Build the PyInstaller folder (no secrets)
+    needs: [check, tests]
+    if: github.repository == 'Heshh999/DoMe'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync with the build extra (PyInstaller from the lock)
+        working-directory: pc-agent
+        run: uv sync --locked --extra build
+
+      - name: Build DoMe.exe and dome-native-host.exe and check the folder
+        working-directory: pc-agent
+        timeout-minutes: 20
+        run: |
+          uv run --no-sync python packaging/installer/build_installer.py --pyinstaller-only
+          if ($LASTEXITCODE -ne 0) { throw "build_installer.py --pyinstaller-only failed (exit code $LASTEXITCODE)" }
+
+      - name: Upload the PyInstaller folder for the sign job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pyinstaller-folder
+          path: pc-agent/dist/DoMe/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: Sign and package (environment release, needs the founder's approval)
+    needs: [check, build]
+    if: github.repository == 'Heshh999/DoMe'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      publisher: ${{ steps.package.outputs.publisher }}
+    env:
+      ASC_VERSION: "1.0.146"
+      ASC_NUPKG_SHA256: "7761e5d8f31e54b764da21d33cd8b0a2940e1b05526c7dfcb5e94b0431426f70"
+    steps:
+      - name: Refuse clearly when release signing is not configured
+        env:
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          DOME_SIGNING_PUBLISHER: ${{ vars.DOME_SIGNING_PUBLISHER }}
+          # GitHub evaluates the comparison: only "true" or "false" reaches the job, never the key.
+          HAS_UPDATE_KEY: ${{ secrets.DOME_UPDATE_SIGNING_KEY != '' }}
+        run: |
+          $names = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_SUBSCRIPTION_ID', 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_PROFILE', 'DOME_SIGNING_PUBLISHER')
+          $missing = @($names | Where-Object { -not ([Environment]::GetEnvironmentVariable($_)) })
+          if ($env:HAS_UPDATE_KEY -ne 'true') { $missing += 'DOME_UPDATE_SIGNING_KEY (secret)' }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Release signing is not configured. Missing: $($missing -join ', '). A release is never published unsigned. See docs/LAUNCH_SETUP.md section 17."
+            exit 1
+          }
+          if ($env:ARTIFACT_SIGNING_ENDPOINT -notmatch '^https://[a-z0-9]+\.codesigning\.azure\.net/?$') {
+            Write-Host "::error::ARTIFACT_SIGNING_ENDPOINT must be the signing account's endpoint, like https://eus.codesigning.azure.net. See docs/LAUNCH_SETUP.md section 17."
+            exit 1
+          }
+          Write-Host "Release signing is configured (publisher: $env:DOME_SIGNING_PUBLISHER)."
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the PyInstaller folder built without secrets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: pyinstaller-folder
+          path: pc-agent/dist/DoMe
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: false
+
+      - name: pc-agent - sync (runtime dependencies only; cryptography signs latest.json)
+        working-directory: pc-agent
+        run: uv sync --locked
+
+      - name: Find the Inno Setup 6 compiler
+        run: |
+          $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe' }
+          $version = if (Test-Path -LiteralPath $iscc) { [string](Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion } else { '' }
+          if (-not $version.StartsWith('6.')) {
+            Write-Host "Inno Setup 6 not found (found '$iscc' version '$version'); installing 6.7.1 with Chocolatey."
+            choco install innosetup --version 6.7.1 --allow-downgrade -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed (exit code $LASTEXITCODE)" }
+            $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+            if (-not (Test-Path -LiteralPath $iscc)) { throw "ISCC.exe not found at $iscc" }
+            $version = [string](Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
+          }
+          Write-Host "Inno Setup compiler: $iscc ($version)"
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Microsoft's Artifact Signing client (checked) and write its metadata.json
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'asc'
+          nuget install Microsoft.ArtifactSigning.Client -Version $env:ASC_VERSION -x -OutputDirectory $dir -NonInteractive
+          if ($LASTEXITCODE -ne 0) { throw "nuget install Microsoft.ArtifactSigning.Client failed (exit code $LASTEXITCODE)" }
+          $pkg = Join-Path $dir 'Microsoft.ArtifactSigning.Client'
+          $nupkg = Get-ChildItem -LiteralPath $pkg -Filter '*.nupkg' | Select-Object -First 1
+          if (-not $nupkg) { throw "no .nupkg in $pkg" }
+          $hash = (Get-FileHash -LiteralPath $nupkg.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne $env:ASC_NUPKG_SHA256) { throw "Microsoft.ArtifactSigning.Client $env:ASC_VERSION has SHA-256 $hash, expected $env:ASC_NUPKG_SHA256" }
+          $verify = (nuget verify -Signatures $nupkg.FullName -NonInteractive 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0 -or $verify -notmatch 'CN=Microsoft Corporation') { throw "the signing client package is not signed by Microsoft Corporation:`n$verify" }
+          $dlib = Join-Path $pkg 'bin\x64\Azure.CodeSigning.Dlib.dll'
+          if (-not (Test-Path -LiteralPath $dlib)) { throw "Azure.CodeSigning.Dlib.dll not found at $dlib" }
+          # Only the Azure CLI login of the next step may authenticate the dlib; every other source is excluded.
+          $exclude = @('EnvironmentCredential', 'WorkloadIdentityCredential', 'ManagedIdentityCredential', 'SharedTokenCacheCredential', 'VisualStudioCredential', 'VisualStudioCodeCredential', 'AzurePowerShellCredential', 'AzureDeveloperCliCredential', 'InteractiveBrowserCredential')
+          $metadata = [ordered]@{
+            Endpoint = $env:ARTIFACT_SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:ARTIFACT_SIGNING_ACCOUNT
+            CertificateProfileName = $env:ARTIFACT_SIGNING_PROFILE
+            CorrelationId = "dome-release-$env:GITHUB_RUN_ID"
+            ExcludeCredentials = $exclude
+          }
+          $metadata | ConvertTo-Json | Out-File -FilePath (Join-Path $dir 'metadata.json') -Encoding utf8
+          "DLIB=$dlib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "- Microsoft.ArtifactSigning.Client $env:ASC_VERSION, SHA-256 ``$hash``, signed by Microsoft Corporation" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Sign in to Azure with this run's OIDC token (no stored Azure secret)
+        uses: azure/login@053f7285eb20bf5469ef084617b0b24d3cec53fc # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Compile DoMe-Setup and sign all four files inside Inno Setup, then verify the signatures
+        id: package
+        working-directory: pc-agent
+        timeout-minutes: 30
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+          BUILD_EVENT: ${{ github.event_name }}
+          BUILD_BRANCH: ${{ github.ref_name }}
+          DOME_SIGNING_PUBLISHER: ${{ vars.DOME_SIGNING_PUBLISHER }}
+          BROWSER_ADDON: ${{ needs.check.outputs.browser_addon }}
+        run: |
+          $addon = @()
+          if ($env:BROWSER_ADDON -ne 'true') { $addon = @('--without-browser-addon') }
+          uv run --no-sync python packaging/installer/build_installer.py --release --skip-pyinstaller --iscc "$env:ISCC" --sign-artifact-signing "$env:RUNNER_TEMP\asc\metadata.json" --dlib "$env:DLIB" --publisher "$env:DOME_SIGNING_PUBLISHER" @addon
+          if ($LASTEXITCODE -ne 0) { throw "build_installer.py --release failed (exit code $LASTEXITCODE)" }
+
+      - name: Sign out of Azure
+        if: always()
+        run: |
+          az logout 2>$null
+          az account clear 2>$null
+          exit 0
+
+      - name: Refuse anything that is not signed or not this version
+        env:
+          SIGNED: ${{ steps.package.outputs.signed }}
+          BUILT_VERSION: ${{ steps.package.outputs.version }}
+          RELEASE_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          if ($env:SIGNED -ne 'true') { throw "build_installer.py did not report verified signatures" }
+          if ($env:BUILT_VERSION -ne $env:RELEASE_VERSION) { throw "built $env:BUILT_VERSION, expected $env:RELEASE_VERSION" }
+
+      - name: Sign latest.json with the update key (the only step that holds it)
+        working-directory: pc-agent
+        env:
+          DOME_UPDATE_SIGNING_KEY: ${{ secrets.DOME_UPDATE_SIGNING_KEY }}
+        run: |
+          uv run --no-sync python -I packaging/release/release_files.py sign --manifest dist/installer/latest.json --out dist/installer/latest.json.sig
+          if ($LASTEXITCODE -ne 0) { throw "signing latest.json failed (exit code $LASTEXITCODE)" }
+
+      - name: Check latest.json, its signature, SHA256SUMS, BUILD-INFO.txt and the installer's own bytes
+        working-directory: pc-agent
+        env:
+          RELEASE_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          uv run --no-sync python -I packaging/release/release_files.py verify --manifest dist/installer/latest.json --sig dist/installer/latest.json.sig --sha256sums dist/installer/SHA256SUMS --build-info dist/installer/BUILD-INFO.txt --setup "dist/installer/DoMe-Setup-$env:RELEASE_VERSION.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the release files do not check out (exit code $LASTEXITCODE)" }
+
+      - name: Upload the signed release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: |
+            pc-agent/dist/installer/DoMe-Setup-*.exe
+            pc-agent/dist/installer/SHA256SUMS
+            pc-agent/dist/installer/BUILD-INFO.txt
+            pc-agent/dist/installer/latest.json
+            pc-agent/dist/installer/latest.json.sig
+            pc-agent/dist/installer/RELEASE-NOTES.md
+          if-no-files-found: error
+          retention-days: 30
+
+  smoke:
+    name: Install and test the signed Setup (no secrets)
+    needs: [check, sign]
+    if: github.repository == 'Heshh999/DoMe'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync with the build extra (pefile, for the icon checks)
+        working-directory: pc-agent
+        run: uv sync --locked --extra build
+
+      - name: Download the signed release files
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/release-files
+
+      - name: Smoke-test the signed Setup (signatures, install, tray, upgrades, uninstalls)
+        working-directory: pc-agent
+        timeout-minutes: 40
+        env:
+          RELEASE_VERSION: ${{ needs.check.outputs.version }}
+          PUBLISHER: ${{ needs.sign.outputs.publisher }}
+          BROWSER_ADDON: ${{ needs.check.outputs.browser_addon }}
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP "release-files\DoMe-Setup-$env:RELEASE_VERSION.exe"
+          $addon = @()
+          if ($env:BROWSER_ADDON -eq 'true') { $addon = @('--browser-addon') }
+          uv run --no-sync python -I packaging/installer/smoke_test.py full --release --setup "$setup" --version "$env:RELEASE_VERSION" --publisher "$env:PUBLISHER" --log-dir "$env:RUNNER_TEMP\installer-smoke" @addon
+          if ($LASTEXITCODE -ne 0) { throw "release smoke test failed (exit code $LASTEXITCODE)" }
+
+      - name: Upload the smoke-test logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-smoke-logs
+          path: ${{ runner.temp }}/installer-smoke/
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    name: Publish the GitHub Release (draft, check digests, publish)
+    needs: [check, sign, smoke]
+    if: github.repository == 'Heshh999/DoMe' && needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv (cache keyed on every uv.lock)
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      - name: pc-agent - sync (runtime dependencies only)
+        working-directory: pc-agent
+        run: uv sync --locked
+
+      - name: Download the signed release files
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/release-files
+
+      - name: Verify latest.json, its signature, SHA256SUMS, BUILD-INFO.txt and the installer's bytes (refuses unsigned or mismatched files)
+        working-directory: pc-agent
+        env:
+          FILES: ${{ runner.temp }}/release-files
+          RELEASE_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          uv run --no-sync python -I packaging/release/release_files.py verify --manifest "$FILES/latest.json" --sig "$FILES/latest.json.sig" --sha256sums "$FILES/SHA256SUMS" --build-info "$FILES/BUILD-INFO.txt" --setup "$FILES/DoMe-Setup-$RELEASE_VERSION.exe"
+
+      - name: Create a draft release, compare GitHub's digests, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.check.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          FILES: ${{ runner.temp }}/release-files
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          setup="DoMe-Setup-$RELEASE_VERSION.exe"
+          files=("$FILES/$setup" "$FILES/SHA256SUMS" "$FILES/BUILD-INFO.txt" "$FILES/latest.json" "$FILES/latest.json.sig" "$FILES/RELEASE-NOTES.md")
+          title="DoMe for Windows $RELEASE_VERSION"
+          if [ "$EVENT_NAME" = "push" ]; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "$title" --notes-file "$FILES/RELEASE-NOTES.md" "${files[@]}"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "$title" --notes-file "$FILES/RELEASE-NOTES.md" "${files[@]}"
+          fi
+          # A draft has no tag yet, so it is found in the list (the token can see drafts: contents: write).
+          listed="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq ".[] | select(.draft and .tag_name == \"$tag\") | .assets[] | \"\(.digest)  \(.name)\"")"
+          for file in "${files[@]}"; do
+            name="$(basename "$file")"
+            want="sha256:$(sha256sum "$file" | cut -d ' ' -f 1)  $name"
+            if ! grep -qxF "$want" <<< "$listed"; then
+              echo "::error::GitHub's digest of $name does not match the verified file (or the file is missing). The draft release was NOT published; delete it on github.com and run again."
+              exit 1
+            fi
+          done
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          sha="$(cut -d ' ' -f 1 "$FILES/SHA256SUMS")"
+          {
+            echo "### DoMe for Windows $RELEASE_VERSION is published"
+            echo ""
+            echo "- Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+            echo "- Version information: https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json and latest.json.sig"
+            echo "- $setup SHA-256: \`$sha\`"
+            echo ""
+            echo "Next: the engineer copies latest.json and latest.json.sig into mobile-app/src/content (windows-release.json and windows-release.sig), CI passes, then press Deploy (production) so domeremote.com/download shows the button."
+          } >> "$GITHUB_STEP_SUMMARY"

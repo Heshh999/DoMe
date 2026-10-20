@@ -306,6 +306,75 @@ Same as section 5, with these differences:
 5. Run **status** for production until it says **"Production is live at https://domeremote.com"**.
    Then sign up and sign in there yourself.
 
+## 11A. Stripe (payments) *(per vendor docs, not yet exercised)*
+
+Stripe is the company that takes card payments for DoMe. Card details are typed on Stripe's own pages and
+never reach DoMe. Until the values below are in place, DoMe sells nothing: the Billing page says
+"Upgrading is not available yet" and everyone stays on Free. That is the state of https://domeremote.com
+today.
+
+> **Honest status (2026-10-20).** DoMe's payment code is written and tested against a stand-in for Stripe,
+> **never against Stripe itself**. Your first test-mode run on staging is the real test. Steps 1 and 2
+> are already done (you set up the Stripe sandbox and the five prices on 2026-10-20). **Steps 6 to 8
+> also need the Deploy button to pass these values to Fly; that part is not built yet.** Paste the
+> values when you are ready, but expect the staging summary to keep saying billing is off until an
+> engineer tells you the Deploy button carries them.
+
+**Cost.** Stripe has no monthly fee. For each successful charge on a US card it keeps **2.9% + $0.30**,
+plus **0.7%** of subscription payments for Stripe Billing (the subscription feature DoMe uses); cards from
+outside the US cost **1.5%** more, and a customer's dispute (chargeback) costs **$15**. Test mode is free:
+nothing is charged and no fee is taken. Example: of a $2.99 AI top-up, Stripe keeps about $0.39 and about
+**$2.60** reaches you; of a $9.99 Pro month, about $0.66 goes to Stripe. The figures and their sources are
+in `docs/COST_MODEL.md` §3.
+
+**Test mode first.** Stripe has a **Test mode** (also called a sandbox) where no real money moves and
+test card numbers work. Use it on staging. Only after staging works do you repeat the steps in
+**Live mode** for production.
+
+1. **Account.** Sign in at https://dashboard.stripe.com and switch the dashboard to **Test mode**
+   (a toggle or a "Sandbox" label at the top). *Done 2026-10-20.*
+2. **Prices.** **Product catalog** > **Add product**, three products, with prices exactly as on the
+   pricing page:
+   - "DoMe Pro": recurring **$9.99 monthly** and recurring **$99.99 yearly** (two prices on one product)
+   - "DoMe Pro Plus": recurring **$24.99 monthly** and recurring **$249.99 yearly**
+   - "DoMe AI top-up" (100 requests): **one-time** **$2.99**
+   Your prices include tax ("inclusive"); keep it that way, and leave **Stripe Tax** off. Open each
+   price and copy its id: it starts with `price_`. You need five ids. *Done 2026-10-20 (the founder
+   holds the five ids).*
+3. **Secret key.** **Developers** > **API keys** > **Secret key** > **Reveal**. In test mode it starts
+   with `sk_test_`. Treat it like a password (section 1).
+4. **Webhook.** **Developers** > **Webhooks** > **Add endpoint**:
+   - Endpoint URL: `https://staging.domeremote.com/v1/billing/webhook`
+   - Events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+     `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`,
+     `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`,
+     `invoice.payment_action_required`
+   - Save, then copy the endpoint's **Signing secret** (starts with `whsec_`). It is a password too.
+5. **Customer portal.** **Settings** > **Billing** > **Customer portal**: allow customers to update
+   their payment method, cancel **at the end of the billing period**, and switch between the four
+   subscription prices (DoMe Pro and DoMe Pro Plus, monthly and yearly). Do not allow pausing.
+6. **Where to paste.** GitHub > your repository > **Settings** > **Environments** > **staging**:
+   - **Environment secrets**: `DOME_STRIPE_SECRET_KEY` (the `sk_test_…` key) and
+     `DOME_STRIPE_WEBHOOK_SECRET` (the `whsec_…` secret). Never as repository secrets, never anywhere
+     else.
+   - **Environment variables**: `DOME_STRIPE_PRICE_PRO_MONTHLY`, `DOME_STRIPE_PRICE_PRO_ANNUAL`,
+     `DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY`, `DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL`,
+     `DOME_STRIPE_PRICE_TOPUP` (the five `price_…` ids; "ANNUAL" is the yearly price).
+   All seven or none: DoMe refuses to start with only some of them, so a typo can never half-switch
+   payments on. A live key (`sk_live_…`) is refused on staging.
+7. **Try it on staging** (once the Deploy button carries the values). Run **Deploy** for staging. Sign
+   in at https://staging.domeremote.com, open **Billing**: it should say **"Test mode: no real
+   charges"**. Choose DoMe Pro, pay on Stripe's page with card `4242 4242 4242 4242`, any future
+   date, any 3-digit CVC. Back in DoMe the page says "Pending activation" and turns to **Pro** within
+   a minute. Then choose **Manage subscription**, cancel, and check the Billing page shows the end date.
+   Tell the engineer what you saw; that run is what lets DoMe call payments "tested with Stripe".
+8. **Only then production.** Switch the Stripe dashboard to **Live mode** and repeat steps 2 to 6 there:
+   new live prices (same amounts), the live secret key (`sk_live_…`), a second webhook endpoint
+   `https://domeremote.com/v1/billing/webhook` with its own `whsec_…` secret, the portal settings, and
+   paste them into the GitHub **production** environment. Real cards are charged from then on.
+9. **With no values** (today): nothing can be bought, the Billing page says upgrading is not available
+   yet, the website keeps "Coming at paid launch", and nobody's plan changes.
+
 ## 12. Redirects and DNSSEC *(per vendor docs, not yet exercised)*
 
 Only `https://domeremote.com` serves DoMe. The other names send visitors there. All of this is in
@@ -427,3 +496,179 @@ summary lists them again until an engineer closes them:
 - signing in yourself on production (the button cannot test sign-in);
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).
+
+## 17. Code signing and releases *(per vendor docs, not yet exercised)*
+
+This section makes DoMe for Windows downloadable as a **signed** program: Windows then shows your name as
+the publisher instead of "Unknown publisher". Until you do it, domeremote.com/download keeps saying
+"not yet published", and only the team's unsigned test builds exist.
+
+> **Honest status (2026-10-20).** The release workflow on GitHub ("Release (signed Windows app)") and
+> everything behind it are written and checked by automated tests, but **have never run**: there is no
+> signing account, identity check or update key yet. Your first run (step 6) is the real test. The
+> Microsoft and GitHub screens below come from their documentation, read on 2026-10-20 through the
+> public copies of those pages on github.com; nobody has clicked through them for DoMe yet, and Azure's
+> pages move often. If a button has moved, look for the same words nearby.
+
+**Words you will see**
+
+- **Code signing**: a digital stamp on DoMe's programs that says who made them and that nobody changed
+  them since.
+- **Azure Artifact Signing**: Microsoft's paid signing service (it was called "Trusted Signing" until
+  January 2026). It does the stamping for DoMe; you never handle a certificate file.
+- **Identity validation**: Microsoft checks your ID once, so the name in the stamp is really yours.
+- **SmartScreen**: the blue "Windows protected your PC" window. It can appear even for signed programs
+  while a version is new.
+- **Update key**: a second, separate key that signs the small file describing each release, so DoMe
+  and the website can tell a real release from a fake one.
+
+### Step 1. Decide the name Windows will show
+
+The cheapest route is an **individual** identity: the publisher Windows shows is **your legal name,
+exactly as on your ID**. Microsoft offers this to individual developers in the **US or Canada**
+(organizations also in the EU, UK and some other countries). If you later sign as a company, that is a
+new identity and Windows' trust in DoMe (SmartScreen reputation) starts again from zero, so choose now.
+
+**Cost:** Artifact Signing **Basic, $9.99 a month**, billed from the day you create the signing account
+and **not pro-rated** (a part month costs the full month). It includes 5,000 signatures a month; each
+DoMe release uses 4. GitHub stays free.
+
+### Step 2. Azure: your signing account and your identity
+
+1. Create an Azure account at https://azure.microsoft.com (a card is needed). When asked, the billing
+   account type must be **Individual**, and its **legal name and address must match your ID exactly**.
+2. In the Azure portal (https://portal.azure.com): **Subscriptions** > your subscription > **Resource
+   providers** > find `Microsoft.CodeSigning` > **Register**.
+3. Search for **Artifact Signing** > **Create**: choose your subscription, a new resource group (any
+   name, for example `dome-signing`), an account name (for example `dome-signing`), region **East US**,
+   and the **Basic** plan. Its endpoint is then `https://eus.codesigning.azure.net` (note it; step 4
+   needs it).
+4. Open the new signing account > **Access control (IAM)** > **Add role assignment** > role **Artifact
+   Signing Identity Verifier** > assign it to yourself.
+5. In the signing account: **Identity validation** > **New identity** > **Public Trust** > **Individual**.
+   Type your name exactly as on your ID, an email address you can read (its link expires after 7 days)
+   and your address as on your ID or a utility bill.
+6. Follow the identity check (through Microsoft's partner AU10TIX): a PIN by email, your phone number,
+   scan a QR code with your phone, a photo of your passport, driving licence or ID card plus a selfie,
+   then the result is added to the **Microsoft Authenticator** app on your phone and shared back with
+   Artifact Signing. You get three upload attempts.
+7. Wait: Microsoft says **1 to 20 business days**. (Older forum answers from 2025 said individuals could
+   not do this; Microsoft's current quickstart says they can.)
+8. When the status says **Completed**: **Certificate profiles** > **Create** > **Public Trust**, name it
+   `dome-windows`, and pick the identity you just validated. The name shown on the profile is what
+   Windows will show; write it down exactly.
+
+### Step 3. Let GitHub sign without a password
+
+GitHub proves who it is to Azure with a short-lived token for each run, so no Azure password is ever
+stored in GitHub.
+
+1. In the Azure portal: **Microsoft Entra ID** > **App registrations** > **New registration**, name it
+   `dome-github-release`, **Register**.
+2. In that app: **Certificates & secrets** > **Federated credentials** > **Add credential** > scenario
+   **GitHub Actions deploying Azure resources**: organization `Heshh999`, repository `DoMe`, entity type
+   **Environment**, environment name `release`. Save.
+3. Back on your signing account: **Access control (IAM)** > **Add role assignment** > role **Artifact
+   Signing Certificate Profile Signer** > assign it to the app `dome-github-release`.
+4. Copy three values (none of them is a secret): from the app's **Overview**, the **Directory (tenant)
+   ID** and the **Application (client) ID**; from **Subscriptions**, the **Subscription ID**.
+
+### Step 4. GitHub: the `release` environment
+
+Open https://github.com/Heshh999/DoMe/settings/environments.
+
+1. **New environment** named `release` (lower case, exactly), set up like section 3: tick **Required
+   reviewers** with `Heshh999`, leave "Prevent self-review" unticked, **untick** "Allow administrators to
+   bypass configured protection rules", **Save protection rules**.
+2. **Deployment branches and tags** > **Selected branches and tags**: add one **Branch** rule with the
+   default branch name (`claude/stoic-heisenberg-txq6ja` today). Add **no** tag rule. Releases are
+   started only by you, with **Run workflow** on the default branch (step 6 and step 7). A version tag
+   that anyone pushes can then never reach the signing step: GitHub refuses the `release` environment
+   for it, so its run stops before anything is signed and never gets the update key or the signing
+   identity.
+3. **Environment variables** (none of these is secret):
+
+| Name | Value |
+| --- | --- |
+| `AZURE_TENANT_ID` | the Directory (tenant) ID from step 3 |
+| `AZURE_CLIENT_ID` | the Application (client) ID from step 3 |
+| `AZURE_SUBSCRIPTION_ID` | the Subscription ID from step 3 |
+| `ARTIFACT_SIGNING_ENDPOINT` | `https://eus.codesigning.azure.net` (the endpoint of your region) |
+| `ARTIFACT_SIGNING_ACCOUNT` | the signing account's name (for example `dome-signing`) |
+| `ARTIFACT_SIGNING_PROFILE` | `dome-windows` |
+| `DOME_SIGNING_PUBLISHER` | the name on the certificate profile, exactly (step 2.8) |
+
+4. Repository **Settings** > **General** > **Releases**: turn on **Immutable releases** (once a release
+   is published, its files can never be swapped).
+
+### Step 5. The update key
+
+This key signs the small file that describes each release. It never goes to Azure.
+
+1. On your own PC, open the **DoMe folder that holds both `testkit` and `pc-agent`** (the folder you
+   extracted the test-kit ZIP into; `testkit` and `pc-agent` sit side by side in it). Open Windows
+   PowerShell right there: in File Explorer, open that folder, click the address bar at the top, type
+   `powershell` and press **Enter** (a blue window opens in that folder; not as administrator). Then run
+   this one line:
+
+   ```powershell
+   cd pc-agent; uv run python packaging/release/make_update_key.py --out "$env:USERPROFILE\Desktop\dome-key"
+   ```
+
+   If it says "Cannot find path ... pc-agent", the window is in the wrong folder (for example inside
+   `testkit`): close it and open PowerShell again from the folder that holds both.
+
+2. Open the new file `dome-update-key.pem` on your Desktop (folder `dome-key`) with Notepad, copy
+   **everything**, and paste it into GitHub > Settings > Environments > **release** > **Environment
+   secrets** > **Add environment secret**, name `DOME_UPDATE_SIGNING_KEY`. Never paste it anywhere else.
+3. Delete the `dome-key` folder (and empty the Recycle Bin).
+4. Send the engineer the 64-character line the command printed (the **public** key; it is not a secret).
+   The engineer pins it in DoMe and sets the release's version number. Releases cannot start before that.
+
+### Step 6. First run, without publishing
+
+1. GitHub > **Actions** > **Release (signed Windows app)** > **Run workflow**: the version the engineer
+   gives you, **publish** left **off**.
+2. GitHub asks you to approve the `release` environment. **Approve only a run you started yourself in
+   the last few minutes** (section 3). Before you approve, check the run's page: next to the run's name
+   it must show the default branch (`claude/stoic-heisenberg-txq6ja` today) and **workflow_dispatch**
+   (Run workflow), with your name as the one who started it. A run that shows a tag (`v...`), another
+   branch or another person: do not approve it, and tell the engineer.
+3. When the run is green, open it and download **release-files** under **Artifacts**. Unzip it and run
+   `DoMe-Setup-<version>.exe` on your PC. Before that, right-click it > **Properties** > **Digital
+   Signatures**: it should show your name.
+4. Tell the engineer what Windows showed. A blue SmartScreen window naming you as the publisher is
+   expected for weeks; anything else (an unknown publisher, a red "blocked" window) is not.
+
+If the run stops at its first step with "Release signing is not configured. Missing: ...", add exactly the
+names it lists in the `release` environment (steps 4 and 5) and run it again. Nothing was signed.
+
+### Step 7. Publish
+
+1. Run the workflow again yourself with **publish** on, from the default branch, and approve it the
+   same way (check the branch and that you started it). Publishing is always this: nobody publishes by
+   pushing a version tag (step 4 keeps tags out of the `release` environment).
+2. The release appears on https://github.com/Heshh999/DoMe/releases with the installer and its
+   checksum.
+3. The engineer copies two files from it into the website; when the checks pass, press **Deploy** for
+   **production** (section 11). Only then does domeremote.com/download show the download button.
+
+### Step 8. What to expect afterwards
+
+- SmartScreen may warn about each new version for weeks: Microsoft says reputation grows with
+  downloads ("hundreds of clean installs" and several weeks are typical), and that certificates bought
+  for extra trust (EV) no longer skip this. Keep the same identity: changing it starts over.
+- Each release uses 4 signatures of the 5,000 a month in Basic.
+- To stop paying: delete the signing account in Azure. Releases you already published stay validly
+  signed, because each signature carries a timestamp.
+- The certificates Microsoft makes for each signing run are only valid for 3 days; the timestamp is what
+  keeps a signature valid afterwards. Nothing to do on your side.
+
+**Sources** (read 2026-10-20): Artifact Signing pricing https://azure.microsoft.com/en-us/pricing/details/artifact-signing/
+(figures confirmed by https://devclass.com/2026/01/14/code-signing-windows-apps-may-be-easier-and-more-secure-with-new-azure-artifact-service/);
+quickstart (eligibility, identity validation, roles) https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart;
+signing integrations https://learn.microsoft.com/en-us/azure/artifact-signing/how-to-signing-integrations;
+FAQ (no pro-rata) https://learn.microsoft.com/en-us/azure/artifact-signing/faq;
+GitHub's guide to signing in to Azure without a password https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure;
+immutable releases https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases;
+SmartScreen reputation https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation.

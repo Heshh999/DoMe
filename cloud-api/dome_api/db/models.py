@@ -59,6 +59,23 @@ ASSISTANT_TURN_STATUSES = (
     "cancelled",
     "abandoned",
 )
+# billing (docs/BILLING.md §4): the subscription row's state, webhook receipt statuses, AI accounting
+SUBSCRIPTION_STATES = (
+    "checkout_pending",
+    "incomplete",
+    "trialing",
+    "active",
+    "cancel_scheduled",
+    "past_due",
+    "unpaid",
+    "canceled",
+)
+# states in which the account holds a paid plan (past_due only until grace_until, decided in billing/state.py)
+SUBSCRIPTION_PAID_STATES = ("trialing", "active", "cancel_scheduled", "past_due")
+BILLING_EVENT_STATUSES = ("received", "processed", "ignored", "failed")
+USAGE_WINDOW_KINDS = ("window", "week")
+TOPUP_STATUSES = ("pending", "credited", "expired", "failed")
+AI_SOURCES = ("taste", "window", "topup")
 SUPPORT_CATEGORIES = (
     "connection",
     "pairing",
@@ -100,6 +117,8 @@ class Account(Base):
     email: Mapped[str] = mapped_column(String(254), nullable=False, default="")
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     plan: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'free'"))
+    # set when a plan change lowered a device limit (the selection window runs from it); cleared on re-upgrade
+    plan_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at_col()
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # AI assistant consent (account-level, versioned; checked on every turn; the history is in security events)
@@ -148,6 +167,8 @@ class PC(Base):
     public_jwk: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     kid: Mapped[str] = mapped_column(String(43), nullable=False, unique=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # disabled by a plan change (not by the owner): re-enabled first when the limits grow again
+    plan_disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     remote_enabled_reported: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     agent_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -219,6 +240,8 @@ class Controller(Base):
     created_at: Mapped[datetime] = created_at_col()
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # chosen through PUT /v1/account/plan-selection: ordered before last_seen_at when the plan limits controllers
+    plan_selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Grant(Base):
@@ -337,11 +360,24 @@ class ActivationEvent(Base):
     created_at: Mapped[datetime] = created_at_col()
 
 
-# ----- Phase C tables: migrated now so the schema is complete; written by Phase C code only ------
+# ----- billing tables (docs/BILLING.md §3): written only by dome_api.billing -----------------------
 
 
 class Subscription(Base):
+    """The backend's cache of the provider's subscription plus DoMe's own grace decision. At most one row per
+    account is live (``state <> 'canceled'``); ``accounts.plan`` is derived from it by ``billing/state.py`` and
+    written nowhere else. Provider ids only: no email, no card data, no amounts."""
+
     __tablename__ = "subscriptions"
+    __table_args__ = (
+        _enum_check("state", SUBSCRIPTION_STATES, "ck_subscriptions_state"),
+        Index(
+            "uq_subscriptions_live_account",
+            "account_id",
+            unique=True,
+            postgresql_where=text("state <> 'canceled'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     account_id: Mapped[uuid.UUID] = mapped_column(
@@ -352,7 +388,14 @@ class Subscription(Base):
     provider_subscription_id: Mapped[str | None] = mapped_column(String(128), unique=True)
     price_id: Mapped[str | None] = mapped_column(String(128))
     plan: Mapped[str] = mapped_column(String(32), nullable=False)
+    interval: Mapped[str | None] = mapped_column(String(16))
     state: Mapped[str] = mapped_column(String(32), nullable=False)
+    # the open Checkout Session while state is checkout_pending; the idempotency key is stored before the call
+    provider_checkout_session_id: Mapped[str | None] = mapped_column(String(128), unique=True)
+    checkout_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    checkout_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_status: Mapped[str | None] = mapped_column(String(32))
+    provider_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -362,21 +405,97 @@ class Subscription(Base):
 
 
 class BillingEvent(Base):
+    """Durable webhook receipt (deduplication by ``provider_event_id``). The raw payload is never stored; the handler
+    re-fetches the object from the provider. ``kind`` groups events for operators (subscription, topup, other)."""
+
     __tablename__ = "billing_events"
+    __table_args__ = (
+        _enum_check("status", BILLING_EVENT_STATUSES, "ck_billing_events_status"),
+        Index("ix_billing_events_status_received", "status", "received_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="stripe")
     provider_event_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str | None] = mapped_column(String(16))
+    # the subscription or Checkout Session id the event is about, so a failed event can be re-fetched and retried
+    provider_object_id: Mapped[str | None] = mapped_column(String(128))
     account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"))
     received_at: Mapped[datetime] = created_at_col()
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="received")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text)
     payload_digest: Mapped[str | None] = mapped_column(String(43))
 
 
+class UsageWindow(Base):
+    """One rolling AI allowance bucket (rules.ai_allowance): the 5-hour ``window`` or the weekly ``week`` of one
+    account, opened at the first reservation while none is open. Counts and micro-dollars only; the cost cap and
+    the failed-turn limit are checked on the ``week`` row."""
+
+    __tablename__ = "usage_windows"
+    __table_args__ = (
+        UniqueConstraint("account_id", "kind", "window_start", name="uq_usage_windows_account_kind_start"),
+        _enum_check("kind", USAGE_WINDOW_KINDS, "ck_usage_windows_kind"),
+        Index("ix_usage_windows_account_kind_end", "account_id", "kind", "window_end"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    requests_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    requests_reserved: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cost_used_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    cost_reserved_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    failed_turns: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class AiBalance(Base):
+    """Per-account AI balances that never roll: Free's one-time taste and the purchased top-up requests. One row
+    per account, locked FOR UPDATE by every reservation, settlement and credit of that account."""
+
+    __tablename__ = "ai_balances"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    taste_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    taste_reserved: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    topup_remaining: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    topup_reserved: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TopupPurchase(Base):
+    """A top-up Checkout Session: pending until the provider reports it paid, credited exactly once (the session id
+    is unique), expired or failed. Amounts in cents for the receipt reference only; no card data."""
+
+    __tablename__ = "topup_purchases"
+    __table_args__ = (_enum_check("status", TOPUP_STATUSES, "ck_topup_purchases_status"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_checkout_session_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    provider_payment_intent_id: Mapped[str | None] = mapped_column(String(128))
+    requests: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = created_at_col()
+    credited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class UsagePeriod(Base):
+    """The calendar-month AI accounting of protocol 1.2. No longer written since the rolling windows of 1.3
+    (``usage_windows``); kept for the history it holds (docs/DATA_RETENTION.md)."""
+
     __tablename__ = "usage_periods"
     __table_args__ = (UniqueConstraint("account_id", "period_start", name="uq_usage_periods_account_start"),)
 
@@ -422,6 +541,7 @@ class AssistantTurn(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "client_turn_id", name="uq_assistant_turns_account_turn"),
         _enum_check("status", ASSISTANT_TURN_STATUSES, "ck_assistant_turns_status"),
+        CheckConstraint("source IS NULL OR source IN ('taste', 'window', 'topup')", name="ck_assistant_turns_source"),
         Index("ix_assistant_turns_status_created", "status", "created_at"),
     )
 
@@ -432,6 +552,10 @@ class AssistantTurn(Base):
     client_turn_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     charged: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # the bucket the turn was taken from (rules.ai_allowance) and the 5-hour window it belongs to; period_start is
+    # the weekly window's start (it was the calendar month before protocol 1.3), month_start the operator's month
+    source: Mapped[str | None] = mapped_column(String(8))
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     month_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reserved_micro_usd: Mapped[int] = mapped_column(BigInteger, nullable=False)

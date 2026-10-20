@@ -35,7 +35,10 @@ const TURN = {
   ],
   context: CONTEXT,
 };
-const ALLOWANCE = { limit: 50, used: 3, period_start: "2026-10-01T00:00:00.000Z", period_end: "2026-11-01T00:00:00.000Z", exhausted: null };
+const WINDOW = { limit: 30, used: 3, starts_at: "2026-10-24T13:00:00.000Z", ends_at: "2026-10-24T18:00:00.000Z" };
+const WEEK = { limit: 120, used: 7, starts_at: "2026-10-24T13:00:00.000Z", ends_at: "2026-10-31T13:00:00.000Z" };
+const ALLOWANCE = { kind: "windows", taste: null, window: WINDOW, week: WEEK, topup: { balance: 0, allowed: true }, exhausted: null, resets_at: null, warn_at_percent: 80 };
+const TASTE_ALLOWANCE = { kind: "taste", taste: { limit: 10, used: 3 }, window: null, week: null, topup: { balance: 0, allowed: false }, exhausted: null, resets_at: null, warn_at_percent: 80 };
 const RESPONSE = {
   turn_id: TURN_ID,
   mode: "act",
@@ -47,6 +50,7 @@ const RESPONSE = {
     { action: "app.launch", params: {}, app: "Spotify" },
   ],
   charged: true,
+  charged_from: "window",
   allowance: ALLOWANCE,
 };
 const STATUS = {
@@ -82,6 +86,10 @@ describe("assistant REST bodies", () => {
     ok("assistant_turn_response", { ...RESPONSE, mode: "ask", reply: "YouTube or the PC?", choices: ["The PC", "YouTube"], steps: [] });
     ok("assistant_status_response", STATUS);
     ok("assistant_status_response", { ...STATUS, available: false, unavailable_reason: "not_configured", provider: "none", consent: null });
+    ok("assistant_status_response", { ...STATUS, allowance: TASTE_ALLOWANCE });
+    ok("assistant_turn_response", { ...RESPONSE, charged: false, charged_from: null, mode: "decline", reply: "No.", steps: [] });
+    ok("assistant_turn_response", { ...RESPONSE, charged_from: "topup" });
+    ok("assistant_allowance", { ...ALLOWANCE, window: null, week: null });
     ok("assistant_consent_request", { version: "2026-10-11", accept: true });
     for (const text of ["Hello, sir. 40% louder? Ünïcode ✓ 🎵", "x".repeat(400)]) ok("assistant_text", text);
     for (const name of ["DoMe", "Mr. Smith", "O'Neil-Brown", "A".repeat(20)]) ok("assistant_persona", { name });
@@ -127,21 +135,34 @@ describe("assistant REST bodies", () => {
     const { exhausted: _omit, ...withoutExhausted } = ALLOWANCE;
     bad("assistant_allowance", withoutExhausted);
     bad("assistant_allowance", { ...ALLOWANCE, exhausted: "money" });
-    for (const reason of ["requests", "cost_cap", "failures"]) ok("assistant_allowance", { ...ALLOWANCE, exhausted: reason });
+    bad("assistant_allowance", { ...ALLOWANCE, exhausted: "requests" }); // the 1.2 reason is gone
+    bad("assistant_allowance", { ...ALLOWANCE, kind: "monthly" });
+    bad("assistant_allowance", { ...ALLOWANCE, warn_at_percent: 90 });
+    bad("assistant_allowance", { ...ALLOWANCE, window: { ...WINDOW, reserved: 1 } });
+    bad("assistant_allowance", { ...ALLOWANCE, topup: { balance: -1, allowed: true } });
+    for (const reason of ["window", "week", "cost_cap", "failures"]) ok("assistant_allowance", { ...ALLOWANCE, exhausted: reason, resets_at: WINDOW.ends_at });
+    ok("assistant_allowance", { ...TASTE_ALLOWANCE, taste: { limit: 10, used: 10 }, exhausted: "taste" });
+    const { charged_from: _omit2, ...withoutChargedFrom } = RESPONSE;
+    bad("assistant_turn_response", withoutChargedFrom);
+    bad("assistant_turn_response", { ...RESPONSE, charged_from: "month" });
   });
 
-  it("has the error codes and plan fields, without a version bump", () => {
-    expect(PROTOCOL_VERSION).toBe("1.2");
+  it("has the error codes and plan fields (protocol 1.3 reshaped the AI plan fields)", () => {
+    expect(PROTOCOL_VERSION).toBe("1.3");
     for (const code of ["AI_NOT_AVAILABLE", "AI_CONSENT_REQUIRED", "AI_ALLOWANCE_EXHAUSTED", "AI_SPEND_LIMIT_REACHED", "AI_UNAVAILABLE", "AI_DECLINED", "AI_BUSY", "AI_TURN_DUPLICATE"]) {
       expect(ERRORS[code]?.user_message).toBeTruthy();
     }
     expect(ERRORS.AI_UNAVAILABLE?.retryable).toBe(true);
     expect(ERRORS.AI_DECLINED?.retryable).toBe(false);
     for (const plan of Object.values(PLANS.plans)) {
-      expect(plan.ai_cost_cap_cents_per_period).toBeGreaterThanOrEqual(0);
+      expect(plan.ai_cost_cap_cents_per_week).toBeGreaterThan(0);
+      expect(plan.ai_window.hours).toBe(5);
+      expect(plan.ai_week.days).toBe(7);
       expect(plan.ai_turn_rate_limit).toEqual({ per_minute: 10, burst: 5 });
     }
-    expect(PLANS.plans.free.ai_interpretations_per_period).toBe(0);
+    expect([PLANS.plans.free.ai_taste_requests, PLANS.plans.free.ai_window.requests, PLANS.plans.free.ai_week.requests, PLANS.plans.free.ai_topup_allowed]).toEqual([10, 0, 0, false]);
+    expect([PLANS.plans.pro.ai_window.requests, PLANS.plans.pro.ai_week.requests, PLANS.plans.pro.ai_topup_allowed]).toEqual([30, 120, true]);
+    expect([PLANS.plans.pro_plus.ai_window.requests, PLANS.plans.pro_plus.ai_week.requests, PLANS.plans.pro_plus.ai_topup_allowed]).toEqual([90, 300, true]);
   });
 
   it("the plan fixture's valid cases name only AI-eligible registry actions", () => {

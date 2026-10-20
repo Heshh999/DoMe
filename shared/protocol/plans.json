@@ -1,5 +1,5 @@
 {
-  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Prices are configured by environment (Stripe price IDs); amounts here are display defaults for the pricing page and must match the configured prices. manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); it is identical for every plan because Free has the same input responsiveness as Pro. The pointer and keyboard capabilities are Free features. AI assistant (docs/design/assistant.md; read by cloud-api only): ai_interpretations_per_period is the customer unit (one charged assistant turn per usage period, the calendar month in UTC); ai_cost_cap_cents_per_period is an internal per-account backstop in US cents on the metered provider cost per usage period (unknown-cost turns count against it); ai_turn_rate_limit is the per-account token bucket for POST /v1/assistant/turn. Both AI allowances stay 0 until the Phase E release gate.",
+  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Device, routine and layout limits are enforced by cloud-api (plans.py) and carried in the entitlement assertion; the assertion's plan claim is 'pro' for every paid plan (Pro and Pro Plus share every PC-facing limit). manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); identical for every plan because Free has the same input responsiveness as Pro. AI assistant (docs/design/assistant.md; read by cloud-api only): one AI request is one charged assistant turn. ai_window is the rolling allowance that starts at the first request when no window is open and lasts `hours`; ai_week likewise lasts `days`; a request needs room in both. ai_taste_requests is a one-time allowance that never renews (Free). ai_topup_allowed: the plan may buy pricing_defaults.topup and spend its balance; the balance never expires and is kept across plan changes. ai_cost_cap_cents_per_week is an internal per-account backstop in US cents on the metered provider cost per weekly window (unknown-cost turns count against it); ai_turn_rate_limit is the per-account token bucket for POST /v1/assistant/turn. Everyday commands the phone understands by itself never count on any plan. Whether AI is offered at all is a server setting (DOME_AI_ENABLED); these allowances describe the plan, not availability.",
   "plans": {
     "free": {
       "display_name": "DoMe Free",
@@ -9,9 +9,18 @@
       "routines": false,
       "routine_max_steps": 0,
       "routine_max_seconds": 0,
-      "ai_interpretations_per_period": 0,
+      "ai_taste_requests": 10,
+      "ai_window": {
+        "hours": 5,
+        "requests": 0
+      },
+      "ai_week": {
+        "days": 7,
+        "requests": 0
+      },
+      "ai_topup_allowed": false,
+      "ai_cost_cap_cents_per_week": 100,
       "ai_transcription_minutes_per_period": 0,
-      "ai_cost_cap_cents_per_period": 0,
       "ai_turn_rate_limit": {
         "per_minute": 10,
         "burst": 5
@@ -37,9 +46,18 @@
       "routines": true,
       "routine_max_steps": 10,
       "routine_max_seconds": 60,
-      "ai_interpretations_per_period": 0,
+      "ai_taste_requests": 0,
+      "ai_window": {
+        "hours": 5,
+        "requests": 30
+      },
+      "ai_week": {
+        "days": 7,
+        "requests": 120
+      },
+      "ai_topup_allowed": true,
+      "ai_cost_cap_cents_per_week": 500,
       "ai_transcription_minutes_per_period": 0,
-      "ai_cost_cap_cents_per_period": 0,
       "ai_turn_rate_limit": {
         "per_minute": 10,
         "burst": 5
@@ -48,7 +66,43 @@
         "per_minute": 120,
         "burst": 30
       },
-      "$comment": "AI allowances stay 0 until the Phase E release gate; the cost model evaluates 250 interpretations / 30 minutes and a 300-cent cost cap.",
+      "coalescable_command_rate_limit": {
+        "per_minute": 360,
+        "burst": 60
+      },
+      "input_rate_limit": {
+        "batches_per_second": 40,
+        "burst": 80
+      }
+    },
+    "pro_plus": {
+      "display_name": "DoMe Pro Plus",
+      "max_enabled_pcs": 5,
+      "max_controllers": 5,
+      "custom_layouts": true,
+      "routines": true,
+      "routine_max_steps": 10,
+      "routine_max_seconds": 60,
+      "ai_taste_requests": 0,
+      "ai_window": {
+        "hours": 5,
+        "requests": 90
+      },
+      "ai_week": {
+        "days": 7,
+        "requests": 300
+      },
+      "ai_topup_allowed": true,
+      "ai_cost_cap_cents_per_week": 1000,
+      "ai_transcription_minutes_per_period": 0,
+      "ai_turn_rate_limit": {
+        "per_minute": 10,
+        "burst": 5
+      },
+      "manual_command_rate_limit": {
+        "per_minute": 120,
+        "burst": 30
+      },
       "coalescable_command_rate_limit": {
         "per_minute": 360,
         "burst": 60
@@ -61,14 +115,27 @@
   },
   "pricing_defaults": {
     "currency": "USD",
-    "monthly_cents": 599,
-    "annual_cents": 4999,
-    "$comment": "Pricing experiment inputs only. Live amounts come from the Stripe price objects referenced by DOME_STRIPE_PRICE_MONTHLY / DOME_STRIPE_PRICE_ANNUAL."
+    "plans": {
+      "pro": {
+        "monthly_cents": 999,
+        "annual_cents": 9999
+      },
+      "pro_plus": {
+        "monthly_cents": 2499,
+        "annual_cents": 24999
+      }
+    },
+    "topup": {
+      "requests": 100,
+      "price_cents": 299,
+      "max_balance_requests": 1000
+    },
+    "$comment": "Display amounts for the pricing page, the Billing page and GET /v1/plans. The amounts charged are those of the Stripe price objects named by DOME_STRIPE_PRICE_*; the founder keeps both equal (docs/LAUNCH_SETUP.md 'Stripe'). US dollars; the Stripe prices are tax-inclusive (founder decision 2026-10-20), so any sales tax is part of the amount, never added to it."
   },
   "downgrade_policy": {
     "selection_window_days": 14,
     "default_selection": "most_recently_seen",
-    "$comment": "On Pro expiry the customer picks which 1 PC and 2 controllers stay enabled within the window; otherwise the most recently seen are kept. Nothing is deleted. Revocation and emergency stop work for every paired device regardless of plan."
+    "$comment": "On a downgrade the customer picks which PCs and phones stay enabled within the window (GET/PUT /v1/account/plan-selection); otherwise the most recently seen are kept. Nothing is deleted. Revocation and emergency stop work for every paired device regardless of plan."
   },
   "billing_grace": {
     "past_due_grace_days": 7,

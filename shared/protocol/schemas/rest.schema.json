@@ -35,8 +35,103 @@
       "type": "string",
       "enum": [
         "free",
-        "pro"
+        "pro",
+        "pro_plus"
       ]
+    },
+    "paid_plan_id": {
+      "type": "string",
+      "enum": [
+        "pro",
+        "pro_plus"
+      ]
+    },
+    "billing_interval": {
+      "type": "string",
+      "enum": [
+        "monthly",
+        "annual"
+      ]
+    },
+    "billing_mode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "test",
+        "live"
+      ]
+    },
+    "price_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "monthly_cents",
+        "annual_cents"
+      ],
+      "properties": {
+        "monthly_cents": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "annual_cents": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "currency",
+        "plans",
+        "topup"
+      ],
+      "properties": {
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "plans": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pro",
+            "pro_plus"
+          ],
+          "properties": {
+            "pro": {
+              "$ref": "#/$defs/price_pair"
+            },
+            "pro_plus": {
+              "$ref": "#/$defs/price_pair"
+            }
+          }
+        },
+        "topup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requests",
+            "price_cents",
+            "max_balance_requests"
+          ],
+          "properties": {
+            "requests": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "price_cents": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_balance_requests": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
     },
     "error_body": {
       "type": "object",
@@ -910,40 +1005,457 @@
       }
     },
     "plans_response": {
-      "description": "GET /v1/plans (public): plans.json content plus the configured display prices",
+      "description": "GET /v1/plans (public): plans.json content, display prices, whether checkout exists and in which Stripe mode, and whether the AI assistant is switched on (ai_enabled false: AI allowances are listed but cannot be used yet)",
       "type": "object",
       "additionalProperties": false,
       "required": [
         "plans",
         "pricing",
-        "billing_enabled"
+        "billing_enabled",
+        "billing_mode",
+        "ai_enabled"
       ],
       "properties": {
         "plans": {
           "type": "object"
         },
         "pricing": {
+          "$ref": "#/$defs/pricing"
+        },
+        "billing_enabled": {
+          "type": "boolean"
+        },
+        "billing_mode": {
+          "$ref": "#/$defs/billing_mode"
+        },
+        "ai_enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "billing_checkout_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "interval"
+      ],
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/paid_plan_id"
+        },
+        "interval": {
+          "$ref": "#/$defs/billing_interval"
+        }
+      }
+    },
+    "billing_checkout_response": {
+      "description": "POST /v1/billing/checkout and /v1/billing/topup: a Stripe-hosted page to redirect to. Nothing is unlocked by returning from it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "checkout_url",
+        "session_id",
+        "expires_at"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "subscription",
+            "topup"
+          ]
+        },
+        "checkout_url": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "billing_portal_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "portal_url"
+      ],
+      "properties": {
+        "portal_url": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 2048
+        }
+      }
+    },
+    "billing_webhook_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "received",
+        "duplicate",
+        "status"
+      ],
+      "properties": {
+        "received": {
+          "type": "boolean"
+        },
+        "duplicate": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "processed",
+            "ignored",
+            "failed",
+            "duplicate"
+          ]
+        }
+      }
+    },
+    "subscription_state": {
+      "type": "string",
+      "enum": [
+        "checkout_pending",
+        "incomplete",
+        "trialing",
+        "active",
+        "cancel_scheduled",
+        "past_due",
+        "unpaid",
+        "canceled"
+      ]
+    },
+    "billing_status_response": {
+      "description": "GET /v1/account/billing: everything the Billing page shows about the account's own plan. subscription is null when no subscription row is live.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "billing_enabled",
+        "billing_mode",
+        "plan",
+        "entitlement_state",
+        "subscription",
+        "checkout_available",
+        "checkout_plans",
+        "portal_available",
+        "pricing",
+        "topup",
+        "selection"
+      ],
+      "properties": {
+        "billing_enabled": {
+          "type": "boolean"
+        },
+        "billing_mode": {
+          "$ref": "#/$defs/billing_mode"
+        },
+        "plan": {
+          "$ref": "#/$defs/plan_id"
+        },
+        "entitlement_state": {
+          "type": "string",
+          "enum": [
+            "free",
+            "active",
+            "pending",
+            "past_due",
+            "canceling",
+            "expired"
+          ]
+        },
+        "subscription": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "plan",
+                "interval",
+                "current_period_end",
+                "cancel_at_period_end",
+                "grace_until",
+                "checkout_expires_at"
+              ],
+              "properties": {
+                "state": {
+                  "$ref": "#/$defs/subscription_state"
+                },
+                "plan": {
+                  "$ref": "#/$defs/paid_plan_id"
+                },
+                "interval": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/billing_interval"
+                    }
+                  ]
+                },
+                "current_period_end": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/timestamp"
+                    }
+                  ]
+                },
+                "cancel_at_period_end": {
+                  "type": "boolean"
+                },
+                "grace_until": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/timestamp"
+                    }
+                  ]
+                },
+                "checkout_expires_at": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/timestamp"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "checkout_available": {
+          "type": "boolean"
+        },
+        "checkout_plans": {
+          "description": "The paid plans a Free customer can buy now (empty when checkout_available is false). pro_plus is absent while the AI assistant is switched off: its AI requests are its only difference from pro.",
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/paid_plan_id"
+          }
+        },
+        "portal_available": {
+          "type": "boolean"
+        },
+        "pricing": {
+          "$ref": "#/$defs/pricing"
+        },
+        "topup": {
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "currency",
-            "monthly_cents",
-            "annual_cents"
+            "allowed",
+            "balance_requests",
+            "requests",
+            "price_cents"
           ],
           "properties": {
-            "currency": {
-              "type": "string"
+            "allowed": {
+              "type": "boolean"
             },
-            "monthly_cents": {
+            "balance_requests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "requests": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "price_cents": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "selection": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "open",
+                "deadline"
+              ],
+              "properties": {
+                "open": {
+                  "type": "boolean"
+                },
+                "deadline": {
+                  "$ref": "#/$defs/timestamp"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "plan_selection_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pc_ids",
+        "controller_ids"
+      ],
+      "properties": {
+        "pc_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        },
+        "controller_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/uuid"
+          }
+        }
+      }
+    },
+    "plan_selection_response": {
+      "description": "GET and 200 PUT /v1/account/plan-selection: which devices stay enabled after a downgrade, and until when the choice can be made here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "open",
+        "deadline",
+        "plan",
+        "limits",
+        "pcs",
+        "controllers"
+      ],
+      "properties": {
+        "open": {
+          "type": "boolean"
+        },
+        "deadline": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        },
+        "plan": {
+          "$ref": "#/$defs/plan_id"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "max_enabled_pcs",
+            "max_controllers"
+          ],
+          "properties": {
+            "max_enabled_pcs": {
               "type": "integer"
             },
-            "annual_cents": {
+            "max_controllers": {
               "type": "integer"
             }
           }
         },
-        "billing_enabled": {
-          "type": "boolean"
+        "pcs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "selected",
+              "last_seen"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/uuid"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "selected": {
+                "type": "boolean"
+              },
+              "last_seen": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/timestamp"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "controllers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "display_name",
+              "selected",
+              "last_seen"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/uuid"
+              },
+              "display_name": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "selected": {
+                "type": "boolean"
+              },
+              "last_seen": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/timestamp"
+                  }
+                ]
+              }
+            }
+          }
         }
       }
     },
@@ -1281,16 +1793,14 @@
         }
       }
     },
-    "assistant_allowance": {
-      "description": "exhausted says which limit stops new turns this period (null while turns are possible); requests: the interpretations are used, cost_cap: the internal per-account cost cap is reached, failures: too many failed turns.",
+    "allowance_bucket": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "limit",
         "used",
-        "period_start",
-        "period_end",
-        "exhausted"
+        "starts_at",
+        "ends_at"
       ],
       "properties": {
         "limit": {
@@ -1301,11 +1811,112 @@
           "type": "integer",
           "minimum": 0
         },
-        "period_start": {
-          "$ref": "#/$defs/timestamp"
+        "starts_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
         },
-        "period_end": {
-          "$ref": "#/$defs/timestamp"
+        "ends_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        }
+      }
+    },
+    "assistant_allowance": {
+      "description": "kind: none (no AI on this plan), taste (Free's one-time requests), windows (a 5-hour and a weekly window). starts_at/ends_at are null while no window is open (the next request opens one). used counts charged turns only. exhausted names what stops a new turn: taste, window, week, cost_cap or failures; resets_at is when that bucket ends (null for taste). topup.balance is spendable only while topup.allowed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "taste",
+        "window",
+        "week",
+        "topup",
+        "exhausted",
+        "resets_at",
+        "warn_at_percent"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "none",
+            "taste",
+            "windows"
+          ]
+        },
+        "taste": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "limit",
+                "used"
+              ],
+              "properties": {
+                "limit": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "used": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "window": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/allowance_bucket"
+            }
+          ]
+        },
+        "week": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/allowance_bucket"
+            }
+          ]
+        },
+        "topup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "balance",
+            "allowed"
+          ],
+          "properties": {
+            "balance": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allowed": {
+              "type": "boolean"
+            }
+          }
         },
         "exhausted": {
           "oneOf": [
@@ -1315,12 +1926,28 @@
             {
               "type": "string",
               "enum": [
-                "requests",
+                "taste",
+                "window",
+                "week",
                 "cost_cap",
                 "failures"
               ]
             }
           ]
+        },
+        "resets_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/timestamp"
+            }
+          ]
+        },
+        "warn_at_percent": {
+          "type": "integer",
+          "const": 80
         }
       }
     },
@@ -1336,7 +1963,8 @@
         "handoff",
         "steps",
         "charged",
-        "allowance"
+        "allowance",
+        "charged_from"
       ],
       "properties": {
         "turn_id": {
@@ -1385,6 +2013,21 @@
         },
         "allowance": {
           "$ref": "#/$defs/assistant_allowance"
+        },
+        "charged_from": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "taste",
+                "window",
+                "topup"
+              ]
+            }
+          ]
         }
       }
     },

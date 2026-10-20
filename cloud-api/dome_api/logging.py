@@ -70,9 +70,15 @@ REDACT_EXACT = frozenset(
         "steps",
         "params",
         "context",
+        # billing (docs/BILLING.md §6): webhook bodies, signatures and anything Stripe knows about the customer
+        "raw_body",
+        "signature",
+        "customer_email",
+        "name",
+        "address",
     }
 )
-REDACT_SUFFIXES = ("_token", "_secret", "_code", "_credential", "_key", "_pem", "_title")
+REDACT_SUFFIXES = ("_token", "_secret", "_code", "_credential", "_key", "_pem", "_title", "_signature")
 
 
 def _should_redact(key: str) -> bool:

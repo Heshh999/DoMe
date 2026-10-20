@@ -5,12 +5,13 @@
  */
 import { PLANS } from "@dome/protocol";
 
-import { FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../content/plans.ts";
+import { AI_OFF_STATUS, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, LAYOUTS_STATUS, planById, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../content/plans.ts";
 
 /** Cell values with a fixed meaning: the page draws a check mark or a dash for them. */
 export const INCLUDED = "Included";
 export const NOT_INCLUDED = "—";
-export const AT_PAID_LAUNCH = "At paid launch";
+/** Pro's and Pro Plus's cell for a feature in the contract that is not built yet. */
+export const COMING = LAYOUTS_STATUS;
 
 export type Row = { label: string; free: string; pro: string; proPlus: string };
 /** `summary` names the group's rows that every plan includes, as one line (the phone list merges them). */
@@ -18,11 +19,12 @@ export type RowGroup = { title: string; status?: string; summary?: string; rows:
 
 const same = (label: string, value: string): Row => ({ label, free: value, pro: value, proPlus: value });
 
-export function pricingRows(): Row[] {
-  return pricingGroups().flatMap((g) => g.rows);
+export function pricingRows(options: { aiOn?: boolean } = {}): Row[] {
+  return pricingGroups(options).flatMap((g) => g.rows);
 }
 
-export function pricingGroups(): RowGroup[] {
+/** `aiOn`: the server says the assistant can be used; otherwise the AI group carries "Not switched on yet". */
+export function pricingGroups({ aiOn = false }: { aiOn?: boolean } = {}): RowGroup[] {
   const free = PLANS.plans.free;
   const pro = PLANS.plans.pro;
   const proPlus = planById("pro_plus");
@@ -57,6 +59,7 @@ export function pricingGroups(): RowGroup[] {
     },
     {
       title: "AI butler",
+      ...(aiOn ? {} : { status: AI_OFF_STATUS }),
       rows: [
         { label: "One-time taste to try the butler", free: `${FREE_TASTE_REQUESTS}, once (does not renew)`, pro: no, proPlus: no },
         { label: `AI requests per ${WINDOW_HOURS}-hour window`, free: no, pro: String(proContent.ai.perWindow?.requests ?? ""), proPlus: String(proPlus.ai.perWindow?.requests ?? "") },
@@ -65,10 +68,12 @@ export function pricingGroups(): RowGroup[] {
       ],
     },
     {
-      title: "At paid launch",
+      // in the plan contract, not built yet: "Coming" whether or not paid plans are on sale
+      title: "Layouts and routines",
+      status: LAYOUTS_STATUS,
       rows: [
-        { label: "Custom remote layouts and named profiles", free: free.custom_layouts ? yes : no, pro: pro.custom_layouts ? AT_PAID_LAUNCH : no, proPlus: pro.custom_layouts ? AT_PAID_LAUNCH : no },
-        { label: `Saved routines (up to ${pro.routine_max_steps} steps)`, free: free.routines ? yes : no, pro: pro.routines ? AT_PAID_LAUNCH : no, proPlus: pro.routines ? AT_PAID_LAUNCH : no },
+        { label: "Custom remote layouts and named profiles", free: free.custom_layouts ? yes : no, pro: pro.custom_layouts ? COMING : no, proPlus: pro.custom_layouts ? COMING : no },
+        { label: `Saved routines (up to ${pro.routine_max_steps} steps)`, free: free.routines ? yes : no, pro: pro.routines ? COMING : no, proPlus: pro.routines ? COMING : no },
       ],
     },
     {

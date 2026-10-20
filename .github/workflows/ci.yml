@@ -9,7 +9,7 @@
 # in-repository development identity provider (tools/dev-idp). The Windows installer has its own
 # workflow, windows-installer.yml, which runs the same Windows test list before it builds anything.
 # The Deploy workflow (deploy.yml) is tested here without secrets: job "deploy-tooling" runs the deploy
-# program's tests against a fake flyctl and lints all three workflow files with actionlint.
+# program's tests against a fake flyctl and lints every workflow file with actionlint.
 #
 # Actions are pinned to the commit of a release tag that was resolved on 2026-10-09
 # (`git ls-remote --tags`); the comment carries the tag.

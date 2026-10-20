@@ -104,7 +104,9 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
-export async function apiRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, options: RequestOptions): Promise<T> {
+export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export async function apiRequest<T>(method: Method, path: string, options: RequestOptions): Promise<T> {
   const sentToken = state.csrfToken;
   try {
     return await sendRequest<T>(method, path, options);
@@ -128,7 +130,7 @@ export async function apiRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE",
   }
 }
 
-async function sendRequest<T>(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, options: RequestOptions): Promise<T> {
+async function sendRequest<T>(method: Method, path: string, options: RequestOptions): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const init: RequestInit = { method, headers, credentials: "include", cache: "no-store", redirect: "error", mode: "same-origin" };
   if (API_ORIGIN) init.mode = "cors";
@@ -196,6 +198,16 @@ export const api = {
   supportTickets: () => apiRequest<rest.SupportTicketsResponse>("GET", "/v1/support/tickets", { responseBody: "support_tickets_response" }),
   supportTicket: (id: string) => apiRequest<rest.SupportTicket>("GET", `/v1/support/tickets/${encodeURIComponent(id)}`, { responseBody: "support_ticket_response" }),
   securityEvents: () => apiRequest<rest.SecurityEventsResponse>("GET", "/v1/account/security-events", { responseBody: "security_events_response" }),
+
+  // Billing (docs/BILLING.md; protocol 1.3): the account's own plan as the server states it, and Stripe-hosted pages to
+  // redirect to. Returning from one of those pages unlocks nothing; the page re-reads the session and this status.
+  // Portal and top-up take an empty JSON object: the body says nothing, the session and CSRF token say who.
+  billing: () => apiRequest<rest.BillingStatusResponse>("GET", "/v1/account/billing", { responseBody: "billing_status_response" }),
+  billingCheckout: (body: rest.BillingCheckoutRequest) => apiRequest<rest.BillingCheckoutResponse>("POST", "/v1/billing/checkout", { responseBody: "billing_checkout_response", requestBody: "billing_checkout_request", body }),
+  billingPortal: () => apiRequest<rest.BillingPortalResponse>("POST", "/v1/billing/portal", { responseBody: "billing_portal_response", body: {} }),
+  billingTopup: () => apiRequest<rest.BillingCheckoutResponse>("POST", "/v1/billing/topup", { responseBody: "billing_checkout_response", body: {} }),
+  planSelection: () => apiRequest<rest.PlanSelectionResponse>("GET", "/v1/account/plan-selection", { responseBody: "plan_selection_response" }),
+  putPlanSelection: (body: rest.PlanSelectionRequest) => apiRequest<rest.PlanSelectionResponse>("PUT", "/v1/account/plan-selection", { responseBody: "plan_selection_response", requestBody: "plan_selection_request", body }),
 
   // The optional AI assistant (docs/design/assistant.md §1.2): PWA-only endpoints. A turn carries the owner's words
   // and the closed context of assistantContext.ts, never PC text; the phone never retries a turn by itself.

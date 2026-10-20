@@ -15,6 +15,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from dome_api import __version__
 from dome_api.assistant.service import AssistantConfig, AssistantService, build_provider
 from dome_api.auth.oidc import OIDCClient
+from dome_api.billing.service import BillingConfig, BillingService
+from dome_api.billing.service import build_provider as build_billing_provider
 from dome_api.db.engine import make_engine, make_session_factory
 from dome_api.db.migrate import head_revision
 from dome_api.entitlements import EntitlementSigner
@@ -38,6 +40,7 @@ from dome_api.routes import (
     agent_link,
     assistant,
     auth,
+    billing,
     commands,
     controllers,
     grants,
@@ -78,6 +81,13 @@ def _build_services(settings: Settings) -> Services:
     signer = EntitlementSigner.from_path(settings.entitlement_signing_key_pem_path, settings.effective_api_url)
     relay = ConnectionManager(settings=settings, db=db, signer=signer)
     registry = load_registry()
+    assistant = AssistantService(
+        config=AssistantConfig.from_settings(settings),
+        provider=build_provider(settings),
+        db=db,
+        registry=registry,
+        validate_responses=settings.validate_rest_responses,
+    )
     return Services(
         settings=settings,
         engine=engine,
@@ -96,14 +106,26 @@ def _build_services(settings: Settings) -> Services:
         link_code_account_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_account, 900),
         link_code_ip_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_ip, 900),
         support_ticket_limiter=SlidingWindowLimiter(settings.rate_support_tickets_per_hour, 3600),
-        assistant=AssistantService(
-            config=AssistantConfig.from_settings(settings),
-            provider=build_provider(settings),
+        assistant=assistant,
+        billing=BillingService(
+            config=BillingConfig.from_settings(settings),
+            provider=build_billing_provider(settings),
             db=db,
-            registry=registry,
-            validate_responses=settings.validate_rest_responses,
+            relay=relay,
+            assistant=assistant,
         ),
     )
+
+
+async def reconcile_once(settings: Settings) -> dict[str, int]:
+    """One billing reconciliation pass for operators (``dome-api --billing-reconcile``); no relay is online here,
+    so snapshots reach PCs at their next connect."""
+    services = _build_services(settings)
+    try:
+        return await services.billing.reconcile()
+    finally:
+        await services.billing.aclose()
+        await services.engine.dispose()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -120,10 +142,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pin_sdk_loggers()  # the AI SDK never logs request options, whatever the log level (also under tests)
         await sweeper.start()
         await services.assistant.start()
-        log.info("startup", version=__version__, env=settings.env, origin=settings.public_origin)
+        await services.billing.start()
+        log.info(
+            "startup",
+            version=__version__,
+            env=settings.env,
+            origin=settings.public_origin,
+            billing=settings.billing_mode,
+        )
         try:
             yield
         finally:
+            await services.billing.stop()
+            await services.billing.aclose()
             await services.assistant.stop()
             await services.assistant.aclose()
             await sweeper.stop()
@@ -155,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         plans.router,
         support.router,
         assistant.router,
+        billing.router,
     ):
         app.include_router(router, prefix="/v1")
     app.include_router(health.router)

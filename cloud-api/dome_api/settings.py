@@ -15,6 +15,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Env = Literal["development", "staging", "production", "test"]
 AiProvider = Literal["", "anthropic", "fake"]
+BillingProvider = Literal["", "stripe", "fake"]
+BillingMode = Literal["off", "test", "live"]
+# the seven Stripe values that must be set together (docs/BILLING.md §5; a half-configured set refuses start-up)
+_STRIPE_FIELDS = (
+    "stripe_secret_key",
+    "stripe_webhook_secret",
+    "stripe_price_pro_monthly",
+    "stripe_price_pro_annual",
+    "stripe_price_pro_plus_monthly",
+    "stripe_price_pro_plus_annual",
+    "stripe_price_topup",
+)
+_PRICE_ID = r"^(price_[A-Za-z0-9_]{4,})?$"
 # The Anthropic SDK reads these from the environment (base URL, logging, extra headers, credentials): a stray one
 # could redirect the key and the owner's words, log request bodies or add headers (docs/design/assistant.md §3.11).
 _ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"
@@ -101,11 +114,23 @@ class Settings(BaseSettings):
     # deploy can prove which build is running; empty outside a built image.
     build_commit: str = Field(default="", pattern=r"^([0-9a-f]{7,40})?$")
 
-    # Phase C (disabled when blank); declared so the schema is complete and validated.
+    # Billing (docs/BILLING.md). Off while every Stripe value is blank; partial configuration refuses start-up.
     stripe_secret_key: SecretStr = SecretStr("")
     stripe_webhook_secret: SecretStr = SecretStr("")
-    stripe_price_monthly: str = ""
-    stripe_price_annual: str = ""
+    stripe_price_pro_monthly: str = Field(default="", pattern=_PRICE_ID)
+    stripe_price_pro_annual: str = Field(default="", pattern=_PRICE_ID)
+    stripe_price_pro_plus_monthly: str = Field(default="", pattern=_PRICE_ID)
+    stripe_price_pro_plus_annual: str = Field(default="", pattern=_PRICE_ID)
+    stripe_price_topup: str = Field(default="", pattern=_PRICE_ID)
+    billing_provider: BillingProvider = ""  # "" = stripe when a secret key is set, else off; fake = tests only
+    billing_webhook_tolerance_seconds: int = Field(default=300, ge=60, le=900)
+    billing_reconcile_interval_seconds: float = Field(default=3600.0, gt=0)
+    # how long a hosted Checkout page stays payable (its expires_at) and how long the reconciler waits before it asks
+    # the provider about a page still pending; Stripe accepts 30 minutes to 24 hours
+    billing_checkout_pending_hours: int = Field(default=24, ge=1, le=24)
+    # checkout, portal and top-up page creations per account per hour
+    rate_billing_requests_per_hour: int = Field(default=10, ge=1)
+    stripe_automatic_tax: bool = False
 
     # AI assistant, step 1 (docs/design/assistant.md §3.11). Off unless DOME_AI_ENABLED; the key lives only here.
     ai_enabled: bool = False
@@ -141,6 +166,22 @@ class Settings(BaseSettings):
             from dome_api.logging import get_logger
 
             get_logger("dome_api.settings").warning("settings.renamed_variable", variable="DOME_AI_API_KEY")
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _v_renamed_price_ids(cls, data: Any) -> Any:
+        # The two-price variables of the Free/Pro design became four plan prices plus a top-up (protocol 1.3).
+        for old, new in (
+            ("DOME_STRIPE_PRICE_MONTHLY", "DOME_STRIPE_PRICE_PRO_MONTHLY"),
+            ("DOME_STRIPE_PRICE_ANNUAL", "DOME_STRIPE_PRICE_PRO_ANNUAL"),
+        ):
+            if os.environ.get(old, "").strip():
+                raise ValueError(f"{old} was renamed to {new}; move the price id and remove the old variable")
+            if old in os.environ:
+                from dome_api.logging import get_logger
+
+                get_logger("dome_api.settings").warning("settings.renamed_variable", variable=old)
         return data
 
     @field_validator("public_origin")
@@ -210,8 +251,40 @@ class Settings(BaseSettings):
             )
         if self.static_dir is not None and not self.static_dir.is_dir():
             raise ValueError(f"DOME_STATIC_DIR {self.static_dir} is not a directory")
+        self._v_billing()
         self._v_ai()
         return self
+
+    def _v_billing(self) -> None:
+        """Billing start-up checks (docs/BILLING.md §5). Messages name variables, never values."""
+        if self.billing_provider == "fake" and self.env in ("staging", "production"):
+            raise ValueError(f"DOME_BILLING_PROVIDER=fake is for development and tests only, not {self.env}")
+        values = {name: self._stripe_value(name) for name in _STRIPE_FIELDS}
+        if any(values.values()) and not all(values.values()):
+            missing = ", ".join(f"DOME_{name.upper()}" for name, value in values.items() if not value)
+            raise ValueError(
+                f"billing is half configured: {missing} must be set as well (or every DOME_STRIPE_* value cleared); "
+                "payments stay unavailable until all seven are present"
+            )
+        key = values["stripe_secret_key"]
+        if key:
+            if not key.startswith(("sk_test_", "rk_test_", "sk_live_", "rk_live_")):
+                raise ValueError("DOME_STRIPE_SECRET_KEY must be a Stripe secret or restricted key (sk_/rk_ prefix)")
+            if self.env != "production" and not key.startswith(("sk_test_", "rk_test_")):
+                raise ValueError(
+                    f"DOME_STRIPE_SECRET_KEY is a live key but DOME_ENV is {self.env}: never charge real cards from "
+                    "a non-production environment; use a test-mode key here"
+                )
+            if not values["stripe_webhook_secret"].startswith("whsec_"):
+                raise ValueError("DOME_STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret (whsec_ prefix)")
+            if len({v for n, v in values.items() if n.startswith("stripe_price_")}) != 5:
+                raise ValueError("the five DOME_STRIPE_PRICE_* values must name five different Stripe prices")
+        if self.billing_provider == "stripe" and not key:
+            raise ValueError("DOME_BILLING_PROVIDER=stripe requires DOME_STRIPE_SECRET_KEY and the other Stripe values")
+
+    def _stripe_value(self, name: str) -> str:
+        value = getattr(self, name)
+        return str(value.get_secret_value() if isinstance(value, SecretStr) else value).strip()
 
     def _v_ai(self) -> None:
         """The assistant's start-up checks (docs/design/assistant.md §3.11). Messages name variables, never values."""
@@ -251,12 +324,12 @@ class Settings(BaseSettings):
         from dome_api.plans import catalog
 
         for plan in catalog().plans.values():
-            limit = max(plan.ai_interpretations_per_period, self.ai_dev_grant_interpretations)
-            cap = max(plan.ai_cost_cap_cents_per_period, self.ai_dev_grant_cost_cap_cents) * MICRO_USD_PER_CENT
-            if limit > 0 and cap < self.ai_turn_reserve_micro_usd:
+            has_allowance = plan.has_ai_allowance or self.ai_dev_grant_interpretations > 0
+            cap = max(plan.ai_cost_cap_cents_per_week, self.ai_dev_grant_cost_cap_cents) * MICRO_USD_PER_CENT
+            if has_allowance and cap < self.ai_turn_reserve_micro_usd:
                 raise ValueError(
                     f"plan {plan.id!r}: an AI allowance needs a cost cap of at least one turn reservation "
-                    "(ai_cost_cap_cents_per_period / DOME_AI_DEV_GRANT_COST_CAP_CENTS x 10000 >= "
+                    "(ai_cost_cap_cents_per_week / DOME_AI_DEV_GRANT_COST_CAP_CENTS x 10000 >= "
                     "DOME_AI_TURN_RESERVE_MICRO_USD); every turn would fail otherwise"
                 )
 
@@ -306,6 +379,41 @@ class Settings(BaseSettings):
     def issuer_origin(self) -> str:
         parts = urlsplit(self.oidc_issuer)
         return _origin(f"{parts.scheme}://{parts.netloc}")
+
+    # ----- billing ------------------------------------------------------------------------------
+    @property
+    def effective_billing_provider(self) -> BillingProvider:
+        """``stripe`` when a key is set and no provider was named; ``fake`` only when asked for (tests)."""
+        if self.billing_provider:
+            return self.billing_provider
+        return "stripe" if self.stripe_secret_key.get_secret_value().strip() else ""
+
+    @property
+    def billing_enabled(self) -> bool:
+        """Checkout, portal, top-ups and the webhook exist only with a provider and all seven Stripe values."""
+        return bool(self.effective_billing_provider) and all(self._stripe_value(n) for n in _STRIPE_FIELDS)
+
+    @property
+    def billing_mode(self) -> BillingMode:
+        """Public (GET /v1/plans): ``test`` lets the UI say "Test mode: no real charges"."""
+        if not self.billing_enabled:
+            return "off"
+        if self.effective_billing_provider == "fake":
+            return "test"
+        return "live" if self.stripe_secret_key.get_secret_value().startswith(("sk_live_", "rk_live_")) else "test"
+
+    def price_map(self) -> dict[str, tuple[str, str]]:
+        """Stripe price id -> (plan id, interval) for the four subscription prices."""
+        return {
+            self.stripe_price_pro_monthly: ("pro", "monthly"),
+            self.stripe_price_pro_annual: ("pro", "annual"),
+            self.stripe_price_pro_plus_monthly: ("pro_plus", "monthly"),
+            self.stripe_price_pro_plus_annual: ("pro_plus", "annual"),
+        }
+
+    @property
+    def topup_price_id(self) -> str:
+        return self.stripe_price_topup
 
     @property
     def validate_rest_responses(self) -> bool:

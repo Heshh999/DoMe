@@ -49,10 +49,13 @@ from websockets.exceptions import ConnectionClosed
 
 from dome_api.assistant.fake_provider import FakeProvider
 from dome_api.assistant.service import AssistantService
+from dome_api.billing.fake_provider import FakeStripe
+from dome_api.billing.service import BillingService
 from dome_api.db.migrate import upgrade_to_head
 from dome_api.keygen import write_key
 from dome_api.main import create_app
 from dome_api.plans import RateLimit
+from dome_api.security.ratelimit import SlidingWindowLimiter
 from dome_api.settings import Settings
 from dome_api.state import Services
 
@@ -60,9 +63,9 @@ REPO = Path(__file__).resolve().parents[2]
 DEV_IDP_BIN = REPO / "tools" / "dev-idp" / ".venv" / "bin" / "dome-dev-idp"
 TEST_DB_URL = os.environ.get("DOME_TEST_DATABASE_URL", "postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329")
 RECV_TIMEOUT = 5.0
-# Both simulators announce every MINOR up to the registry's (1.2) by default; tests that need an older peer pass
+# Both simulators announce every MINOR up to the registry's (1.3) by default; tests that need an older peer pass
 # ``protocol_versions=("1.0",)`` / ``("1.0", "1.1")`` (and ``registry_version``) explicitly.
-DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2")
+DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3")
 
 
 def new_input_session_id() -> str:
@@ -179,6 +182,16 @@ def settings(
         ai_monthly_ceiling_cents=10_000,
         ai_dev_grant_interpretations=50,
         ai_dev_grant_cost_cap_cents=1_000,
+        # billing with the in-memory fake provider; tests swap services.billing.config/provider per test
+        billing_provider="fake",
+        stripe_secret_key="sk_test_fake",
+        stripe_webhook_secret="whsec_fake",
+        stripe_price_pro_monthly="price_fake_pro_monthly",
+        stripe_price_pro_annual="price_fake_pro_annual",
+        stripe_price_pro_plus_monthly="price_fake_pro_plus_monthly",
+        stripe_price_pro_plus_annual="price_fake_pro_plus_annual",
+        stripe_price_topup="price_fake_topup",
+        billing_reconcile_interval_seconds=3600.0,
     )
 
 
@@ -958,6 +971,45 @@ def assistant(env: Env) -> Iterator[AssistantService]:
     svc.provider = FakeProvider()
     yield svc
     svc.config, svc.provider = saved_config, saved_provider
+
+
+@pytest.fixture
+def billing(env: Env) -> Iterator[BillingService]:
+    """Billing with a fresh in-memory fake Stripe. The app is built once from frozen settings, so tests swap
+    ``config`` (dataclasses.replace) and ``provider``; both are restored here."""
+    svc = env.services.billing
+    saved_config, saved_provider, saved_limiter = svc.config, svc.provider, svc._limiter
+    svc.config = dataclasses.replace(saved_config, requests_per_hour=1_000)
+    svc._limiter = SlidingWindowLimiter(1_000, 3600)
+    svc.provider = FakeStripe()
+    yield svc
+    svc.config, svc.provider, svc._limiter = saved_config, saved_provider, saved_limiter
+
+
+def fake_stripe(svc: BillingService) -> FakeStripe:
+    assert isinstance(svc.provider, FakeStripe)
+    return svc.provider
+
+
+async def deliver(env: Env, delivery: tuple[bytes, str], *, expect: int = 200) -> dict[str, Any]:
+    """Post one signed webhook delivery the way Stripe does (no cookie, no Origin, the signature header)."""
+    raw, header = delivery
+    r = await env.http.post(
+        "/v1/billing/webhook",
+        content=raw,
+        headers={"Content-Type": "application/json", "Stripe-Signature": header},
+    )
+    assert r.status_code == expect, f"webhook -> {r.status_code} {r.text}"
+    body: dict[str, Any] = r.json()
+    if r.status_code == 200:
+        SCHEMAS.validate_rest("billing_webhook_response", body)
+    else:
+        SCHEMAS.validate_rest("error_body", body)
+    return body
+
+
+async def deliver_all(env: Env, deliveries: list[tuple[bytes, str]]) -> list[dict[str, Any]]:
+    return [await deliver(env, d) for d in deliveries]
 
 
 def dump(obj: Any) -> str:

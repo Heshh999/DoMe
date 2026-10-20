@@ -465,10 +465,20 @@ const ERROR_VOICE: Readonly<Record<string, string>> = {
  */
 export function voiceForAiError(code: string, limit: { reason?: string | undefined; renews?: string | null } = {}): string {
   if (code === "AI_ALLOWANCE_EXHAUSTED") {
-    const paused = limit.reason === "failures";
-    const what = paused ? "I'm afraid the AI assistant is paused after too many failed requests this month." : "I'm afraid this month's AI requests are used up.";
-    const when = limit.renews ? (paused ? ` It starts again on ${limit.renews}.` : ` They renew on ${limit.renews}.`) : "";
-    return `${what}${when} ${STILL_WORKS}`;
+    // `renews` is the refresh moment as the screen words it ("today at 2 pm"); Free's taste never refreshes
+    const when = limit.renews ? ` ${limit.reason === "failures" ? "It starts again" : limit.reason === "cost_cap" ? "It refreshes" : "They refresh"} ${limit.renews}.` : "";
+    switch (limit.reason) {
+      case "taste":
+        return `I'm afraid your one-time taste of AI requests is used up, and it does not renew. ${STILL_WORKS}`;
+      case "week":
+        return `I'm afraid this week's AI requests are used up.${when} ${STILL_WORKS}`;
+      case "cost_cap":
+        return `I'm afraid this week's AI requests needed more processing than your plan includes.${when} ${STILL_WORKS}`;
+      case "failures":
+        return `I'm afraid the AI assistant is paused after too many failed requests this week.${when} ${STILL_WORKS}`;
+      default:
+        return `I'm afraid this window's AI requests are used up.${when} ${STILL_WORKS}`;
+    }
   }
   return ERROR_VOICE[code] ?? ERROR_VOICE.AI_UNAVAILABLE!;
 }

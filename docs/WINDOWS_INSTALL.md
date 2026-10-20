@@ -9,7 +9,9 @@ per-user installer, `DoMe-Setup-<version>.exe`, now exists (next section). A Git
 upgrade and uninstall there; its first run was green on 2026-10-14 (run 38488799434: the Windows unit tests, the
 build and all 157 smoke-test checks passed). Installer evidence: **integration-tested on the windows-latest
 CI runner (Windows Server, administrator, UAC off); not Windows-device-tested** (no Windows 10/11 PC and
-no standard user yet). This document describes what the agent
+no standard user yet). A signed public release does not exist yet; the pipeline that will produce one
+(`.github/workflows/release.yml`, see "How a release is made" below) is written and **not yet run**
+(no signing account, no update key yet). This document describes what the agent
 does and the install, run and uninstall steps **as the code implements them today**; the last section
 lists what is still blocked. Evidence tags follow `docs/spec/MASTER_PROMPT.md` §17.
 
@@ -21,9 +23,22 @@ Related: `pc-agent/README.md` (developer view and the manual verification checkl
 This is the normal way to put DoMe on a Windows PC. It needs no administrator rights and installs DoMe
 only for the Windows account that runs it.
 
-**Getting it.** Once the team sends the PC code to GitHub, GitHub builds the installer and tests it on
-a Windows machine. The first build and test passed on 2026-10-14 (a GitHub test machine, not a
-home PC). To download it:
+**Getting it.** There are two kinds of DoMe-Setup:
+
+**(A) The public release, when it exists** (*not yet verified*: none has been made). It is signed for
+Windows, and its download is listed on **domeremote.com/download** and on the release page on GitHub
+(`github.com/Heshh999/DoMe/releases`). Both show the file's SHA-256 and the publisher name Windows will
+show. To check the file, run `Get-FileHash .\DoMe-Setup-<version>.exe -Algorithm SHA256` in PowerShell and
+compare the result with the SHA-256 on the page. Right-click the file → **Properties** → **Digital
+Signatures** names the publisher. While a version is new, Windows SmartScreen may still show "Windows
+protected your PC" even though the file is signed: its reputation builds up over weeks of installs.
+The dialog names the publisher; continue only if it is the one on the download page. A release built
+without the browser add-on (there is no Chrome or Edge store listing yet) says so on the page and in
+Setup: YouTube control in Chrome or Edge is then not part of that version; everything else is.
+
+**(B) Test builds for the team.** Once the team sends the PC code to GitHub, GitHub builds an unsigned
+development installer and tests it on a Windows machine. The first build and test passed on 2026-10-14
+(a GitHub test machine, not a home PC). To download one:
 
 1. Open the repository on GitHub (signed in), click **Actions**, then **Windows installer** on the left.
 2. Above the list, set **Branch** to the branch the team names (`main` once the work is merged) and
@@ -57,13 +72,18 @@ prompts are switched off, it asks instead whether this is the right account.) Se
 - offers **Start DoMe now** at the end. DoMe then sits in the notification area, next to the clock. If
   you do not see its icon there, open **DoMe** from the Start menu.
 
-**The blue "Windows protected your PC" warning is expected for now.** The test build is not signed yet.
+**The blue "Windows protected your PC" warning is expected for test builds.** They are not signed.
 For your own test build from GitHub you can click **More info**, then **Run anyway**. Customers must
-never be asked to do this: public downloads wait for signing.
+never be asked to do this: public downloads are signed releases only, and for those the only advice is
+to check that the dialog names the right publisher.
 
 **If Windows says "Smart App Control blocked" DoMe or DoMe-Setup**, do not turn Smart App Control off:
 once it is off, Windows cannot switch it back on without resetting the PC. Keep using the test kit
-(`testkit/README.md`) on that PC until DoMe is signed.
+(`testkit/README.md`) on that PC. Signing does not settle this: a signed DoMe may still be blocked by Smart
+App Control, because only `DoMe.exe`, the browser helper, Setup and the uninstaller are signed, not the
+libraries bundled with them (`docs/SECURITY.md` T12). Whether a signed release runs on a Windows 11 PC with
+Smart App Control on is **not yet verified**: the release smoke test runs on a Windows Server runner, which
+has no Smart App Control.
 
 **Linking.** domeremote.com is live (2026-10-16), so the installed DoMe links to your account. Open
 Windows PowerShell (not as administrator) and run
@@ -75,7 +95,11 @@ folder: quit DoMe from its icon, run the same command with `unlink` instead of `
 and start DoMe from the Start menu. A "Link this PC" item in DoMe's menu will follow. First done on a
 real PC against production on 2026-10-16 (`docs/ACCEPTANCE.md` Scenario 16).
 
-**Updating.** Run a newer `DoMe-Setup` over the old one. It closes DoMe first (the same as **Quit
+**Updating.** DoMe does not check for updates yet. The update-check code exists
+(`pc-agent/dome_agent/update_check.py`, **unit-tested** only: it accepts only version information signed
+with DoMe's pinned update key, and never downloads or installs anything by itself), but it is not
+connected to DoMe's menu or started by DoMe, and no update key is pinned yet. To update, run a newer
+`DoMe-Setup` over the old one. It closes DoMe first (the same as **Quit
 DoMe**) and keeps your link, paired phones and settings. If DoMe does not close, Setup stops without
 changing anything and asks you to quit DoMe from its icon, then run Setup again. Setup refuses to
 install an older **version number** over a newer one; uninstall first if you really want to go back.
@@ -104,7 +128,7 @@ changes which server the test kit uses.
 (`.\DoMe-Setup-0.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`). `/ApiUrl=` and `/ExtensionId=`
 work only in the development builds that GitHub makes today; a release build
 (`build_installer.py --release`) ignores them, always uses `https://domeremote.com`, and registers only
-the production add-on.
+the production add-on (a release built with `--without-browser-addon` registers none).
 
 | Option | What it does |
 | --- | --- |
@@ -117,9 +141,11 @@ the production add-on.
 The uninstaller, `%LOCALAPPDATA%\Programs\DoMe\unins000.exe`, takes `/VERYSILENT /SUPPRESSMSGBOXES`
 and `/REMOVEDATA` (also delete the settings).
 
-**What the installer does not do yet**: it is not signed (Authenticode); it has no automatic updates;
-the YouTube add-on is not in the stores, so there is no production add-on id (and `--release` refuses to
-build without one); DoMe's menu has no "Link this PC" item; test builds of the same version are not
+**What the installer does not do yet**: the test builds are not signed (Authenticode), and no signed
+release has been made yet (the release pipeline is written, **not yet run**); DoMe does not check for
+updates (see "Updating"); the YouTube add-on is not in the stores, so there is no production add-on id
+(a release can only be built with `--without-browser-addon`, and then honestly says that YouTube
+control is not included); DoMe's menu has no "Link this PC" item; test builds of the same version are not
 ordered (see "Updating"); it has been tested only on GitHub's Windows Server machine (an administrator
 account with UAC off), not yet on any Windows 10 or 11 PC, nor by a standard user; that test checks the tray only as a process (DoMe.exe keeps running, a second launch is refused,
 `DoMe.exe quit` ends it): the icon, its menu and **Quit DoMe** from the menu are not verified (the
@@ -133,6 +159,59 @@ How it is built (developers): `pc-agent/packaging/installer/build_installer.py` 
 `pc-agent/packaging/installer/smoke_test.py` is the test the workflow runs. Every DoMe.exe command
 Setup runs gets 60 seconds, and Setup never stops DoMe itself: it asks it to quit
 (`DoMe.exe quit`). Decisions: `pc-agent/DECISIONS.md` 51–56.
+
+**How a release is made (developers)** (*not yet verified*: `release.yml` has never run). The founder's
+one-time setup is `docs/LAUNCH_SETUP.md` §17. `.github/workflows/release.yml` starts from a pushed tag
+`vX.Y.Z` or from **Run workflow** (version, and **publish** on or off) and runs these jobs:
+
+1. **check** (no secrets): the version equals `pc-agent/pyproject.toml` and `dome_agent.__version__`;
+   the commit is on the default branch; no release `vX.Y.Z` exists yet; an update key is pinned in
+   `UPDATE_PUBLIC_KEYS`; whether a production add-on id exists.
+2. **tests** (Windows, no secrets): the Windows test list, as `windows-installer.yml`.
+3. **build** (Windows, no secrets): PyInstaller only (`build_installer.py --pyinstaller-only`); the folder
+   becomes a 7-day workflow artifact.
+4. **sign** (environment `release`: the founder approves the run): refuses at once when a variable or the
+   update key is missing; installs Inno Setup and Microsoft's `Microsoft.ArtifactSigning.Client` (pinned
+   SHA-256, checked to be signed by Microsoft) before it signs in to Azure with the run's OIDC token;
+   `build_installer.py --release --skip-pyinstaller --sign-artifact-signing … --publisher …` compiles
+   Setup, and Inno's `SignTool` signs `DoMe.exe`, `dome-native-host.exe`, Setup and the uninstaller with
+   Azure Artifact Signing (RFC 3161 timestamp from `http://timestamp.acs.microsoft.com`); the script then
+   runs `signtool verify /pa /v` on Setup and both programs and writes `SHA256SUMS`, `BUILD-INFO.txt`,
+   `latest.json` and `RELEASE-NOTES.md`; the job signs out of Azure, then one step that alone holds the
+   update key runs `packaging/release/release_files.py sign` to write `latest.json.sig`.
+5. **smoke** (Windows, no secrets): installs the **signed** Setup with `smoke_test.py full --release`,
+   which checks the Authenticode signatures of Setup and the installed `DoMe.exe`,
+   `dome-native-host.exe` and `unins000.exe` (Valid, the publisher's name, timestamped), that
+   `/ApiUrl=` and `/ExtensionId=` are ignored, and the install, upgrade and uninstall phases.
+6. **publish** (only for a tag, or with **publish** on): `release_files.py verify` checks the signature,
+   the fields, `SHA256SUMS` and that `BUILD-INFO.txt` says "signed with Azure Artifact Signing"; then a
+   **draft** release with the six files, a comparison of GitHub's own SHA-256 digest of every uploaded file
+   with the verified ones, and only then the release is published as **latest**.
+
+`--release` rules (`build_installer.py`): never without a signing option (no unsigned release exists);
+`--publisher` is required (the certificate's name, as Windows shows it); while
+`PRODUCTION_EXTENSION_IDS` is empty, `--without-browser-addon` is required (Setup is compiled with
+`/DNoAddon`: it registers no browser bridge, still removes a development registration left by a test
+install, and shows "YouTube control in Chrome or Edge is not part of this version of DoMe"); once an id
+exists, that flag is refused.
+
+`latest.json` (schema 1, keys sorted, two-space indent, one trailing newline) holds `version`, `url`
+(exactly `https://github.com/Heshh999/DoMe/releases/download/vX.Y.Z/DoMe-Setup-X.Y.Z.exe`), `sha256`,
+`size`, `published_at` (when the build wrote the file, just before signing; the release appears minutes
+later), `release_page`, `publisher`, `browser_addon`, `product` and `schema`. `latest.json.sig` is an
+Ed25519 signature over its exact bytes, base64 plus a newline. The public half of the update key is
+pinned twice: `UPDATE_PUBLIC_KEYS` in `pc-agent/dome_agent/update_check.py` and
+`WINDOWS_RELEASE_PUBLIC_KEYS` in `mobile-app/src/content/windowsRelease.ts` (a pc-agent test checks they
+are equal). The key itself is made with `packaging/release/make_update_key.py` on the founder's PC and
+lives only in the GitHub Environment secret `DOME_UPDATE_SIGNING_KEY`.
+
+**Showing a release on domeremote.com.** The site cannot ask GitHub (the server allows the page to
+connect only to its own origin), so after a release the engineer copies the release's `latest.json` to
+`mobile-app/src/content/windows-release.json` and `latest.json.sig` to
+`mobile-app/src/content/windows-release.sig`, byte for byte. `mobile-app/test/public/windowsRelease.test.ts`
+verifies that signature against the pinned key, so a hand-typed or stale file fails CI. After CI passes,
+the founder presses **Deploy** (production); only then does domeremote.com/download show the button. Until
+then the GitHub release page is where the release is.
 
 ## 1. What the DoMe agent is and is not
 
@@ -537,11 +616,11 @@ test `tests/test_processes.py::test_native_host_process_forwards_frames` (**unit
 | Building `DoMe.exe` / `dome-native-host.exe` | One PyInstaller folder (`dome-agent.spec`); built and run on Linux; built on Windows by `windows-installer.yml` | The first green `windows-installer.yml` run; fix whatever it reports |
 | Installer with uninstall cleanup | Inno Setup per-user installer (`pc-agent/packaging/installer/DoMe.iss`): native host, start-at-login opt-in, upgrade that quits DoMe first, downgrade refusal, uninstall cleanup; smoke-tested by CI, **awaiting its first run**; never run on a PC by a standard user | The first green run, then the founder installs it on his Windows 11 PC |
 | Linking from the tray | `DoMe.exe link` works only from a console; the tray says "Not linked — run DoMe link" | A tray "Link this PC…" item (small change), and domeremote.com live |
-| **Code signing** (Authenticode) | Not possible here: needs the founder's publisher certificate/account. `build_installer.py --sign-thumbprint` is ready but deliberately not wired into CI | A certificate (most likely Azure Trusted Signing), then a separate, protected signing job. Without it SmartScreen warns; **never instruct customers to disable antivirus or SmartScreen** — ship signed builds instead |
-| Update mechanism with a signed manifest, downgrade rejection, staged rollout | Not implemented (spec §15); the agent has no updater. Setup refuses to install over a newer X.Y.Z version (builds of the same version are not ordered), but an unsigned installer is no protection against tampering | A maintained update framework plus the signing key; version negotiation on `hello` already exists so mixed versions fail clearly (`PROTOCOL_INCOMPATIBLE`) |
+| **Code signing** (Authenticode) | Designed and written: `release.yml` signs `DoMe.exe`, `dome-native-host.exe`, Setup and the uninstaller with Azure Artifact Signing (`build_installer.py --sign-artifact-signing`, through Inno's `SignTool`) behind the protected environment `release`, verifies every signature after signing and again after installing. **Not yet verified**: it has never run; the option rules and the commands are **unit-tested** | The founder's Artifact Signing account, identity validation and the GitHub setup (`docs/LAUNCH_SETUP.md` §17), then a first run with publish off. SmartScreen may still warn for new versions; **never instruct customers to disable antivirus or SmartScreen** |
+| Update mechanism | An update **check** exists in code (`dome_agent/update_check.py`): Ed25519-signed `latest.json` against a pinned key, exact GitHub download address, rollback guard, at most three redirects on GitHub hosts, a download kept only when size and SHA-256 match; it never installs anything by itself. **Unit-tested** only; it is **not connected** to DoMe's menu or start-up, and no key is pinned, so DoMe does not check for updates yet. No automatic update, no staged rollout | Connect it to the tray ("Check for updates…") and the agent's start-up (`tray.py`, `agent.py`), pin the founder's update key, then a first signed release to check against |
+| Public download page | domeremote.com/download shows "not yet published" until `mobile-app/src/content/windows-release.json` holds a signed release's `latest.json` (its signature is checked by a vitest); then it shows the download, its SHA-256 and the publisher (**unit-tested** with a mocked release; **not yet verified** with a real one) | A published signed release, its two files copied into the site, CI, then **Deploy** |
 | Inno Setup licence | Free for non-commercial use; its makers ask commercial users to buy a licence | Buy one before the paid launch |
-| Production extension id | `PRODUCTION_EXTENSION_IDS` is empty; only `DOME_AGENT_DEV_EXTENSION_ID` works | Chrome Web Store listing (founder account), pin its `"key"` in `browser-extension/public/manifest.json`, bake the id into the release build |
-| Public download page | `mobile-app` download links are disabled with "coming soon" | A signed build to link to |
+| Production extension id | `PRODUCTION_EXTENSION_IDS` is empty; only `DOME_AGENT_DEV_EXTENSION_ID` works. A release can still ship, built with `--without-browser-addon`: it registers no browser bridge and says on the download page, in the release notes and in Setup that YouTube control in Chrome or Edge is not included in that version (**not yet verified**: no release has been made) | Chrome Web Store listing (founder account), pin its `"key"` in `browser-extension/public/manifest.json`, bake the id into the release build |
 | Windows device evidence | None | The checklist in §7 |
 | Touchpad/keyboard on a real desktop (`SendInput`, multi-monitor, UAC/elevation, lock) | Implemented, unit-/integration-tested with a fake adapter only | The protocol 1.1 rows of the checklist in §7; results go to `docs/INPUT_CONTROL.md` §10–§11 and `docs/ACCEPTANCE.md` |
 | Single-instance mutex and same-account session detection on Windows | Implemented, not run on Windows | Checklist rows *Second launch* and *Repair* |

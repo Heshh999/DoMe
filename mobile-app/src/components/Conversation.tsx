@@ -14,7 +14,7 @@ import type { CommandRecord } from "../lib/commands.ts";
 import { describeAction } from "../lib/labels.ts";
 import { STATUS_LABEL } from "../lib/planRun.ts";
 import { powerVerb } from "../lib/power.ts";
-import type { ChatChip, ChatItem } from "../store/assistant.ts";
+import type { AiCharge, ChatChip, ChatItem } from "../store/assistant.ts";
 import { useLiveStore } from "../store/live.ts";
 import { BrandMark } from "./brand.tsx";
 import { CommandOutcome } from "./CommandOutcome.tsx";
@@ -31,9 +31,9 @@ export interface ConversationHandlers {
   onCancelPower(itemId: number): void;
 }
 
-function AiTag({ ai }: { ai: { charged: boolean } | null }) {
+function AiTag({ ai }: { ai: AiCharge | null }) {
   if (!ai) return null;
-  return <p className="mt-1 text-[11px] text-text-faint">{ai.charged ? "Asked Claude · counts as 1 request" : "Asked Claude · not counted"}</p>;
+  return <p className="mt-1 text-[11px] text-text-faint">{ai.charged ? (ai.chargedFrom === "topup" ? "Asked Claude · used a top-up" : "Asked Claude · counts as 1 request") : "Asked Claude · not counted"}</p>;
 }
 
 function Chips({ chips, onChip, label }: { chips: ChatChip[]; onChip: (c: ChatChip) => void; label: string }) {

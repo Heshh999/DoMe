@@ -86,3 +86,9 @@ next protocol MINOR bump.
     - A cancelled turn (client gone) has no response body; the server logs status 499, which no client ever sees.
     - `assistant_status_response.turn_deadline_seconds` is bounded 10–60 like `DOME_AI_TURN_DEADLINE_SECONDS`; the
       service reports the setting even when a test enforces a shorter deadline.
+
+18. **Protocol 1.3: `plan_id` admits `pro_plus`, but the PC never sees it.** `agent_entitlement_response.plan`
+    references `plan_id`, so the schema would allow `pro_plus` there, yet a 1.2 agent's bundled schema would refuse
+    it. cloud-api therefore sends `pro` for every paid plan in that body and in the assertion's `plan` claim
+    (DECISIONS #69). Proposed for a later MINOR: give `agent_entitlement_response.plan` its own enum
+    `[free, pro]` with a comment, so the contract states what the code guarantees.

@@ -31,7 +31,10 @@ TURN = {
     "recent": [{"who": "owner", "text": "(DoMe handled this itself: pause YouTube)"}, {"who": "butler", "text": "YouTube is paused."}],
     "context": CONTEXT,
 }
-ALLOWANCE = {"limit": 50, "used": 3, "period_start": "2026-10-01T00:00:00.000Z", "period_end": "2026-11-01T00:00:00.000Z", "exhausted": None}
+WINDOW = {"limit": 30, "used": 3, "starts_at": "2026-10-24T13:00:00.000Z", "ends_at": "2026-10-24T18:00:00.000Z"}
+WEEK = {"limit": 120, "used": 7, "starts_at": "2026-10-24T13:00:00.000Z", "ends_at": "2026-10-31T13:00:00.000Z"}
+ALLOWANCE = {"kind": "windows", "taste": None, "window": WINDOW, "week": WEEK, "topup": {"balance": 0, "allowed": True}, "exhausted": None, "resets_at": None, "warn_at_percent": 80}
+TASTE_ALLOWANCE = {"kind": "taste", "taste": {"limit": 10, "used": 3}, "window": None, "week": None, "topup": {"balance": 0, "allowed": False}, "exhausted": None, "resets_at": None, "warn_at_percent": 80}
 RESPONSE = {
     "turn_id": TURN_ID,
     "mode": "act",
@@ -40,6 +43,7 @@ RESPONSE = {
     "handoff": "none",
     "steps": [{"action": "windows.set_volume", "params": {"value": 50}}, {"action": "app.launch", "params": {}, "app": "Spotify"}],
     "charged": True,
+    "charged_from": "window",
     "allowance": ALLOWANCE,
 }
 STATUS = {
@@ -82,11 +86,15 @@ def test_valid_examples():
     ok("assistant_turn_request", {**TURN, "recent": [], "context": {"persona": {"name": "DoMe"}, "pc_connection": "offline", "playback": {"youtube": "list", "media": "paused"}}})
     ok("assistant_turn_response", RESPONSE)
     ok("assistant_turn_response", {**RESPONSE, "mode": "ask", "reply": "YouTube or the PC?", "choices": ["The PC", "YouTube"], "steps": [], "charged": True})
-    ok("assistant_turn_response", {**RESPONSE, "mode": "decline", "reply": "I can't click things.", "handoff": "touchpad", "steps": [], "charged": False})
+    ok("assistant_turn_response", {**RESPONSE, "mode": "decline", "reply": "I can't click things.", "handoff": "touchpad", "steps": [], "charged": False, "charged_from": None})
+    ok("assistant_turn_response", {**RESPONSE, "charged_from": "topup", "allowance": {**ALLOWANCE, "topup": {"balance": 99, "allowed": True}}})
     ok("assistant_status_response", STATUS)
-    ok("assistant_status_response", {**STATUS, "available": False, "unavailable_reason": "not_configured", "provider": "none", "consent": None, "allowance": {**ALLOWANCE, "limit": 0, "used": 0}})
-    for reason in ("requests", "cost_cap", "failures"):
-        ok("assistant_allowance", {**ALLOWANCE, "exhausted": reason})
+    ok("assistant_status_response", {**STATUS, "available": False, "unavailable_reason": "not_configured", "provider": "none", "consent": None, "allowance": {**ALLOWANCE, "kind": "none", "window": None, "week": None}})
+    ok("assistant_status_response", {**STATUS, "allowance": TASTE_ALLOWANCE})
+    ok("assistant_allowance", {**ALLOWANCE, "window": None, "week": None})  # no window open yet: the next request opens one
+    for reason in ("window", "week", "cost_cap", "failures"):
+        ok("assistant_allowance", {**ALLOWANCE, "exhausted": reason, "resets_at": WINDOW["ends_at"]})
+    ok("assistant_allowance", {**TASTE_ALLOWANCE, "taste": {"limit": 10, "used": 10}, "exhausted": "taste"})
     ok("assistant_consent_request", {"version": "2026-10-11", "accept": True})
     for ch in ("Hello, sir. 40% louder? Ünïcode ✓ 🎵", "x" * 400, "Jarvis-like? No: plain words"):
         ok("assistant_text", ch)
@@ -105,6 +113,8 @@ def test_valid_examples():
         ("assistant_turn_response", RESPONSE, ["extra"]),
         ("assistant_turn_response", RESPONSE, ["steps", 0, "confirmed"]),
         ("assistant_turn_response", RESPONSE, ["allowance", "reserved"]),
+        ("assistant_turn_response", RESPONSE, ["allowance", "window", "reserved"]),
+        ("assistant_turn_response", RESPONSE, ["allowance", "topup", "price"]),
         ("assistant_status_response", STATUS, ["extra"]),
         ("assistant_status_response", STATUS, ["consent", "ip"]),
         ("assistant_consent_request", {"version": "2026-10-11", "accept": True}, ["extra"]),
@@ -183,10 +193,18 @@ def test_step_shape():
 
 
 def test_allowance_shape():
-    bad("assistant_allowance", with_(ALLOWANCE, ["exhausted"], ...))
+    for field in ("kind", "taste", "window", "week", "topup", "exhausted", "resets_at", "warn_at_percent"):
+        bad("assistant_allowance", with_(ALLOWANCE, [field], ...))
     bad("assistant_allowance", {**ALLOWANCE, "exhausted": "money"})
-    bad("assistant_allowance", {**ALLOWANCE, "used": -1})
-    bad("assistant_allowance", {**ALLOWANCE, "period_end": "next month"})
+    bad("assistant_allowance", {**ALLOWANCE, "exhausted": "requests"})  # the 1.2 reason is gone
+    bad("assistant_allowance", {**ALLOWANCE, "kind": "monthly"})
+    bad("assistant_allowance", {**ALLOWANCE, "warn_at_percent": 90})
+    bad("assistant_allowance", {**ALLOWANCE, "window": {**WINDOW, "used": -1}})
+    bad("assistant_allowance", {**ALLOWANCE, "week": {**WEEK, "ends_at": "next week"}})
+    bad("assistant_allowance", {**ALLOWANCE, "topup": {"balance": -1, "allowed": True}})
+    bad("assistant_allowance", {**ALLOWANCE, "taste": {"limit": 10}})
+    bad("assistant_turn_response", with_(RESPONSE, ["charged_from"], ...))
+    bad("assistant_turn_response", {**RESPONSE, "charged_from": "month"})
 
 
 def test_consent_and_status_shapes():
@@ -222,18 +240,28 @@ def test_error_codes():
 
 
 def test_plan_fields():
+    """Protocol 1.3 (rules.ai_allowance): every plan carries the window, week, taste, top-up and cost-cap fields."""
     plans = load_registry().plans["plans"]
+    assert set(plans) == {"free", "pro", "pro_plus"}
     for pid, plan in plans.items():
-        for field in ("ai_interpretations_per_period", "ai_transcription_minutes_per_period", "ai_cost_cap_cents_per_period"):
-            assert isinstance(plan[field], int) and plan[field] >= 0, (pid, field)
+        for field in ("ai_taste_requests", "ai_topup_allowed", "ai_cost_cap_cents_per_week", "ai_transcription_minutes_per_period"):
+            assert field in plan, (pid, field)
+        assert plan["ai_window"]["hours"] == 5 and plan["ai_week"]["days"] == 7, pid
+        assert isinstance(plan["ai_window"]["requests"], int) and isinstance(plan["ai_week"]["requests"], int)
         assert plan["ai_turn_rate_limit"] == {"per_minute": 10, "burst": 5}
-    free = plans["free"]
-    assert free["ai_interpretations_per_period"] == free["ai_transcription_minutes_per_period"] == free["ai_cost_cap_cents_per_period"] == 0
+        assert plan["ai_transcription_minutes_per_period"] == 0
+        for gone in ("ai_interpretations_per_period", "ai_cost_cap_cents_per_period", "$comment"):
+            assert gone not in plan, (pid, gone)
+    free, pro, plus = plans["free"], plans["pro"], plans["pro_plus"]
+    assert (free["ai_taste_requests"], free["ai_window"]["requests"], free["ai_week"]["requests"], free["ai_topup_allowed"]) == (10, 0, 0, False)
+    assert (pro["ai_taste_requests"], pro["ai_window"]["requests"], pro["ai_week"]["requests"], pro["ai_topup_allowed"]) == (0, 30, 120, True)
+    assert (plus["ai_taste_requests"], plus["ai_window"]["requests"], plus["ai_week"]["requests"], plus["ai_topup_allowed"]) == (0, 90, 300, True)
+    assert (free["ai_cost_cap_cents_per_week"], pro["ai_cost_cap_cents_per_week"], plus["ai_cost_cap_cents_per_week"]) == (100, 500, 1000)
 
 
-def test_no_version_bump_and_search_rule_clause():
+def test_search_rule_clause():
     reg = load_registry()
-    assert reg.protocol_version == "1.2" and reg.registry_version == "1.2"
+    assert reg.protocol_version == "1.3" and reg.registry_version == "1.3"
     from dome_protocol.registry import _load_json
 
     rule = _load_json("version.json")["rules"]["search_queries"]

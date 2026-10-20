@@ -14,8 +14,9 @@ hash, offline claim re-delivered on connect), controller/grant inventory and rev
 (hello kid binding, grants_snapshot, subscribe with cached state, command routing with every
 rejection as a relay-origin result, in-flight deadline sweeper, outcome_unknown on disconnect,
 late-result correction, revoke_controller, pairing_request delivery), command lifecycle rows, plans,
-health, security headers/CSP, static PWA serving, structlog JSON with redaction. Stripe endpoints
-(Phase C) are **not** implemented; their tables exist in migration 0001 so the schema is complete.
+health, security headers/CSP, static PWA serving, structlog JSON with redaction. Plans and Stripe billing
+(Phase C, protocol 1.3, migration 0004) are implemented and **integration-tested with an in-memory fake Stripe**;
+not yet run against Stripe test mode. See "Billing (Phase C)" below.
 
 Protocol 1.1 (spec §10A, §11A): the signed manual-input stream (`input_batch` routing, `input_ack` /
 `input_session` delivery), `grant_update` from the PC owner, pairing with the `pointer` / `keyboard`
@@ -26,9 +27,10 @@ iPhone-tested, and the relay cannot verify that a batch it forwarded was injecte
 
 AI assistant, step 1 (spec §13, Phase E; `docs/design/assistant.md`): `GET /v1/assistant`, consent, and
 `POST /v1/assistant/turn`, which turns the owner's words into at most three AI-eligible steps or a short spoken
-butler reply with Claude Opus 5.5 (migration 0003). Off unless configured; see "AI assistant" below.
+butler reply (migration 0003). Off unless configured; see "AI assistant" below.
 **Integration-tested** with a scripted fake provider and an HTTP-level stub of the Anthropic API; **not live-tested**
-(no key in the build environment) and not released (`plans.json` allowances stay 0 until the Phase E gate).
+(no key in the build environment) and not released (`DOME_AI_ENABLED` is off in production; the plan allowances of
+protocol 1.3 describe the plans, not availability).
 
 ## AI assistant (step 1)
 
@@ -53,10 +55,20 @@ response → one `assistant.turn` log line. Refusals answer `AI_DECLINED` (422),
 (502, or 504 for a timeout) with `detail.reason`. Only valid replies are charged; every turn's real token cost is
 metered, and turns whose cost is unknown are charged to the account's own cost cap.
 
+Allowances (protocol 1.3, `rules.ai_allowance`, migration 0004; `docs/BILLING.md` §10): one AI request is one charged
+turn. Free has a one-time taste of 10 (`ai_taste_requests`); Pro and Pro Plus have a 5-hour window and a weekly
+window (`ai_window` / `ai_week`: 30/120 and 90/300) that each open at the first request while none is open, and a
+turn needs room in both; otherwise the account's top-up balance pays (paid plans only, and only while billing is on),
+otherwise `AI_ALLOWANCE_EXHAUSTED {reason: taste|window|week|cost_cap|failures, resets_at}`. The cost cap
+(`ai_cost_cap_cents_per_week`) and the failed-turn limit are per weekly window; the operator ceiling stays per
+calendar month. `assistant_turn_response.charged_from` says which bucket paid. Reservations lock the account's
+`ai_balances` row, so one account's accounting is serialised while other accounts are unaffected
+(integration-tested with 10 concurrent reservations, `tests/test_assistant_metering.py`).
+
 What reaches Anthropic: the frozen system prompt and action catalogue (one cached block) and one user message with
 exactly `context`, `recent` and `request`, copied field by field from the validated request. What is stored: counts,
-micro-dollars, outcome codes, the served model id and the provider request id (`assistant_turns`, `usage_periods`,
-`ai_spend_months`). Never stored or logged: the words, `recent`, the context, the reply, the choices, the steps.
+micro-dollars, outcome codes, the served model id and the provider request id (`assistant_turns`, `usage_windows`,
+`ai_balances`, `ai_spend_months`; `usage_periods` is no longer written). Never stored or logged: the words, `recent`, the context, the reply, the choices, the steps.
 
 The Anthropic call (`assistant/anthropic_provider.py`, SDK `anthropic` 1.x): `beta.messages.stream` with
 `model=claude-opus-5-5`, `max_tokens=1024`, `output_config={effort: "low", format: json_schema}`,
@@ -73,6 +85,40 @@ First live check (owner, with a key; costs a few cents, never in CI):
 ```sh
 DOME_AI_LIVE_TESTS=1 DOME_AI_ANTHROPIC_API_KEY=sk-ant-... uv run pytest -q -s tests/test_assistant_live.py
 ```
+
+## Billing (Phase C)
+
+Design and evidence: `docs/BILLING.md`; contract: protocol 1.3 (`shared/protocol/README.md`). Code:
+`dome_api/billing/` (`provider.py` interface, `stripe_provider.py` on the official `stripe` SDK 16.x,
+`fake_provider.py` for development and tests, `state.py` the state machine, `service.py`), `routes/billing.py`,
+and the billing and plan-selection routes in `routes/account.py`.
+
+| Route | Auth | Body | Answer |
+| --- | --- | --- | --- |
+| `GET /v1/plans` | public | | `plans_response` with `pricing`, `billing_enabled`, `billing_mode` (`off` / `test` / `live`), `ai_enabled` |
+| `GET /v1/account/billing` | session | | `billing_status_response` |
+| `POST /v1/billing/checkout` | session + CSRF | `billing_checkout_request{plan, interval}` | `billing_checkout_response` (the same open page on a second call, or on a concurrent one); 409 `ALREADY_SUBSCRIBED` (also when the stored page was already paid), 409 `CHECKOUT_PROCESSING`, 403 `PLAN_NOT_AVAILABLE` (Pro Plus while the assistant is off), 502 `BILLING_PROVIDER_ERROR` |
+| `POST /v1/billing/portal` | session + CSRF | `{}` | `billing_portal_response`; 404 `BILLING_NO_CUSTOMER` |
+| `POST /v1/billing/topup` | session + CSRF | `{}` | `billing_checkout_response`; 403 `TOPUP_NOT_ALLOWED`, 409 `TOPUP_BALANCE_LIMIT` |
+| `POST /v1/billing/webhook` | Stripe signature; any `Origin` refused | raw body ≤ 64 KiB | `billing_webhook_response`; 400 `BILLING_WEBHOOK_INVALID`, 413, 500 when processing failed (Stripe redelivers) |
+| `GET` / `PUT /v1/account/plan-selection` | session (+ CSRF for PUT) | `plan_selection_request` | `plan_selection_response`; 409 `PLAN_SELECTION_CLOSED`, 400 `PLAN_SELECTION_INVALID` |
+
+The page creations share a per-account budget (`DOME_RATE_BILLING_REQUESTS_PER_HOUR`, 429). Webhook URL to give
+Stripe: `{DOME_PUBLIC_ORIGIN}/v1/billing/webhook`. `accounts.plan` is written only by `billing/state.py::apply()`,
+from an object fetched from Stripe (never from an event payload or a return URL); after the commit every online PC
+of the account gets a new `grants_snapshot`. The entitlement assertion's `plan` claim and
+`agent_entitlement_response.plan` are `pro` for Pro Plus too (the installed agents know only free and pro). An
+hourly reconciler runs in the process (`DOME_BILLING_RECONCILE_INTERVAL_SECONDS`); `dome-api --billing-reconcile`
+runs one pass and exits.
+
+Without the seven Stripe values (production today) billing is off: `billing_enabled: false`, `billing_mode: "off"`,
+checkout/portal/top-up/webhook answer 503 `BILLING_NOT_AVAILABLE`, `GET /v1/account/billing` and the plan selection
+still work, and everyone stays on Free. A partial set refuses start-up naming the missing variables.
+
+Logs: one line per operation (`billing.checkout`, `billing.webhook`, `billing.transition`, `billing.reconcile`, …)
+with codes, account ids, plan names and counts; never an email, a body, a signature or a Stripe key. Evidence:
+**integration-tested (fake provider)** in `tests/test_billing_*.py`; the Stripe adapter is **unit-tested** against the
+SDK's signature helper and object models; **not sandbox-provider-tested**.
 
 ## Manual input (protocol 1.1)
 
@@ -246,7 +292,15 @@ misconfiguration stops the process with a plain error.
 | `DOME_STATIC_DIR` | unset | Built PWA directory to serve at `/` (SPA fallback to `index.html`). |
 | `DOME_LOG_LEVEL` | `INFO` | structlog level. JSON output except in `development`. |
 | `DOME_BUILD_COMMIT` | `` | Set by the image (`deploy/Dockerfile` build argument): the git commit, 7–40 lower-case hex digits. Reported by `/healthz` as `commit`. |
-| `DOME_STRIPE_*` | blank | Declared for Phase C; billing endpoints are not implemented yet (`GET /v1/plans` reports `billing_enabled: false`). |
+| `DOME_STRIPE_SECRET_KEY` | `` | Stripe secret (or restricted) key. Outside `production` only `sk_test_` / `rk_test_` is accepted; a live key there refuses start-up. Never logged. |
+| `DOME_STRIPE_WEBHOOK_SECRET` | `` | The webhook endpoint's signing secret (`whsec_…`). |
+| `DOME_STRIPE_PRICE_PRO_MONTHLY` / `_PRO_ANNUAL` / `_PRO_PLUS_MONTHLY` / `_PRO_PLUS_ANNUAL` / `_TOPUP` | `` | The five Stripe price ids (`price_…`, all different). Renamed from `DOME_STRIPE_PRICE_MONTHLY` / `_ANNUAL`: a non-empty old variable refuses start-up, an empty one only warns. Billing is on only when the key, the webhook secret and all five are set; a partial set refuses start-up naming the missing variables. |
+| `DOME_BILLING_PROVIDER` | `` | Blank = `stripe` when a key is set; `fake` = the in-memory stand-in (refused in staging and production). |
+| `DOME_STRIPE_AUTOMATIC_TAX` | `false` | Stripe Tax on Checkout pages. Keep off: the founder's prices are tax-inclusive. |
+| `DOME_BILLING_WEBHOOK_TOLERANCE_SECONDS` | `300` | 60–900; signature timestamp tolerance. |
+| `DOME_BILLING_RECONCILE_INTERVAL_SECONDS` | `3600` | Reconciler period. |
+| `DOME_BILLING_CHECKOUT_PENDING_HOURS` | `24` | 1–72; after this a pending checkout row is dropped. |
+| `DOME_RATE_BILLING_REQUESTS_PER_HOUR` | `10` | Checkout/Portal/top-up page creations per account per hour. |
 | `DOME_AI_ENABLED` | `false` | Master switch of the AI assistant. When true, start-up requires a provider, a key for `anthropic` and no `ANTHROPIC_*` variable in the environment, a ceiling above 0, a deadline ≥ timeout + 5, and for every plan with an effective allowance a cost cap of at least one reservation. |
 | `DOME_AI_PROVIDER` | `` | `anthropic` or `fake` (scripted test provider; refused in staging and production). |
 | `DOME_AI_ANTHROPIC_API_KEY` | `` | Server only; never logged, returned or written to disk by DoMe. (Renamed from `DOME_AI_API_KEY`: a non-empty old variable refuses start-up, an empty one only warns.) |
@@ -259,8 +313,8 @@ misconfiguration stops the process with a plain error.
 | `DOME_AI_CACHE_TTL` | `5m` | `5m` or `1h` (the test kit uses `1h`). |
 | `DOME_AI_MONTHLY_CEILING_CENTS` | `0` | Operator spending ceiling across all accounts per calendar month (UTC). |
 | `DOME_AI_TURN_RESERVE_MICRO_USD` | `250000` | ≥ 10 000; reserved per turn before the call. With the assistant on, start-up refuses a value below the worst case of one turn for `DOME_AI_MODEL` and `DOME_AI_MAX_OUTPUT_TOKENS` (one attempt plus one fallback attempt, `pricing.worst_case_turn_micro_usd`). |
-| `DOME_AI_FAILED_TURNS_PER_PERIOD` | `20` | 1–1000; timeouts, refusals and invalid outputs per account and period before `AI_ALLOWANCE_EXHAUSTED` (`failures`). |
-| `DOME_AI_DEV_GRANT_INTERPRETATIONS` / `DOME_AI_DEV_GRANT_COST_CAP_CENTS` | `0` / `0` | Development/test allowance (effective limit = max(plan, grant)); refused outside `development` and `test`. |
+| `DOME_AI_FAILED_TURNS_PER_PERIOD` | `20` | 1–1000; timeouts, refusals and invalid outputs per account and **weekly window** (the name is kept) before `AI_ALLOWANCE_EXHAUSTED` (`failures`). |
+| `DOME_AI_DEV_GRANT_INTERPRETATIONS` / `DOME_AI_DEV_GRANT_COST_CAP_CENTS` | `0` / `0` | Development/test allowance: raises the 5-hour and the weekly window and the weekly cost cap to max(plan, grant) (a Free account with a grant gets windows instead of its taste); refused outside `development` and `test`. |
 
 ### Client addresses behind a proxy
 
@@ -312,7 +366,12 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy dome_api tests
 ```
 
-Current counts (2026-10-11, AI assistant step 1): **301 passed, 1 skipped** (126 before the assistant, all unchanged
+Current counts (2026-10-20, plans and billing, protocol 1.3): **444 passed, 1 skipped**; mypy strict clean on 95
+files; ruff and ruff format clean. New: `tests/test_billing_*.py` (settings and the CLI pass, checkout and portal,
+webhook, lifecycle with an injected clock, top-ups, the Stripe adapter without the network, the 0004 migration down
+and up) and the rewritten `tests/test_assistant_metering.py` (windows, taste, top-up order, the shared
+`ai-window-cases.json` fixture, concurrency); the skipped one is the opt-in live AI check. Before that:
+(2026-10-11, AI assistant step 1): **301 passed, 1 skipped** (126 before the assistant, all unchanged
 in expectation apart from `test_security_fixes.py`'s proxy test, whose staging settings now drop the suite's fake
 AI provider; 175 new in `tests/test_assistant_*.py`: catalogue and golden prefix, the Anthropic adapter against an
 `httpx2.MockTransport` stub, pricing, output validation with the shared plan fixture, metering races from 10
@@ -345,7 +404,7 @@ frame against `relay-frames.schema.json`.
   `recent`, `persona`, `context`, `steps`, `params`, `user_json`, `system_text`, and anything ending in
   `_token/_secret/_code/_credential/_key` are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
   beyond the error code), so typed text exists only in transit through this process.
-- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`. `dome-api` applies them at start-up;
+- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`, `0004_billing`. `dome-api` applies them at start-up;
   on Fly.io the `release_command` applies them and the process starts with `--skip-migrations`.
 - `GET /healthz` (no auth, `no-store`): `status` (`ok`/`degraded`, 200/503), `version`, `commit` (the build
   commit or null), `database`, `forwarded_client` (above) and the relay counts. The database pool recycles
