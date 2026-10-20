@@ -2,6 +2,25 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-20 — Stripe sandbox set up by the founder; prices are tax-**inclusive** by the founder's decision
+
+- Stripe account `domeremote` created, sandbox (test mode) in use. Prebuilt Checkout chosen as the
+  payment surface, matching what cloud-api is being built against.
+- Product catalogue created in the sandbox, matching `mobile-app/src/content/plans.ts` exactly:
+  **DoMe Pro** $9.99/month and $99.99/year; **DoMe Pro Plus** $24.99/month and $249.99/year;
+  **DoMe AI top-up** $2.99 one-off (first created as a monthly recurring price by mistake, archived and
+  recreated as one-off). Five price ids held by the founder, not yet in GitHub.
+- **Founder decision (2026-10-20): the prices carry `tax_behavior: inclusive`, and stay that way.** The
+  alternative, `exclusive`, is the usual US convention (tax added on top at checkout). `tax_behavior` is
+  immutable per price, so changing it later means new prices and migrating every subscriber. The
+  consequence to carry into any future Stripe Tax decision: with inclusive pricing a $24.99 charge is the
+  gross amount and any sales tax comes out of it (≈ $23.33 net at a 7 % rate), rather than being added to
+  it. Stripe Tax itself is **off** and must not be enabled without revisiting this.
+- The products also carry Stripe's SaaS tax code `txcd_10103001`. Harmless while Stripe Tax is off, and
+  useful if it is ever enabled.
+- Evidence: **founder-run in the Stripe sandbox**; no repository code is connected to these prices yet
+  (the billing build is in flight). Nothing is live and no real money can move.
+
 ## 2026-10-20 — Real sign-up and password-reset emails (Auth0 + Resend), founder-run
 
 - The founder added the sending domain `mail.domeremote.com` in Resend (DNS records written into
