@@ -67,7 +67,7 @@ export function PublicLayout() {
             </div>
             {/* below md the hero carries the page's one solid-blue primary, so this one is outlined there (public.css) */}
             <Link to="/app" className="dome-header-cta tap dome-primary dome-press inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[15px] font-semibold max-[359px]:px-3 max-[359px]:text-[14px]">
-              Open the app
+              Sign in
             </Link>
             <button ref={menuButton} type="button" aria-label={menu ? "Close menu" : "Menu"} aria-expanded={menu} aria-controls={menu ? "site-menu" : undefined} onClick={() => setMenuAt(menu ? null : pathname)} className="dome-press -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-full text-text hover:bg-surface md:hidden">
               <Icon name={menu ? "close" : "menu"} />

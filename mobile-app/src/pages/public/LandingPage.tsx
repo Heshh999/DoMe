@@ -190,7 +190,7 @@ export function LandingPage() {
             <p className="mx-auto mt-6 max-w-[34rem] text-lg text-text-muted sm:text-xl lg:mx-0">Your iPhone becomes a simple, secure remote for your Windows PC. Free, no credit card.</p>
             <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
               <Link to="/app" data-testid="hero-open" className="tap dome-primary dome-press inline-flex w-full items-center justify-center gap-2 rounded-full sm:whitespace-nowrap px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
-                Open the app
+                Get started — free
                 <Icon name="arrow" size={18} />
               </Link>
               <Link to="/download" data-testid="hero-windows" className="tap dome-press inline-flex w-full items-center justify-center gap-2 rounded-full sm:whitespace-nowrap border border-border-strong bg-bg-elevated px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
@@ -322,7 +322,7 @@ export function LandingPage() {
             </p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">
-                Open the app
+                Get started — free
               </Link>
               <Link to="/pricing" className="tap dome-press inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-border-strong px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
                 Compare plans

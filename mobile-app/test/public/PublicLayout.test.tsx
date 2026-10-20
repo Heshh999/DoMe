@@ -49,7 +49,7 @@ describe("PublicLayout", () => {
     expect(within(nav).getByRole("link", { name: "FAQ" })).toHaveAttribute("aria-current", "page");
     expect(NAV.find((n) => n.label === "Demo")?.to).toBe("/demo");
     expect(FOOTER.flatMap((g) => g.links).some((l) => l.to === "/demo")).toBe(true);
-    expect(within(screen.getByRole("banner")).getByRole("link", { name: "Open the app" })).toHaveAttribute("href", "/app");
+    expect(within(screen.getByRole("banner")).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/app");
   });
 
   it("opens the phone menu with the same links and closes it when one is followed", async () => {
