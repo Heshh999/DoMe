@@ -2,6 +2,32 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-20 — Screen view (#52) designed: design brief + ADR-0002 (nothing built, nothing run)
+
+- `docs/design/screen-view.md` and `docs/adr/0002-screen-view-transport.md` written through a
+  workflow: four research reports (Windows capture/encoding and licences, transport and TURN pricing,
+  iOS Safari/PWA behaviour, codebase fit), three independent designs (lean, quality, secure), a judge
+  (secure design as the base with the other two grafted in), the author, then two adversarial reviewers
+  (security/privacy; feasibility/cost/licensing) whose 15 findings were verified and applied: TURN
+  spending bounded server-side, the Free ledger settled on the relay's clock rather than agent-reported
+  seconds, PC-wide consent cooldown with back-off, `PairPage` keeping the pairing code until the PC key
+  pin is verified, aioice address logging redacted, the PC indicator failing closed, logout ending a live
+  stream, the `wrapped_avframe` decoder the `lavfi` device needs, PLI reaching the pre-encoded track,
+  1.2 agents shielded from 1.3-stamped batches, and the rest recorded in the design's §18/§19.
+- Headline decisions: WebRTC peer to peer (aiortc in a separate send-only `DoMe.exe screen-worker`;
+  Safari's own `RTCPeerConnection` on the phone); media never passes through Fly; signaling rides the
+  relay as phone-signed offers and PC-signed answers against a PC key pinned at pairing; our own LGPL
+  FFmpeg + PyAV build with `ddagrab → h264_mf` and a VP8 fallback; `screen` and `screen_audio` granted
+  only in a DoMe window on the PC; a "Screen view on" bar on every monitor; Cloudflare Realtime TURN
+  minted for the phone only, with per-account caps and hourly reconciliation; Free's 10 minutes per
+  5-hour window as a server ledger; protocol 1.3 (additive MINOR). Cost ≈ $0 at 100 MAU and ≈ $1–3 a
+  month at 1,000 MAU; a stress case is bounded by the guard.
+- Evidence: **design only**; vendor prices and several WebKit/Windows behaviours are tagged
+  [research, verify] in the document; nothing is unit-, integration- or device-tested. Status of
+  ADR-0002 is "proposed" until Phase 0's gate numbers exist.
+- Next: the founder's eight decisions (§22) and setup steps (§20: a Cloudflare TURN key, counsel on
+  H.264, code signing); WP-0 ("Screen view: Coming" card); Phase 0 spikes.
+
 ## 2026-10-16 — DoMe is live at domeremote.com; first real PC + iPhone run; installed copy names `DoMe.exe`
 
 - **Live.** Production deploy #4 (commit 7a590ad) runs on Fly.io (Managed Postgres Basic, iad); the founder

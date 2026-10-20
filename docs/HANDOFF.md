@@ -343,10 +343,18 @@ founder-driven; then:
    `PRODUCT_AND_PLANS.md`. Everyday commands DoMe understands by itself never count, on any plan.
 2. **Screen view (#52)**: the PC's screen live on the phone with tap to click, two-finger scroll, a
    floating mini view, PC sound with mute and a TV-style remote for full-screen apps, as the website and
-   film describe it. Not designed yet: it needs a design document, an ADR for the video transport (the
-   relay carries JSON frames today), a contract MINOR, capture on the agent, and Free's 10 minutes per
-   5-hour window metered by #51. Nothing is recorded and the AI never sees the stream. When it ships,
-   change `SCREEN_VIEW_STATUS` and every "in development" line together (`mobile-app/DECISIONS.md` 63).
+   film describe it. **Designed, not built (2026-10-20):** `docs/design/screen-view.md` (22 sections:
+   flows, signed end-to-end signaling with a PC key pinned at pairing, LGPL FFmpeg + PyAV capture and
+   OS H.264 encoding, PC-granted `screen` / `screen_audio`, lifecycle and the fail-closed PC indicator,
+   absolute pointer primitive, server-side Free-minutes ledger, protocol 1.3 contract changes, TURN
+   minted for the phone only with a spending guard, cost ≈ $0–3/month at 1,000 MAU, threat table, test
+   plan, phased work packages, founder decisions in §22) and `docs/adr/0002-screen-view-transport.md`
+   (WebRTC peer to peer; status "proposed" until the Phase 0 gate numbers are in). The design came out
+   of four research reports, three competing designs, a judge and a 15-finding adversarial review, all
+   applied. Build order: WP-0 "Coming" card → Phase 0 spikes and the go/no-go gate (LGPL FFmpeg wheel,
+   `screen-probe`, counsel on H.264, Cloudflare TURN pricing check) → Phase 1 beta → Phase 2 sound, mini
+   view, TV remote. Nothing is recorded and the AI never sees the stream. When it ships, change
+   `SCREEN_VIEW_STATUS` and every "in development" line together (`mobile-app/DECISIONS.md` 63).
 3. **AI butler step 2: click by name (#42)**: "click that" / "click Subscribe" acts on a control found by
    its Windows accessibility name, shown on the phone and confirmed before it runs. The owner ruled out
    screenshots, so `docs/design/assistant.md` §7 (screenshot with a box) must be rewritten before
