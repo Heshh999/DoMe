@@ -451,10 +451,16 @@ the website's FAQ and pricing still say "Coming" until the launch gate in `docs/
 Scenario 26 is met. Turn it on in **staging** first; leave production off until the device round and
 the launch gate are done.
 
-**A PC needs a Windows build that includes Screen view.** Every DoMe build made so far does not
-(the PC answers "This version of DoMe on your PC doesn't include Screen view yet"). The first one
-needs the LGPL video library built by GitHub > Actions > **ffmpeg-lgpl** > **Run workflow** (never
-run yet): an engineer then pins it and makes a new Windows build.
+**A PC needs a Windows build that includes Screen view.** Builds from commit fa8de22 on do: the first
+is `DoMe-Setup-0.1.0+fa8de22` (GitHub > Actions > **Windows installer**, run 39843030059, 2026-10-22);
+its `BUILD-INFO.txt` says `screen view: included`. Older builds answer "This version of DoMe on your PC
+doesn't include Screen view yet".
+
+**Deploy the server before you install a newer DoMe on a PC.** A DoMe from fa8de22 on (protocol 1.4)
+still works with a server running older code for everything it already had, but it cannot approve a
+**new** pairing there: the older server refuses the PC key it now sends with each approval. Phones
+paired before keep working. So run Deploy for an environment first, then install the newer DoMe on a
+PC that uses it.
 
 Steps, per environment (staging first):
 
@@ -477,6 +483,34 @@ Steps, per environment (staging first):
    again), so the phone pins the PC's key; without it the phone says "Pair again".
 6. On the PC: tray > Paired phones > your phone > **Allow Screen view…** (only there, never from the
    phone).
+
+**Testing it on your own PC while production stays off.** A PC talks to one server at a time, so for
+the device round you point your PC at staging and back afterwards. Staging's Free plan allows 10
+minutes of Screen view per 5 hours; a test-mode Pro Plus purchase on staging (§11A step 7, card
+`4242 4242 4242 4242`) removes that limit at no cost. YouTube control in the browser is not set up on
+staging; everything else is.
+
+1. Download the newest green **Windows installer** run's `DoMe-Setup-…` artifact (Actions > **Windows
+   installer**, branch `claude/stoic-heisenberg-txq6ja`, event **push**) and unzip it; `BUILD-INFO.txt`
+   must say `screen view: included`.
+2. Quit DoMe from its icon. In Windows PowerShell (not as administrator):
+   `& "$env:LOCALAPPDATA\Programs\DoMe\DoMe.exe" unlink | Out-Host`. This only forgets the link on this
+   PC; nothing is deleted from your account.
+3. In the same window, go to the unzipped folder (`cd "$env:USERPROFILE\Downloads\<folder>"`) and run
+   `.\DoMe-Setup-0.1.0.exe /ApiUrl=https://staging.domeremote.com`. Test builds are unsigned: on the blue
+   "Windows protected your PC" box click **More info**, then **Run anyway**. Finish with **Start DoMe
+   now** ticked.
+4. Run `& "$env:LOCALAPPDATA\Programs\DoMe\DoMe.exe" link | Out-Host`, sign in on the
+   staging.domeremote.com page it opens, check the code and click **Link this PC**.
+5. On the iPhone, open https://staging.domeremote.com in Safari and sign in. On the PC: tray > **Pair a
+   phone…**; on the phone: **Devices** > pair, scan the QR code, compare the six digits, approve on the PC.
+6. On the PC: tray > **Paired phones** > the iPhone > **Allow Screen view…**, wait 5 seconds, **Allow**.
+7. On the phone: **Remote** > **Screen view (beta)**.
+
+Going back to production afterwards: run Deploy for production first (it must run the same commit as
+staging; Screen view stays off there), then repeat steps 2–5 with
+`/ApiUrl=https://domeremote.com` and the domeremote.com pages. Re-pair the iPhone there too (it pins the
+PC key). Leaving the PC on staging keeps staging's machine and its free database awake.
 
 Once a month: compare Cloudflare's TURN usage with `/healthz` `turn_month_gb` (`turn_month_basis`
 says whether it is Cloudflare's own figure or DoMe's estimate); if they differ by more than 10 % or

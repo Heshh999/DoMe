@@ -534,8 +534,12 @@ library: an LGPL build of FFmpeg made by `.github/workflows/ffmpeg-lgpl.yml`, be
 from the Python package index contains GPL code DoMe may not ship. That library was built and passed its
 licence gate (0 violations) on 2026-10-22 (run 39840865306), was published as the GitHub pre-release
 `av-lgpl-17.1.0-ffmpeg-n8.1.3-r3` (never "latest"), and is pinned for Windows in `pc-agent/pyproject.toml`
-with its SHA-256 in `uv.lock`. Development builds of `windows-installer.yml` from commit after that pin say
-*included*; earlier ones say *not included*. `pc-agent/packaging/licence_gate.py` checks every build, and a
+with its SHA-256 in `uv.lock`. Development builds of `windows-installer.yml` from that pin (commit fa8de22)
+on say *included*; earlier ones say *not included*. The first, `DoMe-Setup-0.1.0+fa8de22` (run 39843030059,
+2026-10-22), passed the licence gate (0 violations), the worker self-test and all 167 installer checks on
+GitHub's Windows machine. To try it on your own PC against staging, see `docs/LAUNCH_SETUP.md` §11B
+"Testing it on your own PC". Deploy the server first: this DoMe cannot approve a new pairing with a server
+still running older code. `pc-agent/packaging/licence_gate.py` checks every build, and a
 release build fails if it finds anything it does not know. With Screen view in, the workflow also runs
 `DoMe.exe screen-worker --self-test` on the build machine (video encoders, exactly one decoder, a test
 picture, the keyframe hook). GitHub's build machines have no graphics card and no desktop, so they cannot

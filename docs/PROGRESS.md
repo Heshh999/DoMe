@@ -2,6 +2,30 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-22 — First Windows build with Screen view: green on GitHub's Windows machine
+
+- `windows-installer.yml` run 39843030059 (commit fa8de22, `windows-latest`) and `ci.yml` run 39843030099
+  passed. Artifact **`DoMe-Setup-0.1.0+fa8de22`** (about 37 MB, 31 MB before the media stack).
+- From the job log: "Screen view: included (beta, not yet verified on a device)"; **licence gate (frozen app,
+  Screen view present): passed (0 violation(s), 43 warning(s))**; **screen-worker self-test passed**: aiortc
+  1.15.0 imports with av `17.1.0+lgpl.ffmpeg8.1.3`, decoders exactly {wrapped_avframe}, a `lavfi` testsrc
+  frame decoded (yuv420p 64×64), the PLI hook present, VP8 available, `h264_mf` present but no hardware
+  encoder (the runner has no GPU; reported as designed, a device-round item); no crash log. The installer
+  smoke test passed **all 167 checks** with this build (install, command line, bridge, tray, upgrade,
+  not-quitting, downgrade refused, insecure URL refused, uninstall, staging address, remove data).
+- Server state, from the Deploy runs: staging and production both run 35a203f (runs 39454681144 and
+  39464803237, 2026-10-20). Deploy #7 (staging, 4815f5b) stopped at the input check on the Stripe values,
+  before any Fly call. Contract diff 35a203f → HEAD: the agent's `pairing_decision` gained `pc_key_mac`, which
+  the 1.2 relay's schema refuses, so a 1.4 DoMe cannot approve **new** pairings against the deployed servers;
+  existing pairings, the hello (it announces 1.0–1.4) and every older frame are unchanged. Rule recorded in
+  `LAUNCH_SETUP.md` §11B and `WINDOWS_INSTALL.md` §4.13: deploy an environment before installing this build
+  on a PC that uses it.
+- `LAUNCH_SETUP.md` §11B gains "Testing it on your own PC while production stays off" (unlink, install with
+  `/ApiUrl=https://staging.domeremote.com`, link, pair, allow, and the way back). Staging's Free plan gives
+  10 minutes per 5 hours; a test-mode Pro Plus purchase there lifts it.
+- Next: the founder's staging deploy with `DOME_SCREEN_VIEW_ENABLED=true` and the device round (design §18).
+- Evidence: CI-run (`windows-latest`, no GPU, no desktop); nothing on a device yet.
+
 ## 2026-10-22 — The LGPL wheel is published and pinned: Windows builds now include Screen view
 
 - `ffmpeg-lgpl.yml` run 39840865306 (publish ticked) rebuilt the wheel, passed the licence gate and smoke test

@@ -383,14 +383,25 @@ founder-driven; then:
    windows, iPhone playback, NAT, TURN). Nothing of it is deployed by this round; once deployed it stays off until
    `DOME_SCREEN_VIEW_ENABLED` is `true` in that environment (absent = off), the website says "Coming", and no Windows build made so far includes the media stack (the PC
    answers "This version of DoMe on your PC doesn't include Screen view yet" and the tray item is disabled).
+   **Windows build with Screen view (2026-10-22):** the LGPL FFmpeg + PyAV wheel was built, licence-gated
+   (0 violations), published as the pre-release `av-lgpl-17.1.0-ffmpeg-n8.1.3-r3` and pinned for Windows
+   (fa8de22). `windows-installer.yml` run 39843030059 made `DoMe-Setup-0.1.0+fa8de22`: "Screen view:
+   included", the licence gate on `dist/DoMe` passed, `DoMe.exe screen-worker --self-test` passed (exactly
+   one decoder, a test frame, the PLI hook, VP8; `h264_mf` present, no hardware encoder on the GPU-less
+   runner), 167 installer checks passed. **Integration-tested on the runner, not on a device.** Both
+   environments still run 35a203f (Deploy #5 staging, #6 production on 2026-10-20); Deploy #7 (staging,
+   4815f5b) stopped at the input check on the seven Stripe values, before any Fly call. A 1.4 DoMe cannot
+   approve a new pairing against that older relay (it sends `pc_key_mac`, which the 1.2 schema refuses), so
+   each environment is deployed before a PC that uses it gets this build.
    **Next (founder), in this order:**
-   1. GitHub > **Actions** > **ffmpeg-lgpl** > **Run workflow** (it has never run) and send the engineer the
-      run's link; the engineer reads its licence gate and smoke results, pins the LGPL PyAV wheel and makes a
-      Windows build that includes Screen view (`pc-agent/KNOWN_ISSUES.md` 19: the PyPI `av` wheel used by
-      the Linux tests is GPL and is never shipped).
-   2. The device round on your own PC and iPhone (`docs/design/screen-view.md` §18 checklist items 1–11 and
-      13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, iOS version and Safari /
-      home-screen mode), on **staging** with `DOME_SCREEN_VIEW_ENABLED` = `true` there only.
+   1. Done 2026-10-22: the LGPL wheel and the first Windows build with Screen view (above).
+   2. Staging: fix the seven Stripe values (or delete all seven), add the variable
+      `DOME_SCREEN_VIEW_ENABLED` = `true`, run Deploy for staging. Then the device round on your own PC and
+      iPhone against staging (`docs/LAUNCH_SETUP.md` §11B "Testing it on your own PC": unlink, install with
+      `/ApiUrl=https://staging.domeremote.com`, link, pair, allow) with `docs/design/screen-view.md` §18
+      checklist items 1–11 and 13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, GPU,
+      iOS version and Safari / home-screen mode. Afterwards deploy production (Screen view off there) and
+      point the PC back.
    3. The Cloudflare TURN key per design §20 (`docs/LAUNCH_SETUP.md` §11B: `DOME_TURN_KEY_ID` as a variable,
       `DOME_TURN_API_TOKEN` and `DOME_TURN_ANALYTICS_TOKEN` as secrets, staging first; check whether
       Cloudflare asks for a payment method and turn on its usage notifications). Without it Screen view works
