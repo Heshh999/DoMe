@@ -166,6 +166,33 @@ async function sendRequest<T>(method: Method, path: string, options: RequestOpti
   return parsed as T;
 }
 
+/**
+ * The Screen view operator switch (DOME_SCREEN_VIEW_ENABLED), read from the public `GET /healthz` body's `screen_view`
+ * field ("on" | "off"). `plans_response` carries no such field in protocol 1.4 (CONTRACT_ISSUES 12), and the health body
+ * has no schema definition, so this is the one tolerant read in this client: strict JSON, one string field, anything
+ * else is "unknown" (and the app keeps its "Coming" card). Never cached; nothing is logged beyond the outcome.
+ */
+export async function screenViewSwitch(signal?: AbortSignal): Promise<"on" | "off" | "unknown"> {
+  const init: RequestInit = { method: "GET", headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", redirect: "error", mode: API_ORIGIN ? "cors" : "same-origin" };
+  if (signal) init.signal = signal;
+  try {
+    const response = await state.fetchImpl(apiUrl("/healthz"), init);
+    if (!response.ok && response.status !== 503) return "unknown";
+    const body = parseBody(await response.text());
+    const value = body.screen_view;
+    log.info("api.screen_view_switch", { value: value === "on" || value === "off" ? value : "unknown" });
+    return value === "on" ? "on" : value === "off" ? "off" : "unknown";
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    log.info("api.screen_view_switch_failed", errorSummaryOf(e));
+    return "unknown";
+  }
+}
+
+function errorSummaryOf(e: unknown): Record<string, unknown> {
+  return { name: e instanceof Error ? e.name : typeof e };
+}
+
 // ---- typed endpoints ------------------------------------------------------------------------------
 
 export const api = {

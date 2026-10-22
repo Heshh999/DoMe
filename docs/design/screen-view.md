@@ -1,4 +1,6 @@
-# Design: Screen view (roadmap #52, protocol 1.3)
+# Design: Screen view (roadmap #52, protocol 1.4)
+
+**Status 2026-10-21: Phase 1 (WP1.1–WP1.9, the "Screen view beta") is being built as protocol 1.4.** Billing took MINOR 1.3 on 2026-10-20, so every "1.3" this brief used for Screen view's contract version now reads 1.4; the shipped agent still announces up to 1.2 and the shipped shared libraries are 1.3, so the compatibility arguments below (the relay shields pre-1.4 agents from 1.4-stamped batches) are unchanged. The contract is in `shared/protocol` and `docs/PROTOCOL.md` §20; where this brief and the contract disagree, the contract wins.
 
 Status: design brief for the component builders, written 2026-10-16 from four research reports, three
 competing designs and the judge's verdict (the secure design as the base, with the lean design's scope
@@ -39,9 +41,9 @@ are a different feature. WP-0 (§19) puts a "Screen view: Coming" card on the Re
 | PC indicator | A "Screen view on" bar on **every** monitor (excluded from capture), a tray badge, start/end notifications and a local history. The bars are created and confirmed **before** the worker starts and capture pauses whenever one is missing (fail-closed, §7). No setting hides it. Stop on the bar, in the tray, by hotkey, by "Disable remote control", by un-granting, by locking the PC, by quitting DoMe. |
 | Session lifecycle | One viewer per PC. Capture starts only after DTLS connects to the certificate the phone signed. An 8 s viewer lease (2 s heartbeats over the authenticated data channel), 60 s allowance tickets the PC must **ask** for (dead-man switch), a 4 h maximum, lock ends, UAC pauses. |
 | Free minutes | A server ledger (rolling 5-hour window per account, 600 s on Free) enforced by the PC through plain `granted_until` tickets and **charged on the relay's own clock** (agent-reported seconds never reduce the charge, §10); TURN credentials expire with the allowance. A patched agent gains only direct-path minutes, which cost DoMe $0; on the relayed path it is charged like everyone else and bounded by the TURN controls. |
-| Input | Tap-to-click stays on the signed `input_batch` path with three additive events: `pointer_move_to` (absolute, normalised over the streamed surface, with a geometry generation), `pointer_wheel` (1/120-notch units for smooth two-finger scroll) and `key: f11`. Batches containing them are stamped 1.3. |
+| Input | Tap-to-click stays on the signed `input_batch` path with three additive events: `pointer_move_to` (absolute, normalised over the streamed surface, with a geometry generation), `pointer_wheel` (1/120-notch units for smooth two-finger scroll) and `key: f11`. Batches containing them are stamped 1.4. |
 | Mini view, TV remote | In-app mini view everywhere (Phase 2). System picture-in-picture only as a Safari-tab experiment after a device test (Phase 3): it is broken in home-screen apps [research]. The TV-style remote is a separate page that works without the picture and is not metered. The website wording for the mini view must change (§22). |
-| Contract | MINOR **1.3** (§11). No `pc_state` change in Phase 1. |
+| Contract | MINOR **1.4** (§11). No `pc_state` change in Phase 1. |
 | Hosting cost | ≈ $0/month added at 100 and 1,000 MAU in the base and high scenarios (§14). No new Fly machine, no dedicated IPv4, no media through the relay. |
 | Ships | Phase 0 spike with a go/no-go gate → Phase 1 "Screen view beta" (picture, taps, scroll, zoom, indicator, pinning, metering) → Phase 2 (sound, mini view, TV remote, second monitor) → Phase 3 only where device data asks. |
 
@@ -89,7 +91,7 @@ Non-goals, stated in the product where a customer could expect otherwise:
 
 ### 2.1 PC: one-time grant (the owner at the desk)
 
-1. Update DoMe (an agent that announces protocol 1.3).
+1. Update DoMe (an agent that announces protocol 1.4).
 2. Tray › **Paired phones** › *Maya's iPhone* › **Allow Screen view…** opens a DoMe window. There is no
    silent checkbox and no CLI-only path on Windows: `DoMe.exe grant <id> --screen` opens this same window
    and waits (headless widening of `screen` works only on the fake platform, for tests).
@@ -113,7 +115,7 @@ Non-goals, stated in the product where a customer could expect otherwise:
 ### 2.2 Phone, every session
 
 1. **Entry.** The Remote page's "Screen" tile and a Home card show one state: "Allow Screen view on your PC
-   first" · "Pair again so your phone can check it is your PC" (pairings made before 1.3, §4.1) · "Update
+   first" · "Pair again so your phone can check it is your PC" (pairings made before 1.4, §4.1) · "Update
    DoMe on your PC" (`PROTOCOL_INCOMPATIBLE`) · "Ready · 10 min left in this window" · "Free Screen view
    resets at 4:12 pm".
 2. **Starting.** The owner taps **Show screen**. That tap is the user gesture iOS requires for `play()`
@@ -192,7 +194,7 @@ iPhone (Safari tab or home-screen app)                         Windows PC (DoMe.
 
 ## 4. Signaling, authenticated end to end with the keys DoMe already has
 
-### 4.1 PC key pinning at pairing (new in 1.3; closes the fake-screen gap)
+### 4.1 PC key pinning at pairing (new in 1.4; closes the fake-screen gap)
 
 Today the PC's identity key (`identity.py`, DPAPI-protected `pc_key.bin`) reaches only the server, in
 `agent_link_start_request.pc_public_jwk`; the pairing HMAC covers `pairing_id|pc_id|controller_kid` only
@@ -225,7 +227,7 @@ that is a credential-phishing path and it steers the owner's taps. Pinning close
    Crockford symbols, 100 bits (`version.json pairing_code_symbols: 20`) **[repo]**, so a MAC for a
    substitute key cannot be ground out. A 6-digit comparison shown to the user would be grindable and is
    deliberately not used here.
-5. **Failures.** The phone left the page before approval, or the agent is older than 1.3 → no pin → the
+5. **Failures.** The phone left the page before approval, or the agent is older than 1.4 → no pin → the
    Screen tile says "Pair again so your phone can check it is your PC". A PC re-linked with `--new-key` →
    pin mismatch → hard stop "This PC's identity changed. Pair again." **Existing pairings (today the
    founder's iPhone) re-pair once**: a camera-scanned verification page would open Safari, whose IndexedDB
@@ -236,7 +238,7 @@ that is a credential-phishing path and it steers the owner's taps. Pinning close
 
 1. **ICE servers and allowance.** `screen_ice_request{pc_id}` on the **bound** controller socket (bound by
    `hello_proof`, so the request is tied to the paired key, not merely to an account session). The relay
-   checks: the socket announced 1.3; a live grant with `screen` exists for this controller on this PC; the
+   checks: the socket announced 1.4; a live grant with `screen` exists for this controller on this PC; the
    PC is online and past its first snapshot; the allowance is not exhausted (no reservation yet); rate
    limits (6/min per controller, 60/h per account); the per-account TURN caps (§13); the operator kill
    switch. It mints the phone's TURN credential (§13) **bound to this controller**: at most one
@@ -274,7 +276,7 @@ The worker produces a send-only answer with a fresh per-session DTLS certificate
 
 ```
 screen_answer_payload {
-  type: "screen_answer", protocol_version: "1.3",
+  type: "screen_answer", protocol_version: "1.4",
   account_id, pc_id, controller_id,
   command_id,            // the screen.session_start it answers
   screen_session_id,     // 22 chars, agent-issued
@@ -287,7 +289,7 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
 
 - **Routing.** The agent sends `screen_answer{envelope, ref_controller_id}`. The relay checks that the
   controller belongs to the PC's account and holds a live `screen` grant, strips the reference, and
-  delivers `screen_answer{pc_id, envelope}` only to that controller's 1.3 sockets, preferring the one that
+  delivers `screen_answer{pc_id, envelope}` only to that controller's 1.4 sockets, preferring the one that
   issued the command (`ConnectionManager.send_to_controller(controller_id, preferred_conn_id, …)`,
   `manager.py:370` **[repo]**). Never to subscribers: SDP contains addresses. No `commands` row, no log
   content.
@@ -605,14 +607,14 @@ state; Wi-Fi ↔ cellular (`iceConnectionState` failed) → the same. A screen w
 (home-screen app from iOS 18.4) [research].
 
 No `pc_state` change in Phase 1: other phones learn of ownership from `SCREEN_SESSION_OWNED` and from the
-`screen_session` lifecycle frames, which the relay broadcasts to the PC's 1.3 subscribers (skipping older
+`screen_session` lifecycle frames, which the relay broadcasts to the PC's 1.4 subscribers (skipping older
 sockets, as it does for 1.0 and `input_session`). This avoids the per-version `pc_state` stripping problem
 (`PROTOCOL.md` §16 #17; `manager.py:42 PC_STATE_1_1_FIELDS` **[repo]**); generalising that tuple into a
 per-version map is the right fix when a `pc_state.screen_session` field is wanted (Phase 2 Health page).
 
 ## 8. Tap to click, scroll, pinch to zoom: the absolute pointer primitive
 
-### 8.1 New input events (contract 1.3, `input_event`)
+### 8.1 New input events (contract 1.4, `input_event`)
 
 - `pointer_move_to{x: 0..65535, y: 0..65535, gen: 1..2147483647}`: normalised over the **currently
   streamed surface** at geometry generation `gen`. Not PC pixels: the ±4096 limit and negative
@@ -628,30 +630,30 @@ per-version map is the right fix when a `pc_state.screen_session` field is wante
   `ref_controller_id` / owner checks, same `send_input_frame_to_controller` delivery, which already filters
   by socket version, `manager.py:412` **[repo]**); the codes keep their names because the condition is about
   the screen session, not the input grant. Integration test: "a `SCREEN_*` rejection frame reaches the
-  issuing controller's 1.3 socket and no subscriber".
+  issuing controller's 1.4 socket and no subscriber".
 - `pointer_wheel{dx, dy}`: integers in Windows wheel units, 120 = one notch, ±1200 per event, for smooth
   two-finger scrolling (today's `pointer_scroll` is whole notches **[repo]**). Capability `pointer`.
 - `key` enum gains `f11` (full screen in apps that are not approved; approved apps already have
   `app.set_fullscreen`). Capability `keyboard`.
 - **Version stamping** (`rules.command_version_stamping`, amended): a batch carries the lowest protocol
-  version that defines every event in it: 1.1 for today's events, **1.3** if it contains `pointer_move_to`,
+  version that defines every event in it: 1.1 for today's events, **1.4** if it contains `pointer_move_to`,
   `pointer_wheel` or `f11`. **The relay refuses such a batch before forwarding it to an agent that did not
-  announce 1.3**, with `error PROTOCOL_INCOMPATIBLE detail{peer: "agent", required: "1.3"}` on the
+  announce 1.4**, with `error PROTOCOL_INCOMPATIBLE detail{peer: "agent", required: "1.4"}` on the
   controller socket, mirroring today's `supports_input` check (`router.py::route_input_batch:395`
   **[repo]**), because the shipped 1.2 agent cannot give that answer itself: the 1.2 shared library runs
   `schemas.validate_input_batch_payload(payload)` **before** `protocol_compatible(...)` /
   `_require_since(...)` (`commands.py::verify_and_parse_input_batch:361-382` **[repo]**), so an unknown
   event fails the closed `input_event` oneOf first and raises `MALFORMED_MESSAGE` (`schemas.py:51`), which
   `agent.py::_on_input_batch` sends back as `error{MALFORMED_MESSAGE}` (`agent.py:521-531`) **[repo]**, and
-  no 1.3 contract can change code that is already installed. The relay therefore keeps each agent socket's
+  no 1.4 contract can change code that is already installed. The relay therefore keeps each agent socket's
   announced versions (`AgentConn.protocol_versions` from `hello`, with `supports_screen` derived from it)
-  and compares the verified batch's stamp against them. In the 1.3 libraries the compatibility and `since`
+  and compares the verified batch's stamp against them. In the 1.4 libraries the compatibility and `since`
   checks move **ahead** of schema validation (Python `verify_and_parse_input_batch`; the TS library has no
   input-batch verifier **[repo]**, its command verifier gets the same ordering), so a future MINOR really
   does yield `PROTOCOL_INCOMPATIBLE` from older peers; `PROTOCOL.md` §20 records that 1.2 agents answer
   `MALFORMED_MESSAGE` and that the relay shields them. `INPUT_BATCH_PROTOCOL_VERSION` becomes a function in
   Python and TS; `input_event_capabilities` and the relay's coverage check learn the new events. The §18.7
-  matrix gains "1.3 phone, 1.2 agent, batch with `pointer_move_to` → relay `PROTOCOL_INCOMPATIBLE`, the
+  matrix gains "1.4 phone, 1.2 agent, batch with `pointer_move_to` → relay `PROTOCOL_INCOMPATIBLE`, the
   agent never sees it", tested in `tests/test_e2e_versions.py` with `tests/older_agent.py` **[repo]**.
 
 ### 8.2 Agent mapping
@@ -795,11 +797,11 @@ gains `screen_view_seconds_per_window` (free 600; pro and pro_plus `null` = unli
 `unlimited: true` tickets still in 60 s chunks (same dead-man latency), and nothing changes on the agent or
 phone. If #51 lands first, Phase 1 uses its window ledger instead of adding the table.
 
-## 11. Contract changes: protocol 1.3 (additive MINOR)
+## 11. Contract changes: protocol 1.4 (additive MINOR)
 
 Done the way 1.1 and 1.2 were (`shared/protocol/README.md`, `PROTOCOL.md` §17–§18 **[repo]**).
 
-- **`version.json`:** `protocol_version: "1.3"`. New limits: `screen_sdp_max_bytes: 12288`,
+- **`version.json`:** `protocol_version: "1.4"`. New limits: `screen_sdp_max_bytes: 12288`,
   `screen_start_command_lifetime_seconds: 60`, `screen_answer_lifetime_seconds: 60`,
   `screen_heartbeat_seconds: 2`, `screen_lease_seconds: 8`, `screen_connect_timeout_seconds: 20`,
   `screen_allowance_chunk_seconds: 60`, `screen_allowance_renew_before_seconds: 20`,
@@ -814,8 +816,8 @@ Done the way 1.1 and 1.2 were (`shared/protocol/README.md`, `PROTOCOL.md` §17�
   diagnostics or storage), `local_permission_ui`. Amended: `grant_update` (screen and screen_audio, never
   implicit), `ai_eligibility`, `command_version_stamping` (§8.1), `pairing_secret` (the PC key MAC),
   `input_sessions` (`pointer_move_to` only with a live screen session of the same controller).
-- **`actions.json`** (`registry_version` 1.3): capabilities `screen`, `screen_audio`;
-  `screen.session_start` (`since: "1.3"`, params `{offer_sdp: string, maxLength 12288, pattern
+- **`actions.json`** (`registry_version` 1.4): capabilities `screen`, `screen_audio`;
+  `screen.session_start` (`since: "1.4"`, params `{offer_sdp: string, maxLength 12288, pattern
   ^[\x20-\x7E\r\n]*$; surface: "primary" | 0–7, default "primary"; audio: boolean, default true; takeover:
   boolean, default false}`, result `screen_session_result`, capability `screen`, risk `moderate`,
   confirmation `none`, `timeout_ms` 45000, availability `windows`, `session_unlocked`, `ai_eligible:
@@ -853,14 +855,14 @@ Done the way 1.1 and 1.2 were (`shared/protocol/README.md`, `PROTOCOL.md` §17�
   mirrors (same order in the command verifier); `pnpm gen:types`; signed fixtures regenerated
   with `make_fixtures.py` / `make-fixtures.ts` (a PC-signed answer vector and a `pc_key_mac` vector);
   `strict-json-cases.json` gains SDP cases (bare `\n`, NUL, non-ASCII, over-length).
-- **Peers:** agent `SUPPORTED_PROTOCOL_VERSIONS` adds `"1.3"` (`__init__.py:12` **[repo]**); relay
-  `supports_screen = protocol_compatible("1.3", …)` next to `supports_input` (`controller_ws.py:99`,
-  `agent_ws.py:83` **[repo]**); the PWA announces 1.3 and adds the new defs to the `RELAY_FRAME_DEFS`
+- **Peers:** agent `SUPPORTED_PROTOCOL_VERSIONS` adds `"1.4"` (`__init__.py:12` **[repo]**); relay
+  `supports_screen = protocol_compatible("1.4", …)` next to `supports_input` (`controller_ws.py:99`,
+  `agent_ws.py:83` **[repo]**); the PWA announces 1.4 and adds the new defs to the `RELAY_FRAME_DEFS`
   allow-list in `scripts/gen-validators.ts` (and mirrors any new library API in the no-eval facade, caught
   by `protocol-parity.test.ts`); the browser extension only regenerates validators.
 - **Deploy order:** cloud (relay and PWA) first, then the agent (`agent_ws._versions_ok` refuses an agent
-  newer than the relay **[repo]**). A 1.3 phone against a 1.2 PC gets `PROTOCOL_INCOMPATIBLE` **from the
-  relay**, for `screen.*` commands and for input batches stamped 1.3 alike (§8.1): "Update DoMe on your PC
+  newer than the relay **[repo]**). A 1.4 phone against a 1.2 PC gets `PROTOCOL_INCOMPATIBLE` **from the
+  relay**, for `screen.*` commands and for input batches stamped 1.4 alike (§8.1): "Update DoMe on your PC
   to use Screen view." `PROTOCOL.md` §20 says why the relay, not the 1.2 agent, gives that answer for
   batches.
 - The §6 proposals in `HANDOFF.md` (Ed25519 algorithm name, `controller_id` in `pairing_request`, proof of
@@ -872,7 +874,7 @@ Done the way 1.1 and 1.2 were (`shared/protocol/README.md`, `PROTOCOL.md` §17�
 | Area | Change |
 | --- | --- |
 | `relay/router.py` | `route_screen_ice_request` (§4.2 checks, rate limits, per-account TURN caps, mint bound to the controller with revocation of its previous credential, `screen_ice_servers`); a pre-forward hook for `screen.session_start`: `supports_screen` on the agent socket (else `PROTOCOL_INCOMPATIBLE`), reserve the first chunk (else the relay `failed` result), attach `relay.screen`, remember `pending_screen_starts[command_id] = (controller_id, connection_id, forwarded_at)` with a 60 s TTL for answer routing and the relay-clock charge; `route_input_batch` gains a **stamp gate**: a batch whose `protocol_version` is not compatible with the target agent's announced versions is refused with `PROTOCOL_INCOMPATIBLE detail{peer: "agent", required}` before forwarding, next to the existing `supports_input` check (§8.1). |
-| `relay/agent_ws.py` | `screen_answer` (schema, size, ownership, strip `ref_controller_id`, deliver to the issuing socket, else the controller's other 1.3 sockets); `screen_session` (track the owner in `AgentConn.screen_sessions` as `input_sessions` does **[repo: `manager.py:122`]**, settle on the relay clock and refund once on `ended`, write security events, forward to the owner and broadcast to 1.3 subscribers); `screen_usage` (reserve the next chunk, answer `screen_allowance`; `final, reason: controller_offline` when the owner has had no bound socket for 60 s or its sockets were closed by `revoked`, logout or session revocation, §7); a per-socket budget of 2 `screen_usage` per minute per session (`KNOWN_ISSUES.md` #1 has no general agent frame budget **[repo]**); `_on_agent_error`'s prefix filter extended from `INPUT_` to `INPUT_` **and** `SCREEN_` so `SCREEN_SESSION_REQUIRED` / `SCREEN_GEOMETRY_CHANGED` reach the issuing controller (§8.1). |
+| `relay/agent_ws.py` | `screen_answer` (schema, size, ownership, strip `ref_controller_id`, deliver to the issuing socket, else the controller's other 1.4 sockets); `screen_session` (track the owner in `AgentConn.screen_sessions` as `input_sessions` does **[repo: `manager.py:122`]**, settle on the relay clock and refund once on `ended`, write security events, forward to the owner and broadcast to 1.4 subscribers); `screen_usage` (reserve the next chunk, answer `screen_allowance`; `final, reason: controller_offline` when the owner has had no bound socket for 60 s or its sockets were closed by `revoked`, logout or session revocation, §7); a per-socket budget of 2 `screen_usage` per minute per session (`KNOWN_ISSUES.md` #1 has no general agent frame budget **[repo]**); `_on_agent_error`'s prefix filter extended from `INPUT_` to `INPUT_` **and** `SCREEN_` so `SCREEN_SESSION_REQUIRED` / `SCREEN_GEOMETRY_CHANGED` reach the issuing controller (§8.1). |
 | `relay/manager.py` | `AgentConn.protocol_versions` (from `hello`), `supports_screen`, `screen_sessions`; `ControllerConn.supports_screen`; `controller_last_bound_at` for the 60 s owner-presence rule; on a controller socket close by `revoked`, logout or session revocation, an immediate `screen_allowance{final, controller_offline}` to the PC of any session that controller owns, plus revocation of its TURN credential. |
 | `routes/pairing.py` | Store `pc_key_mac`; return `pc_key` once approved; never before; approved rows stay readable for at least 5 minutes after approval (tested invariant, §4.1). |
 | `routes/account.py`, `routes/controllers.py` | Logout, session revocation and controller deletion call the same hook: end owned screen sessions (`controller_offline` / `controller_revoked`) and revoke the controller's outstanding TURN credential. |
@@ -1010,7 +1012,7 @@ counsel review of H.264 through OS encoders and of the LGPL obligations (cost un
 Modules: `lib/screen.ts` (`ScreenSessionClient` with an injected `RTCPeerConnection` factory, as
 `RelayClient` takes `socketFactory` **[repo]**: signaling, answer verification, heartbeats, visibility,
 stall detection, restart limits), `lib/screenMap.ts`, `lib/directGestures.ts`, `lib/pcKeyPins.ts`
-(IndexedDB pins), `lib/input.ts` (new events, 1.3 stamping, last-wins coalescing), `pages/app/ScreenPage.tsx`,
+(IndexedDB pins), `lib/input.ts` (new events, 1.4 stamping, last-wins coalescing), `pages/app/ScreenPage.tsx`,
 `components/ScreenSurface.tsx`, `components/ScreenLoupe.tsx`, `pages/app/PairPage.tsx` (pinning),
 `pages/app/RemotePage.tsx` (the WP-0 card, then the Screen tile), `components/MiniView.tsx` and
 `pages/app/TvRemotePage.tsx` (Phase 2), `scripts/gen-validators.ts`, `vite.config.ts` (`orientation:
@@ -1028,7 +1030,7 @@ factory):
 | PC key not pinned | pin store | "Pair this phone with your PC again so it can check it is really your PC. On the PC: DoMe tray › Paired phones › remove this phone, then pair." |
 | Pinned key mismatch | answer `kid` | "This PC's identity changed. Pair again." (hard stop) |
 | Answer signature invalid | §4.3 checks | "Couldn't confirm this is your PC. Nothing was shown." |
-| PC agent older than 1.3 | `PROTOCOL_INCOMPATIBLE` | "Update DoMe on your PC to use Screen view." |
+| PC agent older than 1.4 | `PROTOCOL_INCOMPATIBLE` | "Update DoMe on your PC to use Screen view." |
 | Remote control off | state | "Remote control is switched off on the PC. Turn it on from the DoMe tray icon." |
 | Operator kill switch | `SCREEN_VIEW_DISABLED` | "Screen view is switched off for now. The touchpad and remote still work." |
 | Ask mode / cooldown | `consent: pending` | "Waiting for someone at the PC to allow this… (30)" |
@@ -1109,8 +1111,8 @@ listens") and D10 ("screen viewing" not in V1) are amended by ADR-0002.
 ## 18. Test plan
 
 **Unit (CI, Linux and `windows-latest`):** contract fixtures and cross-language vectors (PC-signed answer,
-`pc_key_mac`, stamping, SDP pattern cases; a 1.3-stamped batch against a 1.2 verifier yields
-`PROTOCOL_INCOMPATIBLE`, not `MALFORMED_MESSAGE`, in the 1.3 library); `ScreenSessionManager` on the fake
+`pc_key_mac`, stamping, SDP pattern cases; a 1.4-stamped batch against a 1.2 verifier yields
+`PROTOCOL_INCOMPATIBLE`, not `MALFORMED_MESSAGE`, in the 1.4 library); `ScreenSessionManager` on the fake
 platform with one test per end reason, every emergency stop within budget, cooldown forces ask, **a second
 controller's start during another phone's cooldown is asked**, **the third refused start within a minute
 opens no window and is refused at once**, the 1-hour block, ticket expiry stops a PC cut off from the relay,
@@ -1139,7 +1141,7 @@ provisional bound, guard trips at 700 and 900 GB, token never in logs or errors)
 **Integration (CI):** relay routing against real PostgreSQL and dev-idp, modelled on
 `test_input_routing.py` / `test_input_hardening.py` **[repo]** (grant required; a 1.2 socket refused; the
 answer reaches only the issuing socket, never subscribers; a foreign `ref_controller_id` refused; oversize
-SDP; **a `SCREEN_*` rejection frame reaches the issuing controller's 1.3 socket and no subscriber**; **a 1.3
+SDP; **a `SCREEN_*` rejection frame reaches the issuing controller's 1.4 socket and no subscriber**; **a 1.4
 phone's batch with `pointer_move_to` against a 1.2 agent is refused by the relay with
 `PROTOCOL_INCOMPATIBLE` and the agent never sees it** (`tests/test_e2e_versions.py` with
 `tests/older_agent.py` **[repo]**); no `commands` content and no SDP in logs); the ledger (10 concurrent
@@ -1227,15 +1229,15 @@ once WP1.1 lands; the integration round joins them.
 
 | WP | Component | Contents | Tests / acceptance |
 | --- | --- | --- | --- |
-| WP1.1 (≈ 3 d) | shared/protocol | §11 in full; `PROTOCOL.md` §20; fixtures; Python and TS libraries; generated types and validators | registry/schema tests, `test_shared_cases`, stamping (`pointer_move_to` below 1.3 → `PROTOCOL_INCOMPATIBLE`), cross-language answer and MAC vectors → **unit-tested** |
+| WP1.1 (≈ 3 d) | shared/protocol | §11 in full; `PROTOCOL.md` §20; fixtures; Python and TS libraries; generated types and validators | registry/schema tests, `test_shared_cases`, stamping (`pointer_move_to` below 1.4 → `PROTOCOL_INCOMPATIBLE`), cross-language answer and MAC vectors → **unit-tested** |
 | WP1.2 (≈ 5 d) | cloud-api | §12: routing (with the input-batch stamp gate), start hook, answer and session frames, `screen_usage` / `screen_allowance` (with `controller_offline`), ledger + migration 0004 settled on the relay clock, TURN client with controller-bound credentials, revocation on every §13 path, per-account caps, **hourly Cloudflare usage reconciliation and the provisional bound** (moved here from Phase 3), the `_on_agent_error` prefix filter, pairing `pc_key_mac` and the approved-row retention invariant, the logout/revocation hook, redaction, security events, settings, deploy secrets, `/healthz` | §18 integration list against real PostgreSQL (including the lying agent, the logout test, the stamp-gate test, the `SCREEN_*` rejection test and the credential-revocation tests) → **integration-tested** |
 | WP1.3 (≈ 6 d) | pc-agent core | `screen/session.py` (PC-wide cooldown, consent back-off, one window per minute, the 1-hour block), `supervisor.py` (bars confirmed before spawn, two-way liveness, redacted stderr), `sdp_check.py`, `signing.py`, `consent.py`, `history.py`, `actions/screen.py`, grants (`pairing.py`, `agent.py`, CLI, tray), `pc_key_mac` in `pairing_decision`, `InputAdapter.move_to` / `wheel` with `gen` and owner checks, `local_permission_ui`, emergency-stop ordering, redaction (IP masking, logger pinning) | `tests/test_screen_session.py` modelled on `test_input_session.py` with `FakeScreenWorker` (including the §18 cooldown, back-off, fail-closed indicator and liveness tests); `test_link_pairing.py` (MAC vector; `screen` never granted at pairing, even with `--yes`); mapping maths; the sentinel test with a loopback peer → **unit-tested** |
 | WP1.4 (≈ 5 d) | pc-agent worker | `screen/worker/*`: pipe protocol, Job object, aiortc send-only (STUN only), strict offer use, pre-encoded H.264 track with SPS/PPS before every IDR, VP8 fallback, PLI → IDR through the `_send_keyframe` hook, 1 fps floor by re-encoding the held raw frame, path detection, bitrate steps from `getStats()`, data-channel vocabulary, no capture before `connected`, exit on missing ticks, logger pinning, `--self-test` | Linux unit tests with the `fake` source (synthetic frames → an aiortc receiver; distinct still-frame packets; NAL 7/8 before every NAL 5; PLI hook; the stock PyAV wheel from PyPI, tests only); import-graph and no-file-write tests → **unit-tested**; Windows capture and encoding → **not yet verified on a device** |
 | WP1.5 (≈ 2 d) | pc-agent UI | Grant window (5 s hold, scam line, options), consent window (Deny, Allow, Block 1 hour, Turn off for this phone), bars on every monitor created and confirmed before capture, tray badge and "Stop Screen view", hotkey, notifications, history view, `StatusView.screen_session` | fake-UI tests of the window model, of `local_permission_ui` and of a UI that cannot create a window → **unit-tested**; tkinter windows and display affinity → **not yet verified on a device** |
 | WP1.6 (≈ 2 d) | packaging | `dome-agent.spec` (aiortc and deps, custom `av`, `screen-worker` subcommand, `aiortc.contrib` excluded), `THIRD_PARTY_NOTICES.txt` + installer licence page + EULA clause, `windows-installer.yml` steps (gate on `dist/`, `screen-worker --self-test`) | `windows-installer.yml` smoke → **integration-tested** on the runner |
 | WP1.7 (≈ 6 d) | mobile-app | `lib/screen.ts`, `screenMap.ts`, `directGestures.ts`, `pcKeyPins.ts`, `input.ts` changes, `ScreenPage` with every §16 state, the loupe, Touchpad-mode toggle, **`PairPage` pinning: the `waiting` step keeps the normalised code (or a derived non-extractable HMAC key) until the poll returns `approved` with `pc_key`, verifies the MAC, writes the pin, then zeroes the code; cleared on `done`, `failed`, `expired` and unmount (§4.1)**, Remote tile and Home card, manifest `orientation: "any"`, wake lock, labels, validators allow-list | the §18 unit list, the `PairPage` component test "code is retained through `waiting` and absent after `done`/`failed`/`expired`/unmount", `no-pixel-access.test.ts`, `protocol-parity.test.ts` → **unit-tested**; playback and gestures → **not yet verified on a device** |
-| WP1.8 (≈ 3 d) | integration | `tests/test_e2e_screen.py` (§18, including the PLI test and the loopback-address sentinel); `tests/test_e2e_versions.py` row for the 1.3 batch against `older_agent.py`; `ControllerSim` gains screen frames; a `conftest.py` aiortc "phone" | → **integration-tested** |
-| WP1.9 (≈ 2 d) | docs and website | ADR-0002 numbers; ADR-0001 D1/D10 amendment note; `SECURITY.md` T24–T34 and §1/§8 wording, **and T4 amended: signing a phone out or revoking its account session also ends its Screen view within about 60 s (`controller_offline`)**; `PROTOCOL.md` §20 (including "1.2 agents answer `MALFORMED_MESSAGE` to a 1.3-stamped batch; the relay refuses such batches before forwarding") and the §18.7 matrix row; `ARCHITECTURE.md` §3.3; `COST_MODEL.md` §7B (§14); `INPUT_CONTROL.md` line 151; the privacy page (sub-processor); `HANDOFF.md`, `PROGRESS.md`, `ACCEPTANCE.md` scenarios 26–30 with device rows; FAQ, `plans.ts` and film copy per §22 | existing website tests updated → **unit-tested** |
+| WP1.8 (≈ 3 d) | integration | `tests/test_e2e_screen.py` (§18, including the PLI test and the loopback-address sentinel); `tests/test_e2e_versions.py` row for the 1.4 batch against `older_agent.py`; `ControllerSim` gains screen frames; a `conftest.py` aiortc "phone" | → **integration-tested** |
+| WP1.9 (≈ 2 d) | docs and website | ADR-0002 numbers; ADR-0001 D1/D10 amendment note; `SECURITY.md` T24–T34 and §1/§8 wording, **and T4 amended: signing a phone out or revoking its account session also ends its Screen view within about 60 s (`controller_offline`)**; `PROTOCOL.md` §20 (including "1.2 agents answer `MALFORMED_MESSAGE` to a 1.4-stamped batch; the relay refuses such batches before forwarding") and the §18.7 matrix row; `ARCHITECTURE.md` §3.3; `COST_MODEL.md` §7B (§14); `INPUT_CONTROL.md` line 151; the privacy page (sub-processor); `HANDOFF.md`, `PROGRESS.md`, `ACCEPTANCE.md` scenarios 26–30 with device rows; FAQ, `plans.ts` and film copy per §22 | existing website tests updated → **unit-tested** |
 | WP1.10 | device round | §18 checklist items 1–11 and 13 with the founder; results in `docs/ACCEPTANCE.md` with Windows build, iOS version and Safari/home-screen mode | **verified on a device** only for what passes |
 
 **Launch gate** before `SCREEN_VIEW_STATUS` changes from "Coming" (DECISIONS 63): device evidence on at
@@ -1276,7 +1278,7 @@ on staging and, behind the switch, on production.
 | 2. Monthly check (backstop) | The service limits relay use by itself (per-account daily and monthly caps, automatic reconciliation with Cloudflare's figures, §13). Once a month, compare the Cloudflare dashboard's TURN usage with the `/healthz` `turn_month_gb` figure; if they disagree by more than 10 % or usage nears 1,000 GB, tell the engineer, or set `DOME_TURN_PROVIDER=none` (Screen view then works only where a direct connection exists, with an honest message). | 2 min/month | $0 |
 | 3. Code signing | Already planned (HANDOFF item 4); now required before anyone but you installs a Screen view build. | per the existing plan | ≈ $9.99/month (Azure Trusted Signing, `COST_MODEL.md` §2; price to verify) |
 | 4. Legal | Two questions for counsel: (a) is relying on the Windows/GPU H.264 encoder acceptable, and must DoMe join the AVC pool (free under 100,000 units a year)? (b) are the LGPL notice, source offer and EULA clause adequate? If (a) is no, Screen view ships with VP8 only. | one meeting | unknown, one-off |
-| 5. Device rounds | Run the §18 checklist with the engineer's script (≈ 2–3 h per phase); borrow an Intel-graphics laptop and an AMD PC if possible. Re-pair your iPhone once after the 1.3 update so it pins the PC's key. | 2–3 h/phase | $0 |
+| 5. Device rounds | Run the §18 checklist with the engineer's script (≈ 2–3 h per phase); borrow an Intel-graphics laptop and an AMD PC if possible. Re-pair your iPhone once after the 1.4 update so it pins the PC's key. | 2–3 h/phase | $0 |
 | 6. Decisions | §22 | — | — |
 
 Not needed: no new Fly machine, no dedicated IPv4, no new server, no Apple developer account. Added hosting

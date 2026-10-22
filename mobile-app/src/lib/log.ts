@@ -5,6 +5,8 @@
  * e-mail) are replaced before they are stored or printed. Typed keyboard content (`text`, `composer`,
  * input `events`/`key`) and YouTube search text (`query`, anything named `*search*`, rules.search_queries)
  * are dropped the same way: no call site passes them, and the regex guarantees they would not survive if one did.
+ * Screen view (protocol 1.4, rules.screen_content) adds the signaling material: `sdp`, `offer_sdp`, `answer_sdp`,
+ * `candidate`, `ice_servers`, `credential`, `username`, `envelope` and `urls` never reach the buffer either.
  */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -20,7 +22,7 @@ export interface LogEntry {
  * codes (api.error, command.result, invalid_frame_dropped) that diagnostics exist to show. Pairing
  * material has explicit names.
  */
-const REDACT_KEY = /(token|pairing_code|code_hash|user_code|verification|secret|challenge|payload|^sig$|signature|title|artist|detail|email|csrf|jwk|cookie|password|display_name|nonce|url|^text$|_text$|composer|^events$|^key$|^keys$|^query$|search)/i;
+const REDACT_KEY = /(token|pairing_code|code_hash|user_code|verification|secret|challenge|payload|^sig$|signature|title|artist|detail|email|csrf|jwk|cookie|password|display_name|nonce|url|^text$|_text$|composer|^events$|^key$|^keys$|^query$|search|sdp|candidate|ice_servers|credential|username|envelope|^urls$)/i;
 const MAX_ENTRIES = 120;
 const MAX_STRING = 160;
 

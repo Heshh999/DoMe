@@ -76,6 +76,15 @@ REDACT_EXACT = frozenset(
         "customer_email",
         "name",
         "address",
+        # Screen view (rules.screen_content): SDP, candidates and TURN credentials never reach a log line
+        "offer_sdp",
+        "answer_sdp",
+        "sdp",
+        "candidate",
+        "candidates",
+        "ice_servers",
+        "credential",
+        "username",
     }
 )
 REDACT_SUFFIXES = ("_token", "_secret", "_code", "_credential", "_key", "_pem", "_title", "_signature")
@@ -175,13 +184,35 @@ def redact_pairing_codes(text: str) -> str:
     return _PAIRING_CONTIGUOUS.sub(_mask_contiguous, out)
 
 
+# Network addresses in free text (rules.screen_content): IPv4 with real octets, with an optional :port, and IPv6 in its
+# full eight-group or compressed (``::``) forms, bare or bracketed with a port. Loopback included, so a sentinel test
+# can assert that no peer address ever reaches a log, a diagnostics bundle or a ticket. Version strings
+# (10.0.19045.3086) have an octet above 255 and clock times (10:00:03) have no ``::``, so neither is touched.
+_OCTET = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
+# an address may end a sentence ("could not reach 192.168.1.5."); a fifth dotted part (1.2.3.4.5) is a version string
+_IPV4_RE = re.compile(rf"(?<![0-9.])(?:{_OCTET}\.){{3}}{_OCTET}(?::[0-9]{{1,5}})?(?![0-9]|\.[0-9])")
+_IPV6_RE = re.compile(
+    r"(?<![0-9A-Za-z:])(?:"
+    r"\[(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}\](?::[0-9]{1,5})?"  # [::1]:8080, [2001:db8::1]
+    r"|(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}"  # eight groups
+    r"|(?:[0-9A-Fa-f]{1,4})?(?::[0-9A-Fa-f]{1,4}){0,6}::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})?"  # ::
+    r")(?![0-9A-Za-z:])"
+)
+
+
+def redact_addresses(text: str) -> str:
+    """Mask IPv4 and IPv6 addresses (with an optional port) in free text."""
+    out = _IPV4_RE.sub(REDACTED, text)
+    return _IPV6_RE.sub(lambda m: REDACTED if ":" in m.group(0) and m.group(0) != "::" else m.group(0), out)
+
+
 def redact_text(text: str) -> str:
-    """Mask token-shaped substrings and pairing codes in free text (the structural :func:`redact` only knows
-    key names). Used for the customer's own support message and as part of :func:`redact_diagnostics`."""
+    """Mask token-shaped substrings, pairing codes and network addresses in free text (the structural :func:`redact`
+    only knows key names). Used for the customer's own support message and as part of :func:`redact_diagnostics`."""
     out = text
     for pattern in _TEXT_PATTERNS:
         out = pattern.sub(REDACTED, out)
-    return redact_pairing_codes(out)
+    return redact_addresses(redact_pairing_codes(out))
 
 
 # ----- support diagnostics (spec section 11A) -------------------------------------------------------------

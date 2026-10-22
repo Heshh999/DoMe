@@ -28,8 +28,12 @@ export const OUTPUT_DTS = resolve(here, "../src/protocol/generated/validators.d.
 const SCHEMA_DOCS = ["envelope", "command", "confirmation", "relay-frames", "bridge", "results", "entitlement", "rest"] as const;
 const BASE = "https://dome.app/schemas/";
 const ACTIONS_BASE = "https://dome.app/actions/";
-/** relay-frames $defs the phone validates directly (the two directions it speaks plus the challenge and its parts). */
-const RELAY_FRAME_DEFS = new Set(["relay_to_controller", "controller_to_relay", "challenge", "error", "pc_state", "youtube_tab", "media_session", "pc_connection_state", "lifecycle_state", "hello_proof", "input_batch_payload", "input_event", "foreground_app"]);
+/**
+ * relay-frames $defs the phone validates directly: the two directions it speaks, the challenge and its parts, and since
+ * protocol 1.4 the PC-signed `screen_answer_payload` and the data-channel vocabulary it receives (`screen_dc_pc_to_phone`;
+ * the other direction and the union are bundled so the facade mirrors `schemas.validateScreenDcMessage` for both sides).
+ */
+const RELAY_FRAME_DEFS = new Set(["relay_to_controller", "controller_to_relay", "challenge", "error", "pc_state", "youtube_tab", "media_session", "pc_connection_state", "lifecycle_state", "hello_proof", "input_batch_payload", "input_event", "foreground_app", "screen_answer_payload", "screen_dc_message", "screen_dc_phone_to_pc", "screen_dc_pc_to_phone"]);
 
 interface JsonObject {
   [k: string]: unknown;

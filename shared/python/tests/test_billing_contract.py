@@ -1,4 +1,4 @@
-"""Protocol 1.3 billing bodies (docs/PROTOCOL.md §20; shared/protocol/README.md "Protocol 1.3"): every new definition
+"""Protocol 1.3 billing bodies (docs/BILLING.md; shared/protocol/README.md "Protocol 1.3"): every new definition
 accepts its example and refuses unknown fields and out-of-enum values; the new error codes exist; the shared
 ``fixtures/ai-window-cases.json`` loads and every case that carries limits/used evaluates the way cloud-api's metering
 does (``exhausted_reason`` below is the reference arithmetic of rules.ai_allowance)."""
@@ -202,7 +202,7 @@ def test_error_codes_and_rule():
     from dome_protocol.registry import _load_json
 
     version = _load_json("version.json")
-    assert version["protocol_version"] == "1.3"
+    assert version["protocol_version"] == "1.4"  # 1.3 added the billing shapes; 1.4 (Screen view) is current
     rule = version["rules"]["ai_allowance"]
     assert "AI_ALLOWANCE_EXHAUSTED{reason, resets_at}" in rule and "never renews" in rule and "'pro' for every paid plan" in rule
 

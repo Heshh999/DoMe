@@ -10,6 +10,18 @@
 # and never for a pull request from a fork: anyone can open one, and the founder installs these files),
 # and the logs (always).
 #
+# Screen view (docs/design/screen-view.md §5.5, §15, §19 WP1.6) is built in only when pc-agent/pyproject.toml
+# pins av on Windows to DoMe's own LGPL wheel (pc-agent/packaging/licence_gate.py shipping-av; the wheel comes
+# from ffmpeg-lgpl.yml); until then the job builds without the `screen` extra and BUILD-INFO.txt says
+# "screen view: not included in this build". The stock PyPI av wheel bundles GPL x264/x265 and never reaches
+# this build. Between PyInstaller and Inno Setup two steps check the folder: the licence gate on dist/DoMe
+# (`licence_gate.py check --frozen`: no GPL or non-free codec by name, import or export, FFmpeg only in
+# av.libs, every DLL known, the notices and licence texts present; an unknown DLL is a warning here and a
+# failure in release.yml) and `DoMe.exe screen-worker --self-test` (with Screen view: aiortc 1.15.0, the +lgpl
+# PyAV, exactly one decoder, a lavfi frame, the PLI hook, VP8; H.264 through Media Foundation is reported
+# only, the runner has no GPU; without it: the worker answers and reports aiortc and av missing). Capture is
+# never tried here, and nothing of Screen view is verified on a device by this workflow.
+#
 # The runner is an administrator with UAC off, so this proves the installer works there; it does not
 # replace a test on a real Windows 10/11 PC as a standard user. Recommended repository setting (public
 # repository): Settings > Actions > General > "Require approval for all external contributors".
@@ -106,9 +118,22 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
 
-      - name: pc-agent - sync with the build extra (PyInstaller from the lock)
+      - name: Screen view in this build? (only when pyproject.toml pins DoMe's LGPL av wheel for Windows)
+        id: screen
         working-directory: pc-agent
-        run: uv sync --locked --extra build
+        run: |
+          uv run --no-project python -I packaging/licence_gate.py shipping-av --pyproject pyproject.toml --lock uv.lock --github-output "$env:GITHUB_OUTPUT"
+          if ($LASTEXITCODE -ne 0) { throw "licence_gate.py shipping-av refused pyproject.toml / uv.lock (exit code $LASTEXITCODE)" }
+
+      - name: pc-agent - sync with the build extra (PyInstaller from the lock), and the screen extra with Screen view
+        working-directory: pc-agent
+        env:
+          SCREEN: ${{ steps.screen.outputs.screen }}
+        run: |
+          $extras = @('--extra', 'build')
+          if ($env:SCREEN -eq 'present') { $extras += @('--extra', 'screen') }
+          uv sync --locked @extras
+          if ($LASTEXITCODE -ne 0) { throw "uv sync failed (exit code $LASTEXITCODE)" }
 
       - name: Find the Inno Setup 6 compiler
         run: |
@@ -126,10 +151,38 @@ jobs:
           Write-Host "Inno Setup compiler: $iscc ($version)"
           "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Build DoMe.exe, dome-native-host.exe and DoMe-Setup.exe (unsigned development build)
+      - name: Build DoMe.exe and dome-native-host.exe, write the notices and check the folder
+        working-directory: pc-agent
+        timeout-minutes: 20
+        run: |
+          uv run --no-sync python packaging/installer/build_installer.py --pyinstaller-only
+          if ($LASTEXITCODE -ne 0) { throw "build_installer.py --pyinstaller-only failed (exit code $LASTEXITCODE)" }
+
+      - name: Licence gate on the frozen folder dist/DoMe (before anything runs from it)
+        working-directory: pc-agent
+        env:
+          SCREEN: ${{ steps.screen.outputs.screen }}
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'licence-gate\licence-frozen.json'
+          uv run --no-sync python -I packaging/licence_gate.py collect --folder dist/DoMe --out "$report"
+          if ($LASTEXITCODE -ne 0) { throw "licence_gate.py collect failed (exit code $LASTEXITCODE)" }
+          uv run --no-sync python -I packaging/licence_gate.py check "$report" --frozen --screen "$env:SCREEN"
+          if ($LASTEXITCODE -ne 0) { throw "the licence gate refused dist/DoMe (exit code $LASTEXITCODE)" }
+
+      - name: Screen view worker self-test on the frozen DoMe.exe
+        working-directory: pc-agent
+        timeout-minutes: 10
+        env:
+          SCREEN: ${{ steps.screen.outputs.screen }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'licence-gate\screen-self-test.json'
+          uv run --no-sync python -I packaging/licence_gate.py screen-self-test --exe dist/DoMe/DoMe.exe --expect "$env:SCREEN" --out "$out"
+          if ($LASTEXITCODE -ne 0) { throw "the screen-worker self-test failed (exit code $LASTEXITCODE)" }
+
+      - name: Compile DoMe-Setup.exe from the checked folder (unsigned development build)
         id: build
         working-directory: pc-agent
-        timeout-minutes: 25
+        timeout-minutes: 10
         env:
           # The branch commit: on a pull request GITHUB_SHA is GitHub's temporary merge commit (BUILD-INFO.txt
           # names that one too). Passed through env, never pasted into the script.
@@ -137,7 +190,7 @@ jobs:
           BUILD_EVENT: ${{ github.event_name }}
           BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          uv run --no-sync python packaging/installer/build_installer.py --iscc "$env:ISCC"
+          uv run --no-sync python packaging/installer/build_installer.py --skip-pyinstaller --iscc "$env:ISCC"
           if ($LASTEXITCODE -ne 0) { throw "build_installer.py failed (exit code $LASTEXITCODE)" }
 
       - name: Smoke-test the installer (install, checks, tray, upgrades, uninstalls)
@@ -171,6 +224,7 @@ jobs:
           name: installer-smoke-logs
           path: |
             ${{ runner.temp }}/installer-smoke/
+            ${{ runner.temp }}/licence-gate/
             pc-agent/build/pyinstaller/**/warn-*.txt
           if-no-files-found: warn
           retention-days: 30

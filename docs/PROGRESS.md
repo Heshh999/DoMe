@@ -2,6 +2,95 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-21 — Screen view Phase 1 beta built (protocol 1.4), reviewed and fixed; switched off, not yet on a device
+
+Nothing of this is released or deployed. Once deployed it stays off until `DOME_SCREEN_VIEW_ENABLED` is `true` in
+that environment (absent = off); no Windows build made so far includes the media stack (the PC answers "This
+version of DoMe on your PC doesn't include Screen view yet"); the website still says "Coming". The build finished
+on 2026-10-21; the review round and the runs below are from 2026-10-22.
+
+What was built (`docs/design/screen-view.md` §19 WP1.1–WP1.9; WP1.10, the device round, is the founder's):
+
+- **Contract, protocol 1.4** (`shared/protocol`, `docs/PROTOCOL.md` §20): `screen.session_start` / `screen.stop`,
+  `screen_ice_request` / `screen_ice_servers`, the PC-signed `screen_answer`, `screen_usage` and `screen_session`
+  frames, the PC key pinned at pairing (`pairing_sessions.pc_key_mac`), `pointer_move_to` / `pointer_wheel` / `f11`,
+  the `screen` grant, Free minutes in `plans.json`; shared Python and TypeScript libraries with answer vectors both
+  ways. Deviations met during the build are §16 items 18–23.
+- **cloud-api** (migration 0005): screen routing on the relay (the answer only to the issuing phone's 1.4 sockets,
+  never to subscribers, no SDP in any row or log), the Free-minutes ledger on the relay's clock with allowance
+  tickets, the sweeper, TURN credentials minted for the phone only (Cloudflare adapter and a fake) with revocation
+  and a spending guard reconciled hourly, and the operator switch. The Deploy button passes `DOME_TURN_*` and
+  `DOME_SCREEN_VIEW_ENABLED`.
+- **pc-agent**: `dome_agent/screen/` (strict SDP check, PC-signed answer, grant and consent windows, history, the
+  fail-closed indicator bars, the worker supervisor, the session manager) and the worker process (aiortc send-only;
+  `ddagrab` with a Windows.Graphics.Capture fallback; `h264_mf` hardware, then software, then VP8; PLI → keyframe);
+  CLI and tray wiring.
+- **mobile-app**: the Screen view page (receive-only peer, the answer verified against the pinned PC key, taps,
+  scroll and pinch), pinning at pairing, status copy, the privacy page's relay-provider paragraph (with a FOUNDER
+  note).
+- **Packaging**: the licence gate on `dist/`, third-party notices, the installer's licence page;
+  `windows-installer.yml` and `release.yml` run the gate.
+- **End to end**: `tests/test_e2e_screen.py` (the real agent and worker process, a Python aiortc phone, the real
+  relay, a loopback STUN server, real PostgreSQL).
+
+Review round (2026-10-22): 32 findings, all fixed, none rejected (two pairs were the same defect reported twice).
+
+- **Capture after DTLS on every source.** `ddagrab`, its WGC fallback and a rebuild's source are constructed at
+  the start and opened only by the track once DTLS connected (they used to open before the answer). The DDA path
+  handles PyAV's `EAGAIN` and reopens with backoff; WGC streams the primary monitor and checks its size.
+- **End order.** An end triggered by a worker event (`bye`, `disconnected`, `error`) ran on the supervisor's own
+  pipe reader and stalled; ends now run on tasks of their own, retire the session synchronously first, and the two
+  e2e tests that were XFAIL pass (pc-agent DECISIONS #75).
+- **Fail-closed indicator.** A frozen tray UI thread stops the worker's liveness ticks; bars are placed and checked
+  with per-monitor DPI awareness and their real window rectangles; pauses are kept per cause (secure desktop,
+  indicator), so one cause clearing never resumes the picture while the other holds.
+- **Emergency stop.** *Disable remote control* retires the session at once, withdraws a waiting consent window and
+  releases held input while the worker exits; *Stop and turn off* on the PC (window or tray) now starts the
+  post-Stop cooldown too, so another installation of the same account gets a consent window.
+- **Redaction.** An IPv4 address ending a sentence ("…192.168.1.5.") was not masked in agent logs, the crash log
+  and cloud-api logs; fixed in all three, with tests. The log-hygiene tests read stderr only once now (they were
+  vacuous) and carry a positive control.
+- **TURN.** Revocation targets the start's own credential, a failed revocation is queued and retried (never
+  recorded as done), the spending guard counts minted lifetimes per UTC day and reconciles whole days against the
+  provider; the monthly guard uses reconciled bytes plus a provisional bound only after the last reconciled
+  instant (the full provisional figure only when reconciliation is off or older than 3 h), and `/healthz` reports
+  the figures the guard uses.
+- **Ledger.** Row locks re-read fresh state, a plan change closes the running segment, the pause discount counts
+  pairs only and is capped per window, a declined or timed-out consent wait is forgiven (a counter of its own),
+  and a relay that lost a pending start (a
+  deploy, a dropped PC socket) binds the reservation instead of answering `final`.
+- **Honesty.** A build without the media stack says so (tray item disabled, start refused before any window);
+  the phone's "paused" copy names the real cause and claims nothing about the clock it cannot keep; the cooldown
+  line has no made-up duration; the sound option reads "(coming in a later update)"; docs updated: `DATA_RETENTION.md` (new tables, columns and local
+  stores), `PROTOCOL.md` §20.2 / §20.8 / §20.12, `INPUT_CONTROL.md`, `ARCHITECTURE.md` §3.3, ADR-0001 D1 and D10,
+  `LAUNCH_SETUP.md` §11B, stale CONTRACT_ISSUES entries.
+
+Tests run (2026-10-22, this Linux sandbox):
+
+- cloud-api `uv run pytest -q -p no:cacheprovider` → 562 passed, 1 skipped; ruff and `mypy dome_api tests` clean.
+- pc-agent `uv run pytest -q -p no:cacheprovider` → 1090 passed, 3 skipped; ruff, `mypy` and `mypy --config-file
+  mypy-windows.ini` clean.
+- mobile-app `pnpm test` → 84 files, 1431 passed, 1 skipped; `pnpm check` (typecheck, lint, test, build) passed.
+- shared/python 333 passed; shared/ts 170 passed; deploy/launch 290 passed.
+- tests/ (end to end) `uv run pytest -q -p no:cacheprovider` → 45 passed in 530 s (`test_e2e_screen.py` included,
+  no XFAIL).
+
+Evidence:
+
+- **integration-tested**: the relay, ledger and TURN client against real PostgreSQL with a fake TURN provider; the
+  end-to-end run on Linux loopback with the fake frame source and a Python aiortc phone. The Cloudflare adapter is
+  tested against an HTTP stub only (**not sandbox-provider-tested**).
+- **unit-tested**: the agent's session manager, supervisor, worker, indicator and windows on Linux with the fake
+  platform and fake UI (real aiortc peers on loopback, a scripted worker process, recording stand-ins for the
+  Windows sources); the phone page and pinning in jsdom with a fake peer; the licence gate.
+- **not yet verified on a device**: everything that touches Windows capture and encoding, the tkinter bars and
+  windows, iPhone playback, NAT traversal, TURN, the Job object and the firewall prompt. `ffmpeg-lgpl.yml` has
+  never run.
+
+Next (founder): run **ffmpeg-lgpl** from the Actions tab, then the §18 device round on his PC and iPhone, the
+Cloudflare TURN key per design §20 (`LAUNCH_SETUP.md` §11B, staging first), and counsel's answer on H.264. Details
+in `docs/HANDOFF.md` item 2.
+
 ## 2026-10-21 — The Deploy button carries Stripe: billing can be switched on from GitHub
 
 - `deploy.yml` and `dome_deploy.py` now pass the seven Stripe values to Fly (this supersedes the "not yet

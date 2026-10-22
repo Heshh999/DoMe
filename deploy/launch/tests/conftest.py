@@ -58,6 +58,28 @@ def stripe_env(key: str = STRIPE_TEST_KEY, webhook: str = STRIPE_WEBHOOK_SECRET,
     return {"DOME_STRIPE_SECRET_KEY": key, "DOME_STRIPE_WEBHOOK_SECRET": webhook, **STRIPE_PRICES, **prices}
 
 
+# Fake Cloudflare TURN values (docs/design/screen-view.md section 20), assembled so no line looks like a real token.
+TURN_KEY_ID = "0123456789abcdef0123456789abcdef"
+TURN_API_TOKEN = "cf-turn-" + "FakeApiToken0123456789abcdefABCDEF"
+TURN_ANALYTICS_TOKEN = "cf-analytics-" + "FakeAnalyticsToken0123456789abcdefAB"
+
+
+def turn_env(
+    key_id: str = TURN_KEY_ID,
+    token: str = TURN_API_TOKEN,
+    analytics: str = TURN_ANALYTICS_TOKEN,
+    *,
+    enabled: bool = True,
+) -> dict[str, str]:
+    """The Screen view values as the deploy step receives them: the switch, the key id and the two tokens."""
+    return {
+        "DOME_SCREEN_VIEW_ENABLED": "true" if enabled else "false",
+        "DOME_TURN_KEY_ID": key_id,
+        "DOME_TURN_API_TOKEN": token,
+        "DOME_TURN_ANALYTICS_TOKEN": analytics,
+    }
+
+
 SECURE_HEADERS = {
     "content-type": "text/html; charset=utf-8",
     "content-security-policy": "default-src 'self'",
@@ -111,9 +133,25 @@ class FakeWeb:
         self.json(f"https://{host}/.well-known/openid-configuration", doc)
 
     def healthz(
-        self, base: str, *, commit: str | None = SHA, forwarded: str = "ok", headers: dict[str, str] | None = None
+        self,
+        base: str,
+        *,
+        commit: str | None = SHA,
+        forwarded: str = "ok",
+        headers: dict[str, str] | None = None,
+        screen_view: str | None = "off",
+        turn: str = "unconfigured",
     ) -> None:
-        body = {"status": "ok", "version": "0.1.0", "commit": commit, "database": "ok", "forwarded_client": forwarded}
+        """cloud-api's GET /healthz; ``screen_view=None`` leaves the Screen view fields out (an older build)."""
+        body: dict[str, Any] = {
+            "status": "ok",
+            "version": "0.1.0",
+            "commit": commit,
+            "database": "ok",
+            "forwarded_client": forwarded,
+        }
+        if screen_view is not None:
+            body.update({"screen_view": screen_view, "turn": turn, "turn_month_gb": 0.0, "turn_reconciled_at": None})
         self.json(base + "/healthz", body, headers=headers)
 
     def plans(self, base: str, mode: str = "off") -> None:
@@ -322,18 +360,28 @@ class World:
         summary = summary_path.read_text() if summary_path.exists() else ""
         return Run(code, out.getvalue(), summary)
 
-    def staging_ready_web(self, app: str = "domeremote-staging", *, commit: str = SHA, billing: str = "off") -> None:
+    def staging_ready_web(
+        self,
+        app: str = "domeremote-staging",
+        *,
+        commit: str = SHA,
+        billing: str = "off",
+        screen_view: str | None = "off",
+        turn: str = "unconfigured",
+    ) -> None:
         self.web.discovery()
-        self.web.healthz(f"https://{app}.fly.dev", commit=commit)
+        self.web.healthz(f"https://{app}.fly.dev", commit=commit, screen_view=screen_view, turn=turn)
         self.web.plans(f"https://{app}.fly.dev", billing)
         self.web.page(f"https://{app}.fly.dev")
         self.web.login(f"https://{app}.fly.dev", "https://staging.domeremote.com/v1/auth/callback")
         self.web.websockets[f"{app}.fly.dev"] = 401
 
-    def production_ready_web(self, billing: str = "off") -> None:
+    def production_ready_web(
+        self, billing: str = "off", *, screen_view: str = "off", turn: str = "unconfigured"
+    ) -> None:
         """Staging healthy with this commit (production's precondition) and a healthy production fly.dev."""
         self.staging_ready_web(commit=SHA)
-        self.web.healthz("https://domeremote-production.fly.dev")
+        self.web.healthz("https://domeremote-production.fly.dev", screen_view=screen_view, turn=turn)
         self.web.plans("https://domeremote-production.fly.dev", billing)
         self.web.page("https://domeremote-production.fly.dev", robots=True, hsts=True)
         self.web.login("https://domeremote-production.fly.dev", "https://domeremote.com/v1/auth/callback")
@@ -381,6 +429,12 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
         "DOME_STRIPE_WEBHOOK_SECRET": "",
         **{name: "" for name in STRIPE_PRICES},
         "STRIPE_SECRETS_AS_VARIABLES": "",
+        # what deploy.yml hands over when the GitHub Environment has no Screen view values: empty strings
+        "DOME_SCREEN_VIEW_ENABLED": "",
+        "DOME_TURN_KEY_ID": "",
+        "DOME_TURN_API_TOKEN": "",
+        "DOME_TURN_ANALYTICS_TOKEN": "",
+        "TURN_SECRETS_AS_VARIABLES": "",
         "GH_TOKEN": GH_TOKEN,
     }
     web = FakeWeb()

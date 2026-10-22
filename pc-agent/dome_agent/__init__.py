@@ -9,4 +9,7 @@ Windows; everywhere else ``dome_agent.platform.unsupported`` answers ``PLATFORM_
 
 __version__ = "0.1.0"
 COMPONENT_NAME = "agent"
-SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2")
+# Every MINOR this agent speaks (DECISIONS.md #38). 1.3 (billing) changed nothing on the agent; 1.4 is Screen view
+# (docs/design/screen-view.md, PROTOCOL.md §20): the relay forwards screen.* commands and 1.4-stamped input batches
+# only to agents that announce it.
+SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3", "1.4")

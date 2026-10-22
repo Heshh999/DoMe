@@ -16,6 +16,7 @@ from dome_protocol import (
     VerifiedCommand,
     loads_strict,
     parse_rfc3339,
+    protocol_compatible,
     verify_and_parse_command,
     verify_and_parse_input_batch,
 )
@@ -28,15 +29,18 @@ from dome_api.logging import get_logger
 from dome_api.plans import Plan, catalog, plan_for
 from dome_api.relay import frames
 from dome_api.relay.manager import CLOSE_REVOKED, AgentConn, ConnectionManager, ControllerConn, InFlight
+from dome_api.screen.metering import AllowanceExhaustedError
 from dome_api.security.ratelimit import SlidingWindowLimiter, TokenBucketLimiter
 from dome_api.settings import Settings
 from dome_api.state import Services
-from dome_api.util import ts_required, utcnow
+from dome_api.util import ts, ts_required, utcnow
 
 log = get_logger("dome_api.relay.router")
 _UUID_RE = re.compile(r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 TERMINAL_STATES = ("succeeded", "failed", "expired", "canceled", "outcome_unknown")
 IN_FLIGHT_STATES = ("created", "accepted", "executing", "awaiting_confirmation")
+SCREEN_PROTOCOL_VERSION = "1.4"  # the MINOR that introduced Screen view (rules.controller_socket_identity)
+SCREEN_START_ACTION = "screen.session_start"
 
 
 class Rejection(Exception):  # noqa: N818 - routing control flow, always converted to a result frame
@@ -67,13 +71,21 @@ class RateLimiters:
     * ``input_refusals``: per socket, a leaky budget for ``input_frames`` refusals (2x the input rate sustained,
       capacity 5 s of that); a socket that empties it is flooding far beyond anything a touchpad sends and is
       closed (4000) with one ``controller_throttled`` event, as the command path does after ``burst`` refusals;
-    * ``input_rejections``: at most one ``input_rejected`` security event per minute per controller.
+    * ``input_rejections``: at most one ``input_rejected`` security event per minute per controller;
+    * Screen view (rules.screen_metering (5)): per-plan ``screen_ice_rate_limit`` buckets keyed by controller id plus
+      the per-account hourly window for ``screen_ice_request``, per-plan ``screen_start_rate_limit`` buckets for
+      ``screen.session_start`` (on top of the manual command bucket), and ``screen_usage``: two ``screen_usage``
+      frames per minute per session (design §12).
     """
 
     def __init__(self, settings: Settings, registry: Registry | None = None) -> None:
         self._manual: dict[str, TokenBucketLimiter] = {}
         self._coalescable: dict[str, TokenBucketLimiter] = {}
         self._input: dict[str, TokenBucketLimiter] = {}
+        self._screen_ice: dict[str, TokenBucketLimiter] = {}
+        self._screen_ice_account: dict[str, SlidingWindowLimiter] = {}
+        self._screen_start: dict[str, TokenBucketLimiter] = {}
+        self.screen_usage = SlidingWindowLimiter(2, 60)
         self.frames = TokenBucketLimiter(
             settings.relay_controller_frames_per_minute, settings.relay_controller_frame_burst
         )
@@ -106,6 +118,30 @@ class RateLimiters:
         if limiter is None:
             rl = plan.input_rate_limit
             limiter = self._input[plan.id] = TokenBucketLimiter(rl.per_minute, rl.burst)
+        return limiter.allow(str(controller_id))
+
+    def allow_screen_ice(self, plan: Plan, controller_id: uuid.UUID, account_id: uuid.UUID) -> bool:
+        """``screen_ice_request``: per controller (token bucket) and per account (hourly window); both must have room,
+        and a refusal consumes nothing from the other."""
+        bucket = self._screen_ice.get(plan.id)
+        if bucket is None:
+            rl = plan.screen_ice_rate_limit
+            bucket = self._screen_ice[plan.id] = TokenBucketLimiter(rl.per_minute, rl.burst)
+        hourly = self._screen_ice_account.get(plan.id)
+        if hourly is None:
+            hourly = self._screen_ice_account[plan.id] = SlidingWindowLimiter(plan.screen_ice_account_per_hour, 3600)
+        if hourly.exhausted(str(account_id)):
+            return False
+        if not bucket.allow(str(controller_id)):
+            return False
+        hourly.hit(str(account_id))
+        return True
+
+    def allow_screen_start(self, plan: Plan, controller_id: uuid.UUID) -> bool:
+        limiter = self._screen_start.get(plan.id)
+        if limiter is None:
+            rl = plan.screen_start_rate_limit
+            limiter = self._screen_start[plan.id] = TokenBucketLimiter(rl.per_minute, rl.burst)
         return limiter.allow(str(controller_id))
 
 
@@ -190,6 +226,8 @@ async def route_command(
     envelope = frame["envelope"]
     received_at = utcnow()
     command_id: str | None = None
+    # a refused screen.session_start also revokes the phone's TURN credential (design §13): remembered once parsed
+    screen_start_by: uuid.UUID | None = None
     try:
         # 2. socket binding
         if envelope.get("kid") != conn.kid:
@@ -221,6 +259,8 @@ async def route_command(
                 command_id = untrusted_command_id(envelope)
                 raise Rejection(exc.code, exc.message, detail=exc.detail or None) from None
             command_id = cmd.command_id
+            if cmd.spec.name == SCREEN_START_ACTION:
+                screen_start_by = ctrl.id
             if ctrl.id not in enabled_ids:
                 raise Rejection("CONTROLLER_PLAN_DISABLED")
             # 4. frame/payload PC agreement
@@ -264,6 +304,37 @@ async def route_command(
             agent = mgr.agent_for(pc.id)
             if agent is None or not agent.snapshot_sent:
                 raise Rejection("PC_OFFLINE")
+            # 8a. Screen view (rules.screen_signaling (3)): the agent must have announced 1.4 for any screen.* action
+            # (the shipped 1.2 agent cannot answer for itself); a start also passes the operator switch, its own
+            # per-controller budget and the ledger, whose first chunk is reserved in this same transaction
+            screen_relay: dict[str, Any] | None = None
+            screen_reservation_id: uuid.UUID | None = None
+            if cmd.spec.capability == "screen" and not agent.supports_screen:
+                raise Rejection(
+                    "PROTOCOL_INCOMPATIBLE",
+                    "The PC's DoMe agent needs an update for Screen view",
+                    detail={"peer": "agent", "required": SCREEN_PROTOCOL_VERSION},
+                )
+            if cmd.spec.name == SCREEN_START_ACTION:
+                if not svc.screen.config.enabled:
+                    raise Rejection("SCREEN_VIEW_DISABLED")
+                if not limiters.allow_screen_start(plan, ctrl.id):
+                    raise Rejection("RATE_LIMITED")
+                ctrl_id, screen_pc_id = ctrl.id, pc.id  # a rollback expires the ORM rows; keep the ids
+                try:
+                    screen_reservation_id, screen_relay = await svc.screen.reserve_start(
+                        db,
+                        account_id=conn.account_id,
+                        pc_id=screen_pc_id,
+                        controller_id=ctrl_id,
+                        command_id=uuid.UUID(cmd.command_id),
+                        plan=plan,
+                        now=svc.screen.now(),  # the ledger's clock (the relay's own; replaceable in tests)
+                    )
+                except AllowanceExhaustedError as exc:
+                    await db.rollback()
+                    await svc.screen.allowance_exhausted_event(conn.account_id, ctrl_id, screen_pc_id, exc.resets_at)
+                    raise Rejection("SCREEN_ALLOWANCE_EXHAUSTED", detail={"resets_at": ts(exc.resets_at)}) from None
             # 9. queue depth
             if len(agent.inflight) >= svc.settings.relay_per_pc_queue_depth:
                 raise Rejection("QUEUE_FULL")
@@ -302,21 +373,37 @@ async def route_command(
                 await db.rollback()
                 raise Rejection("COMMAND_ID_REUSED") from None
             agent.inflight[inf.command_id] = inf
-            forwarded = {
+            forwarded: dict[str, Any] = {
                 "type": "command",
                 "envelope": envelope,
                 "relay": {"received_at": ts_required(received_at), "connection_id": str(conn.connection_id)},
             }
+            if screen_relay is not None:
+                forwarded["relay"]["screen"] = screen_relay
             if not await agent.send(forwarded, validate=False):
                 agent.inflight.pop(inf.command_id, None)
                 failed = frames.relay_result(
                     inf.command_id, "failed", error=frames.error_object("PC_OFFLINE"), started_at=received_at
                 )
                 await mgr.finish_command(inf, "failed", "PC_OFFLINE", failed)
+                if screen_reservation_id is not None:
+                    await svc.screen.on_start_lost(screen_reservation_id, ctrl.id, conn.account_id)
                 return
+            if screen_reservation_id is not None:
+                await svc.screen.on_start_forwarded(
+                    agent,
+                    command_id=inf.command_id,
+                    controller_id=ctrl.id,
+                    controller_conn_id=conn.connection_id,
+                    account_id=conn.account_id,
+                    reservation_id=screen_reservation_id,
+                    now=svc.screen.now(),
+                )
             log.info("command.forwarded", action=cmd.spec.name, pc_id=pc_id_str, controller_id=str(ctrl.id))
     except Rejection as rej:
         await _reject(mgr, limiters, conn, pc_id_str, command_id, rej, received_at)
+        if screen_start_by is not None:
+            await svc.screen.on_start_refused(screen_start_by, rej.code)
 
 
 async def route_input_batch(
@@ -394,6 +481,16 @@ async def route_input_batch(
             raise Rejection("PC_RECONNECTING")
         if not agent.supports_input:
             raise Rejection("PROTOCOL_INCOMPATIBLE", "The PC's DoMe agent needs an update for touchpad and keyboard")
+        # the stamp gate (rules.command_version_stamping, 1.4): a batch stamped with a MINOR the agent did not announce
+        # (a 1.4 tap with pointer_move_to to a 1.2 agent) is refused here, because the shipped agent would answer
+        # MALFORMED_MESSAGE for it instead of PROTOCOL_INCOMPATIBLE (PROTOCOL.md §20.6)
+        stamp = str(batch.payload["protocol_version"])
+        if not protocol_compatible(stamp, agent.protocol_versions):
+            raise Rejection(
+                "PROTOCOL_INCOMPATIBLE",
+                "The PC's DoMe agent needs an update for Screen view",
+                detail={"peer": "agent", "required": batch.required_protocol_version},
+            )
         forwarded = {
             "type": "input_batch",
             "envelope": envelope,
@@ -404,6 +501,94 @@ async def route_input_batch(
         conn.remember_input_seq(batch.input_session_id, batch.seq)
     except Rejection as rej:
         await _reject_input(mgr, limiters, conn, pc_id_str, rej)
+
+
+async def route_screen_ice_request(
+    svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]
+) -> None:
+    """``rules.screen_signaling`` (1): the socket announced 1.4 and is bound; the operator switch; a live grant with
+    ``screen`` for this controller on this PC; the PC online and past its first snapshot; the rate limits; the
+    allowance; then the phone's TURN credential (one outstanding per controller) and ``screen_ice_servers``. Refusals
+    are ``error`` frames with ``ref_pc_id`` (never a result: no command exists yet) and never close the socket."""
+    pc_id_str: str = frame["pc_id"]
+    now = svc.screen.now()
+    try:
+        if not conn.supports_screen:
+            raise Rejection(
+                "PROTOCOL_INCOMPATIBLE",
+                "Announce protocol 1.4 in hello to use Screen view",
+                detail={"peer": "controller", "required": SCREEN_PROTOCOL_VERSION},
+            )
+        if not svc.screen.config.enabled:
+            raise Rejection("SCREEN_VIEW_DISABLED")
+        if conn.controller_id is None:
+            raise Rejection("GRANT_MISSING", "This connection is not bound to a paired controller")
+        pc_id = uuid.UUID(pc_id_str)
+        async with svc.db() as db:
+            ctrl, record = await resolve_controller_record(db, conn)
+            if ctrl is None or record is None or ctrl.revoked_at is not None:
+                raise Rejection("CONTROLLER_REVOKED")
+            account = await db.get(Account, conn.account_id)
+            plan = plan_for(account.plan if account else None)
+            if ctrl.id not in await mgr.plan_enabled_controller_ids(db, conn.account_id, plan):
+                raise Rejection("CONTROLLER_PLAN_DISABLED")
+            pc = await db.get(PC, pc_id)
+            if pc is None or pc.deleted_at is not None or pc.account_id != conn.account_id:
+                raise Rejection("ACCOUNT_MISMATCH", "No such PC on this account")
+            if not pc.enabled:
+                raise Rejection("PC_PLAN_DISABLED")
+            grant = await db.scalar(
+                select(Grant).where(
+                    Grant.controller_id == ctrl.id,
+                    Grant.pc_id == pc.id,
+                    Grant.account_id == conn.account_id,
+                    Grant.revoked_at.is_(None),
+                )
+            )
+            if grant is None or "screen" not in set(grant.capabilities):
+                raise Rejection("GRANT_MISSING", "Allow Screen view for this phone on the PC first")
+            agent = mgr.agent_for(pc.id)
+            if agent is None:
+                raise Rejection("PC_OFFLINE")
+            if not agent.snapshot_sent:
+                raise Rejection("PC_RECONNECTING")
+            if not agent.supports_screen:
+                raise Rejection(
+                    "PROTOCOL_INCOMPATIBLE",
+                    "The PC's DoMe agent needs an update for Screen view",
+                    detail={"peer": "agent", "required": SCREEN_PROTOCOL_VERSION},
+                )
+            if not limiters.allow_screen_ice(plan, ctrl.id, conn.account_id):
+                raise Rejection("RATE_LIMITED")
+            ctrl_id, pc_uuid = ctrl.id, pc.id  # a rollback expires the ORM rows; keep the ids
+            try:
+                answer = await svc.screen.ice_servers(
+                    db, account_id=conn.account_id, controller_id=ctrl_id, plan=plan, now=now
+                )
+                await db.commit()  # the TURN row, the mint counter and any cap event
+            except AllowanceExhaustedError as exc:
+                await db.rollback()
+                await svc.screen.allowance_exhausted_event(conn.account_id, ctrl_id, pc_uuid, exc.resets_at)
+                raise Rejection("SCREEN_ALLOWANCE_EXHAUSTED", detail={"resets_at": ts(exc.resets_at)}) from None
+        await conn.send(answer.frame(pc_uuid))
+    except Rejection as rej:
+        error = frames.error_object(rej.code, rej.message, detail=rej.detail)
+        await conn.send(
+            {"type": "error", "error": error, "ref_pc_id": pc_id_str}
+            if _UUID_RE.match(pc_id_str)
+            else {"type": "error", "error": error}
+        )
+        log.info("screen_ice_request.rejected", code=rej.code, controller_id=str(conn.controller_id), pc_id=pc_id_str)
+        await audited_event(
+            mgr,
+            limiters,
+            conn,
+            kind="screen_ice_rejected",
+            severity="notice" if rej.code in ("PC_OFFLINE", "PC_RECONNECTING", "RATE_LIMITED") else "warning",
+            detail={"reason": rej.code, "pc_id": pc_id_str},
+        )
+        if rej.close:
+            await conn.close(CLOSE_REVOKED)
 
 
 async def _reject_input(
@@ -507,5 +692,7 @@ __all__ = [
     "resolve_controller_record",
     "route_command",
     "route_input_batch",
+    "route_screen_ice_request",
     "IN_FLIGHT_STATES",
+    "SCREEN_PROTOCOL_VERSION",
 ]

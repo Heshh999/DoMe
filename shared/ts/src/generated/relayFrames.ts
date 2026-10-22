@@ -44,7 +44,8 @@ export type ControllerToRelay =
   | ControllerCancel
   | Ping
   | Pong
-  | ControllerInputBatch;
+  | ControllerInputBatch
+  | ControllerScreenIceRequest;
 /**
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "relay_to_controller".
@@ -61,7 +62,15 @@ export type RelayToController =
   | Ping
   | Pong
   | AgentInputAck
-  | AgentInputSession;
+  | AgentInputSession
+  | RelayScreenIceServers
+  | RelayScreenAnswer
+  | AgentScreenSession;
+/**
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_session_id".
+ */
+export type ScreenSessionId = string;
 /**
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "agent_to_relay".
@@ -79,7 +88,10 @@ export type AgentToRelay =
   | AgentRevokeController
   | AgentInputAck
   | AgentInputSession
-  | AgentGrantUpdate;
+  | AgentGrantUpdate
+  | AgentScreenAnswer
+  | AgentScreenSession
+  | AgentScreenUsage;
 /**
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "relay_to_agent".
@@ -95,7 +107,8 @@ export type RelayToAgent =
   | Ping
   | Pong
   | AgentRevoked
-  | RelayToAgentInputBatch;
+  | RelayToAgentInputBatch
+  | RelayScreenAllowance;
 /**
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "input_session_id".
@@ -141,12 +154,97 @@ export type InputEvent =
         | "home"
         | "end"
         | "page_up"
-        | "page_down";
+        | "page_down"
+        | "f11";
     }
   | {
       type: "shortcut";
       name: "ctrl_a" | "ctrl_c" | "ctrl_v" | "ctrl_z" | "ctrl_l";
+    }
+  | {
+      type: "pointer_move_to";
+      x: number;
+      y: number;
+      gen: number;
+    }
+  | {
+      type: "pointer_wheel";
+      dx: number;
+      dy: number;
     };
+/**
+ * Data-channel messages the phone may send (dome-screen-v1, DTLS-authenticated): hb renews the viewer lease, keyframe asks for an IDR, bye ends the session (`stopped`), audio{on} mutes or unmutes PC sound (Phase 2). Nothing here can inject input or run anything.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_dc_phone_to_pc".
+ */
+export type ScreenDcPhoneToPc =
+  | {
+      type: "hb";
+    }
+  | {
+      type: "keyframe";
+    }
+  | {
+      type: "bye";
+    }
+  | {
+      type: "audio";
+      on: boolean;
+    };
+/**
+ * Data-channel messages the PC may send: geometry (a new generation: the streamed surface, its size and rotation, and DoMe's own reserved rectangles that taps must avoid), state (sending, or paused with the cause; encoder and data_saver as hints for the Health note and the badge), allowance (the ticket the PC last received, for the countdown) and restricted (input is currently refused on the PC and why). Phase 2/3 add cursor_shape, cursor_pos and roi.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_dc_pc_to_phone".
+ */
+export type ScreenDcPcToPhone =
+  | {
+      type: "geometry";
+      gen: number;
+      surface_index: number;
+      width: number;
+      height: number;
+      rotation: 0 | 90 | 180 | 270;
+      /**
+       * @maxItems 8
+       */
+      reserved:
+        | []
+        | [ScreenRect]
+        | [ScreenRect, ScreenRect]
+        | [ScreenRect, ScreenRect, ScreenRect]
+        | [ScreenRect, ScreenRect, ScreenRect, ScreenRect]
+        | [ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect]
+        | [ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect]
+        | [ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect]
+        | [ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect, ScreenRect];
+    }
+  | {
+      type: "state";
+      state: "sending" | "paused";
+      reason?: "secure_desktop" | "indicator";
+      encoder?: "h264" | "vp8";
+      data_saver?: boolean;
+    }
+  | {
+      type: "allowance";
+      unlimited: boolean;
+      remaining_seconds: number | null;
+      resets_at: Timestamp | null;
+    }
+  | {
+      type: "restricted";
+      restricted: boolean;
+      reason?: "elevated" | "secure_desktop" | "locked" | "permission_ui";
+    };
+/**
+ * Every message on the dome-screen-v1 data channel, in either direction (rules.screen_content): a JSON object of at most screen_dc_message_max_bytes with a closed vocabulary; each side validates against its own inbound direction (screen_dc_phone_to_pc on the PC, screen_dc_pc_to_phone on the phone) and drops anything else.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_dc_message".
+ */
+export type ScreenDcMessage = ScreenDcPhoneToPc | ScreenDcPcToPhone;
 
 /**
  * All frames are JSON objects with a `type`. Frames are limited to 65536 bytes. Unknown `type` or unknown fields are rejected with MALFORMED_MESSAGE and the socket may be closed. The relay never alters a signed envelope or a challenge_text; it adds routing metadata in sibling fields which receivers treat as informational only. Terminal-result rule: every command_id a controller sends ends with exactly one `result` frame (see version.json rules.terminal_result); `error` frames are for situations with no command_id. Close codes: 1009 frame too large; 4000 protocol error; 4001 superseded by another connection of the same PC (the agent must NOT auto-reconnect; it shows a tray warning with a manual Reconnect); 4003 revoked/unauthorised; 4008 authentication required.
@@ -311,11 +409,11 @@ export interface ErrorFrame {
    */
   ref_pc_id?: string;
   /**
-   * Manual-input rejections (INPUT_*): the input session the refused batch named. The phone ignores errors for a session it no longer runs.
+   * Manual-input rejections (INPUT_*, and since 1.4 the Screen view rejections of input batches SCREEN_SESSION_REQUIRED / SCREEN_GEOMETRY_CHANGED): the input session the refused batch named. The phone ignores errors for a session it no longer runs.
    */
   ref_input_session_id?: string;
   /**
-   * Agent → relay only, on INPUT_* rejections: the controller whose batch was refused. The relay routes the frame to that controller's 1.1 sockets (after checking the controller belongs to the PC's account) and strips this field.
+   * Agent → relay only, on INPUT_* and SCREEN_* rejections: the controller whose batch was refused. The relay routes the frame to that controller's sockets of a compatible version (1.1 for INPUT_*, 1.4 for SCREEN_*; after checking the controller belongs to the PC's account) and strips this field.
    */
   ref_controller_id?: string;
 }
@@ -406,6 +504,26 @@ export interface RelayToAgentCommand {
   relay: {
     received_at: Timestamp;
     connection_id: Uuid;
+    /**
+     * Since 1.4, present only on a forwarded screen.session_start: the first allowance ticket and the PC's STUN servers (rules.screen_sessions / screen_signaling). Absent on every other command.
+     */
+    screen?: {
+      /**
+       * End of the first allowance ticket; null only when unlimited is true.
+       */
+      granted_until: Timestamp | null;
+      unlimited: boolean;
+      /**
+       * STUN only: the PC never holds a TURN credential (rules.screen_signaling).
+       *
+       * @maxItems 4
+       */
+      stun_urls: [] | [string] | [string, string] | [string, string, string] | [string, string, string, string];
+      /**
+       * Present when the relay asks for Data saver on relayed paths (the monthly TURN guard, rules.screen_metering).
+       */
+      relayed_max_kbps?: number;
+    };
   };
 }
 /**
@@ -455,171 +573,1491 @@ export interface GrantsSnapshot {
      */
     capabilities:
       | []
-      | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"]
+      | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ]
       | [
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          (
+            | "status"
+            | "media"
+            | "volume"
+            | "apps"
+            | "lock"
+            | "power"
+            | "pointer"
+            | "keyboard"
+            | "screen"
+            | "screen_audio"
+          ),
+          "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
         ];
     display_name: string;
     /**
@@ -653,171 +2091,171 @@ export interface PairingRequest {
    */
   requested_capabilities:
     | []
-    | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"]
+    | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ];
   expires_at: Timestamp;
 }
@@ -832,7 +2270,7 @@ export interface EcPublicJwk {
   y: string;
 }
 /**
- * Agent → relay after the local approve/decline. On approve, `kid` must equal the kid the agent computed from the JWK it stored; the relay only then creates the controller/grant rows.
+ * Agent → relay after the local approve/decline. On approve, `kid` must equal the kid the agent computed from the JWK it stored; the relay only then creates the controller/grant rows. Since 1.4 an approve carries pc_key_mac (rules.pc_key_pinning); the relay stores it and returns it with the PC's public key in pairing_status_response.pc_key once approved. Agents older than 1.4 send none, and such a pairing cannot use Screen view until the phone pairs again.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "pairing_decision".
@@ -847,172 +2285,176 @@ export interface PairingDecision {
    */
   granted_capabilities:
     | []
-    | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"]
+    | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ];
+  /**
+   * base64url(HMAC-SHA256(key = normalised pairing code, msg = 'dome-pair-pc-key-v1|' + pairing_id + '|' + pc_id + '|' + controller_kid + '|' + pc_kid)), 32 bytes untruncated. Only on approve.
+   */
+  pc_key_mac?: string;
 }
 /**
  * Agent → relay → controller. Delivery/authorization acknowledgement only; NOT an execution result. Never carries a terminal state.
@@ -1574,6 +3016,16 @@ export interface ControllerInputBatch {
   envelope: DoMeSignedEnvelope;
 }
 /**
+ * Controller → relay (bound socket announcing 1.4). Ask for ICE servers and the current allowance before building the offer; the relay mints the phone's TURN credential here (rules.screen_signaling).
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "controller_screen_ice_request".
+ */
+export interface ControllerScreenIceRequest {
+  type: "screen_ice_request";
+  pc_id: Uuid;
+}
+/**
  * Agent → relay → the owning controller. Windows accepted these events (not an observed application effect); at most 4 per second per session.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
@@ -1680,6 +3132,140 @@ export interface AgentInputSession {
   at: Timestamp;
 }
 /**
+ * Relay → controller, the answer to screen_ice_request. turn: available (a TURN credential is in ice_servers), unavailable (no TURN key configured: STUN only) or disabled (a per-account cap or the monthly guard refused TURN: STUN only, the phone says so). A refusal of the request itself is an error frame (SCREEN_VIEW_DISABLED, SCREEN_ALLOWANCE_EXHAUSTED, GRANT_MISSING, PC_OFFLINE, PC_RECONNECTING, RATE_LIMITED, PROTOCOL_INCOMPATIBLE) with ref_pc_id.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "relay_screen_ice_servers".
+ */
+export interface RelayScreenIceServers {
+  type: "screen_ice_servers";
+  pc_id: Uuid;
+  /**
+   * @maxItems 8
+   */
+  ice_servers:
+    | []
+    | [ScreenIceServer]
+    | [ScreenIceServer, ScreenIceServer]
+    | [ScreenIceServer, ScreenIceServer, ScreenIceServer]
+    | [ScreenIceServer, ScreenIceServer, ScreenIceServer, ScreenIceServer]
+    | [ScreenIceServer, ScreenIceServer, ScreenIceServer, ScreenIceServer, ScreenIceServer]
+    | [ScreenIceServer, ScreenIceServer, ScreenIceServer, ScreenIceServer, ScreenIceServer, ScreenIceServer]
+    | [
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer
+      ]
+    | [
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer,
+        ScreenIceServer
+      ];
+  /**
+   * When the TURN credential expires (TTL = remaining allowance + 60 s on Free, the session maximum on unlimited plans); null when no credential was minted.
+   */
+  expires_at: Timestamp | null;
+  allowance: ScreenAllowanceState;
+  turn: "available" | "unavailable" | "disabled";
+}
+/**
+ * One RTCIceServer for the phone. A TURN entry carries a credential minted for this controller only, revoked by the relay on every §13 path (rules.screen_signaling). Never logged; never sent to the PC.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_ice_server".
+ */
+export interface ScreenIceServer {
+  /**
+   * @minItems 1
+   * @maxItems 8
+   */
+  urls:
+    | [string]
+    | [string, string]
+    | [string, string, string]
+    | [string, string, string, string]
+    | [string, string, string, string, string]
+    | [string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string];
+  username?: string;
+  credential?: string;
+}
+/**
+ * The Free allowance as the relay knows it (rules.screen_metering): unlimited: true on plans with screen_view_seconds_per_window null (then both other fields are null). Display only on the phone; the ledger is authoritative.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_allowance_state".
+ */
+export interface ScreenAllowanceState {
+  unlimited: boolean;
+  remaining_seconds: number | null;
+  resets_at: Timestamp | null;
+}
+/**
+ * Relay → the issuing controller. The PC-signed answer, verbatim. The phone accepts it only under the checks of rules.screen_signaling (6) against the PC key pinned at pairing.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "relay_screen_answer".
+ */
+export interface RelayScreenAnswer {
+  type: "screen_answer";
+  pc_id: Uuid;
+  envelope: DoMeSignedEnvelope;
+}
+/**
+ * Agent → relay → the owner and the PC's 1.4 subscribers. Screen view lifecycle (rules.screen_sessions): started (after DTLS connected and the first frame was sent; `path` says whether media is direct or relayed), paused / resumed (reason secure_desktop or indicator) and ended with the reason. live_seconds is informational: the ledger is settled on the relay's clock. No names, no SDP, no addresses.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "agent_screen_session".
+ */
+export interface AgentScreenSession {
+  type: "screen_session";
+  pc_id: Uuid;
+  screen_session_id: ScreenSessionId;
+  controller_id: Uuid;
+  event: "started" | "paused" | "resumed" | "ended";
+  /**
+   * `started` on event started; secure_desktop or indicator on paused / resumed; an end reason on ended.
+   */
+  reason:
+    | "started"
+    | "stopped"
+    | "stopped_on_pc"
+    | "replaced"
+    | "viewer_gone"
+    | "takeover"
+    | "controller_revoked"
+    | "controller_offline"
+    | "grant_removed"
+    | "plan_disabled"
+    | "remote_disabled"
+    | "session_locked"
+    | "secure_desktop"
+    | "indicator"
+    | "allowance_exhausted"
+    | "allowance_unconfirmed"
+    | "max_duration"
+    | "capture_failed"
+    | "connection_failed"
+    | "agent_restart";
+  /**
+   * On started (and resumed): how the media flows.
+   */
+  path?: "direct" | "relayed";
+  live_seconds: number;
+  at: Timestamp;
+}
+/**
  * Agent → relay. The PC owner revoked a controller locally (tray). The relay revokes the grant, sends `revoked` to that controller's sockets and a fresh grants_snapshot back.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
@@ -1706,172 +3292,197 @@ export interface AgentGrantUpdate {
    * @maxItems 16
    */
   capabilities:
-    | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"]
+    | ["status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ]
     | [
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard",
-        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard"
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio",
+        "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio"
       ];
+}
+/**
+ * Agent → relay. The PC-signed answer (envelope over screen_answer_payload) for the controller named by ref_controller_id. The relay checks that this controller belongs to the PC's account and holds a live screen grant, strips ref_controller_id and delivers relay_screen_answer only to that controller's 1.4 sockets, preferring the one that issued the command; never to subscribers, never logged, no commands row.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "agent_screen_answer".
+ */
+export interface AgentScreenAnswer {
+  type: "screen_answer";
+  envelope: DoMeSignedEnvelope;
+  ref_controller_id: Uuid;
+}
+/**
+ * Agent → relay, about screen_allowance_renew_before_seconds before the current ticket's granted_until (and at most twice per minute per session): ask for the next allowance chunk. live_seconds, relayed and relayed_bytes are informational only; the relay never charges or discounts on them (rules.screen_metering).
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "agent_screen_usage".
+ */
+export interface AgentScreenUsage {
+  type: "screen_usage";
+  pc_id: Uuid;
+  screen_session_id: ScreenSessionId;
+  live_seconds: number;
+  relayed: boolean;
+  relayed_bytes: number;
 }
 /**
  * Relay → agent. This PC's cloud access is gone. The agent must stop reconnecting, discard the PC credential, keep local grants for the user to inspect, and show a local re-link prompt.
@@ -1894,6 +3505,21 @@ export interface RelayToAgentInputBatch {
     received_at: Timestamp;
     connection_id: Uuid;
   };
+}
+/**
+ * Relay → agent: the next allowance ticket, in answer to screen_usage or sent at once when the owning controller went offline (reason controller_offline). final: true means no further ticket will come; granted_until null with final means stop now. When granted_until passes without a new ticket the agent ends the session (rules.screen_sessions (4)).
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "relay_screen_allowance".
+ */
+export interface RelayScreenAllowance {
+  type: "screen_allowance";
+  screen_session_id: ScreenSessionId;
+  granted_until: Timestamp | null;
+  unlimited: boolean;
+  final: boolean;
+  reason?: "controller_offline" | "allowance_exhausted" | "plan_disabled";
+  resets_at?: Timestamp | null;
 }
 /**
  * Payload of hello.proof. Proves to the relay that the socket's owner holds the controller key before the socket is bound to the paired controller (a bare kid is public to the whole account). Verifier checks: signature with the JWK the relay stored at pairing for (session account, kid); envelope.kid == kid == hello.kid; account_id == the session's account; issued_at/expires_at within the normal window with lifetime <= confirmation_challenge_lifetime_seconds; nonce not seen before on this relay (single use).
@@ -1930,4 +3556,35 @@ export interface InputBatchPayload {
    * @maxItems 64
    */
   events: InputEvent[];
+}
+/**
+ * A rectangle normalised to 0..65535 over the streamed surface (the same units as pointer_move_to).
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_rect".
+ */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+/**
+ * The payload the PC signs with its identity key (envelope kid = pc_kid) to answer one screen.session_start (rules.screen_signaling). offer_digest is base64url SHA-256 of the exact offer_sdp bytes it answers; answer_sdp is the send-only answer with the per-session DTLS fingerprint. Lifetime at most screen_answer_lifetime_seconds. Never journaled, never in a result.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_answer_payload".
+ */
+export interface ScreenAnswerPayload {
+  type: "screen_answer";
+  protocol_version: string;
+  account_id: Uuid;
+  pc_id: Uuid;
+  controller_id: Uuid;
+  command_id: Uuid;
+  screen_session_id: ScreenSessionId;
+  offer_digest: string;
+  answer_sdp: string;
+  issued_at: Timestamp;
+  expires_at: Timestamp;
 }

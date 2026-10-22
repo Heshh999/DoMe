@@ -574,3 +574,82 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     cost_cap, failures), preferring the error's own `resets_at`. The butler's voice reuses the same phrase
     ("They refresh today at 2 pm"), so nothing on the phone says "month" or invents a date.
 
+
+66. **Screen view is one client owned by the runtime; the page only renders it.** (Protocol 1.4, WP1.7;
+    docs/design/screen-view.md §16.) `lib/screen.ts` `ScreenSessionClient` takes an injected
+    `RTCPeerConnection` factory the way `RelayClient` takes `socketFactory`, receives `screen_*` frames
+    and the start command's records from the runtime, and is stopped by the runtime on hidden, PC switch
+    and sign-out. `ScreenPage` turns its state into exactly one §16 row through the pure
+    `lib/screenStatus.ts` (all copy lives there), so every row is a unit test and a component test.
+    Tests use `test/helpers/fakePeer.ts` (`FakePeerConnection`, `FakeDataChannel`, `FakePcKey` signing
+    answers like the agent) and `test/helpers/fakeTimers.ts`, the repo's pattern for test-only doubles.
+
+67. **The pairing code is held, not derived, until the PC key is pinned.** §4.1 allows the normalised
+    code or a non-extractable HMAC key; the shared library's `verifyPcKeyMac` takes the code, and one
+    MAC implementation in one place beats a second copy of the message format. The code lives in a
+    `HeldPairingCode` (`lib/pcKeyPins.ts`) carried by the `waiting` step and cleared on approved (after
+    `verifyAndPin`), declined, expired, 404, Cancel and unmount; `heldPairingCodes()` counts holders so
+    the page test proves "absent after". A MAC that does not verify pins nothing and removes an earlier
+    pin for that PC (the relay just served a key the PC did not vouch for); the pairing itself still
+    completes, because pairing grants and Screen view trust are separate decisions. Pins live in the
+    controller key's IndexedDB (`pins` store, DB version 2; the upgrade only adds a store).
+
+68. **The operator switch is read from `GET /healthz`, and "unknown" is never "on".** The brief named
+    `GET /v1/plans`, but `plans_response` has no such field (closed schema, CONTRACT_ISSUES 12) while
+    cloud-api already reports `screen_view: "on" | "off"` in `/healthz`. `screenViewSwitch` reads that one
+    string tolerantly (no schema exists for the health body), once per app load, credentials omitted.
+    Anything else keeps the "Coming" card (DECISIONS 63): the tile, the Home card and the page's controls
+    exist only while the server says "on".
+
+69. **Taps are dropped, never clamped, and carry the generation the phone saw.** `lib/screenInput.ts`
+    glues the gesture outputs to signed events: a tap is `[pointer_move_to, click]` and is flushed at once
+    (no tap delay); scroll and touchpad motion ride the per-frame flush so a slide never becomes 60
+    batches a second. Letterbox bars, DoMe's reserved bars, a geometry held back after a `<video>` resize
+    and a missing geometry are drops with a reason (a short hint for the last three). The loupe's aim moves
+    at 1/2.5 of the finger so the 2.5× view buys real precision; the loupe is a second `<video>` on the
+    same stream with a CSS transform — no canvas, no second decoder in our code. Pinch vs scroll is decided
+    on pairs of moves (`DirectGestureMachine.twoPending`): browsers report two fingers one at a time, and
+    judging after one finger's half of a fast two-finger slide would read it as a spread change, i.e. a
+    pinch; a finger that moves twice while the other stays still (an anchored thumb) is judged then.
+
+70. **The input session follows the picture.** It starts once the picture is live and only when the
+    grant holds `pointer` or `keyboard`, and stops when the screen session ends or the page is left, so an
+    input session never outlives the picture it was for. A view-only grant never starts one.
+
+71. **Nothing starts on arrival; Phase 1 stops on leaving.** "Show screen" is the user gesture iOS wants
+    for `play()`. Leaving the page stops the session (the mini view is Phase 2). The background path is
+    the runtime's existing "hidden" pattern; on return the page starts one fresh session only when the
+    client says `resume: "auto"` (Resume button after an ask-mode start; nothing after a PC stop, a
+    refusal, a used-up allowance or a removed grant). Frame timing comes from `requestVideoFrameCallback`
+    with `timeupdate` as the fallback; the stall thresholds are inclusive (2 s → keyframe, 5 s → fresh
+    session, at most twice).
+
+72. **The no-pixel-access allow-list has one entry, not zero.** §17.2 asks for an empty allow-list, but
+    the pairing page's QR scanner (`lib/qr.ts`) must read camera pixels for jsQR. It stays the single,
+    reasoned entry; the test also requires that every allow-list entry still needs it, and the Screen view
+    files get a stricter check (no canvas at all, the stream only ever assigned to `srcObject`, no fetch
+    or socket).
+
+73. **Manifest `orientation: "any"`.** Needed for a landscape picture (§16); every other page is a
+    phone-width layout that reflows, so nothing else changes. iOS reportedly ignores the field.
+
+74. **The way in names one state and never claims "Ready" early.** `ScreenViewTile` (Remote tile and
+    Home card) shows "Checking…" until the grant and the pin are read, then `entryLine`; the last
+    allowance and the last start problem per PC come from the screen store so the tile can say "7 min
+    left" or "Update DoMe on your PC" before a session starts.
+
+75. **Review round (2026-10-22): the Screen view copy says only what is true in every configuration.**
+    A pause names its cause: a missing bar is "A screen on the PC changed. The picture comes back when
+    DoMe's bar is on every screen." with no claim about the clock (the relay discounts only Windows
+    prompts); a Windows prompt on Free says "Up to two minutes of Windows permission prompts in each
+    5-hour window don't count toward your Free minutes" (what the relay does), never "the clock stops".
+    "Stopped on the PC" promises no cooldown length (it is 10 min, 1 min or off per grant). The switch
+    off is "Screen view isn't switched on yet." (it is operator-wide, not per account) and "unknown" is
+    a checking state. PC sound is labelled "(coming in a later update)" on the phone and in the PC's
+    grant window. On Free the consent wait says it counts toward the minutes if the PC allows it.
+76. **The phone keeps the PC's pause causes as a set** (`ScreenSessionClient.pauseCauses`): the PC sends
+    one `paused` / `resumed` frame per cause (pc-agent CONTRACT_ISSUES #25), so a `resumed` for one cause
+    while another remains keeps the picture paused and shows the remaining cause; the data channel's
+    `sending` (sent only when no cause is left) clears it.
+77. **`ACTION_UNAVAILABLE{reason: screen_view_not_included}` has its own row** ("not_included", no retry):
+    the PC's build lacks the media stack; the generic "That control is not available" stays for the rest.

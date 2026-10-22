@@ -6,15 +6,21 @@
     python -I licence_gate.py notices licence-report.json --pacman pacman-qi.txt --ffmpeg-commit SHA --out FILE
     python -I licence_gate.py smoke --expect-version VERSION [--log FILE]
 
+  The frozen app (Phase 1, WP1.6; windows-installer.yml and release.yml, after PyInstaller):
+
+    python -I licence_gate.py shipping-av --pyproject pyproject.toml --lock uv.lock [--github-output FILE]
+    python -I licence_gate.py check REPORT --frozen --screen present|absent [--strict]
+    python -I licence_gate.py screen-self-test --exe dist/DoMe/DoMe.exe --expect present|absent --out FILE
+    python    licence_gate.py bundle-notices --head THIRD_PARTY_NOTICES.txt --licenses DIR --out-dir dist/DoMe
+
 Why it exists: DoMe is closed-source, so the FFmpeg it carries must stay LGPL-2.1-or-later. The stock PyAV
 wheels on PyPI bundle x264/x265 (GPL) and report "LGPL version 3" (design §5.5), so one wrong wheel or one
 wrong configure flag would quietly change what DoMe may distribute. This gate makes that a build failure.
 
-It runs now on the custom wheel built by ``.github/workflows/ffmpeg-lgpl.yml`` and, from Phase 1 (WP1.6), on
-the frozen ``dist/DoMe`` folder (``collect --folder``; the allow-list then grows by the interpreter's own
-DLLs, each added together with its notice). It is a build-time tool: it never ships and nothing in
-``dome_agent`` imports it. The design names it ``license_gate.py`` (§5.5, §15, §19); the file is spelled
-``licence_gate.py`` and the design is to be reconciled.
+It runs on the custom wheel built by ``.github/workflows/ffmpeg-lgpl.yml`` and, since Phase 1 (WP1.6), on the
+frozen ``dist/DoMe`` folder (``collect --folder`` then ``check --frozen``, see "The frozen app" below). It is a
+build-time tool: it never ships and nothing in ``dome_agent`` imports it. The design names it
+``license_gate.py`` (§5.5, §15, §19); the file is spelled ``licence_gate.py`` and the design is to be reconciled.
 
 Rules applied by :func:`evaluate` to a report (``check`` prints one line per violation and exits 1 on any):
 
@@ -49,6 +55,34 @@ option it ignores, so an ignored flag is a gate failure, never a quiet no-op). `
 a ``lavfi`` ``testsrc`` frame decoded as NV12, a VP8 frame encoded, aiortc importable; the hardware H.264
 encoder and Desktop Duplication are reported only, because the CI runner has no GPU or desktop session.
 
+The frozen app. Screen view is in a Windows build only when ``pyproject.toml`` resolves ``av`` on Windows to
+the shipping LGPL wheel (``shipping-av``: a ``[tool.uv.sources]`` entry with ``marker = "sys_platform ==
+'win32'"`` and an https GitHub release-asset URL, locked in ``uv.lock`` with its SHA-256 and a ``+lgpl`` local
+version); the workflows then install the ``screen`` extra, otherwise they build without it. The stock PyPI
+wheel therefore never reaches a Windows build. ``check --frozen`` applies to every PE file in the folder
+(``.dll``, ``.pyd``, ``.exe``) R1, R3, R4 and R9, and to every other file name R1, plus:
+
+- F1 av.libs: every DLL in ``_internal/av.libs`` is on the R2 allow-list, and no FFmpeg, libvpx or libopus DLL
+  lies anywhere else.
+- F2 runtime DLLs: every other DLL matches :data:`FROZEN_DLL_STEMS` (the Python runtime, the Visual C++
+  runtime, pywin32, google-crc32c), each covered by THIRD_PARTY_NOTICES.txt. An unknown one is a warning, and
+  a failure with ``--strict`` (release.yml): the list was written without a Windows build at hand, so the
+  first windows-installer.yml run names anything it missed without breaking the development build.
+- F3 screen: ``--screen absent`` means no ``av`` package, no ``av.libs`` and no FFmpeg DLL at all;
+  ``--screen present`` means all seven FFmpeg libraries plus libvpx and libopus in ``av.libs``.
+- F4 notices: ``THIRD_PARTY_NOTICES.txt`` and every file of :data:`LICENCE_FILES` in ``licenses/``; a
+  ``[NOT FOUND`` marker in the notices (a package without licence files) is a warning, a failure with
+  ``--strict``.
+
+``screen-self-test`` runs the frozen ``DoMe.exe screen-worker --self-test`` (with a throw-away state folder)
+and checks its JSON report: with Screen view, aiortc 1.15.0 and the ``+lgpl`` PyAV import, the decoder set is
+exactly ``{wrapped_avframe}`` (R7 on the frozen build), a ``lavfi`` ``testsrc`` frame decodes, the PLI hook point
+exists and VP8 encodes (H.264 through Media Foundation is reported only); without it, the worker answers
+and reports aiortc and av missing. Either way no crash log may appear. ``bundle-notices`` writes
+``THIRD_PARTY_NOTICES.txt`` (the hand-written Part 1, then the Python runtime's licence and every installed
+package's own licence files, read from the running interpreter: run it with the build venv's Python) and
+copies ``licenses/*.txt`` next to it.
+
 Standard library only; ``pefile`` is used by ``collect`` when importable. ``packaging/`` is outside ruff and
 mypy on purpose, so the module keeps its own type hints and is unit-tested by ``tests/test_licence_gate.py``.
 """
@@ -57,9 +91,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
+import tomllib
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -156,6 +193,78 @@ OFFER = (
     "[OFFER: the FFmpeg source and this build script are available from DoMe on request for three years "
     "from the date of distribution]"
 )
+
+# --- the frozen app (dist/DoMe) ---
+NOTICES_NAME = "THIRD_PARTY_NOTICES.txt"
+NOT_FOUND = "[NOT FOUND"  # bundle-notices writes it where a licence text is missing; F4 looks for it
+# Directories under _internal that only a build with Screen view has (PyInstaller 6 onedir layout).
+SCREEN_DIRS = ("av", "av.libs")
+# packaging/licenses/*.txt, each named in THIRD_PARTY_NOTICES.txt Part 1 (F4: all of them, in every build).
+LICENCE_FILES = (
+    "Apache-2.0.txt",
+    "GCC-RUNTIME-LIBRARY-EXCEPTION-3.1.txt",
+    "GPL-3.0.txt",
+    "LGPL-2.1.txt",
+    "libvpx-LICENSE.txt",
+    "libvpx-PATENTS.txt",
+    "opus-COPYING.txt",
+    "winpthreads-COPYING.txt",
+)
+# DLLs a frozen DoMe may hold outside av.libs, with the THIRD_PARTY_NOTICES.txt part that covers each (F2).
+# Written from CPython 3.12's Windows layout, pywin32 and google-crc32c without a Windows build at hand.
+FROZEN_DLL_STEMS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(pattern), covered_by)
+    for pattern, covered_by in (
+        (r"python3\d*", "Part 1 section 2 (the Python runtime)"),
+        (r"vcruntime140(_1)?|msvcp140(_\d+|_atomic_wait|_codecvt_ids)?", "Part 1 section 2 (Visual C++ runtime)"),
+        (r"lib(crypto|ssl)-3(-x64)?", "Part 1 section 2 (OpenSSL 3)"),
+        (r"libffi-\d+|sqlite3|tcl86t|tk86t|zlib1", "Part 1 section 2 (the Python runtime's own libraries)"),
+        (r"pywintypes3\d+|pythoncom3\d+", "Part 2 (pywin32)"),
+        (r"crc32c", "Part 2 (google-crc32c, Screen view)"),
+    )
+)
+# FFmpeg and the codec libraries it links: allowed only inside av.libs (F1).
+FFMPEG_FAMILY = re.compile(r"(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale|libvpx|libopus)-\d+")
+SCREEN_LIBRARIES = (
+    "avcodec",
+    "avdevice",
+    "avfilter",
+    "avformat",
+    "avutil",
+    "swresample",
+    "swscale",
+    "libvpx",
+    "libopus",
+)
+# shipping-av: the Windows source of av must be a release asset of a GitHub repository, as a win_amd64 wheel.
+RELEASE_ASSET = re.compile(
+    r"\Ahttps://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/releases/download/[^/\s]+/[^/\s]+-win_amd64\.whl\Z"
+)
+WIN32_MARKER = "sys_platform=='win32'"
+SHA256_HASH = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
+AIORTC_VERSION = "1.15.0"  # pyproject.toml pins aiortc==1.15.0: the PLI hook (design §5.3) depends on it
+# Distributions in a build venv that never reach the frozen app (bundle-notices leaves them out).
+BUILD_ONLY = frozenset(
+    {
+        "altgraph",
+        "dome-agent",
+        "dome-protocol",
+        "macholib",
+        "mypy",
+        "mypy-extensions",
+        "pefile",
+        "pip",
+        "pluggy",
+        "iniconfig",
+        "pyinstaller",
+        "pyinstaller-hooks-contrib",
+        "pytest",
+        "pytest-asyncio",
+        "pywin32-ctypes",
+        "ruff",
+    }
+)
+_LICENCE_NAME = re.compile(r"(LICEN[CS]E|COPYING|NOTICE|AUTHORS)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -396,13 +505,15 @@ def pe_tables(path: Path) -> tuple[list[str], list[str]] | None:
     return imports, exports
 
 
-def scan_dlls(folder: Path) -> list[dict[str, Any]]:
+def scan_dlls(folder: Path, suffixes: tuple[str, ...] = (".dll",)) -> list[dict[str, Any]]:
+    """Every file under ``folder`` with one of ``suffixes``: its name, its path below ``folder`` and its PE tables."""
     out: list[dict[str, Any]] = []
-    for path in sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() == ".dll"):
+    for path in sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in suffixes):
         tables = pe_tables(path)
         out.append(
             {
                 "name": path.name,
+                "path": path.relative_to(folder).as_posix(),
                 "imports": tables[0] if tables else [],
                 "exports": tables[1] if tables else [],
                 "pe_parsed": tables is not None,
@@ -422,7 +533,26 @@ def collect_wheel_env(venv: Path) -> dict[str, Any]:
 
 
 def collect_folder(folder: Path) -> dict[str, Any]:
-    return {"schema": SCHEMA, "source": "folder", "dlls": scan_dlls(folder)}
+    """A folder report: every DLL (``dlls``) and every other PE file (``binaries``: ``.pyd``, ``.exe``) with its
+    tables; every file whose name matches the R1 pattern whatever its type (``denied_names``: a Linux freeze's
+    ``libx264*.so`` too); which Screen view parts exist under ``_internal``; the notices and licence files."""
+    files = sorted(p for p in folder.rglob("*") if p.is_file())
+    internal = folder / "_internal"
+    notices = folder / NOTICES_NAME
+    not_found: list[str] = []
+    if notices.is_file():
+        text = notices.read_text(encoding="utf-8", errors="replace")
+        not_found = [line.strip() for line in text.splitlines() if NOT_FOUND in line]
+    return {
+        "schema": SCHEMA,
+        "source": "folder",
+        "dlls": scan_dlls(folder),
+        "binaries": scan_dlls(folder, (".pyd", ".exe")),
+        "denied_names": [p.relative_to(folder).as_posix() for p in files if DENY_NAME.search(p.name.lower())],
+        "screen_dirs": {name: (internal / name).is_dir() for name in SCREEN_DIRS},
+        "notices": {"present": notices.is_file(), "not_found": not_found},
+        "licence_files": sorted(p.name for p in (folder / "licenses").glob("*.txt")),
+    }
 
 
 # --- notices ----------------------------------------------------------------------------------------
@@ -648,6 +778,398 @@ def format_smoke(rows: Iterable[SmokeRow]) -> str:
     return "\n".join(f"{row.status:<18} {row.name}: {row.detail}" for row in rows)
 
 
+# --- the frozen app: check --frozen ---------------------------------------------------------------------
+
+
+def _frozen_dll_covered(name: str) -> str | None:
+    stem = dll_stem(name)
+    return next((covered for pattern, covered in FROZEN_DLL_STEMS if pattern.fullmatch(stem)), None)
+
+
+def _in_av_libs(entry: dict[str, Any]) -> bool:
+    return "av.libs" in str(entry.get("path", "")).split("/")[:-1]
+
+
+def evaluate_frozen(
+    report: dict[str, Any], *, screen: str, strict: bool = False
+) -> tuple[list[Violation], list[Violation]]:
+    """(failures, warnings) for a ``collect --folder`` report of ``dist/DoMe``. ``screen`` is what the workflow
+    built (``present`` or ``absent``); ``strict`` turns every warning into a failure (release builds)."""
+    if screen not in ("present", "absent"):
+        raise ValueError(f"screen must be 'present' or 'absent', not {screen!r}")
+    fail: list[Violation] = []
+    warn: list[Violation] = []
+    if report.get("schema") != SCHEMA or report.get("source") != "folder":
+        fail.append(Violation("R0 report", "report", "not a schema-1 folder report (collect --folder)"))
+    dlls = list(report.get("dlls") or [])
+    binaries = list(report.get("binaries") or [])
+    if not dlls and not binaries:
+        fail.append(Violation("R0 report", "files", "no PE file was collected (is this the dist/DoMe folder?)"))
+
+    for entry in dlls + binaries:
+        name = str(entry.get("name", ""))
+        where = str(entry.get("path", name))
+        if DENY_NAME.search(name.lower()):
+            fail.append(
+                Violation("R1 name-deny", where, "the name matches a GPL, non-free or patent-encumbered library")
+            )
+        for imp in entry.get("imports") or []:
+            if DENY_NAME.search(str(imp).lower()):
+                fail.append(Violation("R3 import-deny", where, f"imports {imp}"))
+        for exp in entry.get("exports") or []:
+            if DENY_EXPORT.match(str(exp)):
+                fail.append(Violation("R4 export-deny", where, f"exports {exp}"))
+        if not entry.get("pe_parsed"):
+            fail.append(Violation("R9 pe-tables", where, "the import and export tables could not be read"))
+    pe_paths = {str(e.get("path", e.get("name", ""))) for e in dlls + binaries}
+    for path in report.get("denied_names") or []:
+        if path not in pe_paths:
+            fail.append(
+                Violation("R1 name-deny", str(path), "the name matches a GPL, non-free or patent-encumbered library")
+            )
+
+    av_libs = [e for e in dlls if _in_av_libs(e)]
+    for entry in dlls:
+        name, where = str(entry.get("name", "")), str(entry.get("path", entry.get("name", "")))
+        if _in_av_libs(entry):
+            if not allowed(name):
+                fail.append(Violation("F1 av.libs", where, f"stem {dll_stem(name)!r} is not on the FFmpeg allow-list"))
+        elif FFMPEG_FAMILY.fullmatch(dll_stem(name)):
+            fail.append(Violation("F1 av.libs", where, "an FFmpeg or codec library outside _internal/av.libs"))
+        elif _frozen_dll_covered(name) is None:
+            target = fail if strict else warn
+            target.append(
+                Violation(
+                    "F2 runtime-dlls",
+                    where,
+                    f"stem {dll_stem(name)!r} is not in FROZEN_DLL_STEMS: add it there and to THIRD_PARTY_NOTICES.txt "
+                    "together, or keep it out of the build",
+                )
+            )
+
+    dirs = report.get("screen_dirs") or {}
+    if screen == "absent":
+        present = sorted(name for name in SCREEN_DIRS if dirs.get(name))
+        if present or av_libs:
+            fail.append(
+                Violation("F3 screen", "_internal", f"built without Screen view but holds {present or 'av.libs DLLs'}")
+            )
+    else:
+        stems = {dll_stem(str(e.get("name", ""))).rsplit("-", 1)[0] for e in av_libs}
+        missing = [lib for lib in SCREEN_LIBRARIES if lib not in stems]
+        if not dirs.get("av.libs") or missing:
+            fail.append(Violation("F3 screen", "_internal/av.libs", f"built with Screen view but missing {missing}"))
+
+    notices = report.get("notices") or {}
+    if not notices.get("present"):
+        fail.append(Violation("F4 notices", NOTICES_NAME, "missing from the folder (bundle-notices writes it)"))
+    for line in notices.get("not_found") or []:
+        (fail if strict else warn).append(Violation("F4 notices", NOTICES_NAME, str(line)[:200]))
+    missing_texts = sorted(set(LICENCE_FILES) - set(report.get("licence_files") or []))
+    if missing_texts:
+        fail.append(Violation("F4 notices", "licenses", f"missing {missing_texts}"))
+    return fail, warn
+
+
+# --- the frozen app: shipping-av ------------------------------------------------------------------------
+
+
+class GateError(Exception):
+    """A configuration the gate refuses outright (shipping-av); the message says what to change."""
+
+
+def shipping_av(pyproject: dict[str, Any], lock: dict[str, Any]) -> tuple[str, str]:
+    """("present", url) when ``pyproject.toml`` resolves ``av`` on Windows to a locked, hash-pinned ``+lgpl``
+    release-asset wheel; ("absent", why) when it has no ``av`` source at all (Windows would get the stock PyPI
+    wheel, so the build leaves Screen view out). Anything in between raises :class:`GateError`."""
+    sources = ((pyproject.get("tool") or {}).get("uv") or {}).get("sources") or {}
+    entry = sources.get("av")
+    if entry is None:
+        return (
+            "absent",
+            "pyproject.toml has no [tool.uv.sources] entry for av, so Windows would get the stock PyPI wheel",
+        )
+    entries = entry if isinstance(entry, list) else [entry]
+    if len(entries) != 1 or not isinstance(entries[0], dict):
+        raise GateError("[tool.uv.sources] av must be exactly one { url = ..., marker = ... } entry")
+    source = entries[0]
+    if set(source) != {"url", "marker"}:
+        raise GateError(f"[tool.uv.sources] av must have exactly the keys url and marker, not {sorted(source)}")
+    marker = re.sub(r"\s+", "", str(source["marker"])).replace('"', "'")
+    if marker != WIN32_MARKER:
+        raise GateError(
+            f"[tool.uv.sources] av has marker {source['marker']!r}: it must be exactly sys_platform == 'win32', so "
+            "Linux and macOS keep the PyPI wheel for development and only Windows builds get the LGPL wheel"
+        )
+    url = str(source["url"])
+    if not RELEASE_ASSET.match(url):
+        raise GateError(f"[tool.uv.sources] av url {url!r} is not an https GitHub release asset ending -win_amd64.whl")
+    locked = [
+        p for p in lock.get("package") or [] if p.get("name") == "av" and (p.get("source") or {}).get("url") == url
+    ]
+    if len(locked) != 1:
+        raise GateError(
+            "uv.lock does not resolve av to that url: run `uv lock` and commit pyproject.toml and uv.lock together"
+        )
+    package = locked[0]
+    if "+lgpl" not in str(package.get("version", "")):
+        raise GateError(f"the locked av is version {package.get('version')!r}, not DoMe's +lgpl build")
+    wheels = [w for w in package.get("wheels") or [] if w.get("url") == url]
+    if len(wheels) != 1 or not SHA256_HASH.match(str(wheels[0].get("hash", ""))):
+        raise GateError("uv.lock does not pin that wheel by its SHA-256")
+    return "present", url
+
+
+# --- the frozen app: screen-self-test -------------------------------------------------------------------
+
+
+def run_screen_self_test(exe: Path, state_dir: Path, *, timeout: float = 300) -> tuple[int, str, str]:
+    """``DoMe.exe screen-worker --self-test`` with no ``DOME_*`` variable (never ``DOME_SCREEN_DEV_H264``) and a
+    throw-away state folder, so a crash log lands there and the runner's own DoMe folder stays untouched."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("DOME_")}
+    env["DOME_AGENT_STATE_DIR"] = str(state_dir)
+    done = subprocess.run(
+        [str(exe), "screen-worker", "--self-test"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        env=env,
+        timeout=timeout,
+        check=False,
+    )
+    return done.returncode, done.stdout, done.stderr
+
+
+def parse_self_test(stdout: str) -> dict[str, Any] | None:
+    """The worker's report: the last stdout line that is a JSON object (logs go to stderr)."""
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                value = json.loads(line)
+            except ValueError:
+                return None
+            return value if isinstance(value, dict) else None
+    return None
+
+
+def evaluate_screen_self_test(
+    report: dict[str, Any] | None, returncode: int, *, expect: str, crash_log: bool
+) -> list[SmokeRow]:
+    """Rows for the frozen worker's self-test. ``expect`` is ``present`` (a build with Screen view) or ``absent``."""
+    if expect not in ("present", "absent"):
+        raise ValueError(f"expect must be 'present' or 'absent', not {expect!r}")
+    rows = [SmokeRow("the worker answered with its JSON report", True, report is not None, f"exit code {returncode}")]
+    checks: dict[str, Any] = (report or {}).get("checks") or {}
+
+    def check(name: str) -> dict[str, Any]:
+        value = checks.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def shown(item: dict[str, Any]) -> str:
+        return str(item.get("value") if item.get("ok") else item.get("error", "not reported"))[:200]
+
+    if report is not None and expect == "present":
+        imports = check("imports")
+        versions = imports.get("value") if isinstance(imports.get("value"), dict) else {}
+        rows.append(
+            SmokeRow(
+                f"aiortc {AIORTC_VERSION} imports",
+                True,
+                imports.get("ok") is True and versions.get("aiortc") == AIORTC_VERSION,
+                shown(imports),
+            )
+        )
+        rows.append(
+            SmokeRow("av is DoMe's LGPL build (+lgpl)", True, "+lgpl" in str(versions.get("av", "")), shown(imports))
+        )
+        decoders = check("decoders")
+        value = decoders.get("value") if isinstance(decoders.get("value"), dict) else {}
+        rows.append(
+            SmokeRow(
+                "decoders == {wrapped_avframe}",
+                True,
+                decoders.get("ok") is True and value.get("exactly_wrapped_avframe") is True,
+                shown(decoders),
+            )
+        )
+        frame = check("lavfi_testsrc_frame")
+        rows.append(SmokeRow("lavfi testsrc -> one decoded frame", True, frame.get("ok") is True, shown(frame)))
+        hook = check("pli_hook")
+        rows.append(
+            SmokeRow(
+                "PLI hook point (RTCRtpSender._send_keyframe and its PLI dispatch)",
+                True,
+                hook.get("ok") is True and hook.get("value") is True,
+                shown(hook),
+            )
+        )
+        encoders = check("encoders")
+        listed = [r for r in encoders.get("value") or [] if isinstance(r, dict)] if encoders.get("ok") else []
+        summary = ", ".join(
+            f"{r.get('encoder')}: {'yes' if r.get('available') else r.get('note') or 'no'}" for r in listed
+        )
+        vp8 = any(r.get("kind") == "vp8" and r.get("available") is True for r in listed)
+        rows.append(SmokeRow("VP8 encoder available", True, vp8, summary or shown(encoders)))
+        h264 = any(r.get("kind") == "h264" and r.get("available") is True for r in listed)
+        rows.append(SmokeRow("H.264 through Media Foundation", False, h264, summary or shown(encoders)))
+        rows.append(
+            SmokeRow(
+                "the worker's own verdict (exit code 0)",
+                True,
+                returncode == 0 and report.get("ok") is True,
+                f"exit code {returncode}",
+            )
+        )
+    elif report is not None:
+        imports = check("imports")
+        error = str(imports.get("error", ""))
+        rows.append(
+            SmokeRow(
+                "Screen view is not in this build (aiortc and av cannot be imported)",
+                True,
+                imports.get("ok") is False and error.startswith(("ModuleNotFoundError", "ImportError")),
+                shown(imports),
+            )
+        )
+        rows.append(
+            SmokeRow(
+                "the worker says it is not ready (exit code 1)",
+                True,
+                returncode == 1 and report.get("ok") is False,
+                f"exit code {returncode}",
+            )
+        )
+    rows.append(SmokeRow("no crash log", True, not crash_log, "logs/crash.log was written" if crash_log else "none"))
+    return rows
+
+
+# --- the frozen app: bundle-notices ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PackageNotice:
+    """One installed distribution and the licence files it ships (``texts``: file name and text)."""
+
+    name: str
+    version: str
+    licence: str
+    texts: tuple[tuple[str, str], ...]
+
+
+def distribution_licence(meta: Any) -> str:
+    """The licence a distribution declares: ``License-Expression``, a short ``License`` field, or its classifiers."""
+    expression = str(meta.get("License-Expression") or "").strip()
+    if expression:
+        return expression
+    declared = str(meta.get("License") or "").strip()
+    if declared and "\n" not in declared and len(declared) <= 80:
+        return declared
+    classifiers = [c.split("::")[-1].strip() for c in meta.get_all("Classifier") or [] if c.startswith("License ::")]
+    return "; ".join(classifiers) or "not declared (see its licence files below)"
+
+
+def distribution_texts(dist: Any) -> tuple[tuple[str, str], ...]:
+    """The licence files a distribution ships: its ``License-File`` entries (``.dist-info/licenses/`` or
+    ``.dist-info/``), else any LICENSE/COPYING/NOTICE/AUTHORS file in its ``.dist-info``."""
+    out: dict[str, str] = {}
+    for name in dist.metadata.get_all("License-File") or []:
+        for candidate in (f"licenses/{name}", name):
+            text = dist.read_text(candidate)
+            if text is not None:
+                out[name] = text
+                break
+    if not out:
+        for file in dist.files or []:
+            parts = Path(str(file)).parts
+            if len(parts) >= 2 and parts[0].endswith(".dist-info") and _LICENCE_NAME.search(parts[-1]):
+                text = dist.read_text("/".join(parts[1:]))
+                if text is not None:
+                    out[parts[-1]] = text
+    return tuple(sorted(out.items()))
+
+
+def installed_packages(fallbacks: Path | None = None, exclude: frozenset[str] = BUILD_ONLY) -> list[PackageNotice]:
+    """Every distribution in the running interpreter's environment except ``exclude`` and ``types-*`` stubs. A
+    package that ships no licence file gets ``fallbacks/<normalised name>.txt`` (``packaging/licenses/python``:
+    the text from the project's own repository at that version) when one exists."""
+    import importlib.metadata as md
+
+    seen: dict[str, PackageNotice] = {}
+    for dist in md.distributions():
+        name = str(dist.metadata.get("Name") or "").strip()
+        key = re.sub(r"[-_.]+", "-", name).lower()
+        if not name or key in exclude or key.startswith("types-") or key in seen:
+            continue
+        texts = distribution_texts(dist)
+        fallback = fallbacks / f"{key}.txt" if fallbacks is not None else None
+        if not texts and fallback is not None and fallback.is_file():
+            note = f"{fallback.name}, from the project's source repository (the package ships no licence file)"
+            texts = ((note, fallback.read_text(encoding="utf-8")),)
+        seen[key] = PackageNotice(name, str(dist.version), distribution_licence(dist.metadata), texts)
+    return sorted(seen.values(), key=lambda p: p.name.lower())
+
+
+def python_runtime_licence() -> tuple[str, str | None]:
+    """(where, text) of the build interpreter's own LICENSE.txt, which names the libraries compiled into it."""
+    import sysconfig
+
+    base = Path(sys.base_prefix)
+    stdlib = Path(sysconfig.get_paths()["stdlib"])
+    for path in (base / "LICENSE.txt", base / "LICENSE", stdlib / "LICENSE.txt", stdlib / "LICENSE"):
+        if path.is_file():
+            return path.name, path.read_text(encoding="utf-8", errors="replace")
+    return "LICENSE.txt", None
+
+
+def render_bundle_notices(
+    head: str, packages: Sequence[PackageNotice], runtime: tuple[str, str | None], python_version: str
+) -> tuple[str, list[str]]:
+    """THIRD_PARTY_NOTICES.txt for the frozen app: ``head`` (Part 1 and the PART 2 heading), the package list,
+    the Python runtime's licence, then each package's licence files. Returns the text and what was not found."""
+    missing: list[str] = []
+    lines = [head.rstrip("\n"), "", "Python packages in this build (name, version, licence):"]
+    lines += [f"  {p.name} {p.version}: {p.licence}" for p in packages]
+    lines += ["", "", f"== Python runtime: CPython {python_version} ({runtime[0]}) =="]
+    if runtime[1] is None:
+        missing.append("the Python runtime's licence")
+        lines.append(f"{NOT_FOUND}: the build interpreter has no LICENSE.txt; add CPython's licence text here]")
+    else:
+        lines.append(runtime[1].rstrip("\n"))
+    for package in packages:
+        lines += ["", "", f"== {package.name} {package.version}: {package.licence} =="]
+        if not package.texts:
+            missing.append(package.name)
+            lines.append(f"{NOT_FOUND}: {package.name} {package.version} ships no licence file; add its licence text]")
+        for file_name, text in package.texts:
+            lines += [f"-- {file_name} --", text.rstrip("\n")]
+    return "\n".join(lines) + "\n", missing
+
+
+def bundle_notices(head_path: Path, licences: Path, out_dir: Path) -> list[str]:
+    """Write ``out_dir/THIRD_PARTY_NOTICES.txt`` and copy ``licences/*.txt`` to ``out_dir/licenses``. Returns what
+    was not found (also marked in the file, so ``check --frozen`` sees it)."""
+    text, missing = render_bundle_notices(
+        head_path.read_text(encoding="utf-8"),
+        installed_packages(licences / "python"),
+        python_runtime_licence(),
+        ".".join(str(n) for n in sys.version_info[:3]),
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / NOTICES_NAME).write_text(text, encoding="utf-8")
+    target = out_dir / "licenses"
+    target.mkdir(exist_ok=True)
+    for path in sorted(licences.glob("*.txt")):
+        (target / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    return missing
+
+
+def _annotate(prefix: str, line: str) -> str:
+    """A GitHub Actions annotation on the runner (``::warning::``), the plain line elsewhere."""
+    return f"::{prefix} title=licence gate::{line}" if os.environ.get("GITHUB_ACTIONS") == "true" else line
+
+
 # --- command line -------------------------------------------------------------------------------------
 
 
@@ -668,9 +1190,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     src.add_argument("--wheel-env", type=Path)
     src.add_argument("--folder", type=Path)
     p.add_argument("--out", type=Path, required=True)
-    p = sub.add_parser("check", help="apply R0-R9 to a report; exit 1 on any violation")
+    p = sub.add_parser("check", help="apply R0-R10 (or, with --frozen, the frozen-app rules); exit 1 on any violation")
     p.add_argument("report")
     p.add_argument("--dlls-only", action="store_true", help="a --folder report: skip R5-R8 (no FFmpeg metadata)")
+    p.add_argument("--frozen", action="store_true", help="a --folder report of dist/DoMe: R1 R3 R4 R9 and F1-F4")
+    p.add_argument("--screen", choices=("present", "absent"), help="with --frozen: was Screen view built in")
+    p.add_argument("--strict", action="store_true", help="with --frozen: warnings fail too (release builds)")
     p = sub.add_parser("notices", help="write the THIRD_PARTY_NOTICES draft inventory")
     p.add_argument("report")
     p.add_argument("--pacman", type=Path, required=True)
@@ -679,6 +1204,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     p = sub.add_parser("smoke", help="functional checks inside the venv that has the wheel")
     p.add_argument("--expect-version", required=True)
     p.add_argument("--log", type=Path)
+    p = sub.add_parser("shipping-av", help="is av pinned to DoMe's LGPL wheel on Windows? prints screen=present|absent")
+    p.add_argument("--pyproject", type=Path, required=True)
+    p.add_argument("--lock", type=Path, required=True)
+    p.add_argument("--github-output", type=Path, help="also append screen=... to this file (GITHUB_OUTPUT)")
+    p = sub.add_parser("screen-self-test", help="run the frozen DoMe.exe screen-worker --self-test and check it")
+    p.add_argument("--exe", type=Path, required=True)
+    p.add_argument("--expect", choices=("present", "absent"), required=True)
+    p.add_argument("--out", type=Path, required=True, help="where to keep the worker's JSON report")
+    p.add_argument("--timeout", type=float, default=300.0)
+    p = sub.add_parser("bundle-notices", help="write THIRD_PARTY_NOTICES.txt and licenses/ for the frozen app")
+    p.add_argument("--head", type=Path, required=True, help="packaging/THIRD_PARTY_NOTICES.txt (Part 1)")
+    p.add_argument("--licenses", type=Path, required=True, help="packaging/licenses")
+    p.add_argument("--out-dir", type=Path, required=True, help="dist/DoMe")
     args = parser.parse_args(argv)
 
     if args.command == "configure-summary":
@@ -693,12 +1231,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote {args.out} ({len(report['dlls'])} DLLs)")
         return 0
+    if args.command == "check" and args.frozen:
+        if args.screen is None:
+            parser.error("check --frozen needs --screen present|absent")
+        violations, warnings = evaluate_frozen(_load(args.report), screen=args.screen, strict=args.strict)
+        for v in violations:
+            print(_annotate("error", v.line()))
+        for v in warnings:
+            print(_annotate("warning", "WARN " + v.line().removeprefix("FAIL ")))
+        print(
+            f"licence gate (frozen app, Screen view {args.screen}{', strict' if args.strict else ''}): "
+            f"{'FAILED' if violations else 'passed'} ({len(violations)} violation(s), {len(warnings)} warning(s))"
+        )
+        return 1 if violations else 0
     if args.command == "check":
         violations = evaluate(_load(args.report), dlls_only=args.dlls_only)
         for v in violations:
             print(v.line())
         print(f"licence gate: {'FAILED' if violations else 'passed'} ({len(violations)} violation(s))")
         return 1 if violations else 0
+    if args.command == "shipping-av":
+        try:
+            screen, detail = shipping_av(
+                tomllib.loads(args.pyproject.read_text(encoding="utf-8")),
+                tomllib.loads(args.lock.read_text(encoding="utf-8")),
+            )
+        except GateError as exc:
+            print(_annotate("error", f"shipping-av: FAILED: {exc}"))
+            return 1
+        print(f"screen={screen}")
+        print(f"shipping-av: Screen view {'is built in' if screen == 'present' else 'is left out'}: {detail}")
+        if args.github_output:
+            with args.github_output.open("a", encoding="utf-8") as fh:
+                fh.write(f"screen={screen}\n")
+        return 0
+    if args.command == "screen-self-test":
+        with tempfile.TemporaryDirectory(prefix="dome-self-test-") as state:
+            try:
+                returncode, stdout, stderr = run_screen_self_test(args.exe, Path(state), timeout=args.timeout)
+            except subprocess.TimeoutExpired:
+                returncode, stdout, stderr = -1, "", f"timed out after {args.timeout:.0f} s"
+            crash = Path(state) / "logs" / "crash.log"
+            crash_text = crash.read_text(encoding="utf-8", errors="replace") if crash.is_file() else ""
+        report = parse_self_test(stdout)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        rows = evaluate_screen_self_test(report, returncode, expect=args.expect, crash_log=bool(crash_text))
+        print(format_smoke(rows))
+        failed = any(r.required and not r.ok for r in rows)
+        if failed:
+            # The worker's stderr (redacted by its own log pipeline) and the crash log (masked by crashguard)
+            # explain a failure; neither holds a frame or an address.
+            print("--- worker stderr (last 40 lines) ---\n" + "\n".join(stderr.splitlines()[-40:]))
+            if crash_text:
+                print("--- crash.log (last 40 lines) ---\n" + "\n".join(crash_text.splitlines()[-40:]))
+        print(f"screen-worker self-test (Screen view {args.expect}): {'FAILED' if failed else 'passed'}")
+        return 1 if failed else 0
+    if args.command == "bundle-notices":
+        missing = bundle_notices(args.head, args.licenses, args.out_dir)
+        for item in missing:
+            print(_annotate("warning", f"WARN F4 notices: no licence text found for {item}"))
+        print(f"wrote {args.out_dir / NOTICES_NAME} and {args.out_dir / 'licenses'} ({len(missing)} missing text(s))")
+        return 0
     if args.command == "notices":
         text = render_notices(
             _load(args.report),

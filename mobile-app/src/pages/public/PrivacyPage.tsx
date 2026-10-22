@@ -48,6 +48,15 @@ export function PrivacyPage() {
         </ul>
       </section>
       <section>
+        <h2>Screen view (beta, optional)</h2>
+        <ul>
+          <li>Only when the PC’s owner allowed it in a DoMe window on that PC, your PC’s picture goes straight to your phone, encrypted between the two devices. It never passes through the DoMe service, and nothing is recorded or stored. The AI butler never sees it.</li>
+          <li>To connect the two devices, the DoMe service forwards the signed connection set-up between them without reading, storing or logging it. It keeps the session’s timing and the seconds counted toward your plan, never the picture or a network address.</li>
+          <li>When your phone cannot reach the PC directly (often on mobile data), the connection may go through a relay server run by a connection relay provider. The provider sees both devices’ network addresses, connection times and how much data passed; the picture stays encrypted and the provider cannot see it. A lookup server of the same provider tells each device its own public address. [FOUNDER: list the connection relay provider (Cloudflare) as a sub-processor before Screen view is switched on in production.]</li>
+          <li>The PC keeps a local list of its last 20 Screen view sessions (which phone, when, how long, why it ended, and refused requests); you can clear it on the PC.</li>
+        </ul>
+      </section>
+      <section>
         <h2>On your PC</h2>
         <p>The DoMe app keeps its key material protected by Windows, the list of phones you approved, the apps you approved, and a short bounded journal of executed commands. Logs are redacted. The browser extension only runs on YouTube pages and does not collect browsing history.</p>
       </section>
@@ -64,7 +73,7 @@ export function PrivacyPage() {
         <ul>
           <li>Legal entity name, address and contact for privacy requests.</li>
           <li>Jurisdiction, applicable law and supervisory authority; whether GDPR/UK GDPR/CCPA terms apply to the launch regions.</li>
-          <li>Sub-processors: hosting provider, identity provider, payment provider, email provider.</li>
+          <li>Sub-processors: hosting provider, identity provider, payment provider, email provider, AI provider, and the Screen view connection relay provider (connection addresses, timing and byte counts; never the picture) — before Screen view is switched on in production.</li>
           <li>Retention table per record type (see docs/DATA_RETENTION.md when written).</li>
         </ul>
       </section>

@@ -73,6 +73,16 @@ class Schemas:
         """relay-frames.schema.json#/$defs/input_batch_payload — the signed payload of an input_batch frame."""
         self._validate("relay-frames", "/$defs/input_batch_payload", value)
 
+    def validate_screen_answer_payload(self, value: Any) -> None:
+        """relay-frames.schema.json#/$defs/screen_answer_payload — the PC-signed payload of a screen_answer frame (1.4)."""
+        self._validate("relay-frames", "/$defs/screen_answer_payload", value)
+
+    def validate_screen_dc_message(self, direction: str, value: Any) -> None:
+        """relay-frames.schema.json#/$defs/screen_dc_<direction> — one data-channel message (rules.screen_content)."""
+        if direction not in ("phone_to_pc", "pc_to_phone"):
+            raise ValueError(direction)
+        self._validate("relay-frames", f"/$defs/screen_dc_{direction}", value)
+
     def validate_frame(self, direction: str, value: Any) -> None:
         if direction not in ("controller_to_relay", "relay_to_controller", "agent_to_relay", "relay_to_agent"):
             raise ValueError(direction)

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from dome_api.billing.service import BillingService
     from dome_api.relay.manager import ConnectionManager
     from dome_api.relay.router import RateLimiters
+    from dome_api.screen.service import ScreenService
 
 
 @dataclass(slots=True)
@@ -46,3 +47,6 @@ class Services:
     assistant: AssistantService
     # billing (docs/BILLING.md): the only writer of accounts.plan; config and provider are replaceable for tests
     billing: BillingService
+    # Screen view (docs/design/screen-view.md §12): the ledger, the TURN bookkeeping and the relay hooks; config, clock
+    # and provider are replaceable for tests
+    screen: ScreenService

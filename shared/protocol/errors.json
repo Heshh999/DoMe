@@ -376,6 +376,66 @@
     "PLAN_SELECTION_INVALID": {
       "retryable": false,
       "user_message": "That choice doesn't fit your plan's limits or names a device that isn't yours."
+    },
+    "SCREEN_SESSION_OWNED": {
+      "retryable": false,
+      "user_message": "Another phone is viewing this PC. Take over to continue."
+    },
+    "SCREEN_SESSION_REQUIRED": {
+      "retryable": false,
+      "user_message": "Start Screen view on this PC before tapping the picture."
+    },
+    "SCREEN_ALLOWANCE_EXHAUSTED": {
+      "retryable": false,
+      "user_message": "You've used Free Screen view for now. The app shows when it resets. The touchpad and remote still work."
+    },
+    "SCREEN_OFFER_INVALID": {
+      "retryable": false,
+      "user_message": "The phone's connection request was not valid. Try again."
+    },
+    "SCREEN_CAPTURE_UNAVAILABLE": {
+      "retryable": false,
+      "user_message": "Your PC can't share its screen right now. Another app may be capturing it, or this display isn't supported yet."
+    },
+    "SCREEN_ENCODER_UNAVAILABLE": {
+      "retryable": false,
+      "user_message": "Your PC has no video encoder DoMe can use for Screen view."
+    },
+    "SCREEN_CONNECTION_FAILED": {
+      "retryable": true,
+      "user_message": "Couldn't reach your PC's picture from this network. The touchpad and remote still work."
+    },
+    "SCREEN_CONSENT_DECLINED": {
+      "retryable": false,
+      "user_message": "Not allowed at the PC."
+    },
+    "SCREEN_CONSENT_TIMEOUT": {
+      "retryable": false,
+      "user_message": "No one answered at the PC."
+    },
+    "SCREEN_GEOMETRY_CHANGED": {
+      "retryable": true,
+      "user_message": "The PC's screen layout changed. Tap again."
+    },
+    "SCREEN_VIEW_DISABLED": {
+      "retryable": false,
+      "user_message": "Screen view is switched off for now. The touchpad and remote still work."
+    },
+    "INPUT_PAUSED_ON_PC": {
+      "retryable": true,
+      "user_message": "Waiting for someone at the PC."
+    },
+    "INPUT_TARGET_RESERVED": {
+      "retryable": false,
+      "user_message": "That tap would land on DoMe's own window on the PC and was not sent."
+    },
+    "SCREEN_PC_UNVERIFIED": {
+      "retryable": false,
+      "user_message": "Pair this phone with your PC again so it can check it is really your PC."
+    },
+    "SCREEN_ANSWER_INVALID": {
+      "retryable": false,
+      "user_message": "Couldn't confirm this is your PC. Nothing was shown."
     }
   }
 }

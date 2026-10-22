@@ -38,6 +38,7 @@ NAMED_KEYS: tuple[str, ...] = (
     "end",
     "page_up",
     "page_down",
+    "f11",  # since 1.4 (Screen view): full screen in apps that are not approved
 )
 SHORTCUTS: tuple[str, ...] = ("ctrl_a", "ctrl_c", "ctrl_v", "ctrl_z", "ctrl_l")
 
@@ -245,6 +246,49 @@ class ForegroundApp:
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class Monitor:
+    """One monitor of the virtual desktop in PHYSICAL pixels (Screen view, design §5.2/§8.2). ``index`` is the
+    agent's own stable numbering (the primary monitor first, then by position), the ``surface_index`` of
+    ``screen_session_result.surfaces``. ``rotation`` is the display orientation in degrees. No names."""
+
+    index: int
+    left: int
+    top: int
+    width: int
+    height: int
+    primary: bool
+    rotation: int = 0
+
+    @property
+    def right(self) -> int:
+        return self.left + self.width
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.height
+
+    def as_surface(self) -> dict[str, object]:
+        """``results#/$defs/screen_surface``."""
+        return {"index": self.index, "width": self.width, "height": self.height, "primary": self.primary}
+
+
+class ScreenAdapter(Protocol):
+    """Monitor enumeration for Screen view (design §15: ``platform/windows/screen.py``). Synchronous."""
+
+    def monitors(self) -> list[Monitor]:
+        """Every monitor in physical pixels, primary first; ``PLATFORM_UNSUPPORTED`` where none can be read."""
+        ...
+
+
+class NoScreen:
+    """The default when a platform set names no screen adapter: nothing can be enumerated, so Screen view
+    fails closed (``SCREEN_CAPTURE_UNAVAILABLE``) rather than guessing a monitor."""
+
+    def monitors(self) -> list[Monitor]:
+        raise ProtocolError("PLATFORM_UNSUPPORTED", "screen enumeration is only available on Windows")
+
+
 class InputAdapter(Protocol):
     """Manual pointer/keyboard injection (spec §10A). Every method is synchronous and blocking.
 
@@ -255,6 +299,21 @@ class InputAdapter(Protocol):
 
     def move(self, dx: int, dy: int) -> None:
         """Relative cursor motion in desktop pixels (never clamped to one display)."""
+        ...
+
+    def move_to(self, x: int, y: int) -> None:
+        """Absolute cursor position in PHYSICAL virtual-desktop pixels (Screen view ``pointer_move_to`` after the
+        agent mapped the normalised position onto the streamed monitor, design §8.2): ``SetCursorPos`` inside
+        per-monitor DPI awareness, exact pixels, no pointer acceleration."""
+        ...
+
+    def wheel(self, dx: int, dy: int) -> None:
+        """Raw wheel units (120 = one notch; ``pointer_wheel``), ``dy > 0`` scrolls content up, ``dx > 0`` right."""
+        ...
+
+    def cursor_position(self) -> tuple[int, int] | None:
+        """The cursor in physical virtual-desktop pixels, or None when unknown (rules.local_permission_ui: a
+        press that would land on DoMe's own bars or windows is dropped)."""
         ...
 
     def button(self, button: str, action: str) -> None:
@@ -448,6 +507,7 @@ class PlatformSet:
     native_host: NativeHostRegistrar
     input: InputAdapter
     notes: list[str] = field(default_factory=list)
+    screen: ScreenAdapter = field(default_factory=NoScreen)  # Screen view monitor enumeration (1.4)
 
     @property
     def supports_windows_actions(self) -> bool:

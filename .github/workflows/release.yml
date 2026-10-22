@@ -18,6 +18,10 @@
 #   dome_agent.__version__; a hand-started run runs on the default branch, a tag tags a commit of the
 #   default branch; no release vX.Y.Z exists yet; an update key is pinned in dome_agent/update_check.py.
 # * Jobs "tests" and "build" run the Windows tests and PyInstaller (third-party build code) with NO secrets.
+#   "build" builds Screen view in only when pc-agent/pyproject.toml pins av on Windows to DoMe's LGPL wheel
+#   (licence_gate.py shipping-av), then runs the licence gate on dist/DoMe with --strict (every DLL must be
+#   known and every package's licence text found, or no release) and `DoMe.exe screen-worker --self-test`,
+#   before the folder goes to "sign" (docs/design/screen-view.md §5.5, §19 WP1.6).
 # * Job "sign" is the only job with environment `release` (the founder approves every run there) and the
 #   only one with id-token: write. It runs no tests and no PyInstaller. It refuses at its first step when a
 #   variable or the update key is missing (never an unsigned release). Every install (Inno Setup, Microsoft's
@@ -193,9 +197,22 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
 
-      - name: pc-agent - sync with the build extra (PyInstaller from the lock)
+      - name: Screen view in this build? (only when pyproject.toml pins DoMe's LGPL av wheel for Windows)
+        id: screen
         working-directory: pc-agent
-        run: uv sync --locked --extra build
+        run: |
+          uv run --no-project python -I packaging/licence_gate.py shipping-av --pyproject pyproject.toml --lock uv.lock --github-output "$env:GITHUB_OUTPUT"
+          if ($LASTEXITCODE -ne 0) { throw "licence_gate.py shipping-av refused pyproject.toml / uv.lock (exit code $LASTEXITCODE)" }
+
+      - name: pc-agent - sync with the build extra (PyInstaller from the lock), and the screen extra with Screen view
+        working-directory: pc-agent
+        env:
+          SCREEN: ${{ steps.screen.outputs.screen }}
+        run: |
+          $extras = @('--extra', 'build')
+          if ($env:SCREEN -eq 'present') { $extras += @('--extra', 'screen') }
+          uv sync --locked @extras
+          if ($LASTEXITCODE -ne 0) { throw "uv sync failed (exit code $LASTEXITCODE)" }
 
       - name: Build DoMe.exe and dome-native-host.exe and check the folder
         working-directory: pc-agent
@@ -203,6 +220,36 @@ jobs:
         run: |
           uv run --no-sync python packaging/installer/build_installer.py --pyinstaller-only
           if ($LASTEXITCODE -ne 0) { throw "build_installer.py --pyinstaller-only failed (exit code $LASTEXITCODE)" }
+
+      - name: Licence gate on the frozen folder dist/DoMe, strict (before anything runs from it)
+        working-directory: pc-agent
+        env:
+          SCREEN: ${{ steps.screen.outputs.screen }}
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'licence-gate\licence-frozen.json'
+          uv run --no-sync python -I packaging/licence_gate.py collect --folder dist/DoMe --out "$report"
+          if ($LASTEXITCODE -ne 0) { throw "licence_gate.py collect failed (exit code $LASTEXITCODE)" }
+          uv run --no-sync python -I packaging/licence_gate.py check "$report" --frozen --screen "$env:SCREEN" --strict
+          if ($LASTEXITCODE -ne 0) { throw "the licence gate refused dist/DoMe (exit code $LASTEXITCODE)" }
+
+      - name: Screen view worker self-test on the frozen DoMe.exe
+        working-directory: pc-agent
+        timeout-minutes: 10
+        env:
+          SCREEN: ${{ steps.screen.outputs.screen }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'licence-gate\screen-self-test.json'
+          uv run --no-sync python -I packaging/licence_gate.py screen-self-test --exe dist/DoMe/DoMe.exe --expect "$env:SCREEN" --out "$out"
+          if ($LASTEXITCODE -ne 0) { throw "the screen-worker self-test failed (exit code $LASTEXITCODE)" }
+
+      - name: Upload the licence gate and self-test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: licence-gate-reports
+          path: ${{ runner.temp }}/licence-gate/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload the PyInstaller folder for the sign job
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

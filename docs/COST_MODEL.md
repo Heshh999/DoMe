@@ -262,6 +262,75 @@ Reading:
 Free and Pro carry the same input cost by design (identical `input_rate_limit`). Input
 responsiveness is never a paid lever, so touchpad traffic is a Free-account cost.
 
+## 7B. Screen view (beta, protocol 1.4): what a live picture costs [research, verify]
+
+Source: `docs/design/screen-view.md` §13–§14 (2026-10-16). Every vendor figure here is **[research,
+verify]**: it comes from search excerpts of Cloudflare's pages and must be confirmed on the vendor page
+before anyone relies on it. The usage figures are **[estimate]**: no Screen view session has run on a
+device, so the relayed share and the hours per user are guesses until real usage exists.
+
+Inputs: Fly egress $0.02/GB (§2/§2A); Cloudflare Realtime TURN $0.05/GB on Cloudflare-to-client data with
+**1,000 GB a month free** (shared with Cloudflare's SFU) and STUN free [research, verify: price, the free
+tier, whether a payment method is required and the maximum credential lifetime]; production ≈ $45 and
+staging ≈ $4 of the ≈ $50 monthly budget, so the headroom is ≈ $1–5 (§2A).
+
+The picture never passes through Fly: it goes peer to peer between the PC and the phone, or through
+Cloudflare's TURN relay when no direct path exists. Fly carries only the signaling (≈ 15 KB per start plus
+the usage frames) and the touchpad/keyboard batches that run during a session (§7A).
+
+Data per streamed hour (video cap + 64 kbps sound + ≈ 5 % overhead) [estimate]:
+
+| Path | Video cap | Per hour |
+| --- | --- | --- |
+| Direct (peer to peer) | 1.5 Mbps | ≈ 0.74 GB |
+| Relayed through TURN | 1.0 Mbps | ≈ 0.50 GB |
+| Data saver (the guard's soft step) | 0.5 Mbps | ≈ 0.27 GB |
+| A still desktop (only changed frames are sent) | — | ≈ 0.1–0.3 GB |
+
+| Cost per streamed hour | DoMe pays |
+| --- | --- |
+| Direct media | **$0** |
+| Relayed, inside the free 1,000 GB | **$0** |
+| Relayed, beyond the free tier | ≤ **$0.025/h** (0.50 GB × $0.05); ≤ $0.014/h in Data saver |
+| Signaling on Fly | ≈ $0.000001/h |
+| Touchpad/keyboard batches during Screen view (§7A: 2.7–48 MB/h) | **$0.00005–0.001/h** |
+| Database | one ledger row per account; one UPDATE per minute per live Free session |
+
+Monthly, pessimistic on purpose: 30 % of MAU use Screen view; Base 4 h and High 10 h per user per month;
+**40 % of hours relayed** (Safari hides raw LAN addresses and the PC has no TURN); Free allows at most
+≈ 24 h a month (10 minutes × 4.8 windows a day × 30) [estimate]:
+
+| MAU | Scenario | Streamed h | Relayed h | TURN GB | TURN $ | Fly $ (signaling + input) | **Added total** |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 100 | Base | 120 | 48 | 24 | $0 | ≤ $0.12 | **≈ $0** |
+| 100 | High | 300 | 120 | 60 | $0 | ≤ $0.30 | **≈ $0** |
+| 1,000 | Base | 1,200 | 480 | 240 | $0 | ≤ $1.20 | **≈ $1** |
+| 1,000 | High | 3,000 | 1,200 | 600 | $0 | ≤ $3 | **≈ $3** (the input egress uses the remaining headroom) |
+| 1,000 | Stress: 60 % adopt, every user at the Free maximum, 40 % relayed | 14,400 | 5,760 | 2,880 (1,440 in Data saver) | $94 without the guard; **$0 with it** (Free goes STUN-only past 900 GB) | ≤ $14 | **≈ $14**, beyond the budget: at this scale paid plans must exist and the caps can rise |
+
+Reading:
+- The free tier covers ≈ 2,000 relayed hours, or ≈ 5,000 streamed hours a month at 40 % relayed; the
+  hosting budget stays ≈ $49 at 100 and 1,000 MAU in Base and High. No new Fly machine, no dedicated
+  IPv4 and no media server are needed.
+- Abuse is bounded independently of these assumptions (design §13; `cloud-api` implements it): TURN
+  credentials are minted for the phone only, one per controller, revoked when no session starts within
+  60 s and at every end; a Free account can relay at most ≈ 2 GB a day (`DOME_SCREEN_TURN_FREE_DAILY_GB`,
+  ≈ $0.10 past the free tier) and mint at most 600 credentials a month; past 700 GB in the month relayed
+  Free sessions drop to Data saver and past 900 GB Free gets STUN only; the relay reconciles hourly with
+  Cloudflare's own usage figures and uses a server-side provisional bound until they arrive. The
+  founder's monthly dashboard check (design §20 step 2) is a backstop, not the control.
+- If direct paths through mDNS work on real networks (design §21 question 2), the relayed share and the
+  Cloudflare figures fall; the input-egress line does not depend on the path.
+- For comparison: video through the Fly relay would cost ≈ $0.015/h at the cap (≈ $18/month at 1,000 MAU
+  Base, ≈ $45 at High) **plus** a larger machine; coturn on Fly ≈ $6/month fixed plus $0.02/GB and a
+  dedicated IPv4. Both break the budget (ADR-0002).
+
+Non-hosting costs that Screen view makes urgent: Authenticode signing (Azure Trusted Signing ≈ $9.99/month,
+§2; an unsigned app that captures the screen and injects input is very likely to be flagged by SmartScreen
+and antivirus [research]) and a one-off counsel review of H.264 through the Windows/GPU encoder (the AVC
+pool is $0 for the first 100,000 units a year, then $0.20 a unit [research, verify]) and of the LGPL
+notice, written source offer and licence terms drafted in `pc-agent/packaging/` (cost unknown).
+
 ## 8. Sensitivities
 
 - **Identity provider MAU.** If Auth0 Essentials includes only 500 MAU with $0.07/MAU overage (one of

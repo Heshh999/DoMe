@@ -354,7 +354,7 @@ founder-driven; then:
    pays).
 2. **Screen view (#52)**: the PC's screen live on the phone with tap to click, two-finger scroll, a
    floating mini view, PC sound with mute and a TV-style remote for full-screen apps, as the website and
-   film describe it. **Designed, not built (2026-10-20):** `docs/design/screen-view.md` (22 sections:
+   film describe it. **Designed (2026-10-20):** `docs/design/screen-view.md` (22 sections:
    flows, signed end-to-end signaling with a PC key pinned at pairing, LGPL FFmpeg + PyAV capture and
    OS H.264 encoding, PC-granted `screen` / `screen_audio`, lifecycle and the fail-closed PC indicator,
    absolute pointer primitive, server-side Free-minutes ledger, protocol 1.3 contract changes, TURN
@@ -370,9 +370,46 @@ founder-driven; then:
    configure output (the review found the workflow would always fail: `buffer`/`buffersink`/`abuffer`/
    `abuffersink` cannot be selected and configure only warns; fixed, and an ignored option is now a gate
    failure); `dome_agent/screen/probe.py` is a skeleton with no capture or encode code (its `gate` command
-   works; `matrix` says it is not written yet). **Next:** run `ffmpeg-lgpl.yml` by hand (Actions > Run
-   workflow) and read its gate and smoke results; then the WP0.2 device round on the founder's PC. Nothing is recorded and the AI never sees the stream. When it ships, change
-   `SCREEN_VIEW_STATUS` and every "in development" line together (`mobile-app/DECISIONS.md` 63).
+   works; `matrix` says it is not written yet).
+   **Phase 1 status (built 2026-10-21, reviewed and fixed 2026-10-22, protocol 1.4, migration 0005; not
+   released):** the contract, the relay's screen routing, the Free-minutes ledger on the relay's clock, TURN for
+   the phone only with revocation and a reconciled spending guard, the agent's session manager, worker process,
+   fail-closed bars and grant / consent windows, the phone's Screen view page with PC-key pinning at pairing, the
+   licence gate on `dist/`, and `tests/test_e2e_screen.py` (see `docs/PROGRESS.md`, 2026-10-21 entry, for the 32
+   review findings, all fixed). Evidence: **integration-tested** (relay, ledger and TURN client against real
+   PostgreSQL with a fake TURN provider; end to end on Linux loopback with the fake frame source and a Python
+   aiortc phone: 45 passed in 530 s on 2026-10-22); **unit-tested** (agent with the fake platform and fake UI,
+   phone page in jsdom); **not yet verified on a device** (Windows capture and encoding, the tkinter bars and
+   windows, iPhone playback, NAT, TURN). Nothing of it is deployed by this round; once deployed it stays off until
+   `DOME_SCREEN_VIEW_ENABLED` is `true` in that environment (absent = off), the website says "Coming", and no Windows build made so far includes the media stack (the PC
+   answers "This version of DoMe on your PC doesn't include Screen view yet" and the tray item is disabled).
+   **Next (founder), in this order:**
+   1. GitHub > **Actions** > **ffmpeg-lgpl** > **Run workflow** (it has never run) and send the engineer the
+      run's link; the engineer reads its licence gate and smoke results, pins the LGPL PyAV wheel and makes a
+      Windows build that includes Screen view (`pc-agent/KNOWN_ISSUES.md` 19: the PyPI `av` wheel used by
+      the Linux tests is GPL and is never shipped).
+   2. The device round on your own PC and iPhone (`docs/design/screen-view.md` §18 checklist items 1–11 and
+      13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, iOS version and Safari /
+      home-screen mode), on **staging** with `DOME_SCREEN_VIEW_ENABLED` = `true` there only.
+   3. The Cloudflare TURN key per design §20 (`docs/LAUNCH_SETUP.md` §11B: `DOME_TURN_KEY_ID` as a variable,
+      `DOME_TURN_API_TOKEN` and `DOME_TURN_ANALYTICS_TOKEN` as secrets, staging first; check whether
+      Cloudflare asks for a payment method and turn on its usage notifications). Without it Screen view works
+      only where a direct connection exists, with an honest message elsewhere.
+   4. Counsel's answer on H.264 (design §20 step 4, §22 item 7; also the LGPL notice and source offer). If the
+      answer is no, Screen view ships VP8 only: an engineer adds that switch (today the agent uses VP8 only when
+      `h264_mf` is unavailable on the PC).
+   5. Before production: list the connection relay provider as a sub-processor on the Privacy page (the
+      FOUNDER note there), then the launch gate in design §19 (device evidence per GPU vendor and on iOS 18
+      and 26 in both modes, Authenticode signing and the updater, branch protection with required review).
+   **Next (engineer):** after the device round, fix what the real PC and iPhone answer differently (the
+   Windows sources, `h264_mf`, the bars' placement on scaled and multi-monitor PCs and the Job object were
+   written against the design and only tested with stand-ins), then fill in ADR-0002's gate numbers.
+   **Phase 2 (not started, design §19, ≈ 8–12 days):** PC sound (WASAPI loopback → Opus, the `screen_audio`
+   grant; the option is labelled "coming in a later update" today), a second monitor ("Next screen" as a new
+   session) and the cursor overlay, the in-app mini view, the TV-style remote for full-screen apps with
+   "Still watching?", the Data saver badge, then the labels flip for what is delivered. Nothing is recorded and
+   the AI never sees the stream. When it ships, change `SCREEN_VIEW_STATUS` and every "in development" line
+   together (`mobile-app/DECISIONS.md` 63).
 3. **AI butler step 2: click by name (#42)**: "click that" / "click Subscribe" acts on a control found by
    its Windows accessibility name, shown on the phone and confirmed before it runs. The owner ruled out
    screenshots, so `docs/design/assistant.md` §7 (screenshot with a box) must be rewritten before

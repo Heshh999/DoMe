@@ -8,13 +8,14 @@ credentials: only digests and lifecycle metadata.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -76,6 +77,10 @@ BILLING_EVENT_STATUSES = ("received", "processed", "ignored", "failed")
 USAGE_WINDOW_KINDS = ("window", "week")
 TOPUP_STATUSES = ("pending", "credited", "expired", "failed")
 AI_SOURCES = ("taste", "window", "topup")
+# Screen view (docs/design/screen-view.md §10, §13): a reservation's life and a phone TURN credential's life
+SCREEN_RESERVATION_STATES = ("reserved", "live", "settled", "swept")
+# revoke_pending: the provider refused or timed out; the username waits in turn_pending_revocations for a retry
+TURN_CREDENTIAL_STATES = ("outstanding", "bound", "revoked", "revoke_pending", "expired")
 SUPPORT_CATEGORIES = (
     "connection",
     "pairing",
@@ -298,6 +303,9 @@ class PairingSession(Base):
     created_at: Mapped[datetime] = created_at_col()
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # rules.pc_key_pinning (1.4): the MAC the agent computed with the pairing code over its identity key; stored
+    # verbatim on approve, returned with the PC's public key once approved. Not a secret (only the code verifies it).
+    pc_key_mac: Mapped[str | None] = mapped_column(String(43))
 
 
 class Command(Base):
@@ -570,6 +578,172 @@ class AssistantTurn(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = created_at_col()
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ----- Screen view (docs/design/screen-view.md §10, §13; rules.screen_metering): written only by dome_api.screen ------
+
+
+class ScreenAccount(Base):
+    """One row per account that ever used Screen view: the lock every reservation and every TURN mint of that account
+    takes FOR UPDATE (so two reservations of one account cannot open two windows), and the per-account monthly mint
+    counter. Created on first use."""
+
+    __tablename__ = "screen_accounts"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    turn_mints_month_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    turn_mints_this_month: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ScreenViewWindow(Base):
+    """One rolling Free allowance window of one account (plans.json screen_view_window_hours), opened at the first
+    reservation while none is open. Seconds only, settled on the relay's clock; ``zero_charged_attempts`` counts the
+    failed starts this window forgave (at most three)."""
+
+    __tablename__ = "screen_view_windows"
+    __table_args__ = (
+        UniqueConstraint("account_id", "window_start", name="uq_screen_view_windows_account_start"),
+        Index("ix_screen_view_windows_account_end", "account_id", "window_end"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    reserved_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    zero_charged_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # starts refused at the PC (Deny, no answer) that this window forgave, counted apart from the connection failures
+    consent_forgiven: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # secure-desktop pause seconds discounted in this window so far (capped per window, not only per session)
+    pause_discount_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class ScreenReservation(Base):
+    """One Screen view start as the relay saw it: the allowance reserved for it in 60 s chunks and the wall time the
+    relay measured. ``outstanding_seconds`` is what is reserved and not yet settled in the current window;
+    ``segment_started_at`` is where the current charging segment began (the forward, the first `started` frame, or
+    the previous window's end). Ids and seconds only: no SDP, no address, no name."""
+
+    __tablename__ = "screen_reservations"
+    __table_args__ = (
+        _enum_check("state", SCREEN_RESERVATION_STATES, "ck_screen_reservations_state"),
+        Index("ix_screen_reservations_state_until", "state", "reserved_until"),
+        Index("ix_screen_reservations_account_created", "account_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    pc_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pcs.id", ondelete="CASCADE"), nullable=False)
+    controller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("controllers.id", ondelete="CASCADE"), nullable=False)
+    command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
+    screen_session_id: Mapped[str | None] = mapped_column(String(22), index=True)
+    # the window the outstanding chunks belong to; NULL on plans with an unlimited allowance
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unlimited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    forwarded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    segment_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reserved_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outstanding_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    charged_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    pause_discount_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # set once the relay told the PC no further ticket will come (controller_offline, plan_disabled)
+    final_reason: Mapped[str | None] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
+    end_reason: Mapped[str | None] = mapped_column(String(32))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = created_at_col()
+
+
+class TurnCredential(Base):
+    """The one TURN credential a controller may hold (rules.screen_signaling (1)): the primary key is the controller,
+    so minting replaces the previous row after revoking it at the provider. Only the provider's username is kept
+    (for revocation and reconciliation); the credential itself is handed to the phone once and never stored."""
+
+    __tablename__ = "turn_credentials"
+    __table_args__ = (
+        _enum_check("state", TURN_CREDENTIAL_STATES, "ck_turn_credentials_state"),
+        Index("ix_turn_credentials_account_minted", "account_id", "minted_at"),
+        Index("ix_turn_credentials_state_minted", "state", "minted_at"),
+    )
+
+    controller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("controllers.id", ondelete="CASCADE"), primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    username: Mapped[str] = mapped_column(String(256), nullable=False)
+    minted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    command_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    screen_session_id: Mapped[str | None] = mapped_column(String(22))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="outstanding")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoke_reason: Mapped[str | None] = mapped_column(String(32))
+
+
+class TurnPendingRevocation(Base):
+    """A phone TURN username whose revocation the provider refused or timed out (design §13 "revoked on every path"):
+    kept apart from ``turn_credentials`` (whose row the controller's next mint replaces) and retried by the sweeper
+    until the provider confirms or the credential expires. No foreign key: a deleted account's or phone's credential
+    must still be revoked. Ids, a username, a reason and timestamps only."""
+
+    __tablename__ = "turn_pending_revocations"
+
+    username: Mapped[str] = mapped_column(String(256), primary_key=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    controller_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    last_error: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TurnMintDay(Base):
+    """Counters per account and UTC day of mint, only ever added to: the TTL seconds of every credential minted, and
+    the seconds that can no longer relay outside a session (the whole TTL once the credential is bound to a session,
+    whose ticketed seconds count instead; the unused rest once a revocation is confirmed). The provisional guard counts
+    ``minted - released`` at the relayed cap; unlike the per-controller ``turn_credentials`` row, nothing here is
+    replaced by the next mint."""
+
+    __tablename__ = "turn_mint_days"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    minted_ttl_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    released_ttl_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+
+
+class TurnReconcilePass(Base):
+    """One successful reconciliation pass (the provider's figures cover activity up to about here). The guard trusts
+    the reconciled figures only while the latest pass is recent, and persists that across restarts."""
+
+    __tablename__ = "turn_reconcile_passes"
+
+    reconciled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    rows: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+
+class TurnUsageDay(Base):
+    """Relayed bytes per account per UTC day as the TURN provider reports them (the hourly reconciliation,
+    docs/design/screen-view.md §13). Never from agent-reported figures."""
+
+    __tablename__ = "turn_usage_days"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    egress_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    reconciled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Layout(Base):

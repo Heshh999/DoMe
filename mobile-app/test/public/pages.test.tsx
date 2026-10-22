@@ -22,8 +22,11 @@ describe("public reading pages", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Privacy notice" })).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent(/DRAFT — prepared for founder review/);
     const headings = Array.from(container.querySelectorAll("h2")).map((h) => h.textContent);
-    expect(headings).toEqual(["What DoMe is", "Data we hold for your account", "Data that passes through the DoMe service", "On your phone", "The AI butler (optional)", "On your PC", "Your choices", "Open items for founder review"]);
+    expect(headings).toEqual(["What DoMe is", "Data we hold for your account", "Data that passes through the DoMe service", "On your phone", "The AI butler (optional)", "Screen view (beta, optional)", "On your PC", "Your choices", "Open items for founder review"]);
     expect(container.textContent).toContain("Never sent to Anthropic: audio, your screen");
+    // the connection relay provider is named as a sub-processor item, with what it sees and what it never sees
+    expect(container.textContent).toContain("connection addresses, timing and byte counts; never the picture");
+    expect(container.textContent).toContain("It never passes through the DoMe service");
     expect(container.textContent).toContain("DoMe is not end-to-end encrypted and we do not claim otherwise");
   });
 

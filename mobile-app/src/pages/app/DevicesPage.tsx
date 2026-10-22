@@ -10,7 +10,7 @@ import type { rest } from "@dome/protocol";
 import { api, ApiError } from "../../lib/api.ts";
 import { getControllerIdentity, KeyStorageError } from "../../lib/controllerKey.ts";
 import { absoluteTime, relativeTime } from "../../lib/format.ts";
-import { capabilityLabel, errorMessage, INPUT_SCOPE_EXPLANATION, isInputCapability } from "../../lib/labels.ts";
+import { capabilityLabel, errorMessage, INPUT_SCOPE_EXPLANATION, isInputCapability, isScreenCapability, SCREEN_SCOPE_EXPLANATION } from "../../lib/labels.ts";
 import { connectionOf } from "../../lib/connection.ts";
 import { Icon } from "../../components/icons.tsx";
 import { Button, Card, EmptyState, HeaderPill, IconWell, inputClass, KeyValue, Notice, PageHeader, Pill, SectionLabel } from "../../components/ui.tsx";
@@ -238,6 +238,11 @@ export function DevicesPage() {
                 ]}
               />
               {grants.some((g) => g.capabilities.some(isInputCapability)) ? <p className="mt-2 text-xs text-text-muted">{INPUT_SCOPE_EXPLANATION}</p> : null}
+              {grants.some((g) => g.capabilities.some(isScreenCapability)) ? (
+                <p className="mt-2 text-xs text-text-muted" data-testid={`screen-scope-${pc.id}`}>
+                  {SCREEN_SCOPE_EXPLANATION}
+                </p>
+              ) : null}
               {grants.length > 0 ? (
                 <details className="mt-3 text-sm">
                   <summary className="flex min-h-[44px] cursor-pointer items-center font-medium text-text-muted">
@@ -253,6 +258,7 @@ export function DevicesPage() {
                             {ctrl?.id === thisController?.id ? <span className="text-accent"> (this phone)</span> : null}
                             <span className="block text-xs text-text-muted">{g.capabilities.map(capabilityLabel).join(", ")}</span>
                             {g.capabilities.some(isInputCapability) ? <span className="block text-xs text-warning">Manual input: reaches every app of the unlocked session</span> : null}
+                            {g.capabilities.includes("screen") ? <span className="block text-xs text-warning">Screen view: sees everything on the PC’s screens while it is on</span> : null}
                           </span>
                           <ConfirmButton label="Revoke" confirmLabel="Revoke access" onConfirm={() => run(() => api.revokeGrant(g.id))} />
                         </li>

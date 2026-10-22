@@ -24,6 +24,10 @@ from dome_api.security.tokens import ip_hash
 from dome_api.util import b64url_to_sha256, client_ip, parse_uuid, rest_response, strict_body, ts_required, utcnow
 
 router = APIRouter(tags=["pairing"])
+# rules.pc_key_pinning (2): an approved row stays readable for at least this long after the decision so the phone's
+# poll can fetch pc_key. Nothing deletes approved rows today; this constant and its test pin the invariant so a later
+# retention change cannot break pinning (docs/design/screen-view.md §4.1).
+PAIRING_APPROVED_READABLE_SECONDS = 300
 
 
 @router.post("/pairing/start")
@@ -169,6 +173,10 @@ def _status_body(ps: PairingSession, pc: PC, online: bool) -> dict[str, Any]:
             out["controller_id"] = str(ps.controller_id)
         if ps.grant_id is not None:
             out["grant_id"] = str(ps.grant_id)
+        # rules.pc_key_pinning: the PC's identity key and the code-keyed MAC, once approved and never before; an agent
+        # older than 1.4 sent no MAC and such a pairing cannot use Screen view until the phone pairs again
+        if ps.pc_key_mac is not None:
+            out["pc_key"] = {"public_jwk": dict(pc.public_jwk), "mac": ps.pc_key_mac}
     return out
 
 

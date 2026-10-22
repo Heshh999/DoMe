@@ -50,6 +50,8 @@ from dome_api.routes import (
     plans,
     support,
 )
+from dome_api.screen.service import ScreenConfig, ScreenService
+from dome_api.screen.turn import TurnConfig, TurnService, build_turn_provider
 from dome_api.security.headers import RequestLogMiddleware, SecurityHeadersMiddleware, build_csp
 from dome_api.security.proxy import TrustedProxyMiddleware
 from dome_api.security.ratelimit import SlidingWindowLimiter
@@ -88,6 +90,18 @@ def _build_services(settings: Settings) -> Services:
         registry=registry,
         validate_responses=settings.validate_rest_responses,
     )
+    screen = ScreenService(
+        config=ScreenConfig.from_settings(settings, registry),
+        turn=TurnService(
+            TurnConfig.from_settings(
+                settings, start_lifetime_seconds=int(registry.limits["screen_start_command_lifetime_seconds"])
+            ),
+            build_turn_provider(settings),
+        ),
+        db=db,
+        relay=relay,
+    )
+    relay.screen = screen  # the socket-close paths end owned Screen view sessions through it
     return Services(
         settings=settings,
         engine=engine,
@@ -114,6 +128,7 @@ def _build_services(settings: Settings) -> Services:
             relay=relay,
             assistant=assistant,
         ),
+        screen=screen,
     )
 
 
@@ -143,16 +158,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await sweeper.start()
         await services.assistant.start()
         await services.billing.start()
+        await services.screen.start()
         log.info(
             "startup",
             version=__version__,
             env=settings.env,
             origin=settings.public_origin,
             billing=settings.billing_mode,
+            screen_view="on" if settings.screen_view_enabled else "off",
+            turn=settings.effective_turn_provider,
         )
         try:
             yield
         finally:
+            await services.screen.stop()
+            await services.screen.aclose()
             await services.billing.stop()
             await services.billing.aclose()
             await services.assistant.stop()

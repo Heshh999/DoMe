@@ -20,7 +20,8 @@ Secret rules enforced here (tested in tests/test_dome_deploy.py):
   ``flyctl mpg create`` and ``flyctl mpg attach`` print the database password, so their output is never
   shown at all; only a fixed line and the exit code are.
 * Child processes do not inherit DOME_OIDC_CLIENT_SECRET, DEPLOY_DATABASE_URL (the GitHub secret DATABASE_URL),
-  DOME_STRIPE_SECRET_KEY, DOME_STRIPE_WEBHOOK_SECRET or GH_TOKEN; flyctl gets FLY_API_TOKEN because it needs it. The
+  DOME_STRIPE_SECRET_KEY, DOME_STRIPE_WEBHOOK_SECRET, DOME_TURN_API_TOKEN, DOME_TURN_ANALYTICS_TOKEN or GH_TOKEN; flyctl
+  gets FLY_API_TOKEN because it needs it. The
   database password inside DATABASE_URL is masked on its own too (GitHub masks only the whole stored value).
 * The summary (``$GITHUB_STEP_SUMMARY``) names secrets and says what happened to them; it never holds a value.
 * The gate job never sees a secret value: GitHub evaluates ``secrets.X != ''`` and hands over only the NAMES of
@@ -92,6 +93,8 @@ CHILD_ENV_DROP = frozenset(
         "DEPLOY_DATABASE_URL",
         "DOME_STRIPE_SECRET_KEY",
         "DOME_STRIPE_WEBHOOK_SECRET",
+        "DOME_TURN_API_TOKEN",
+        "DOME_TURN_ANALYTICS_TOKEN",
         "GH_TOKEN",
     }
 )
@@ -103,6 +106,8 @@ DEPLOY_SECRET_NAMES = (
     "DATABASE_URL",
     "DOME_STRIPE_SECRET_KEY",
     "DOME_STRIPE_WEBHOOK_SECRET",
+    "DOME_TURN_API_TOKEN",
+    "DOME_TURN_ANALYTICS_TOKEN",
 )
 GITHUB_API = "https://api.github.com"
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # RFC 6455 section 1.3
@@ -145,6 +150,22 @@ BILLING_MODE_TEXT = {
     "off": "Stripe: off — nothing can be bought, everyone stays on Free",
     "test": "Stripe: TEST MODE — no real charges",
     "live": "Stripe: LIVE — real charges",
+}
+# Screen view, Phase 1 beta (docs/design/screen-view.md §12, §13, §20; cloud-api settings.py _v_screen). The relay
+# server (Cloudflare Realtime TURN) for the PHONE needs two values, both or neither: the Environment VARIABLE
+# DOME_TURN_KEY_ID and the Environment SECRET DOME_TURN_API_TOKEN (staged into Fly on stdin). The SECRET
+# DOME_TURN_ANALYTICS_TOKEN (read-only analytics scope, for the hourly usage reconciliation) is optional and accepted
+# only with them. DOME_SCREEN_VIEW_ENABLED is a VARIABLE and the beta's switch: "true" switches it on; anything else
+# leaves it off, and the summary says so honestly. Without the TURN values Screen view works only where a direct
+# connection exists (the app says `turn: unavailable`).
+TURN_KEY_ID = "DOME_TURN_KEY_ID"
+TURN_SECRET_NAMES = ("DOME_TURN_API_TOKEN", "DOME_TURN_ANALYTICS_TOKEN")
+TURN_NAMES = (TURN_KEY_ID, *TURN_SECRET_NAMES)
+SCREEN_VIEW_SWITCH = "DOME_SCREEN_VIEW_ENABLED"
+SCREEN_VIEW_TEXT = {"off": "Screen view: off", "on": "Screen view: ON (beta)"}
+TURN_TEXT = {
+    "off": "relay server: none (no `DOME_TURN_` values; Screen view works only where a direct connection exists)",
+    "on": "relay server: Cloudflare TURN",
 }
 DATABASE_MODES = ("external", "fly-managed")
 AUTO_STOP_VALUES = ("off", "stop", "suspend")
@@ -208,6 +229,8 @@ _FLY_TOKENS = re.compile(r"\b(FlyV1\s+\S+|f[mo][12]_[A-Za-z0-9_+/=-]{8,})")
 _PRIVATE_KEY_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)
 _STRIPE_SECRETS = re.compile(r"\b((?:sk|rk)_(?:test|live)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9+/=]{8,})")
 _STRIPE_PRICE_ID = re.compile(r"^price_[A-Za-z0-9_]{4,}$")  # cloud-api settings.py _PRICE_ID
+# cloud-api settings.py turn_key_id pattern, with a floor so a cut-off paste is caught here, before Fly
+_TURN_KEY_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _SECRET_ASSIGNMENT = re.compile(r"\b([A-Z][A-Z0-9_]*(?:URL|SECRET|PASSWORD|TOKEN|KEY|B64))=\S+")
 
 
@@ -1080,6 +1103,165 @@ def billing_next_steps(cfg: EnvConfig, billing: Billing) -> list[str]:
     return steps
 
 
+@dataclass(frozen=True)
+class ScreenView:
+    """The Screen view values of one GitHub Environment: the switch, and the relay server (TURN) values when both
+    are present. The secrets live in memory only and reach Fly on stdin."""
+
+    enabled: bool = False
+    turn: str = "off"  # "off" or "on"
+    key_id: str = ""
+    api_token: str = field(default="", repr=False)
+    analytics_token: str = field(default="", repr=False)
+
+    @property
+    def turn_on(self) -> bool:
+        return self.turn == "on"
+
+    @property
+    def reconciliation(self) -> bool:
+        return self.turn_on and bool(self.analytics_token)
+
+
+@dataclass
+class ScreenViewCheck:
+    screen: ScreenView
+    problems: list[str] = field(default_factory=list)
+    missing_secrets: list[str] = field(default_factory=list)
+    missing_vars: list[str] = field(default_factory=list)
+    next_steps: list[str] = field(default_factory=list)
+
+
+def turn_token_steps(name: str) -> str:
+    """How to replace a Cloudflare token that others may have seen (it was stored somewhere that is not hidden)."""
+    if name == "DOME_TURN_API_TOKEN":
+        return (
+            "In the Cloudflare dashboard open **Realtime** > **TURN Server**, delete the key this token belongs to and "
+            "create a new one (docs/design/screen-view.md section 20, step 1); paste the new key's token only as the "
+            "Environment secret `DOME_TURN_API_TOKEN` and its id as the Environment variable `DOME_TURN_KEY_ID`."
+        )
+    return (
+        "In the Cloudflare dashboard open **My Profile** > **API Tokens**, roll (or delete and recreate) the read-only "
+        "analytics token, and paste the new one only as the Environment secret `DOME_TURN_ANALYTICS_TOKEN`."
+    )
+
+
+def read_screen_view(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook) -> ScreenViewCheck:
+    """The Screen view switch and the relay server values, checked before any flyctl call with the rules of cloud-api
+    settings.py (`_v_screen`): key id and API token both or neither, the analytics token only with them, usable shapes.
+    Messages name variables, never values."""
+    page = environments_page(env)
+    switch = env.get(SCREEN_VIEW_SWITCH, "").strip().lower()
+    key_id = env.get(TURN_KEY_ID, "").strip()
+    api_token = env.get("DOME_TURN_API_TOKEN", "").strip()
+    analytics = env.get("DOME_TURN_ANALYTICS_TOKEN", "").strip()
+    for value in (api_token, analytics):
+        if value:
+            book.add(value, mask=False)  # stored GitHub secrets: GitHub masks the whole value itself
+    # NAMES (never values) of the two secrets saved as Environment variables instead (deploy.yml evaluates
+    # `vars.X != ''`): a variable is never hidden, so such a value must be replaced at Cloudflare.
+    as_variables = [n for n in TURN_SECRET_NAMES if n in env.get("TURN_SECRETS_AS_VARIABLES", "").split()]
+    check = ScreenViewCheck(ScreenView())
+    if switch not in ("", "true", "false"):
+        check.problems.append(
+            f"The variable `{SCREEN_VIEW_SWITCH}` must be `true` or `false` (or absent, which means off)."
+        )
+    enabled = switch == "true"
+    for name in as_variables:
+        check.problems.append(
+            f"`{name}` is saved as an Environment **variable**. It is a password, and GitHub never hides variables, "
+            "so treat it as seen by others."
+        )
+        check.next_steps.append(
+            turn_token_steps(name)
+            + f" Delete the **variable** `{name}` (Environment variables, the bin icon next to it)."
+        )
+    if not key_id and not api_token and not analytics and not as_variables:
+        check.screen = ScreenView(enabled=enabled)
+        return check
+
+    if bool(key_id) != bool(api_token) and not as_variables:
+        missing = "DOME_TURN_API_TOKEN" if key_id else TURN_KEY_ID
+        check.problems.append(
+            f"Screen view's relay server is half set up in the {cfg.name} environment: `{missing}` is missing. DoMe "
+            f"takes both `{TURN_KEY_ID}` and `DOME_TURN_API_TOKEN` or neither (with neither, Screen view works only "
+            "where a direct connection exists)."
+        )
+        (check.missing_secrets if missing == "DOME_TURN_API_TOKEN" else check.missing_vars).append(missing)
+        check.next_steps.append(
+            f"Both come from the Cloudflare dashboard, **Realtime** > **TURN Server** > the key for {cfg.name}: the "
+            f"key id is the **variable** `{TURN_KEY_ID}`, the token is the **secret** `DOME_TURN_API_TOKEN` "
+            "(docs/design/screen-view.md section 20, step 1). To keep the relay server off instead, delete every "
+            f"`DOME_TURN_` secret and variable from the {cfg.name} environment."
+        )
+    if analytics and not (key_id and api_token) and not as_variables:
+        check.problems.append(
+            "`DOME_TURN_ANALYTICS_TOKEN` is set, but the relay server key is not: the usage reconciliation only makes "
+            f"sense with `{TURN_KEY_ID}` and `DOME_TURN_API_TOKEN`. Add them, or delete the analytics token."
+        )
+    if key_id and not _TURN_KEY_ID.match(key_id):
+        check.problems.append(
+            f"The variable `{TURN_KEY_ID}` is not a TURN key id (letters, digits, `-` and `_` only, at least 8 "
+            "characters, no spaces). Copy it again from Cloudflare > **Realtime** > **TURN Server**."
+        )
+    if api_token and (not importable(api_token) or len(api_token) < 16):
+        check.problems.append(
+            "`DOME_TURN_API_TOKEN` contains a space, a quote or #, or is too short to be a whole token. Copy it again "
+            "with Cloudflare's copy button."
+        )
+    if analytics and (not importable(analytics) or len(analytics) < 16):
+        check.problems.append(
+            "`DOME_TURN_ANALYTICS_TOKEN` contains a space, a quote or #, or is too short to be a whole token. Copy it "
+            "again with Cloudflare's copy button."
+        )
+    if not check.problems and not check.missing_secrets and not check.missing_vars and key_id and api_token:
+        check.screen = ScreenView(enabled, "on", key_id, api_token, analytics)
+    if check.problems or check.missing_secrets or check.missing_vars:
+        check.next_steps.append(
+            f"The Screen view values are at {page} > **{cfg.name}** (docs/design/screen-view.md section 20)."
+        )
+    return check
+
+
+def screen_view_step_text(screen: ScreenView) -> str:
+    switch = f"**{SCREEN_VIEW_TEXT['on' if screen.enabled else 'off']}**"
+    if not screen.enabled:
+        switch += f" (the variable `{SCREEN_VIEW_SWITCH}` is not `true` in this GitHub Environment)"
+    if screen.turn_on:
+        relay = f"{TURN_TEXT['on']} (`{TURN_KEY_ID}` passed to the app, `DOME_TURN_API_TOKEN` stored in Fly; usage " + (
+            "reconciliation on: `DOME_TURN_ANALYTICS_TOKEN` stored in Fly)"
+            if screen.reconciliation
+            else "reconciliation off: no `DOME_TURN_ANALYTICS_TOKEN`, the app's own bound carries the guard)"
+        )
+    else:
+        relay = TURN_TEXT["off"]
+    return f"{switch}; {relay}"
+
+
+def screen_view_of(health: Health) -> tuple[str, str]:
+    """What the running app says (GET /healthz): (`screen_view`, `turn`) as cloud-api routes/health.py reports them,
+    or ("unknown", "unknown") for an older build without the fields."""
+    body = health.body if health.reachable and health.status_code == 200 else {}
+    switch, turn = body.get("screen_view"), body.get("turn")
+    if switch not in ("on", "off") or turn not in ("ok", "unconfigured", "error"):
+        return "unknown", "unknown"
+    return str(switch), str(turn)
+
+
+def screen_view_status_text(health: Health) -> str:
+    switch, turn = screen_view_of(health)
+    if switch == "unknown":
+        return "unknown (/healthz has no Screen view fields: an older build)"
+    text = f"**{SCREEN_VIEW_TEXT[switch]}**"
+    if turn == "ok":
+        text += f"; {TURN_TEXT['on']} configured"
+    elif turn == "error":
+        text += f"; {TURN_TEXT['on']} configured but not answering (the app mints no relay credentials for a while)"
+    else:
+        text += f"; {TURN_TEXT['off']}"
+    return text
+
+
 @dataclass
 class Inputs:
     cfg: EnvConfig
@@ -1097,6 +1279,7 @@ class Inputs:
     support_url: str
     support_expectation: str
     billing: Billing = field(default_factory=Billing)
+    screen: ScreenView = field(default_factory=ScreenView)
 
 
 def url_password(url: str) -> str:
@@ -1221,6 +1404,9 @@ def check_no_repository_secrets(env: Mapping[str, str]) -> None:
             "In Stripe > **Developers** > **Webhooks**, open the endpoint, roll its **Signing secret**, and paste the "
             "new one only as the Environment secret `DOME_STRIPE_WEBHOOK_SECRET` of that endpoint's environment."
         )
+    for name in TURN_SECRET_NAMES:
+        if name in found:
+            steps.append(turn_token_steps(name))
     steps.append("Run Deploy again.")
     raise Stop(
         "you",
@@ -1419,6 +1605,10 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
     problems += billing.problems
     missing_secrets += billing.missing_secrets
     missing_vars += billing.missing_vars
+    screen = read_screen_view(env, cfg, book)
+    problems += screen.problems
+    missing_secrets += screen.missing_secrets
+    missing_vars += screen.missing_vars
 
     next_steps: list[str] = []
     if missing_secrets:
@@ -1443,6 +1633,7 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
             "the database**. Never paste the Neon address into this environment."
         )
     next_steps += billing.next_steps
+    next_steps += screen.next_steps
     if missing_secrets or missing_vars or problems:
         next_steps.append("Run Deploy again. Nothing was created or changed by this run.")
         raise Stop(
@@ -1464,6 +1655,7 @@ def read_inputs(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook, summar
         support_url=support_url,
         support_expectation=expectation,
         billing=billing.billing,
+        screen=screen.screen,
     )
 
 
@@ -1815,6 +2007,7 @@ class Deployer:
             inputs = read_inputs(self.env, cfg, self.book, self.summary)
             self.summary.step("Inputs", "all present")
             self.summary.step("Billing (Stripe)", billing_step_text(inputs.billing))
+            self.summary.step("Screen view", screen_view_step_text(inputs.screen))
             self.deploy(inputs)
         except Stop as stop:
             self.summary.headline = HEADLINES[stop.kind]
@@ -1931,16 +2124,29 @@ class Deployer:
                 ("DOME_STRIPE_SECRET_KEY", inp.billing.secret_key),
                 ("DOME_STRIPE_WEBHOOK_SECRET", inp.billing.webhook_secret),
             ]
+        turn_staged: list[str] = []
+        if inp.screen.turn_on:
+            staged.append(("DOME_TURN_API_TOKEN", inp.screen.api_token))
+            turn_staged.append("DOME_TURN_API_TOKEN")
+            if inp.screen.analytics_token:
+                staged.append(("DOME_TURN_ANALYTICS_TOKEN", inp.screen.analytics_token))
+                turn_staged.append("DOME_TURN_ANALYTICS_TOKEN")
         self.log("Storing secrets in Fly (staged; they reach the app with this deploy)")
         self.stage(app, staged)
         self.summary.step("DOME_OIDC_CLIENT_SECRET", "updated from GitHub")
         if inp.billing.on:
             self.summary.step(", ".join(STRIPE_SECRET_NAMES), "updated from GitHub")
+        if turn_staged:
+            self.summary.step(", ".join(turn_staged), "updated from GitHub")
         # Removal: the GitHub Environment is the only source of the Stripe values, and the app refuses to start with
         # only some of the seven, so a DOME_STRIPE_* secret an earlier deploy (or a person) left in Fly goes away when
         # GitHub no longer has it (all of them when billing is off; any price id kept as a Fly secret when it is on,
-        # because the price ids now come with -e).
-        leftovers = [n for n in STRIPE_NAMES if n in names and n not in {name for name, _ in staged}]
+        # because the price ids now come with -e). The same holds for the Screen view relay server values: the two
+        # TURN secrets go when GitHub no longer has them (the key id comes with -e), so the app never starts with a
+        # token and no key id.
+        staged_names = {name for name, _ in staged}
+        leftovers = [n for n in STRIPE_NAMES if n in names and n not in staged_names]
+        turn_leftovers = [n for n in TURN_NAMES if n in names and n not in staged_names]
         if leftovers:
             self.unstage(app, leftovers)
             self.summary.step(
@@ -1952,6 +2158,17 @@ class Deployer:
                     "were removed because this GitHub Environment has no `DOME_STRIPE_` values. Subscriptions that "
                     "already exist keep running and charging at Stripe, but DoMe no longer hears about them: cancel "
                     "them in the Stripe dashboard, or put all seven values back and run Deploy again."
+                )
+        if turn_leftovers:
+            self.unstage(app, turn_leftovers)
+            self.summary.step(
+                ", ".join(turn_leftovers), "removed from Fly with this deploy (not in this GitHub Environment)"
+            )
+            if not inp.screen.turn_on:
+                self.summary.notes.append(
+                    "The Screen view relay server was switched **off** by this deploy: the Cloudflare TURN secrets an "
+                    "earlier deploy stored in Fly were removed because this GitHub Environment has no `DOME_TURN_` "
+                    "values. Screen view, if on, now works only where a direct connection exists."
                 )
 
         self.build_and_deploy(inp)
@@ -2226,6 +2443,11 @@ class Deployer:
         if inp.support_expectation:
             env_args.append(f"DOME_SUPPORT_RESPONSE_EXPECTATION={inp.support_expectation}")
         env_args += [f"{name}={value}" for name, value in inp.billing.prices]  # not secret: price ids
+        # Screen view: the switch is passed explicitly either way (off is the honest default), the TURN key id only with
+        # its token (both or neither, like the app's own check)
+        env_args.append(f"{SCREEN_VIEW_SWITCH}={'true' if inp.screen.enabled else 'false'}")
+        if inp.screen.turn_on:
+            env_args.append(f"{TURN_KEY_ID}={inp.screen.key_id}")  # not secret: the key's id
         config = self.write_fly_config(cfg)
         argv = [
             "flyctl",
@@ -2385,6 +2607,24 @@ class Deployer:
             )
             problems.append(problem)
             self.summary.step(f"{app}.fly.dev billing (/v1/plans)", problem)
+        switch, turn = screen_view_of(health)
+        wanted_switch = "on" if inp.screen.enabled else "off"
+        wanted_turn = "ok" if inp.screen.turn_on else "unconfigured"
+        if (switch, turn) == (wanted_switch, wanted_turn):
+            turn_text = TURN_TEXT["on" if turn == "ok" else "off"].split(" (")[0]
+            self.summary.step(
+                f"{app}.fly.dev Screen view (/healthz)",
+                f"reports {SCREEN_VIEW_TEXT[switch].lower()}, {turn_text}, as configured",
+            )
+        else:
+            problem = (
+                "/healthz did not answer with the Screen view fields (an older build?)"
+                if switch == "unknown"
+                else f"/healthz reports Screen view {switch} with relay server {turn}, but this deploy configured "
+                f"{wanted_switch} with relay server {wanted_turn}"
+            )
+            problems.append(problem)
+            self.summary.step(f"{app}.fly.dev Screen view (/healthz)", problem)
         if problems:
             raise Stop(
                 "engineer",
@@ -2658,6 +2898,7 @@ def run_status(env: Mapping[str, str], out: TextIO, envs: Mapping[str, EnvConfig
             "Billing (Stripe)",
             f"**{BILLING_MODE_TEXT[billing]}**" if billing in BILLING_MODE_TEXT else f"unknown (/v1/plans: {billing})",
         )
+        summary.step("Screen view", screen_view_status_text(health))
         try:
             app_addresses = set(resolve(f"{app}.fly.dev"))
         except OSError:

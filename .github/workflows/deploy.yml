@@ -24,7 +24,10 @@
 #   which holds FLY_API_TOKEN, DOME_OIDC_CLIENT_SECRET and DATABASE_URL (staging: required, its Neon
 #   database's direct address; production: only a fallback when Fly will not list or attach its Managed
 #   Postgres, never a Neon address), and optionally billing: the secrets DOME_STRIPE_SECRET_KEY and
-#   DOME_STRIPE_WEBHOOK_SECRET with the five variables DOME_STRIPE_PRICE_* (all seven or none). No job receives a Fly token without an approval from the founder's
+#   DOME_STRIPE_WEBHOOK_SECRET with the five variables DOME_STRIPE_PRICE_* (all seven or none), and optionally the
+#   Screen view relay server: the secret DOME_TURN_API_TOKEN with the variable DOME_TURN_KEY_ID (both or none) plus
+#   the optional secret DOME_TURN_ANALYTICS_TOKEN; the Screen view beta itself is the variable
+#   DOME_SCREEN_VIEW_ENABLED (true = on; the summary says "Screen view: off" otherwise). No job receives a Fly token without an approval from the founder's
 #   GitHub account; that approval authorizes whatever is on the default branch at that commit
 #   (docs/SECURITY.md section 6).
 # * Jobs "gate", "deploy" and "status" all refuse, before any request, when staging and production resolve
@@ -94,7 +97,7 @@ jobs:
           FLY_STAGING_APP: ${{ vars.FLY_STAGING_APP }}
           FLY_PRODUCTION_APP: ${{ vars.FLY_PRODUCTION_APP }}
           # Names only: GitHub evaluates each comparison, so no secret value reaches this job.
-          REPO_LEVEL_SECRETS: ${{ secrets.FLY_API_TOKEN != '' && 'FLY_API_TOKEN ' || '' }}${{ secrets.DOME_OIDC_CLIENT_SECRET != '' && 'DOME_OIDC_CLIENT_SECRET ' || '' }}${{ secrets.DATABASE_URL != '' && 'DATABASE_URL ' || '' }}${{ secrets.DOME_STRIPE_SECRET_KEY != '' && 'DOME_STRIPE_SECRET_KEY ' || '' }}${{ secrets.DOME_STRIPE_WEBHOOK_SECRET != '' && 'DOME_STRIPE_WEBHOOK_SECRET' || '' }}
+          REPO_LEVEL_SECRETS: ${{ secrets.FLY_API_TOKEN != '' && 'FLY_API_TOKEN ' || '' }}${{ secrets.DOME_OIDC_CLIENT_SECRET != '' && 'DOME_OIDC_CLIENT_SECRET ' || '' }}${{ secrets.DATABASE_URL != '' && 'DATABASE_URL ' || '' }}${{ secrets.DOME_STRIPE_SECRET_KEY != '' && 'DOME_STRIPE_SECRET_KEY ' || '' }}${{ secrets.DOME_STRIPE_WEBHOOK_SECRET != '' && 'DOME_STRIPE_WEBHOOK_SECRET ' || '' }}${{ secrets.DOME_TURN_API_TOKEN != '' && 'DOME_TURN_API_TOKEN ' || '' }}${{ secrets.DOME_TURN_ANALYTICS_TOKEN != '' && 'DOME_TURN_ANALYTICS_TOKEN' || '' }}
           GH_TOKEN: ${{ github.token }}
         run: /usr/bin/python3 -I deploy/launch/dome_deploy.py gate
 
@@ -143,6 +146,11 @@ jobs:
           # Staging refuses a live key. Staged into Fly on stdin, never echoed.
           DOME_STRIPE_SECRET_KEY: ${{ secrets.DOME_STRIPE_SECRET_KEY }}
           DOME_STRIPE_WEBHOOK_SECRET: ${{ secrets.DOME_STRIPE_WEBHOOK_SECRET }}
+          # Screen view relay server (docs/design/screen-view.md section 20): the Cloudflare TURN key's token, both or
+          # none with the variable DOME_TURN_KEY_ID below; the read-only analytics token is optional. Staged into Fly on
+          # stdin, never echoed.
+          DOME_TURN_API_TOKEN: ${{ secrets.DOME_TURN_API_TOKEN }}
+          DOME_TURN_ANALYTICS_TOKEN: ${{ secrets.DOME_TURN_ANALYTICS_TOKEN }}
           # Not secret: environment variables (or repository variables for the app-name overrides).
           DOME_OIDC_ISSUER: ${{ vars.DOME_OIDC_ISSUER }}
           DOME_OIDC_CLIENT_ID: ${{ vars.DOME_OIDC_CLIENT_ID }}
@@ -159,6 +167,12 @@ jobs:
           DOME_STRIPE_PRICE_TOPUP: ${{ vars.DOME_STRIPE_PRICE_TOPUP }}
           # Names only, never values: a Stripe secret saved as a VARIABLE by mistake (variables are never hidden).
           STRIPE_SECRETS_AS_VARIABLES: ${{ vars.DOME_STRIPE_SECRET_KEY != '' && 'DOME_STRIPE_SECRET_KEY ' || '' }}${{ vars.DOME_STRIPE_WEBHOOK_SECRET != '' && 'DOME_STRIPE_WEBHOOK_SECRET' || '' }}
+          # Screen view (not secret): the beta switch (true = on, anything else = off) and the TURN key's id, passed to
+          # the app with flyctl deploy -e like the price ids
+          DOME_SCREEN_VIEW_ENABLED: ${{ vars.DOME_SCREEN_VIEW_ENABLED }}
+          DOME_TURN_KEY_ID: ${{ vars.DOME_TURN_KEY_ID }}
+          # Names only, never values: a Cloudflare token saved as a VARIABLE by mistake.
+          TURN_SECRETS_AS_VARIABLES: ${{ vars.DOME_TURN_API_TOKEN != '' && 'DOME_TURN_API_TOKEN ' || '' }}${{ vars.DOME_TURN_ANALYTICS_TOKEN != '' && 'DOME_TURN_ANALYTICS_TOKEN' || '' }}
           DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
           CREATE_DATABASE: ${{ inputs.create_database_if_missing }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

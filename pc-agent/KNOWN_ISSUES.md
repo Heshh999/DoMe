@@ -79,3 +79,82 @@
     put it into its own full screen, reported as `WINDOW_STATE_UNCHANGED` (the owner opted in to F11 there).
     The phone's own copy for `FULLSCREEN_UNSUPPORTED` may still say only "Try Maximise instead" where it does
     not show the agent's message (mobile-app).
+19. **The PyPI `av` wheel is not the shipping build.** `uv sync --locked --extra dev` installs the stock PyAV wheel
+    from PyPI (it bundles GPL x264/x265 and every FFmpeg decoder) so that the Linux unit tests can run aiortc on
+    loopback; it never ships. The shipping LGPL FFmpeg + PyAV wheel comes from `.github/workflows/ffmpeg-lgpl.yml`
+    (written, never run) and will be pinned under `[tool.uv.sources]` with `marker = "sys_platform == 'win32'"`
+    once published (WP0.1). Until then a Windows developer's `uv sync` also gets the GPL wheel (fine for
+    development; `packaging/licence_gate.py` refuses it in a release). `DoMe.exe screen-worker --self-test`
+    reports `decoders.exactly_wrapped_avframe: false` on it, honestly.
+20. **Nothing in Screen view is verified on a device.** Capture (`ddagrab` through PyAV's `lavfi` device, the
+    Windows.Graphics.Capture fallback), `h264_mf` encoding and whether a vendor's MFT repeats SPS/PPS, the Tk
+    bars with `WS_EX_NOACTIVATE` / `SetWindowDisplayAffinity`, `RegisterHotKey`, the Job object killing the
+    worker when DoMe.exe dies, `SetCursorPos` under per-monitor DPI on mixed-DPI, rotated or HDR monitors, mDNS
+    `.local` candidates from a standard-user process and the Windows firewall prompt are written against the
+    design and the documentation only. The Linux tests use the fake frame sources (`lavfi testsrc`, synthetic
+    frames) and the development `libx264`; every failure on a real PC must come back as
+    `SCREEN_CAPTURE_UNAVAILABLE{driver|busy|unsupported_display|remote_session}` or
+    `SCREEN_ENCODER_UNAVAILABLE` and is reported, never pretended.
+21. **The WGC fallback needs the `windows-capture` package, which is not a dependency yet**: `WgcSource` answers
+    `SCREEN_CAPTURE_UNAVAILABLE{detail: unsupported_display}` until the device round shows that Desktop
+    Duplication really fails on a hybrid-GPU laptop and the package is added (and its DLL covered by the licence
+    gate). When it is added it streams only the primary monitor (`monitor_index=None`) and refuses a first frame whose
+    size differs from the monitor taps map onto (DECISIONS #85); **not yet verified on a device**.
+22. **Bar placement on scaled and multi-monitor PCs is written against the documentation only** (DECISIONS #79): the
+    Tk thread is made per-monitor DPI aware (v2) so bar geometry is physical pixels, each bar's real rectangle is read
+    with `GetWindowRect` / `MonitorFromWindow` and must lie on its monitor (else the start is refused and a live
+    mis-placement pauses capture), and taps are refused on the measured rectangle. On Windows older than 10 1607
+    (no `SetThreadDpiAwarenessContext`) the bars may land elsewhere on a scaled display and the placement check then
+    refuses Screen view rather than stream without a bar. Making the Tk thread DPI aware also renders DoMe's other
+    tkinter windows (pairing, grant, consent) unscaled in pixel terms (fonts scale): **not yet verified on a device**.
+    Off Windows (development) the reserved band is still the fixed 56 px.
+23. **Display changes are detected by polling, not by `WM_DISPLAYCHANGE`**: the agent enumerates the monitors afresh
+    every second while a session is live (and the Tk thread checks every second that each bar window still exists), so
+    a monitor plugged in, unplugged or switched to another resolution pauses capture within about a second, the bars
+    are recreated for the new set and capture resumes; the session ends `capture_failed` if that takes more than 10 s,
+    and at once if the viewed monitor itself was unplugged. When the viewed monitor changed size, rotation or place the
+    worker rebuilds its capture at the new size and announces a new geometry generation; taps aimed at the old picture
+    are refused `SCREEN_GEOMETRY_CHANGED` until the phone has the new one. A change that leaves every monitor's
+    rectangle as it was (a colour-depth or refresh-rate switch) is not noticed by the agent; `ddagrab` rebuilds itself
+    then (up to three times).
+24. **Bitrate steps reopen the encoder (about 100 ms without frames) and no REMB is wired**: the worker steps
+    1.5 → 0.8 → 0.5 Mbps only from `getStats()` receiver reports (`fractionLost` above 10 % for 5 s).
+25. **`screen_session_result.allowance.remaining_seconds` is always `null`** from the agent (CONTRACT_ISSUES.md
+    #18): the phone shows the window figures it received in `screen_ice_servers` and the data-channel
+    `allowance` message instead.
+26. **A headless agent (`--headless`, `NullUI`) can never start Screen view**: with no window there is no
+    indicator, so every start is `SCREEN_CAPTURE_UNAVAILABLE{detail: indicator}`. This is the fail-closed rule,
+    not a bug; `grant --screen` likewise needs the running tray to open its window.
+27. **`screen_audio` is granted but nothing is streamed in Phase 1** (DECISIONS.md #67): the audio m-line is
+    `inactive`, the bar shows no speaker glyph and `screen_session_result.audio` is `false`.
+28. **The strict offer check accepts any `application` section whose protocol names SCTP** and leaves the finer
+    SDP parsing to aiortc; an offer aiortc refuses after the strict check answers `SCREEN_OFFER_INVALID` with
+    `reason: media` rather than a more specific reason.
+29. **The agent's monitor numbering is not checked against `ddagrab`'s `output_idx`.** The agent numbers monitors
+    primary first, then by position (`platform/windows/screen.py`), and passes that number to `ddagrab` as
+    `output_idx`, which counts the outputs of the graphics adapter as DXGI lists them. On a one-adapter PC the primary
+    is normally output 0, and Phase 1 phones only ask for the primary, but on a multi-monitor or hybrid-GPU PC the two
+    numberings may differ: **not yet verified on a device**. Phase 2 ("Next screen") must map by the monitor's
+    rectangle (`IDXGIOutput::GetDesc`) before it offers other monitors.
+30. **The Screen view tkinter windows (grant window, consent window, bars) have no automated test that opens a real
+    window.** (The bar controller's placement check and heartbeat are unit-tested against a fake tkinter since
+    2026-10-22.)
+    Their button logic (`GrantWindowModel`, `ConsentWindowModel`), the menu items, the fail-closed paths without a
+    display and the agent's use of them through a fake UI are unit-tested; the windows themselves, `WS_EX_NOACTIVATE`,
+    the display affinity and the hotkey are **not yet verified on a device** (this environment has no Tk).
+31. **A capture source that cannot open is reported only after DTLS** (DECISIONS #82): no frame may exist before the
+    phone's certificate is verified, so `ddagrab` / WGC open in the track, after `connected`. A PC whose duplication is
+    busy (another capture app) or unsupported therefore answers the start, shows the bars, connects and then ends
+    `capture_failed` ("Your PC's screen sharing stopped unexpectedly"), instead of refusing the start with
+    `SCREEN_CAPTURE_UNAVAILABLE{busy|unsupported_display}`. The worker's `error` still names the detail in the agent's
+    log. A pre-flight that checks the duplication without capturing a frame is a candidate for the device round.
+32. **Desktop Duplication's still-desktop behaviour is not verified on a device** (DECISIONS #83): `DdagrabSource`
+    treats `av.error.BlockingIOError` (EAGAIN) as "nothing new" and returns None, but if PyAV's lavfi read blocks
+    instead, the 1 fps floor cannot fire while the desktop is still and the phone's stall detector would re-session.
+    Device checklist (`README.md`): a still desktop for 10 s keeps ≥ 1 fps with no rebuild; one UAC prompt pauses
+    rather than ends. If lavfi blocks, switch to PyAV's `Graph` pull API (ADR-0002 D4).
+33. **Current Windows builds do not include Screen view** (DECISIONS #86): they are made without the `screen` extra, so
+    they still announce protocol 1.4 (pairing needs `pc_key_mac`) but refuse every start with
+    `ACTION_UNAVAILABLE{reason: screen_view_not_included}` before any window or bar, and the tray shows "Screen view:
+    not in this version of DoMe". A build with the shipping LGPL wheel (`.github/workflows/ffmpeg-lgpl.yml`, never run)
+    is what turns it on.

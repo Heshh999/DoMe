@@ -55,7 +55,8 @@ export default defineConfig({
         display: "standalone",
         start_url: "/app",
         scope: "/",
-        orientation: "portrait",
+        // Screen view turns the picture landscape when the phone is rotated (docs/design/screen-view.md §16)
+        orientation: "any",
         icons: [
           { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },

@@ -18,8 +18,12 @@
 ;     elevated that way, runs no DoMe.exe at all and uses its registry fallbacks. With UAC off (or the
 ;     built-in Administrator) every program of the account runs with full rights anyway; Setup then only
 ;     asks whether this is the right account (that is how the GitHub Actions runner installs it);
+;   * shows DoMe's licence terms (licence-terms.txt; a silent install accepts them). They permit what the
+;     LGPL asks of DoMe for pystray and, in builds with Screen view, the FFmpeg libraries: replacing those
+;     parts and reverse engineering DoMe to debug such changes (docs/design/screen-view.md section 5.5);
 ;   * installs the PyInstaller folder (DoMe.exe, dome-native-host.exe, _internal\) into
-;     %LOCALAPPDATA%\Programs\DoMe and a Start menu shortcut;
+;     %LOCALAPPDATA%\Programs\DoMe and a Start menu shortcut, with THIRD_PARTY_NOTICES.txt and licenses\
+;     (written into that folder by build_installer.py) next to them;
 ;   * writes the DoMe server address into {app}\dome-server.json: https://domeremote.com, or in a
 ;     development build only /ApiUrl=https://... or the address of the previous installation (a release
 ;     build always writes https://domeremote.com). Only `DoMe.exe link` reads it, as its last fallback;
@@ -102,6 +106,8 @@ CloseApplicationsFilter=*.exe,*.dll,*.pyd
 RestartApplications=no
 SetupLogging=yes
 UsePreviousTasks=no
+; DoMe's terms (draft, packaging/installer/licence-terms.txt; ASCII, like this file).
+LicenseFile=licence-terms.txt
 #ifdef Sign
 SignTool=domesign
 SignedUninstaller=yes
@@ -148,14 +154,17 @@ english.StillRunningUninstall=DoMe is still running and did not close.%n%nRight-
 Name: "startatlogin"; Description: "{cm:StartAtLogin}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
 
 [InstallDelete]
-; A new version brings a complete PyInstaller runtime; never mix it with the old one.
+; A new version brings a complete PyInstaller runtime and its own licence texts; never mix them with the old ones.
 Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\licenses"
 
 [Files]
 ; signonce is ignored unless SignTool is set (/DSign).
 Source: "{#AppFiles}\DoMe.exe"; DestDir: "{app}"; Flags: ignoreversion signonce
 Source: "{#AppFiles}\dome-native-host.exe"; DestDir: "{app}"; Flags: ignoreversion signonce
 Source: "{#AppFiles}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#AppFiles}\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#AppFiles}\licenses\*.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\DoMe"; Filename: "{app}\DoMe.exe"; WorkingDir: "{app}"; Comment: "Control this PC from your phone"

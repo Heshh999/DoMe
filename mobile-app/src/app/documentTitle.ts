@@ -26,6 +26,7 @@ const APP_PAGES: Record<string, string> = {
   "/app": "Home",
   "/app/remote": "Remote",
   "/app/touchpad": "Touchpad",
+  "/app/screen": "Screen view",
   "/app/assistant": "Ask",
   "/app/command": "Type a command",
   "/app/apps": "Apps",

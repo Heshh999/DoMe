@@ -20,3 +20,8 @@ tests/test_app_approval_local.py
 tests/test_app_fullscreen_f11.py
 tests/test_tray_apps_window.py
 tests/test_installer_commands.py
+tests/test_screen_input_mapping.py
+tests/test_screen_ui_model.py
+tests/test_screen_sdp_check.py
+tests/test_screen_signing.py
+tests/test_screen_redaction.py

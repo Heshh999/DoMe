@@ -16,6 +16,10 @@ port-forwarding or VPN setup. See the master prompt for full requirements.
 actions / Native Messaging → browser extension → YouTube tab`.
 
 - The PC never listens on the internet. It opens one authenticated outbound WebSocket.
+- *Amended 2026-10-21 by ADR-0002 (Screen view, protocol 1.4):* during a live Screen view session only,
+  the PC's worker binds ephemeral UDP sockets that answer that session's ICE checks and complete DTLS
+  only with the certificate the phone signed; they close with the session. The PC is STUN-only and never
+  holds a TURN credential.
 - One modular FastAPI process owns REST, both WebSocket endpoints, and the in-process
   connection manager. PostgreSQL is the only datastore. No broker until horizontal scaling
   is demonstrated. **[reversible: introduce Redis pub/sub when >1 relay replica is needed]**
@@ -166,6 +170,12 @@ End-to-end payload encryption from the relay (the relay can read routed payloads
 privacy docs), LAN/offline mode, Wake-on-LAN, native apps, AI interpretation/voice
 (Phase E), screen viewing, trackpad/keyboard. The architecture leaves seams (transport
 abstraction, action registry, provider adapter interface) without exposing unfinished UI.
+
+*Amended 2026-10-21 by ADR-0002:* screen viewing moved into the product (Screen view, protocol 1.4,
+behind `DOME_SCREEN_VIEW_ENABLED`); its media is DTLS-SRTP between the PC and the phone, for the picture
+only. "End-to-end payload encryption from the relay" stays absent for commands, typing, PC state and
+signaling (`docs/ARCHITECTURE.md` §3.3, `docs/SECURITY.md` §1/§8). Trackpad and keyboard arrived in
+protocol 1.1 and AI interpretation in Phase E step 1, both after this record.
 
 ## Consequences
 

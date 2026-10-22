@@ -153,3 +153,55 @@ Items from the review that were recorded rather than fully closed, plus residual
     again once it finished. Search-result chips and deterministic chips are local turns: they never
     reach the AI even when it is on. A plan already running when the owner switches PC finishes on the
     PC it was shown for, but its closing line is not said (the conversation it belonged to was cleared).
+
+28. **Nothing in Screen view is verified on a device.** Playback of the PC's stream in Safari and the Home
+    Screen app (H.264 level, VP8 fallback), muted autoplay and the "Tap to show the picture" path,
+    `requestVideoFrameCallback` timing, the wake lock, landscape with `orientation: "any"`, safe areas,
+    tap precision with zoom and the loupe, pinch vs scroll on glass, the black picture after an app switch
+    (WebKit 231365), WebRTC under the CSP (`connect-src 'self'`) and NAT behaviour are tested in jsdom
+    with a fake `RTCPeerConnection` only. Label: **unit-/component-tested; not yet verified on a device**.
+    The README's Screen view checklist is open.
+
+29. **Phase 2 parts are not built.** No mini view (leaving the Screen page stops the session), no PC sound
+    (the audio transceiver is offered but `audio: false` is sent), no second monitor ("Next screen"), no
+    TV-style remote, no "Still watching?" prompt (the PC's 4-hour maximum still ends a session:
+    "Screen view stopped after 4 hours"), no direct-mode long-press drag (Touchpad mode drags instead).
+
+30. **"Weak connection: lowering quality" is never shown.** The §16 row needs a step-down signal the
+    1.4 data-channel vocabulary does not carry (CONTRACT_ISSUES 13). "Data saver" and "Via relay server"
+    are shown.
+
+31. **"Zeroing" the pairing code drops the reference.** JavaScript strings cannot be overwritten in place,
+    so after `HeldPairingCode.clear()` the text may stay in memory until garbage collection. It is never
+    in the URL, storage, logs or any other object (DECISIONS 67).
+
+32. **A browser with neither `requestVideoFrameCallback` nor `timeupdate` on a live stream would see false
+    stalls**: the phone would ask for keyframes and restart the session at most twice, then show
+    "Couldn't connect". Current iOS Safari has the callback (15.4+); confirm on the device round.
+
+33. **Existing pairings must pair again to use Screen view**, including the founder's iPhone: pins are only
+    written at pairing. A pairing done in a Safari tab pins nothing for the Home Screen app, whose storage
+    is separate [judge; confirm on device].
+
+34. **The Free minutes on the phone are a display.** The bar counts down from the last figure the relay or
+    the PC sent; the relay's clock is the charge and the PC's `ended{allowance_exhausted}` is what ends a
+    session, so the phone's figure can be a few seconds off and does not show the bounded pause discount.
+
+35. **Horizontal two-finger scroll follows the touchpad's sign convention** (fingers right → positive
+    `dx`, `MOUSEEVENTF_HWHEEL` right) with the shared direction preference. Whether "natural" feels right
+    horizontally on a PC is not yet verified on a device.
+
+36. **"Not allowed at the PC. Try again in a few minutes." is inferred from timing.** The PC answers a
+    start refused by its consent back-off with the same `SCREEN_CONSENT_DECLINED` as a Deny; the phone
+    shows the back-off line when the refusal came within 1.5 s of sending and with no acknowledgement
+    (no window was shown). CONTRACT_ISSUES 15 proposes a `detail.reason`.
+
+37. **A phone still running the 1.3 build cannot finish pairing with a 1.4 PC until it reloads.** The 1.3
+    build validates `pairing_status_response` against its own closed schema, and the approved status of a
+    1.4 PC carries `pc_key`, so a cached 1.3 PWA rejects it ("The server's answer was not understood") and
+    the pairing looks failed. Reloading the app (the service worker's update) fixes it; `docs/PROTOCOL.md`
+    §20.12 says so.
+
+38. **Every Windows build of DoMe so far lacks Screen view** (pc-agent KNOWN_ISSUES #33): its PC refuses a
+    start with `ACTION_UNAVAILABLE{reason: screen_view_not_included}` and the page shows "Screen view isn't
+    in DoMe on your PC yet" (no retry). Not yet seen on a device.

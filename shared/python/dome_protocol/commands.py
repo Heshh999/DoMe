@@ -22,7 +22,11 @@ from .signing import Envelope, verify_envelope
 from .timeutil import check_command_window, format_rfc3339, now_utc, parse_rfc3339
 from .versions import (
     INPUT_BATCH_PROTOCOL_VERSION,
+    SCREEN_INPUT_PROTOCOL_VERSION,
+    input_batch_protocol_version,
+    input_event_since,
     negotiate_version,
+    parse_version,
     protocol_compatible,
     version_below,
 )
@@ -32,6 +36,7 @@ __all__ = [
     "INPUT_BATCH_PROTOCOL_VERSION",
     "KEYBOARD_EVENT_TYPES",
     "POINTER_EVENT_TYPES",
+    "SCREEN_INPUT_PROTOCOL_VERSION",
     "KeyRecord",
     "KeyResolver",
     "VerifiedCommand",
@@ -40,7 +45,9 @@ __all__ = [
     "VerifiedInputBatch",
     "build_hello_proof_payload",
     "build_input_batch_payload",
+    "input_batch_protocol_version",
     "input_event_capabilities",
+    "input_event_since",
     "negotiate_version",
     "protocol_compatible",
     "verify_and_parse_command",
@@ -119,6 +126,28 @@ def _require_since(payload_version: str, since: str) -> None:
         )
 
 
+def _check_stamp(payload: dict[str, Any], registry: Registry, *, since: str | None) -> None:
+    """The version checks that run BEFORE schema validation (rules.command_version_stamping, 1.4 check order).
+
+    A payload from a newer MINOR may carry fields or events this library does not know; validating its schema first
+    would turn that into MALFORMED_MESSAGE, which tells the customer nothing. So the stamp is read first: a
+    protocol_version this peer does not speak is PROTOCOL_INCOMPATIBLE (detail {peer, supported}), a stamp below
+    ``since`` is PROTOCOL_INCOMPATIBLE (detail {peer, required}). A stamp that is not a MAJOR.MINOR string at all falls
+    through, and schema validation reports it as MALFORMED_MESSAGE as before."""
+    stamp = payload.get("protocol_version")
+    if parse_version(stamp) is None:
+        return
+    assert isinstance(stamp, str)
+    if not protocol_compatible(stamp, (registry.protocol_version,)):
+        raise ProtocolError(
+            "PROTOCOL_INCOMPATIBLE",
+            "unsupported protocol version",
+            detail={"peer": stamp, "supported": [registry.protocol_version]},
+        )
+    if since is not None:
+        _require_since(stamp, since)
+
+
 def _verify(raw_envelope: Any, resolve_key: KeyResolver, registry: Registry) -> tuple[Envelope, dict[str, Any], KeyRecord]:
     records: dict[str, KeyRecord] = {}
 
@@ -156,13 +185,11 @@ def verify_and_parse_command(
     registry = registry or load_registry()
     schemas = schemas or load_schemas()
     envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
+    # Version first (compatibility and the action's `since`, when the action is one we know), schema second.
+    action = payload.get("action")
+    since = registry.min_version(action) if isinstance(action, str) and action in registry.actions else None
+    _check_stamp(payload, registry, since=since)
     schemas.validate_command_payload(payload)
-    if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
-        raise ProtocolError(
-            "PROTOCOL_INCOMPATIBLE",
-            "unsupported protocol version",
-            detail={"peer": payload["protocol_version"], "supported": [registry.protocol_version]},
-        )
     _bind(payload, key)
     check_command_window(
         payload["issued_at"],
@@ -197,9 +224,8 @@ def verify_and_parse_confirmation(
     registry = registry or load_registry()
     schemas = schemas or load_schemas()
     envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
+    _check_stamp(payload, registry, since=None)
     schemas.validate_confirmation_payload(payload)
-    if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
-        raise ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version")
     _bind(payload, key)
     check_command_window(
         payload["issued_at"],
@@ -258,9 +284,8 @@ def verify_hello_proof(
     registry = registry or load_registry()
     schemas = schemas or load_schemas()
     envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
+    _check_stamp(payload, registry, since=None)
     schemas.validate_hello_proof_payload(payload)
-    if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
-        raise ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version")
     if envelope.kid != expected_kid or payload["kid"] != expected_kid:
         raise ProtocolError("UNKNOWN_KEY", "hello proof is not for this socket's kid")
     if payload["account_id"] != expected_account_id or key.account_id != expected_account_id:
@@ -276,7 +301,7 @@ def verify_hello_proof(
     return VerifiedHelloProof(envelope=envelope, payload=payload, key=key)
 
 
-POINTER_EVENT_TYPES = frozenset({"pointer_move", "pointer_button", "pointer_scroll"})
+POINTER_EVENT_TYPES = frozenset({"pointer_move", "pointer_button", "pointer_scroll", "pointer_move_to", "pointer_wheel"})
 KEYBOARD_EVENT_TYPES = frozenset({"text", "key", "shortcut"})
 
 
@@ -320,6 +345,11 @@ class VerifiedInputBatch:
     def required_capabilities(self) -> set[str]:
         return input_event_capabilities(self.payload["events"])
 
+    @property
+    def required_protocol_version(self) -> str:
+        """The lowest version that defines every event in the batch (what the stamp had to be at least)."""
+        return input_batch_protocol_version(self.payload["events"])
+
     def age_seconds(self, now: datetime | None = None) -> float:
         """Seconds since the controller issued the batch (the agent's input-age budget check)."""
         return ((now or now_utc()) - parse_rfc3339(self.payload["issued_at"])).total_seconds()
@@ -340,8 +370,9 @@ def build_input_batch_payload(
     issued = now or now_utc()
     return {
         "type": "input_batch",
-        # rules.command_version_stamping: the version that defined input batches, so older PCs accept it
-        "protocol_version": INPUT_BATCH_PROTOCOL_VERSION,
+        # rules.command_version_stamping: the lowest version that defines every event in the batch (1.1 for the
+        # touchpad events, 1.4 once a Screen view event is present), so older PCs keep accepting plain batches
+        "protocol_version": input_batch_protocol_version(events),
         "account_id": account_id,
         "controller_id": controller_id,
         "target_pc_id": target_pc_id,
@@ -361,16 +392,18 @@ def verify_and_parse_input_batch(
     registry: Registry | None = None,
     schemas: Schemas | None = None,
 ) -> VerifiedInputBatch:
-    """Relay and agent both call this: signature over the exact bytes, schema, protocol compatibility,
-    controller/account binding to the key record, and the batch window (lifetime <= input_batch_lifetime_seconds).
-    Session ownership, sequence, age budget and capability coverage are the caller's checks."""
+    """Relay and agent both call this: signature over the exact bytes, protocol compatibility and the 1.1 floor
+    (before the schema, so a batch from a newer MINOR with events we do not know is PROTOCOL_INCOMPATIBLE rather
+    than MALFORMED_MESSAGE), schema, the per-event stamp floor (a batch carrying a 1.4 event stamped 1.1 is
+    PROTOCOL_INCOMPATIBLE with required 1.4), controller/account binding to the key record, and the batch window
+    (lifetime <= input_batch_lifetime_seconds). Session ownership, sequence, age budget and capability coverage are
+    the caller's checks."""
     registry = registry or load_registry()
     schemas = schemas or load_schemas()
     envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
+    _check_stamp(payload, registry, since=INPUT_BATCH_PROTOCOL_VERSION)
     schemas.validate_input_batch_payload(payload)
-    if not protocol_compatible(payload["protocol_version"], (registry.protocol_version,)):
-        raise ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version")
-    _require_since(payload["protocol_version"], INPUT_BATCH_PROTOCOL_VERSION)
+    _require_since(payload["protocol_version"], input_batch_protocol_version(payload["events"]))
     _bind(payload, key)
     skew = registry.limits["max_clock_skew_seconds"]
     check_command_window(

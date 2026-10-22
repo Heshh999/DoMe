@@ -1,5 +1,5 @@
 {
-  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Device, routine and layout limits are enforced by cloud-api (plans.py) and carried in the entitlement assertion; the assertion's plan claim is 'pro' for every paid plan (Pro and Pro Plus share every PC-facing limit). manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); identical for every plan because Free has the same input responsiveness as Pro. AI assistant (docs/design/assistant.md; read by cloud-api only): one AI request is one charged assistant turn. ai_window is the rolling allowance that starts at the first request when no window is open and lasts `hours`; ai_week likewise lasts `days`; a request needs room in both. ai_taste_requests is a one-time allowance that never renews (Free). ai_topup_allowed: the plan may buy pricing_defaults.topup and spend its balance; the balance never expires and is kept across plan changes. ai_cost_cap_cents_per_week is an internal per-account backstop in US cents on the metered provider cost per weekly window (unknown-cost turns count against it); ai_turn_rate_limit is the per-account token bucket for POST /v1/assistant/turn. Everyday commands the phone understands by itself never count on any plan. Whether AI is offered at all is a server setting (DOME_AI_ENABLED); these allowances describe the plan, not availability.",
+  "$comment": "Central plan contract. Limits are design assumptions, not validated pricing. Device, routine and layout limits are enforced by cloud-api (plans.py) and carried in the entitlement assertion; the assertion's plan claim is 'pro' for every paid plan (Pro and Pro Plus share every PC-facing limit). manual_command_rate_limit applies per controller to non-coalescable actions; coalescable_command_rate_limit applies to actions that declare `coalesce` (sliders): the PWA throttles sliders to one command per 250 ms plus the final value on release. input_rate_limit applies per controller to signed input_batch frames (manual touchpad/keyboard, rules.input_sessions); identical for every plan because Free has the same input responsiveness as Pro. AI assistant (docs/design/assistant.md; read by cloud-api only): one AI request is one charged assistant turn. ai_window is the rolling allowance that starts at the first request when no window is open and lasts `hours`; ai_week likewise lasts `days`; a request needs room in both. ai_taste_requests is a one-time allowance that never renews (Free). ai_topup_allowed: the plan may buy pricing_defaults.topup and spend its balance; the balance never expires and is kept across plan changes. ai_cost_cap_cents_per_week is an internal per-account backstop in US cents on the metered provider cost per weekly window (unknown-cost turns count against it); ai_turn_rate_limit is the per-account token bucket for POST /v1/assistant/turn. Everyday commands the phone understands by itself never count on any plan. Whether AI is offered at all is a server setting (DOME_AI_ENABLED); these allowances describe the plan, not availability. Screen view (docs/design/screen-view.md §10; read by cloud-api only, not part of the entitlement assertion): screen_view_seconds_per_window is the Free picture allowance per rolling window of screen_view_window_hours, settled on the relay's clock (rules.screen_metering); null means unlimited. screen_ice_rate_limit bounds screen_ice_request per controller (per_minute, burst) and per account (account_per_hour); screen_start_rate_limit bounds screen.session_start per controller.",
   "plans": {
     "free": {
       "display_name": "DoMe Free",
@@ -36,6 +36,17 @@
       "input_rate_limit": {
         "batches_per_second": 40,
         "burst": 80
+      },
+      "screen_view_seconds_per_window": 600,
+      "screen_view_window_hours": 5,
+      "screen_ice_rate_limit": {
+        "per_minute": 6,
+        "burst": 6,
+        "account_per_hour": 60
+      },
+      "screen_start_rate_limit": {
+        "per_minute": 6,
+        "burst": 6
       }
     },
     "pro": {
@@ -73,6 +84,17 @@
       "input_rate_limit": {
         "batches_per_second": 40,
         "burst": 80
+      },
+      "screen_view_seconds_per_window": null,
+      "screen_view_window_hours": 5,
+      "screen_ice_rate_limit": {
+        "per_minute": 6,
+        "burst": 6,
+        "account_per_hour": 60
+      },
+      "screen_start_rate_limit": {
+        "per_minute": 6,
+        "burst": 6
       }
     },
     "pro_plus": {
@@ -110,6 +132,17 @@
       "input_rate_limit": {
         "batches_per_second": 40,
         "burst": 80
+      },
+      "screen_view_seconds_per_window": null,
+      "screen_view_window_hours": 5,
+      "screen_ice_rate_limit": {
+        "per_minute": 6,
+        "burst": 6,
+        "account_per_hour": 60
+      },
+      "screen_start_rate_limit": {
+        "per_minute": 6,
+        "burst": 6
       }
     }
   },

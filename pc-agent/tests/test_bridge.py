@@ -201,7 +201,13 @@ async def test_incompatible_extension_is_refused(settings: Settings, bridge: Any
             break
         await asyncio.sleep(0.02)
     assert ext.errors and ext.errors[0]["error"]["code"] == "PROTOCOL_INCOMPATIBLE"
-    assert ext.errors[0]["error"]["detail"]["supported"] == ["1.0", "1.1", "1.2"]  # every MINOR the agent speaks
+    assert ext.errors[0]["error"]["detail"]["supported"] == [
+        "1.0",
+        "1.1",
+        "1.2",
+        "1.3",
+        "1.4",
+    ]  # every MINOR the agent speaks
     assert not server.connected
     ext.close()
 
@@ -231,7 +237,8 @@ def test_negotiate_protocol_version(peer: list[str], agent: tuple[str, ...], exp
         (("1.0",), "1.0"),  # an extension the owner has not reloaded since the 1.0 build: never acked "1.1"
         (("1.0", "1.1"), "1.1"),
         (("1.0", "1.1", "1.2"), "1.2"),
-        (("1.0", "1.1", "1.2", "1.3"), "1.2"),  # a newer extension talking to this agent
+        (("1.0", "1.1", "1.2", "1.3"), "1.3"),  # the agent speaks 1.3 and 1.4 too (Screen view): highest common
+        (("1.0", "1.1", "1.2", "1.3", "1.4", "1.5"), "1.4"),  # a newer extension talking to this agent
     ],
 )
 async def test_hello_ack_is_the_highest_common_version(

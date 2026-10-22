@@ -6,6 +6,10 @@
  *
  * If storage is unavailable or the key is gone (cleared site data, private browsing), the UI
  * explains that this installation must pair again. There is deliberately no recovery shortcut.
+ *
+ * Since protocol 1.4 the same database also holds the PC identity keys pinned at pairing (`pins`,
+ * rules.pc_key_pinning; written only by `lib/pcKeyPins.ts` after the MAC verified). A pin belongs to
+ * the pairing, so it lives next to the key: sign-out keeps both, "Forget this installation" deletes both.
  */
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
@@ -13,9 +17,18 @@ import { exportPublicJwk, generateControllerKeyPair, kidFromJwk, type EcPublicJw
 
 import { log } from "./log.ts";
 
+/** One PC identity key this phone trusts for Screen view answers (rules.pc_key_pinning (3)). */
+export interface PcKeyPin {
+  pc_id: string;
+  pc_kid: string;
+  pc_public_jwk: EcPublicJwk;
+  pinned_at: string;
+}
+
 interface DomeDb extends DBSchema {
   keys: { key: string; value: CryptoKeyPair };
   state: { key: string; value: string };
+  pins: { key: string; value: PcKeyPin };
 }
 
 export class KeyStorageError extends Error {
@@ -34,7 +47,8 @@ export interface ControllerIdentity {
 }
 
 const DB_NAME = "dome";
-const DB_VERSION = 1;
+/** 1: keys + state. 2 (protocol 1.4): + pins. The upgrade only ever adds stores; nothing is migrated or dropped. */
+const DB_VERSION = 2;
 const KEY_RECORD = "controller";
 export const STATE_CONTROLLER_ID = "controller_id";
 export const STATE_SELECTED_PC = "selected_pc_id";
@@ -50,6 +64,7 @@ function db(): Promise<IDBPDatabase<DomeDb>> {
       upgrade(database) {
         if (!database.objectStoreNames.contains("keys")) database.createObjectStore("keys");
         if (!database.objectStoreNames.contains("state")) database.createObjectStore("state");
+        if (!database.objectStoreNames.contains("pins")) database.createObjectStore("pins");
       },
       blocking() {
         // another tab upgraded the schema; drop our handle so the next call reopens
@@ -143,12 +158,36 @@ export async function clearAccountState(): Promise<void> {
   await database.clear("state");
 }
 
-/** Full local reset (Settings → "Forget this installation"): the key is deleted, pairing is required again. */
+/** Full local reset (Settings → "Forget this installation"): the key and every PC pin are deleted, pairing is required again. */
 export async function deleteInstallationKey(): Promise<void> {
   const database = await db();
   await database.clear("state");
+  await database.clear("pins");
   await database.delete("keys", KEY_RECORD);
   log.info("controller_key.deleted_by_user");
+}
+
+// ---- PC key pins (protocol 1.4) ------------------------------------------------------------------------
+// Only lib/pcKeyPins.ts writes here, and only after verifyPcKeyMac passed with the pairing code.
+
+export async function readPin(pcId: string): Promise<PcKeyPin | null> {
+  const database = await db();
+  return (await database.get("pins", pcId)) ?? null;
+}
+
+export async function writePin(pin: PcKeyPin): Promise<void> {
+  const database = await db();
+  await database.put("pins", pin, pin.pc_id);
+}
+
+export async function deletePin(pcId: string): Promise<void> {
+  const database = await db();
+  await database.delete("pins", pcId);
+}
+
+export async function listPins(): Promise<PcKeyPin[]> {
+  const database = await db();
+  return database.getAll("pins");
 }
 
 /** Test/diagnostic hook: forget the cached connection so a fresh `openDB` happens. */

@@ -488,6 +488,125 @@
           }
         }
       }
+    },
+    "screen_surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "width",
+        "height",
+        "primary"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "primary": {
+          "type": "boolean"
+        }
+      },
+      "description": "One monitor the PC can stream, in physical pixels. No names."
+    },
+    "screen_session_result": {
+      "description": "Result of screen.session_start (since 1.4). The agent issued the id; the phone also needs the PC-signed screen_answer frame, which arrives separately (never in a result). Carries ids, geometry, flags and the allowance only: no SDP, no title, no address.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "screen_session_id",
+        "surfaces",
+        "surface_index",
+        "gen",
+        "audio",
+        "lease_seconds",
+        "allowance",
+        "consent"
+      ],
+      "properties": {
+        "screen_session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        },
+        "surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/screen_surface"
+          }
+        },
+        "surface_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7,
+          "description": "The surface being streamed."
+        },
+        "gen": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "The geometry generation the stream starts with; pointer_move_to carries the gen the phone saw."
+        },
+        "audio": {
+          "type": "boolean",
+          "description": "PC sound is on for this session (needs screen_audio; Phase 2)."
+        },
+        "lease_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "screen_lease_seconds: no heartbeat for this long ends the session viewer_gone."
+        },
+        "allowance": {
+          "$ref": "relay-frames.schema.json#/$defs/screen_allowance_state"
+        },
+        "consent": {
+          "type": "string",
+          "enum": [
+            "not_required",
+            "granted"
+          ],
+          "description": "Whether someone at the PC had to allow this start (ask mode or the post-Stop cooldown) and did. A refusal is a failed result (SCREEN_CONSENT_DECLINED / SCREEN_CONSENT_TIMEOUT), never a consent value."
+        },
+        "encoder": {
+          "type": "string",
+          "enum": [
+            "h264",
+            "vp8"
+          ],
+          "description": "The video encoder in use; vp8 is the basic picture mode."
+        }
+      }
+    },
+    "screen_session_stop_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stopped",
+        "live_seconds"
+      ],
+      "properties": {
+        "stopped": {
+          "type": "boolean",
+          "description": "False when the id was unknown or the session had already ended (idempotent)."
+        },
+        "live_seconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
   }
 }

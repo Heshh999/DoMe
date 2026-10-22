@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime as dt
 import json
 import os
 import secrets
@@ -28,6 +29,7 @@ import uvicorn
 from dome_protocol import (
     build_hello_proof_payload,
     build_input_batch_payload,
+    build_screen_answer_payload,
     dumps_compact,
     format_rfc3339,
     generate_pairing_code,
@@ -40,6 +42,7 @@ from dome_protocol import (
     now_utc,
     pairing_code_handle,
     pairing_verification_code,
+    pc_key_mac,
     sign_payload,
 )
 from dome_protocol.keys import b64url_encode
@@ -55,23 +58,59 @@ from dome_api.db.migrate import upgrade_to_head
 from dome_api.keygen import write_key
 from dome_api.main import create_app
 from dome_api.plans import RateLimit
+from dome_api.screen.service import ScreenService
+from dome_api.screen.turn import FakeTurn
 from dome_api.security.ratelimit import SlidingWindowLimiter
 from dome_api.settings import Settings
 from dome_api.state import Services
+from dome_api.util import utcnow
 
 REPO = Path(__file__).resolve().parents[2]
 DEV_IDP_BIN = REPO / "tools" / "dev-idp" / ".venv" / "bin" / "dome-dev-idp"
 TEST_DB_URL = os.environ.get("DOME_TEST_DATABASE_URL", "postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329")
 RECV_TIMEOUT = 5.0
-# Both simulators announce every MINOR up to the registry's (1.3) by default; tests that need an older peer pass
+# Both simulators announce every MINOR up to the registry's (1.4) by default; tests that need an older peer pass
 # ``protocol_versions=("1.0",)`` / ``("1.0", "1.1")`` (and ``registry_version``) explicitly.
-DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3")
+DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3", "1.4")
 
 
 def new_input_session_id() -> str:
     """A fresh agent-style input_session_id (22 base64url characters)."""
     sid: str = b64url_encode(secrets.token_bytes(16))
     return sid[:22]
+
+
+new_screen_session_id = new_input_session_id  # same shape (relay-frames#/$defs/screen_session_id)
+
+# Screen view (protocol 1.4): the capabilities a Screen view phone holds, and a synthetic receive-only offer and
+# send-only answer of the right shape (printable ASCII + CRLF; placeholder addresses only). The relay never parses
+# them; it forwards the signed envelopes verbatim. Sentinel substrings let tests assert they never reach a log or row.
+SCREEN_CAPS = ("status", "media", "volume", "pointer", "keyboard", "screen")
+_FP = ":".join(["AB"] * 32)
+OFFER_SDP = (
+    "v=0\r\no=- 4611731400430051336 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0 1 2\r\n"
+    "m=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:SENTINEL-OFFER-UFRAG\r\n"
+    "a=ice-pwd:SENTINELOFFERPASSWORD0001\r\na=fingerprint:sha-256 " + _FP + "\r\na=setup:actpass\r\na=mid:0\r\n"
+    "a=recvonly\r\na=rtcp-mux\r\na=rtpmap:96 H264/90000\r\n"
+    "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\nc=IN IP4 0.0.0.0\r\na=mid:1\r\na=recvonly\r\na=rtpmap:111 opus/48000/2\r\n"
+    "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\na=mid:2\r\na=sctp-port:5000\r\n"
+)
+ANSWER_SDP = OFFER_SDP.replace("recvonly", "sendonly").replace("actpass", "active").replace("OFFER", "ANSWER")
+SDP_SENTINELS = ("SENTINEL-OFFER-UFRAG", "SENTINELOFFERPASSWORD0001", "SENTINEL-ANSWER-UFRAG", _FP)
+
+
+class FakeClock:
+    """The Screen view service's clock in tests: real time plus an offset the test moves (the relay charges wall time
+    it measures itself, so tests advance this instead of sleeping)."""
+
+    def __init__(self) -> None:
+        self.offset = dt.timedelta()
+
+    def __call__(self) -> dt.datetime:
+        return utcnow() + self.offset
+
+    def advance(self, seconds: float) -> None:
+        self.offset += dt.timedelta(seconds=seconds)
 
 
 def free_port() -> int:
@@ -646,6 +685,86 @@ class AgentSim:
             {"type": "grant_update", "controller_id": controller_id, "kid": kid, "capabilities": capabilities}
         )
 
+    # --- Screen view (protocol 1.4, agent side) ---
+    def screen_result(self, screen_session_id: str, *, remaining_seconds: int | None = 540) -> dict[str, Any]:
+        """A registry-valid screen_session_result (ids, geometry, flags, allowance; never SDP)."""
+        result = {
+            "screen_session_id": screen_session_id,
+            "surfaces": [{"index": 0, "width": 1920, "height": 1080, "primary": True}],
+            "surface_index": 0,
+            "gen": 1,
+            "audio": False,
+            "lease_seconds": 8,
+            "allowance": {
+                "unlimited": remaining_seconds is None,
+                "remaining_seconds": remaining_seconds,
+                "resets_at": None,
+            },
+            "consent": "not_required",
+            "encoder": "h264",
+        }
+        REGISTRY.validate_result("screen.session_start", result)
+        return result
+
+    async def screen_answer(
+        self, controller_id: str, command_id: str, screen_session_id: str, *, offer_sdp: str = OFFER_SDP
+    ) -> dict[str, Any]:
+        """The PC-signed answer frame (rules.screen_signaling (5)): the payload signed with this PC's identity key.
+        Returns the envelope that went on the wire."""
+        payload = build_screen_answer_payload(
+            account_id=self.account_id,
+            pc_id=self.pc_id,
+            controller_id=controller_id,
+            command_id=command_id,
+            screen_session_id=screen_session_id,
+            offer_sdp=offer_sdp,
+            answer_sdp=ANSWER_SDP,
+            registry=REGISTRY,
+        )
+        envelope: dict[str, Any] = sign_payload(self.key, dumps_compact(payload)).to_dict()
+        await self.send({"type": "screen_answer", "envelope": envelope, "ref_controller_id": controller_id})
+        return envelope
+
+    async def screen_session(
+        self,
+        screen_session_id: str,
+        controller_id: str,
+        event: str = "started",
+        reason: str = "started",
+        *,
+        path: str | None = "direct",
+        live_seconds: int = 0,
+    ) -> dict[str, Any]:
+        frame: dict[str, Any] = {
+            "type": "screen_session",
+            "pc_id": self.pc_id,
+            "screen_session_id": screen_session_id,
+            "controller_id": controller_id,
+            "event": event,
+            "reason": reason,
+            "live_seconds": live_seconds,
+            "at": format_rfc3339(now_utc()),
+        }
+        if path is not None and event in ("started", "resumed"):
+            frame["path"] = path
+        await self.send(frame)
+        return frame
+
+    async def screen_usage(
+        self, screen_session_id: str, *, live_seconds: int = 0, relayed: bool = False, relayed_bytes: int = 0
+    ) -> dict[str, Any]:
+        """Ask for the next allowance ticket; the figures are informational (the relay charges on its own clock)."""
+        frame = {
+            "type": "screen_usage",
+            "pc_id": self.pc_id,
+            "screen_session_id": screen_session_id,
+            "live_seconds": live_seconds,
+            "relayed": relayed,
+            "relayed_bytes": relayed_bytes,
+        }
+        await self.send(frame)
+        return frame
+
     # --- pairing (PC side) ---
     async def start_pairing(self) -> tuple[str, dict[str, Any]]:
         code = generate_pairing_code()
@@ -667,22 +786,27 @@ class AgentSim:
         approve: bool = True,
         granted: list[str] | None = None,
         expected_phone_code: str | None = None,
+        pin_pc_key: bool = True,
     ) -> None:
+        """Approve or decline on the PC. A 1.4 agent (``pin_pc_key``) also sends ``pc_key_mac``, the HMAC over its
+        identity key keyed by the pairing code it still holds (rules.pc_key_pinning); ``False`` behaves like an agent
+        older than 1.4."""
         assert kid_from_jwk(request["public_jwk"]) == request["kid"]
         if expected_phone_code is not None:
             assert (
                 pairing_verification_code(code, request["pairing_id"], self.pc_id, request["kid"])
                 == expected_phone_code
             )
-        await self.send(
-            {
-                "type": "pairing_decision",
-                "pairing_id": request["pairing_id"],
-                "decision": "approve" if approve else "decline",
-                "kid": request["kid"],
-                "granted_capabilities": granted if granted is not None else request["requested_capabilities"],
-            }
-        )
+        frame: dict[str, Any] = {
+            "type": "pairing_decision",
+            "pairing_id": request["pairing_id"],
+            "decision": "approve" if approve else "decline",
+            "kid": request["kid"],
+            "granted_capabilities": granted if granted is not None else request["requested_capabilities"],
+        }
+        if approve and pin_pc_key:
+            frame["pc_key_mac"] = pc_key_mac(code, request["pairing_id"], self.pc_id, request["kid"], self.kid)
+        await self.send(frame)
 
 
 @dataclass
@@ -901,6 +1025,21 @@ class ControllerSim:
         await self.send({"type": "input_batch", "pc_id": pc_id, "envelope": env})
         return env
 
+    # --- Screen view (protocol 1.4, phone side) ---
+    async def screen_ice_request(self, pc_id: str) -> dict[str, Any]:
+        """Send ``screen_ice_request`` and return the relay's answer (``screen_ice_servers`` or an ``error``)."""
+        await self.send({"type": "screen_ice_request", "pc_id": pc_id})
+        while True:
+            frame = await self.recv()
+            if frame["type"] in ("screen_ice_servers", "error"):
+                return frame
+
+    async def screen_start(self, pc_id: str, *, offer_sdp: str = OFFER_SDP, **kw: Any) -> str:
+        """The signed ``screen.session_start`` with the offer inside (stamped 1.4, its ``since``; 60 s lifetime)."""
+        params: dict[str, Any] = {"offer_sdp": offer_sdp, "surface": "primary", "audio": True, "takeover": False}
+        kw.setdefault("lifetime", 60)
+        return await self.command(pc_id, "screen.session_start", params, None, **kw)
+
     async def close(self) -> None:
         if self.ws is not None:
             await self.ws.close()
@@ -984,6 +1123,42 @@ def billing(env: Env) -> Iterator[BillingService]:
     svc.provider = FakeStripe()
     yield svc
     svc.config, svc.provider, svc._limiter = saved_config, saved_provider, saved_limiter
+
+
+@pytest.fixture
+async def screen(env: Env) -> AsyncIterator[ScreenService]:
+    """Screen view switched on with a fresh fake TURN provider, a movable clock and a generous screen_usage budget. The
+    app is built once from frozen settings, so tests swap ``config`` (dataclasses.replace), the TURN config and the
+    provider; everything is restored here. The background sweeper is paused for the test and the tests call
+    ``sweep()`` themselves: a background pass on a clock the test is moving would race the test's own call (it could
+    sweep the row first and leave the test's counts at zero)."""
+    svc = env.services.screen
+    limiters = env.services.limiters
+    await svc.stop()
+    saved = (svc.config, svc.turn.config, svc.turn.provider, limiters.screen_usage)
+    saved_breaker = (svc.turn.failures, svc.turn.breaker_open_until, svc.turn.last_reconciled_at)
+    svc.config = dataclasses.replace(svc.config, enabled=True, clock=FakeClock())
+    svc.turn.config = dataclasses.replace(svc.turn.config, configured=True)
+    svc.turn.provider = FakeTurn()
+    svc.turn.failures, svc.turn.breaker_open_until = 0, None
+    limiters.screen_usage = SlidingWindowLimiter(10_000, 60)
+    svc._health_cache = None
+    yield svc
+    svc.config, svc.turn.config, svc.turn.provider, limiters.screen_usage = saved
+    svc.turn.failures, svc.turn.breaker_open_until, svc.turn.last_reconciled_at = saved_breaker
+    svc._health_cache = None
+    await svc.start()
+
+
+def fake_turn(svc: ScreenService) -> FakeTurn:
+    assert isinstance(svc.turn.provider, FakeTurn)
+    return svc.turn.provider
+
+
+def screen_clock(svc: ScreenService) -> FakeClock:
+    clock = svc.config.clock
+    assert isinstance(clock, FakeClock)
+    return clock
 
 
 def fake_stripe(svc: BillingService) -> FakeStripe:

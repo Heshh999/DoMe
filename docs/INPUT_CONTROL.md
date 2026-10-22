@@ -148,10 +148,20 @@ Rules that keep gestures from producing extra clicks (all **unit-tested** in
 
 Sensitivity and scroll direction are stored in `localStorage` on this phone only (they are not
 secrets; `mobile-app/src/store/input.ts`, default `{sensitivity: 1.4, scrollDirection: "natural"}`).
-Motion is relative, so neither depends on the PC's screen size or monitor layout: the phone never maps
-its own dimensions onto PC pixels, and the agent does not clamp motion to one display. Whether the feel
-is right across multiple monitors and mixed DPI is **not yet verified** (`mobile-app/KNOWN_ISSUES.md`
-#12, `pc-agent/KNOWN_ISSUES.md` #6).
+Touchpad motion is relative, so neither depends on the PC's screen size or monitor layout: on the
+Touchpad page the phone never maps its own dimensions onto PC pixels, and the agent does not clamp motion
+to one display. Whether the feel is right across multiple monitors and mixed DPI is **not yet verified**
+(`mobile-app/KNOWN_ISSUES.md` #12, `pc-agent/KNOWN_ISSUES.md` #6).
+
+**Amendment (protocol 1.4, Screen view, 2026-10-22).** Taps on the Screen view picture are ABSOLUTE:
+`pointer_move_to{x, y, gen}` carries a position normalised to 0..65535 over the streamed monitor, and the
+agent maps it onto that one monitor in physical pixels (`px = left + round(x · (width − 1) / 65535)`,
+`dome_agent/screen/session.py::map_to_pixels`), only for the controller that owns the live, connected
+Screen view session and only at the CURRENT geometry generation (`SCREEN_SESSION_REQUIRED` /
+`SCREEN_GEOMETRY_CHANGED` drop the batch otherwise). The phone maps its finger through the letterbox and the
+zoom onto the picture (`mobile-app/src/lib/screenMap.ts`); taps in the letterbox and on DoMe's own bars are
+dropped, never clamped. `pointer_wheel` (two-finger scroll) is relative as before. Evidence: unit-tested and
+integration-tested on Linux (`docs/PROTOCOL.md` §20.6); **not yet verified on a device**.
 
 The **Gestures** sheet (`components/GestureGuide.tsx`) renders the table in
 `gestures.ts::GESTURES` with the note "Adding a second finger never clicks. … Windows accepting input is

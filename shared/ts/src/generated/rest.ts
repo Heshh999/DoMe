@@ -27,7 +27,8 @@ export type B64UrlSha256 = string;
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "capability".
  */
-export type Capability = "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard";
+export type Capability =
+  "status" | "media" | "volume" | "apps" | "lock" | "power" | "pointer" | "keyboard" | "screen" | "screen_audio";
 /**
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "plan_id".
@@ -414,7 +415,7 @@ export interface PairingClaimRequest {
       ];
 }
 /**
- * POST /v1/pairing/claim (202) and GET /v1/pairing/{pairing_id}. `claimed` = waiting for approval on the PC (which may be offline; the relay re-delivers the request when it connects).
+ * POST /v1/pairing/claim (202) and GET /v1/pairing/{pairing_id}. `claimed` = waiting for approval on the PC (which may be offline; the relay re-delivers the request when it connects). Since 1.4 an approved pairing whose agent sent pc_key_mac also carries pc_key{public_jwk, mac}: the PC's identity key and the MAC the phone verifies with the pairing code before pinning it (rules.pc_key_pinning). Never present before approval.
  *
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
  * via the `definition` "pairing_status_response".
@@ -429,6 +430,13 @@ export interface PairingStatusResponse {
   controller_id?: Uuid;
   grant_id?: Uuid;
   granted_capabilities?: Capability[];
+  pc_key?: {
+    public_jwk: EcPublicJwk;
+    /**
+     * pairing_decision.pc_key_mac, verbatim.
+     */
+    mac: string;
+  };
 }
 /**
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema

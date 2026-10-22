@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dome_protocol import ProtocolError
 
-from .protocol import AppWindow, ForegroundApp, MediaSession, PlatformSet, VolumeState, WindowState
+from .protocol import AppWindow, ForegroundApp, MediaSession, Monitor, PlatformSet, VolumeState, WindowState
 
 
 def _unsupported(what: str) -> ProtocolError:
@@ -138,6 +138,15 @@ class UnsupportedInput:
     def move(self, dx: int, dy: int) -> None:
         raise _unsupported("manual pointer input")
 
+    def move_to(self, x: int, y: int) -> None:
+        raise _unsupported("manual pointer input")
+
+    def wheel(self, dx: int, dy: int) -> None:
+        raise _unsupported("manual pointer input")
+
+    def cursor_position(self) -> tuple[int, int] | None:
+        return None
+
     def button(self, button: str, action: str) -> None:
         raise _unsupported("manual pointer input")
 
@@ -168,6 +177,13 @@ class UnsupportedInput:
         return False
 
 
+class UnsupportedScreen:
+    """Screen view needs Desktop Duplication and the monitor topology: nothing to enumerate off Windows."""
+
+    def monitors(self) -> list[Monitor]:
+        raise _unsupported("screen enumeration")
+
+
 def build_unsupported_platform() -> PlatformSet:
     return PlatformSet(
         name="unsupported",
@@ -179,6 +195,7 @@ def build_unsupported_platform() -> PlatformSet:
         startup=UnsupportedStartup(),
         native_host=UnsupportedNativeHost(),
         input=UnsupportedInput(),
+        screen=UnsupportedScreen(),
         notes=[
             "Non-Windows host: Windows-only actions answer PLATFORM_UNSUPPORTED; YouTube control via the browser bridge works."
         ],

@@ -15,6 +15,7 @@ import { Button, Card, IconWell, Notice, PageHeader, SectionLabel, type WellTone
 import { APP_VERSION, buildDiagnostics, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useInputStore } from "../../store/input.ts";
+import { useScreenStore } from "../../store/screen.ts";
 import { useLiveStore } from "../../store/live.ts";
 import { useSessionStore } from "../../store/session.ts";
 
@@ -79,6 +80,7 @@ export function SettingsPage() {
       sessionPresent: session !== null,
       plan: session?.plan ?? null,
       input: useInputStore.getState().session,
+      screen: useScreenStore.getState().session,
     });
     downloadJson(`dome-diagnostics-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`, report);
   };

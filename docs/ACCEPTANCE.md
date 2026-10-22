@@ -25,6 +25,14 @@ describe the earlier state, in which the relay only logged those frames. Every m
 statement here is at most **integration-tested** with the fake input adapter. The Windows input
 adapter and the real phone keyboard are **not yet verified** by definition.
 
+Update of 2026-10-22 (protocol 1.4, the Screen view beta, `docs/design/screen-view.md`): Scenario 26 was
+added. Its evidence is unit- and integration-tested on Linux only; the inventory table in §1 still shows
+the 2026-10-09 runs, and the Screen view suites' own counts are in `docs/PROGRESS.md`. No Windows build
+carries Screen view yet (`docs/WINDOWS_INSTALL.md`), so every device row of Scenario 26 is outstanding.
+A review round the same day fixed, among others, an end-order defect that left every stop path started by
+the phone (`bye`) or by a lost connection stalled on the PC; the stop paths are now integration-tested end
+to end (row "The end-to-end run" below).
+
 ## 1. Test inventory (what the tags refer to)
 
 | Suite | Command | Last recorded run (2026-10-09, Linux, re-run for this update) | What it proves |
@@ -486,6 +494,68 @@ and the broken-download check remain outstanding on a PC. Run these:
   text, URLs and pairing codes.
 - **Power copy.** Open Sleep/Restart/Shutdown confirmations on the iPhone and check the
   loss-of-access and no-remote-wake copy (`mobile-app/README.md` "Confirmation on device").
+
+### Scenario 26 — Screen view beta (protocol 1.4): a granted phone sees the PC's screen live, taps to click, scrolls with two fingers and pinches to zoom; the picture never passes through DoMe's servers, the PC shows that it is being watched, and every stop path ends the stream
+
+Scope: Phase 1 of `docs/design/screen-view.md` (WP1.1–WP1.9) behind `DOME_SCREEN_VIEW_ENABLED` (off by
+default). Sound, a second monitor, the mini view and the TV remote are Phase 2 and not part of this
+scenario. The design's §18 test plan is the source of the rows below.
+
+| Evidence now | Tag |
+| --- | --- |
+| The contract: capabilities `screen`/`screen_audio`, `screen.session_start`/`stop`, the signaling frames, the PC-signed answer, `pc_key_mac`, the data-channel vocabulary, the 1.4 input events and the stamp rule (a `pointer_move_to` batch below 1.4 is `PROTOCOL_INCOMPATIBLE`). `shared/python/tests/test_screen_contract.py`, `shared/ts/test/screenContract.test.ts`, cross-language vectors both ways | unit-tested |
+| The relay: ICE servers only for a bound 1.4 socket with a live `screen` grant; the answer reaches only the issuing socket; a 1.2 agent is shielded from 1.4 batches; one session per PC with takeover; the Free ledger charged on the relay's clock (ten concurrent starts never exceed 600 s, a lying agent still exhausts its window); TURN credentials for the phone only, one per controller, revoked on every end, a credential without a start revoked within 60 s; logout and revocation end the stream within one ticket; `pc_key_mac` stored and returned only once approved; no SDP or credential in the logs. `cloud-api/tests/test_screen_routing.py`, `test_screen_metering.py`, `test_screen_turn.py`, `test_screen_migration.py`, `test_screen_settings.py` (real PostgreSQL) | integration-tested (TURN against a stub; Cloudflare itself not yet verified) |
+| The PC: the strict offer check, the PC-signed answer matching the fixture vector, bars before the worker and fail-closed, lease, tickets, 4 h maximum, lock and secure desktop, cooldown and consent back-off, the 1-hour block, `screen` never granted at pairing, phone presses dropped while a DoMe permission window is open, taps only at the current geometry generation, no SDP or address in logs, journal, bundle or state. `pc-agent/tests/test_screen_session.py`, `test_screen_ui_model.py`, `test_screen_sdp_check.py`, `test_screen_signing.py`, `test_screen_redaction.py`, `test_screen_input_mapping.py`, `test_link_pairing.py` (fake platform, fake UI, fake worker) | unit-tested |
+| The worker on Linux with synthetic frames and the PyPI PyAV wheel (development only): SPS/PPS before every IDR, distinct still-frame packets, the PLI hook forcing an IDR, capture only after DTLS, exit on pipe EOF and on missing ticks, no agent/relay/recording imports, aiortc loopback sessions (H.264 and the VP8 fallback). `pc-agent/tests/test_screen_worker.py` | unit-tested (real aiortc peers on 127.0.0.1) |
+| The phone: every §4.3 refusal shows nothing, the answer applied only after verification against the pinned key, the pin store, the pairing code held only through `waiting`, the closed data-channel vocabulary, stall → one fresh session, `bye` on hidden, the letterbox/zoom maths, pinch vs scroll, no pixel access anywhere in `src/`. `mobile-app/test/screen.test.ts`, `pcKeyPins.test.ts`, `components/PairPage.test.tsx`, `components/ScreenPage.test.tsx`, `screenMap.test.ts`, `directGestures.test.ts`, `screenInput.test.ts`, `screenStatus.test.ts`, `no-pixel-access.test.ts` | unit-tested (jsdom) |
+| The Windows build: Screen view is built in only with DoMe's LGPL PyAV wheel pinned for Windows; the licence gate on `dist/DoMe` (no GPL or non-free codec by name, import or export, FFmpeg only in `av.libs`, notices present) and the frozen worker's `--self-test` (exactly one decoder, a `lavfi` frame, the PLI hook, VP8); `aiortc.contrib` never bundled; the PLI hook's source shipped so the frozen check works. `pc-agent/tests/test_licence_gate_frozen.py`, `test_packaging_screen_view.py`, `test_screen_view_workflows.py`. A Linux PyInstaller build of the real spec was checked by hand on 2026-10-22: with Screen view the frozen worker reports the PLI hook present (absent without the source copy), the gate refuses the PyPI wheel (x264/x265 by name, 539 decoders); without it the worker reports aiortc and av missing | unit-tested; the Windows workflow steps have not run (no LGPL wheel yet) |
+| The end-to-end run (`tests/test_e2e_screen.py`: the real agent and its real worker process on the fake platform and the fake frame source, a Python aiortc "phone" signing with the fixture key, the real relay with a loopback STUN server, real PostgreSQL: pinning at pairing, the grant window, the PC-signed answer verified against the pin, frames peer to peer, PLI → keyframe within 500 ms, taps mapped to physical pixels and a stale `gen` dropped, tickets and the relay-clock charge, the 8 s lease, one session per PC with takeover, sign-out / revocation / Disable remote control within seconds, the cooldown, a missing bar pausing the picture, Free minutes running out, a lying agent still charged, a swapped / edited / replayed answer and a tampered offer fingerprint showing nothing, every stop path ending with the `ended` frame, the history row and the bars closed, no SDP, address or credential in any file, log, bundle or table) | integration-tested (Linux loopback, fake frame source, Python aiortc phone; run 2026-10-22: 45 passed in 530 s) |
+
+**Outstanding (Phase 1 device round, WP1.10; design §18 checklist items 1–11 and 13).** Run on the
+founder's Windows 11 PC and iPhone, plus a borrowed Intel-graphics laptop and an AMD PC where possible; iOS
+18.x and 26.x, each in a Safari tab and in the home-screen app; staging with `DOME_SCREEN_VIEW_ENABLED` on
+and a Windows build that carries Screen view (BUILD-INFO.txt says "screen view: included"). Record each
+item as a dated row (§7) with the Windows build, GPU, iOS version and Safari/home-screen mode:
+1. **Capture and encoding.** PyAV drives `ddagrab → scale_d3d11 → hwdownload` through the `lavfi` device
+   with the `wrapped_avframe` decoder; `h264_mf hw_encoding=1` on NVIDIA, Intel and AMD; whether each
+   vendor's encoder repeats SPS/PPS on every IDR; time to first frame; PC CPU and RAM; the
+   Windows.Graphics.Capture fallback on a hybrid-GPU laptop.
+2. **Playback.** Safari accepts the stream (profile and level 3.1); first frame; keyframe on PLI; the VP8
+   fallback plays; Low Power Mode.
+3. **Latency.** Glass-to-glass on the same Wi-Fi and over cellular (a PC test page with a millisecond
+   counter filmed together with the phone at 240 fps); tap-to-photon.
+4. **NAT.** Same Wi-Fi (direct through mDNS, hairpin or relayed), home PC ↔ cellular phone, a hotel-style
+   Wi-Fi that forces TURN over TLS 443; how often the path is relayed; the Windows Firewall prompt for a
+   standard user on Private and Public networks, and whether ICE works after Cancel.
+5. **Lease and tickets.** Background the app for 5 s and 30 s, lock the phone, take an incoming call: the
+   PC ends within 8 s and the Free clock stops; cut the PC's relay connection: the stream ends within 60 s.
+6. **mDNS.** `.local` candidate resolution from the standard-user worker (multicast join, firewall).
+7. **Indicator.** The bars are left out of the picture on each capture path; bars over an exclusive
+   full-screen game; tray badge; notifications; every Stop path; the hotkey; the worker ends when DoMe.exe
+   is ended in Task Manager (the Job object).
+8. **Windows states.** Lock, UAC pause and resume, resolution change, monitor unplug, a rotated display,
+   HDR, mixed DPI, a tap on an elevated window, a `WDA_MONITOR` window and a DRM video showing black.
+9. **Taps.** Precision at 1×, 2× and 4× zoom and with the loupe on a 1080p and a 1440p desktop; letterbox
+   taps dropped; pinch vs scroll; smooth `pointer_wheel` scrolling.
+10. **Pinning.** Re-pair the founder's iPhone so it pins the PC key; a `--new-key` re-link of the PC
+    triggers the hard stop ("pair again").
+11. **The phone itself.** Landscape with `orientation: "any"`; wake lock; a 30-minute battery and heat
+    check; the iOS 26.0.x home-screen media regressions.
+13. **The frozen build on a clean Windows 10 22H2 standard-user account.** Antivirus and SmartScreen
+    behaviour, unsigned vs signed; Windows N (no Media Feature Pack: VP8 expected).
+
+(Item 12 of the design's checklist is Phase 2: sound, the mini view and the TV remote.) Before
+`SCREEN_VIEW_STATUS` changes from "Coming" (design §19 launch gate): device evidence on at least one PC per
+GPU vendor and on iOS 18 and 26 in both modes, Authenticode signing with the update check, branch
+protection with required review, counsel's answer on H.264 and the LGPL drafts (or VP8 only), the privacy
+notice naming the connection relay provider as a sub-processor (the Privacy page draft carries the section
+and a FOUNDER note), and `DOME_SCREEN_VIEW_ENABLED` on in production.
+
+Device-checklist additions from the 2026-10-22 review (pc-agent `README.md` "Device checklist"): the bars at
+100 %, 125 %, 150 % and mixed scaling with a secondary monitor left of the primary (each bar on its monitor,
+taps under it refused); a still desktop for 10 s keeps at least 1 fps with no rebuild; one UAC prompt pauses
+rather than ends; the WGC fallback's first frame is the primary's size; a frozen DoMe window thread pauses
+the picture.
 
 ## 3. Phase A deliverables (spec §18) — evidence
 

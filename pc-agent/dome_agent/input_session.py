@@ -35,6 +35,16 @@ typing is a deliberate continuation). Acks carry Windows acceptance only, at mos
 
 Content hygiene: text payloads never reach a log line, a security event, the journal, diagnostics,
 state frames or the recovery file. Only event *types* and counts are logged.
+
+Screen view (protocol 1.4, design §8, ``rules.input_sessions`` (2a), ``rules.local_permission_ui``):
+``pointer_move_to{x, y, gen}`` is an absolute position over the streamed monitor; it is accepted only while a
+screen session owned by the batch's controller is connected (``SCREEN_SESSION_REQUIRED``) and ``gen`` is the
+current geometry generation (``SCREEN_GEOMETRY_CHANGED``), is mapped to physical pixels here
+(:func:`dome_agent.screen.session.map_to_pixels`) and never summed (consecutive ones coalesce to the last).
+``pointer_wheel`` carries raw wheel units; ``key: f11`` is a plain key. While a DoMe permission window is open
+(pairing approval, grant window, consent window) every button and keyboard event of every phone is dropped
+(``INPUT_PAUSED_ON_PC``, one frame per second), and a press whose cursor sits on one of DoMe's own bars or windows
+is dropped (``INPUT_TARGET_RESERVED``): a phone cannot click its own Allow or Stop.
 """
 
 from __future__ import annotations
@@ -58,7 +68,9 @@ from dome_protocol.commands import VerifiedInputBatch
 
 from .frames import error_frame, input_ack_frame, input_session_frame
 from .logsetup import get_logger
-from .platform.protocol import ForegroundApp, InputHoldError, PlatformSet
+from .platform.protocol import ForegroundApp, InputHoldError, Monitor, PlatformSet
+from .screen.consent import PermissionUiState
+from .screen.session import map_to_pixels
 
 log = get_logger(__name__)
 
@@ -78,8 +90,11 @@ EndReason = Literal[
     "agent_restart",
 ]
 HOLDS_FILENAME = "input_holds.json"
-POINTER_EVENTS = frozenset({"pointer_move", "pointer_button", "pointer_scroll"})
+POINTER_EVENTS = frozenset({"pointer_move", "pointer_button", "pointer_scroll", "pointer_move_to", "pointer_wheel"})
 KEYBOARD_EVENTS = frozenset({"text", "key", "shortcut"})
+# Events DoMe never injects while one of its own permission windows is open (rules.local_permission_ui).
+PERMISSION_UI_BLOCKED_EVENTS = frozenset({"pointer_button", "text", "key", "shortcut"})
+ScreenTarget = Callable[[str, int], tuple[Monitor | None, str | None]]
 RETIRED_IDS_KEPT = 64
 ERROR_FRAME_INTERVAL = 1.0  # per code per session
 CLOCK_WINDOW_SECONDS = 30.0  # > input_batch_lifetime + 2 x max_clock_skew: older batches fail the envelope window
@@ -186,16 +201,22 @@ class _DispatchOutcome:
 
 
 def coalesce_events(events: Iterable[dict[str, Any]], motion_max: int = 1 << 20) -> list[tuple[dict[str, Any], int]]:
-    """Sum ADJACENT ``pointer_move`` events; never merge across a button, scroll, text, key or shortcut
-    event; preserve order. Returns ``(event, number_of_original_events)`` pairs so acks count what the
-    phone sent. A zero-motion result is kept (counted, nothing injected)."""
+    """Sum ADJACENT ``pointer_move`` events; collapse adjacent ``pointer_move_to`` events to the LAST one (an absolute
+    position is never summed and never merged with a relative move); never merge across a button, scroll, text,
+    key or shortcut event; preserve order. Returns ``(event, number_of_original_events)`` pairs so acks count what
+    the phone sent. A zero-motion result is kept (counted, nothing injected)."""
     out: list[tuple[dict[str, Any], int]] = []
     for ev in events:
-        if ev.get("type") == "pointer_move" and out and out[-1][0].get("type") == "pointer_move":
+        kind = ev.get("type")
+        if kind == "pointer_move" and out and out[-1][0].get("type") == "pointer_move":
             prev, n = out[-1]
             dx = max(-motion_max, min(motion_max, int(prev["dx"]) + int(ev["dx"])))
             dy = max(-motion_max, min(motion_max, int(prev["dy"]) + int(ev["dy"])))
             out[-1] = ({"type": "pointer_move", "dx": dx, "dy": dy}, n + 1)
+            continue
+        if kind == "pointer_move_to" and out and out[-1][0].get("type") == "pointer_move_to":
+            _prev, n = out[-1]
+            out[-1] = (dict(ev), n + 1)  # last position wins
             continue
         out.append((dict(ev), 1))
     return out
@@ -218,6 +239,9 @@ class InputSessionManager:
         watchdog_interval: float = 0.1,
         lock_poll_seconds: float = 1.0,
         foreground_refresh_seconds: float = 2.0,
+        permission_ui: PermissionUiState | None = None,
+        screen_target: ScreenTarget | None = None,
+        on_restricted: Callable[[bool, str | None], Awaitable[None]] | None = None,
     ) -> None:
         limits = load_registry().limits
         self._platform = platform
@@ -227,6 +251,9 @@ class InputSessionManager:
         self._session_locked = session_locked
         self._remote_enabled = remote_enabled
         self._on_state_change = on_state_change
+        self._permission_ui = permission_ui
+        self._screen_target = screen_target
+        self._on_restricted = on_restricted
         self.lease_seconds = float(lease_seconds if lease_seconds is not None else limits["input_lease_seconds"])
         self.age_budget_ms = int(age_budget_ms if age_budget_ms is not None else limits["input_age_budget_ms"])
         self.max_batch_events = int(limits["input_batch_max_events"])
@@ -570,6 +597,15 @@ class InputSessionManager:
             await self._report("INPUT_NOT_PERMITTED", session=session)
             self._schedule_ack(session)
             return False
+        screen_code = self._screen_gate(session, vb.payload["events"])
+        if screen_code is not None:
+            # An absolute pointer without the picture (or at a stale geometry) is dropped whole; the session continues.
+            session.dropped_events += count
+            session.last_seq = vb.seq
+            session.lease_expires_at = time.monotonic() + self.lease_seconds
+            await self._report(screen_code, session=session)
+            self._schedule_ack(session)
+            return False
         session.last_seq = vb.seq
         session.lease_expires_at = time.monotonic() + self.lease_seconds
         if count:
@@ -579,6 +615,20 @@ class InputSessionManager:
         else:
             self._schedule_ack(session)  # keepalive: the phone still learns last_seq/holds at ≤ 4/s
         return True
+
+    def _screen_gate(self, session: InputSession, events: list[dict[str, Any]]) -> str | None:
+        """``pointer_move_to`` needs a connected screen session owned by this controller at the current ``gen``
+        (rules.input_sessions (2a)); returns the error code that drops the batch, or None."""
+        gens = {int(ev["gen"]) for ev in events if ev.get("type") == "pointer_move_to"}
+        if not gens:
+            return None
+        if self._screen_target is None:
+            return "SCREEN_SESSION_REQUIRED"
+        for gen in gens:
+            _monitor, code = self._screen_target(session.controller_id, gen)
+            if code is not None:
+                return code
+        return None
 
     def _batch_age(
         self,
@@ -651,11 +701,20 @@ class InputSessionManager:
         out = _DispatchOutcome()
         coalesced = coalesce_events(pending.events)
         restricted: bool | None = None  # probed live, once per batch, at the first keyboard event
+        permission_ui_open = self._permission_ui is not None and self._permission_ui.is_open
+        paused_reported = False
         for index, (ev, n) in enumerate(coalesced):
             if not session.live:  # retired meanwhile: stop immediately, nothing more is pressed
                 out.dropped += n
                 continue
             kind = ev["type"]
+            if permission_ui_open and kind in PERMISSION_UI_BLOCKED_EVENTS:
+                # rules.local_permission_ui: a phone cannot click its own Allow; moves and wheels still pass
+                out.dropped += n
+                if not paused_reported:
+                    out.errors.append(("INPUT_PAUSED_ON_PC", ""))
+                    paused_reported = True
+                continue
             try:
                 if kind in KEYBOARD_EVENTS:
                     if session.keyboard_blocked:
@@ -686,10 +745,24 @@ class InputSessionManager:
                 if kind == "pointer_move":
                     if ev["dx"] or ev["dy"]:
                         adapter.move(int(ev["dx"]), int(ev["dy"]))
+                elif kind == "pointer_move_to":
+                    if self._screen_target is None:
+                        raise ProtocolError("SCREEN_SESSION_REQUIRED", "no screen session")
+                    monitor, code = self._screen_target(session.controller_id, int(ev["gen"]))
+                    if monitor is None:
+                        raise ProtocolError(code or "SCREEN_SESSION_REQUIRED", "the streamed geometry changed")
+                    px, py = map_to_pixels(monitor, int(ev["x"]), int(ev["y"]))
+                    adapter.move_to(px, py)
                 elif kind == "pointer_scroll":
                     adapter.scroll(int(ev["dx"]), int(ev["dy"]))
+                elif kind == "pointer_wheel":
+                    adapter.wheel(int(ev["dx"]), int(ev["dy"]))
                 elif kind == "pointer_button":
                     button, action = str(ev["button"]), str(ev["action"])
+                    if action != "up" and self._press_lands_on_dome_ui():
+                        out.dropped += n  # the press would land on DoMe's own bar or window: never injected
+                        out.errors.append(("INPUT_TARGET_RESERVED", ""))
+                        continue
                     adapter.button(button, action)
                     if action == "down":
                         session.held_buttons.add(button)
@@ -735,6 +808,16 @@ class InputSessionManager:
             return bool(self._platform.input.input_restricted())
         except Exception:  # noqa: BLE001 - a failed probe is not evidence of a restriction
             return False
+
+    def _press_lands_on_dome_ui(self) -> bool:
+        """``GetCursorPos`` against the registered rectangles of DoMe's bars and windows (rules.local_permission_ui)."""
+        if self._permission_ui is None or not self._permission_ui.reserved_rects():
+            return False
+        try:
+            position = self._platform.input.cursor_position()
+        except Exception:  # noqa: BLE001 - an unknown cursor position is not evidence of a reserved target
+            return False
+        return position is not None and self._permission_ui.hit(position[0], position[1])
 
     def _target_still_in_front(self, session: InputSession) -> bool:
         try:
@@ -806,6 +889,9 @@ class InputSessionManager:
             self._restricted = False
         if self._restricted != before and self.live_session is not None:
             self._on_state_change()  # the phone shows "restricted" without waiting for the periodic frame
+        if self._restricted != before and self._on_restricted is not None:
+            with contextlib.suppress(Exception):
+                await self._on_restricted(self._restricted, None)  # the Screen view data channel's `restricted`
         return self._restricted
 
     # ----- foreground / state ----------------------------------------------------------------------------

@@ -3,11 +3,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { JsonValue, rest } from "@dome/protocol";
 
+import { screenViewSwitch } from "../lib/api.ts";
 import type { CommandRecord } from "../lib/commands.ts";
+import type { PcKeyPin } from "../lib/controllerKey.ts";
 import type { LabelContext } from "../lib/labels.ts";
+import { getPin } from "../lib/pcKeyPins.ts";
 import { useDevicesStore } from "../store/devices.ts";
 import { useInputStore } from "../store/input.ts";
 import { EMPTY_LIVE_PC, isFresh, useLiveStore, withTimeStaleness, type AppEntry, type LivePc } from "../store/live.ts";
+import { useScreenStore, type ScreenSwitch } from "../store/screen.ts";
 import { describeSendError, getRuntime } from "./runtime.ts";
 
 export function useSelectedPc() {
@@ -165,4 +169,59 @@ export function useMyGrant(pcId: string | null): rest.Grant | null | undefined {
   if (!pcId || grants === undefined) return undefined;
   if (!controllerId) return controllers.length === 0 ? undefined : null;
   return grants.find((g) => g.controller_id === controllerId) ?? null;
+}
+
+/** The live Screen view session (store mirror), its preferences and the client (protocol 1.4). */
+export function useScreenSession() {
+  const session = useScreenStore((s) => s.session);
+  const prefs = useScreenStore((s) => s.prefs);
+  const setPrefs = useScreenStore((s) => s.setPrefs);
+  return { session, prefs, setPrefs, client: getRuntime().screen };
+}
+
+/** Asked at most once per app load (`switchChecked`); until the server answers the value is "unknown" and the app keeps its "Coming" card. */
+let switchRequest: Promise<void> | null = null;
+
+/**
+ * The Screen view operator switch as the server states it (GET /healthz `screen_view`). "unknown" until it answers or
+ * when it cannot be read: the Screen tile then does not exist and the honest "Coming" card stays (DECISIONS 63).
+ */
+export function useScreenSwitch(): ScreenSwitch {
+  const value = useScreenStore((s) => s.switch);
+  const checked = useScreenStore((s) => s.switchChecked);
+  useEffect(() => {
+    if (checked || switchRequest) return;
+    switchRequest = screenViewSwitch()
+      .then((v) => useScreenStore.getState().setSwitch(v))
+      .catch(() => useScreenStore.getState().setSwitch("unknown"))
+      .finally(() => {
+        switchRequest = null;
+      });
+  }, [checked]);
+  return value;
+}
+
+/** Tests only: forget the one-shot switch request so the next mount asks again. */
+export function resetScreenSwitchForTests(): void {
+  switchRequest = null;
+  useScreenStore.setState({ switch: "unknown", switchChecked: false });
+}
+
+/** The PC key pinned at pairing for `pcId` (undefined while reading, null when none: Screen view says "pair again"). */
+export function usePcKeyPin(pcId: string | null, epoch = 0): PcKeyPin | null | undefined {
+  const key = `${pcId ?? ""}|${epoch}`;
+  const [read, setRead] = useState<{ key: string; pin: PcKeyPin | null } | null>(null);
+  useEffect(() => {
+    if (!pcId) return;
+    let cancelled = false;
+    void getPin(pcId).then((p) => {
+      if (!cancelled) setRead({ key, pin: p });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pcId, key]);
+  if (!pcId) return null;
+  // a read for another PC (or an older epoch) is not this one's answer yet
+  return read && read.key === key ? read.pin : undefined;
 }

@@ -356,3 +356,283 @@ def test_tray_icon_is_drawn_when_the_png_is_missing(monkeypatch: pytest.MonkeyPa
     assert image.size == (256, 256)
     assert image.getpixel((128, 6)) == (1, 66, 251, 255), "drawn DoMe Blue tile"
     assert image.getpixel((201, 201))[:3] == tray._COLOURS["disabled"]  # noqa: SLF001
+
+
+# ----- Screen view (protocol 1.4) ------------------------------------------------------------------------------------
+async def test_screen_view_menu_items_follow_the_session_and_the_grant(
+    pystray: Any, settings: Settings, store: Store
+) -> None:
+    """Tray: "Stop Screen view" only while someone watches (it stops at the PC), the status line names the viewer,
+    and each phone offers "Allow Screen view…" (the grant window, never a silent checkbox) until it has Screen view,
+    then "Screen view settings…" and "Turn off Screen view"."""
+    import asyncio
+
+    from dome_agent.ui import ScreenSessionView, StatusView
+
+    calls: list[tuple[str, Any]] = []
+
+    class _Screen:
+        async def stop_on_pc(self, source: str) -> bool:
+            calls.append(("stop_on_pc", source))
+            return True
+
+        async def turn_off_on_pc(self, controller_id: str, source: str) -> bool:
+            calls.append(("turn_off_on_pc", (controller_id, source)))
+            return False
+
+    class _Agent:
+        def __init__(self) -> None:
+            self.store = store
+            self.screen = _Screen()
+
+        async def request_screen_grant(self, controller_id: str) -> dict[str, Any]:
+            calls.append(("request_screen_grant", controller_id))
+            return {"window_opened": True}
+
+        async def update_grant_capabilities(self, controller_id: str, **kw: Any) -> None:
+            calls.append(("update_grant_capabilities", (controller_id, kw)))
+
+    tray = TrayUI(settings)
+    tray.bind(_Agent(), asyncio.get_running_loop())
+    tray._tk._root = object()  # noqa: SLF001  # a display exists (no Tk call is made by these items)
+    cid = "0f6d2c1e-1111-4222-8333-444455556666"
+    store.add_grant(
+        controller_id=cid, kid="kid-1", public_jwk={"kty": "EC"}, capabilities=["status"], display_name="iPhone"
+    )
+    menu = tray._menu()  # noqa: SLF001
+    stop = _item(menu, "Stop Screen view")
+    tray.update_status(StatusView(connection="connected", remote_enabled=True, linked=True))
+    assert stop.enabled is False and tray._status_line() == "Connected"  # noqa: SLF001
+    tray.update_status(
+        StatusView(
+            connection="connected",
+            remote_enabled=True,
+            linked=True,
+            screen_session=ScreenSessionView(phone_name="iPhone", since="2026-10-22T10:00:00Z", audio=False),
+        )
+    )
+    assert stop.enabled is True and tray._status_line() == "Screen view on (iPhone)"  # noqa: SLF001
+    stop(None)
+    phone = list(_submenu(menu, "Paired phones"))[0].submenu
+    allow = next(i for i in phone if i.text == "Allow Screen view…")
+    assert not next(i for i in phone.items if i.text == "Turn off Screen view").visible
+    allow(None)
+    for _ in range(100):
+        if len(calls) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert calls == [("stop_on_pc", "tray"), ("request_screen_grant", cid)]
+    store.update_grant_capabilities(cid, ["status", "screen"])
+    phone = list(_submenu(menu, "Paired phones"))[0].submenu
+    assert [i.text for i in phone if i.text.startswith(("Screen view", "Turn off"))] == [
+        "Screen view settings…",
+        "Turn off Screen view",
+    ]
+    next(i for i in phone if i.text == "Turn off Screen view")(None)
+    for _ in range(100):
+        if len(calls) == 3:
+            break
+        await asyncio.sleep(0.01)
+    assert calls[-1] == ("turn_off_on_pc", (cid, "tray"))  # the cooldown starts there when this phone is watching
+
+
+def test_without_a_display_the_bars_fail_closed_and_no_grant_window_widens(settings: Settings) -> None:
+    from dome_agent.platform.protocol import Monitor
+    from dome_agent.ui import ScreenBarRequest, ScreenGrantRequest
+
+    tray = TrayUI(settings)  # the Tk thread never started: no root, as on a PC without a desktop
+    bars = tray.show_screen_bars(
+        ScreenBarRequest(
+            viewer_name="iPhone",
+            audio=False,
+            monitors=(Monitor(0, 0, 0, 1920, 1080, True),),
+            on_stop=lambda _s: None,
+            on_turn_off=lambda: None,
+        )
+    ).result(timeout=1)
+    assert bars.created is False and not tray.screen_bars_present()
+    answers: list[Any] = []
+    tray.show_screen_grant(
+        ScreenGrantRequest(
+            request_id="r1",
+            controller_id="c1",
+            display_name="iPhone",
+            screen=False,
+            screen_audio=False,
+            ask_each_time=False,
+            cooldown_seconds=600,
+            respond=answers.append,
+        )
+    )
+    assert answers == [None]  # Cancel: widening Screen view needs a window (rules.local_permission_ui)
+
+
+def test_a_bar_answer_after_the_agent_gave_up_is_dropped() -> None:
+    """The agent waits 3 s for the bars and then refuses the start: a late confirmation from the Tk thread must not
+    raise on the cancelled future, and tells the caller to take the orphan bars down."""
+    from concurrent.futures import Future
+
+    from dome_agent.tray import _cooldown_label, _cooldown_seconds, _resolve_bars
+    from dome_agent.ui import ScreenBars
+
+    ok: Future[ScreenBars] = Future()
+    assert _resolve_bars(ok, ScreenBars(created=True)) is True and ok.result().created
+    assert _resolve_bars(ok, ScreenBars(created=False)) is False  # answered once only
+    gave_up: Future[ScreenBars] = Future()
+    gave_up.cancel()
+    assert _resolve_bars(gave_up, ScreenBars(created=True)) is False
+    for seconds, label in ((600, "10 minutes"), (60, "1 minute"), (0, "off")):
+        assert _cooldown_label(seconds) == label and _cooldown_seconds(label) == seconds
+    assert _cooldown_label(42) == "10 minutes" and _cooldown_seconds("??") == 600  # unknown → the secure default
+
+
+# ----- review round (2026-10-22): bar placement, a frozen Tk thread, a build without Screen view --------------------------
+class _FakeWidget:
+    """Enough of a tkinter widget for ScreenBarsController: every other call is accepted and ignored."""
+
+    def __init__(self, *args: Any, **_kw: Any) -> None:
+        self.children: list[_FakeWidget] = []
+        self.after_calls: list[Any] = []
+        if args and isinstance(args[0], _FakeWidget):
+            args[0].children.append(self)
+
+    def __getattr__(self, name: str) -> Any:
+        return lambda *a, **k: None
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def winfo_id(self) -> int:
+        return 1
+
+    def winfo_viewable(self) -> bool:
+        return True
+
+    def winfo_children(self) -> list[_FakeWidget]:
+        return self.children
+
+    def winfo_screenwidth(self) -> int:
+        return 4800
+
+    def winfo_screenheight(self) -> int:
+        return 1620
+
+    def after(self, ms: int, fn: Any) -> None:
+        self.after_calls.append(fn)
+
+
+class _FakeLabel(_FakeWidget):
+    pass
+
+
+def test_bar_placement_problem_is_pure_and_fails_closed() -> None:
+    from dome_agent.platform.protocol import Monitor
+    from dome_agent.tray import BarPlacement, bar_placement_problem
+
+    left = Monitor(1, -2880, 0, 2880, 1620, False)  # 150 %: physical -2880..0, logical -1920..0
+    on = BarPlacement((-2880, 0, 0, 54), (-2880, 0, 0, 1620))
+    assert bar_placement_problem(on, left) is None
+    assert bar_placement_problem(BarPlacement((-2880, 0, 0, 54), None), left) is None  # not Windows: no monitor query
+    # a DPI-unaware placement: x=-2880 read as logical lands off the desktop, Windows puts it elsewhere
+    assert (
+        bar_placement_problem(BarPlacement((-1920, 0, 960, 36), (0, 0, 1920, 1080)), left) == "bar not on its monitor"
+    )
+    assert bar_placement_problem(BarPlacement((-2880, 0, 0, 54), (0, 0, 0, 0)), left) == "bar not on its monitor"
+    assert bar_placement_problem(BarPlacement((-2880, 400, 0, 454), (-2880, 0, 0, 1620)), left) is not None
+    assert bar_placement_problem(BarPlacement((-2880, 0, -2880, 54), None), left) == "bar has no size"
+
+
+def test_bars_are_confirmed_only_on_their_monitor_and_a_frozen_tk_thread_counts_as_no_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Design §7 fail-closed indicator, the tray side: a bar whose real rectangle is not on its monitor is no bar
+    (the start is refused), its measured rectangle is what taps are refused on, a bar that moves off its monitor or a
+    Tk thread whose check has not run for 3 s makes `present()` False (capture pauses) and `ui_alive()` False (the
+    worker's ticks are withheld)."""
+    import sys
+
+    from dome_agent.platform.protocol import Monitor
+    from dome_agent.tray import BarPlacement, ScreenBarsController
+    from dome_agent.ui import ScreenBarRequest
+
+    monkeypatch.setitem(
+        sys.modules,
+        "tkinter",
+        SimpleNamespace(Toplevel=_FakeWidget, Label=_FakeLabel, Menu=_FakeWidget, Menubutton=_FakeWidget),
+    )
+    root = _FakeWidget()
+    now = [100.0]
+    misplaced: dict[int, BarPlacement] = {}
+
+    def measure(win: Any, monitor: Monitor) -> BarPlacement:
+        good = BarPlacement(
+            (monitor.left, monitor.top, monitor.right, monitor.top + 54),
+            (monitor.left, monitor.top, monitor.right, monitor.bottom),
+        )
+        return misplaced.get(monitor.index, good)
+
+    ctl = ScreenBarsController(
+        SimpleNamespace(root=root, post=lambda fn: fn()),  # type: ignore[arg-type]
+        on_display_change=lambda: None,
+        measure=measure,
+        clock=lambda: now[0],
+    )
+    monitors = (Monitor(0, 0, 0, 1920, 1080, True), Monitor(1, -2880, 0, 2880, 1620, False))
+    request = ScreenBarRequest(
+        viewer_name="iPhone", audio=False, monitors=monitors, on_stop=lambda _s: None, on_turn_off=lambda: None
+    )
+    misplaced[1] = BarPlacement((-1920, 0, 960, 36), (0, 0, 1920, 1080))
+    bars = ctl.show(request).result(timeout=1)
+    assert bars.created is False and bars.detail == "bar not on its monitor" and not ctl.present()
+    del misplaced[1]
+    bars = ctl.show(request).result(timeout=1)
+    assert bars.created is True and bars.reserved == ((0, 0, 1920, 54), (-2880, 0, 0, 54))  # the measured rectangles
+    assert ctl.present() and ctl.ui_alive()
+    misplaced[1] = BarPlacement((-1920, 0, 960, 36), (0, 0, 1920, 1080))  # a scaling change moved it
+    ctl._check()  # noqa: SLF001
+    assert not ctl.present() and ctl.ui_alive()  # a missing bar, not a frozen thread
+    del misplaced[1]
+    ctl._check()  # noqa: SLF001
+    assert ctl.present()
+    now[0] += 3.5  # the Tk thread stopped running its checks
+    assert not ctl.present() and not ctl.ui_alive()
+    ctl._check()  # noqa: SLF001  # it recovers
+    assert ctl.present() and ctl.ui_alive()
+
+
+async def test_a_build_without_screen_view_says_so_in_the_tray(pystray: Any, settings: Settings, store: Store) -> None:
+    import asyncio
+
+    from dome_agent.screen import NOT_INCLUDED_MESSAGE
+
+    notes: list[tuple[str, str]] = []
+
+    class _Screen:
+        media_available = False
+
+    class _Agent:
+        def __init__(self) -> None:
+            self.store = store
+            self.screen = _Screen()
+
+        async def request_screen_grant(self, controller_id: str) -> dict[str, Any]:
+            raise AssertionError("no grant window in a build without Screen view")
+
+    tray = TrayUI(settings)
+    tray.bind(_Agent(), asyncio.get_running_loop())
+    tray._tk._root = object()  # noqa: SLF001
+    tray.notify = lambda title, message: notes.append((title, message))  # type: ignore[method-assign]
+    store.add_grant(
+        controller_id="0f6d2c1e-1111-4222-8333-444455556666",
+        kid="kid-1",
+        public_jwk={"kty": "EC"},
+        capabilities=["status", "pointer"],
+        display_name="iPhone",
+    )
+    menu = tray._menu()  # noqa: SLF001
+    phone = list(_submenu(menu, "Paired phones"))[0].submenu
+    item = next(i for i in phone if "Screen view" in i.text)
+    assert item.text == "Screen view: not in this version of DoMe" and item.enabled is False
+    item(None)
+    await asyncio.sleep(0.05)
+    assert notes == [("DoMe", NOT_INCLUDED_MESSAGE)]

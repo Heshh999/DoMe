@@ -22,13 +22,24 @@ Design: `docs/design/pc-agent.md`. Contract: `shared/protocol/` (frozen; verifie
 ```
 dome_agent/
   cli.py           dome-agent run|link|unlink|pair|pair-approve|pair-decline|status|enable|disable|
-                   approve-app|remove-app|revoke|grant|stop-input|install-native-host|uninstall-native-host|
-                   repair|reconnect|diagnostics|quit|start-at-login|version
+                   approve-app|remove-app|revoke|grant|stop-input|stop-screen|screen-history|
+                   install-native-host|uninstall-native-host|repair|reconnect|diagnostics|quit|start-at-login|
+                   version · screen-worker (INTERNAL: the Screen view media process the agent starts)
   crashguard.py    frozen entry points: any exception → logs/crash.log + exit 70, never a modal error box
   agent.py         orchestrator: frame dispatch, snapshot application, mismatch handling, local controls,
                    input_batch verification, grant_update, every input-session end trigger
   input_session.py manual-input session manager: one session per PC, lease watchdog, seq/age/capability
-                   checks, ordered dispatch with motion coalescing, backpressure, holds + crash recovery, acks
+                   checks, ordered dispatch with motion coalescing, backpressure, holds + crash recovery, acks;
+                   1.4: pointer_move_to (absolute, needs the owner's connected screen session at a known gen),
+                   pointer_wheel, key f11, and rules.local_permission_ui (no presses while a DoMe window is open
+                   or onto DoMe's own bars)
+  screen/          Screen view (protocol 1.4): session.py (ScreenSessionManager: start checks in the design's
+                   order, lease, allowance tickets, pause/resume, takeover, end order, recovery), supervisor.py
+                   (the worker process: pipe, Job object, ticks, redacted stderr), sdp_check.py (strict offer
+                   check), signing.py (PC-signed answer), consent.py (consent gate, permission-UI state, window
+                   models), indicator.py (bars confirmed before capture, reserved rectangles), history.py,
+                   probe.py (Phase 0 probe), worker/ (the separate send-only aiortc process: main, rtc, track,
+                   encode, fake sources; capture_dda / capture_wgc written for Windows, not yet verified)
   single_instance.py one agent per user session: named mutex (Windows) / flock, second-launch `show`, repair
   authz.py         authorization in the design's exact order (KeyRecord resolver = local store ∩ snapshot)
   queue.py         serialized executor: depth 16, coalescing groups, timeouts, lifecycle frames, never-retry
@@ -46,9 +57,12 @@ dome_agent/
                    input.py = SendInput, instance.py = mutex) · unsupported.py (other OSes)
   bridge/          host.py (native-messaging host), ipc.py (named pipe / unix socket), server.py (agent side)
   control.py       local CLI ⇄ agent channel (same identity rule as the bridge IPC)
-  tray.py ui.py    pystray tray + tkinter pairing windows; NullUI for headless runs
+  tray.py ui.py    pystray tray + tkinter pairing windows; 1.4: the Screen view grant and consent windows, the
+                   "Screen view on" bars (one per monitor), the red badge, the Ctrl+Alt+Shift+S hotkey, the
+                   history window; NullUI for headless runs (no bars → Screen view fails closed)
   diagnostics.py   redacted bundle
-  testing/         fake_platform.py, fake_relay.py (fake API + relay), fake_extension.py — TEST DOUBLES ONLY
+  testing/         fake_platform.py, fake_relay.py (fake API + relay), fake_extension.py, fake_ui.py,
+                   fake_screen_worker.py — TEST DOUBLES ONLY
 packaging/         dome-agent.spec (ONE PyInstaller folder: DoMe.exe, dome-native-host.exe, _internal),
                    agent_entry.py / native_host_entry.py, installer/ (DoMe.iss = Inno Setup per-user
                    installer, build_installer.py, smoke_test.py; built and tested by
@@ -217,6 +231,106 @@ Authorization uses `ActionSpec.satisfied_by` (capability or an alternate; `input
 permitted by pointer **or** keyboard) and the `GRANT_MISSING` message names every accepted capability
 (unit-tested). `ai_eligible: false` actions and the batch primitives are never offered to a model or a
 routine (the agent has no AI path; the registry check is unit-tested).
+
+## Screen view (protocol 1.4, Phase 1 beta; `docs/design/screen-view.md`, ADR-0002)
+
+The phone sees the PC's picture over WebRTC between the two devices; the relay carries signed signaling only
+and never any media. The agent side is `dome_agent/screen/`; the media stack is the optional extra `screen`
+(`uv sync --extra dev` installs it; `aiortc==1.15.0`, `av>=14,<18`). **Evidence: everything below is
+unit-tested on Linux with the fake platform, a fake UI, an in-process fake worker and real aiortc peers on
+loopback (the fake frame sources `lavfi testsrc` / synthetic frames and the development `libx264`); Windows
+capture, encoding, the bars, the hotkey and the Job object are not yet verified on a device
+(KNOWN_ISSUES.md #19–#33). An end the worker reports (`bye`, `disconnected`, a late `error`, its exit) is also
+tested through the REAL `ProcessWorkerLauncher` with a scripted worker process (DECISIONS #75), and the
+cross-component suite runs the real agent and worker against a Python aiortc phone (`tests/test_e2e_screen.py`,
+integration-tested on Linux). A build without the media stack refuses every start with
+`ACTION_UNAVAILABLE{reason: screen_view_not_included}` (KNOWN_ISSUES #33).**
+
+* **Start checks, in the design's order** (`ScreenSessionManager.start_session`): remote control on →
+  session unlocked and not on the secure desktop → the relay's first allowance ticket (`relay.screen` on the
+  forwarded `screen.session_start`, kept by command id; missing → `ACTION_UNAVAILABLE`) → the strict offer
+  check (`sdp_check.check_offer`: ≤ 12 KiB, printable ASCII + CRLF, `v=0`, exactly one `sha-256` fingerprint
+  value, `setup`, ICE credentials, exactly `video recvonly` + `audio recvonly` + one SCTP `application`
+  section, H.264 or VP8; anything else `SCREEN_OFFER_INVALID{reason}`) → ownership
+  (`SCREEN_SESSION_OWNED` unless `takeover`) → consent (below) → monitors → the old session ends
+  (`takeover` / `replaced`) → **a bar on every monitor, confirmed** (fail closed:
+  `SCREEN_CAPTURE_UNAVAILABLE{indicator}`) → only then the worker is spawned. The worker's send-only answer is
+  signed with the PC's identity key (`signing.sign_screen_answer`, verified against the shared fixture
+  vector) and leaves in a `screen_answer` frame, never in the result or the journal.
+* **The worker** (`DoMe.exe screen-worker`, `screen/worker/`): a separate send-only aiortc process on an
+  anonymous pipe, Job object kill-on-close on Windows, exits on pipe EOF, on `stop` and after 10 s without an
+  agent tick (ticks are sent only while the UI thread that owns the bars still answers). STUN only (no TURN
+  credential ever reaches the PC). Capture starts only after `connectionState == "connected"` (DTLS to the
+  certificate the phone signed): the capture source is constructed at `start` but opened only by the track after
+  that, on every kind (`ddagrab`, its WGC fallback, a rebuild's new source). Pre-encoded H.264 track with
+  SPS/PPS before every IDR, 1 fps floor by re-encoding the held raw frame (never re-sending a packet), PLI →
+  IDR through the `RTCRtpSender._send_keyframe` hook, at most two requested IDRs a second (periodic IDR
+  fallback), path detection from the
+  nominated pair, bitrate steps 1.5 → 0.8 → 0.5 Mbps from `getStats()`, VP8 through aiortc's libvpx as
+  "Basic picture mode". Data channel `dome-screen-v1`: inbound `hb` / `keyframe` / `bye` / `audio` and
+  outbound `geometry` / `state` / `allowance` / `restricted` only, both directions validated against the
+  contract; anything else is dropped and counted. `--self-test` and `--list-encoders` print JSON.
+* **Lifecycle** (`rules.screen_sessions`): 8 s viewer lease renewed by `hb`; allowance tickets the agent
+  ASKS for (`screen_usage` about 20 s before `granted_until`, the dead-man switch: no ticket →
+  `allowance_exhausted` / `controller_offline` / `plan_disabled` / `allowance_unconfirmed`, so a PC cut off
+  from the relay stops within one ticket and a signed-out phone within about 60 s); 4 h maximum; lock ends
+  (`session_locked`); a UAC / secure desktop pauses and ends after 120 s; a missing bar (or a bar off its
+  monitor, or a UI thread whose check has not run for 3 s) pauses and ends after 10 s; pause causes are a set, so
+  capture resumes only once every cause is gone (the monitors are enumerated afresh every second, so a monitor plugged in without a bar counts too; bars
+  are recreated for the new set, and a viewed monitor that changed size makes the worker rebuild its capture at a
+  new geometry generation; the viewed monitor unplugged ends the session `capture_failed`); no DTLS within 20 s
+  is `connection_failed`. The start answers within its own 45 s command timeout, and a start abandoned half-way
+  (timeout, revocation) takes its bars, worker and consent window down. End order: retire the id → `stop` to the worker, ≤ 2 s,
+  terminate → close the bars only once the worker has exited → `screen_session{ended}` → notification →
+  history row; an end the worker asks for runs on a task of its own, never on the supervisor's pipe reader.
+  Every emergency stop works offline: *Disable remote control* retires the screen `remote_disabled` (and
+  withdraws a waiting consent window) BEFORE the input session is touched, releases held input while the worker
+  exits, and returns once both have ended; revocation and snapshot narrowing end it `controller_revoked` /
+  `grant_removed` / `plan_disabled`, quitting DoMe ends it `agent_restart` (and a crashed agent's session is
+  recorded as such at the next start from `screen_session.json`, which holds ids only).
+* **Grants only in a DoMe window** (`rules.local_permission_ui`): `screen` and `screen_audio` are never granted
+  at pairing (greyed, "add later from Paired phones"), never by a bare flag on Windows and never by the phone
+  or the server. Tray › Paired phones › *phone* › **Allow Screen view…** (or `DoMe.exe grant <id> --screen`,
+  which opens the same window and waits) shows `pairing.SCREEN_SCOPE_EXPLANATION`, the scam line, the PC sound
+  option, start right away / ask each time, and the post-Stop cooldown (10 min / 1 min / off); Allow unlocks
+  after 5 s; the PC sound option says "(coming in a later update)". Narrowing is immediate (`--remove-screen`,
+  "Turn off Screen view", the bar's "Stop and turn off") and ends a live session `grant_removed`; the bar's "Stop
+  and turn off" and the tray's "Turn off Screen view" while that phone watches also start the PC-wide cooldown.
+* **Consent and the PC-wide cooldown** (`screen/consent.py`): with ask mode, or during the cooldown that a Stop
+  at the PC starts for EVERY phone, a window "*phone* wants to see this screen" offers Deny, Allow (after 1 s),
+  Block this phone for 1 hour and Turn off Screen view for this phone; 30 s without an answer is
+  `SCREEN_CONSENT_TIMEOUT`. At most one consent window per minute per PC; after a Deny or timeout further
+  starts from any phone are refused without a window for 1, 2, 5, then 10 minutes. Refusals are written to the
+  local history and reported as the security event `screen_consent_declined{reason}`.
+* **DoMe never injects input into its own permission UI** (`PermissionUiState`): while a pairing approval,
+  grant window or consent window is open every button and keyboard event from every phone is dropped
+  (`INPUT_PAUSED_ON_PC`, one frame per second); a press whose cursor sits on a bar or DoMe window is dropped
+  (`INPUT_TARGET_RESERVED`).
+* **Tap to click** (design §8): `pointer_move_to{x, y, gen}` is mapped onto the streamed monitor in PHYSICAL
+  pixels (`map_to_pixels`, last position wins, never summed) and injected with `SetCursorPos` inside per-monitor
+  DPI awareness; it needs the batch's controller to own the connected screen session at the CURRENT geometry
+  generation (`SCREEN_SESSION_REQUIRED` / `SCREEN_GEOMETRY_CHANGED` drop the batch, the input session continues;
+  while a new generation is being announced every tap waits for it).
+  `pointer_wheel` sends raw wheel units; `key: f11` is a plain key.
+* **Content hygiene** (`rules.screen_content`): SDP exists in memory and on the private pipe only; results,
+  frames, the journal, the history, the recovery file and the diagnostics bundle carry ids, geometry, flags,
+  reasons and seconds. `offer_sdp`, `answer_sdp`, `sdp`, `candidate`, `ice_servers`, `username` are sensitive
+  keys; free text (log lines, the worker's stderr, `crash.log`, the diagnostics tail) has IPv4/IPv6(:port)
+  addresses and SDP attribute lines masked; the aiortc / aioice loggers are pinned to WARNING whatever
+  `LOG_LEVEL` says (an address ending a sentence, "could not reach 192.168.1.5.", is masked too). The sentinel
+  tests run a real loopback session at `LOG_LEVEL=DEBUG` and assert that
+  `127.0.0.1:<port>`, the fingerprints and the ICE password reach no sink.
+* **PC key pinning** (`rules.pc_key_pinning`): the pairing approve carries `pc_key_mac`, the HMAC over the PC's
+  identity key keyed by the pairing code the server never holds (shared fixture vector), so the phone can
+  verify the PC-signed answer later; no pin, no picture.
+* **Operator switch**: the relay enables Screen view with `DOME_SCREEN_VIEW_ENABLED` (default off) and refuses
+  starts and tickets itself; the agent needs no setting. The PC owner's switches are the grant window, the
+  bar, the tray, the hotkey, `DoMe.exe stop-screen` and *Disable remote control*.
+* **Device checklist (Phase 0 / §18 round, nothing here is device-verified)**: the bars on every monitor at 100 %,
+  125 %, 150 % and mixed scaling, with a secondary monitor left of the primary (each bar on its monitor, taps under
+  it refused); a still desktop for 10 s keeps ≥ 1 fps with no rebuild; one UAC prompt pauses rather than ends; the
+  WGC fallback's first frame is the primary's size; Ctrl+Alt+Shift+S; the Job object killing the worker when DoMe.exe
+  is ended in Task Manager; the Windows firewall prompt on first use.
 
 ## Single instance per Windows user session (spec §10)
 

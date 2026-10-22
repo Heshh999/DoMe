@@ -1,6 +1,6 @@
 {
   "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), target (name in target_schemas or null), result (name of a $def in schemas/results.schema.json; the agent validates before emitting, the controller before rendering), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: the coalescing GROUP is (coalesce key, canonical target JSON or '' when null) per PC across all controllers; a later command in the same group replaces queued earlier ones, which terminate as canceled/COMMAND_SUPERSEDED), routine_allowed (may appear in Pro routines), idempotent (safe to re-emit the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts). `alternate_capabilities` (optional): the action is permitted when the grant holds `capability` OR any listed alternate. `ai_eligible: false` marks human-only actions that must never enter an AI tool catalogue or a saved routine (rules.ai_eligibility). `since` (optional): the protocol version that introduced the action (absent means 1.0). A controller stamps a command with its action's `since`, and verifiers refuse a command whose protocol_version is below it (PROTOCOL_INCOMPATIBLE; version.json rules.command_version_stamping).",
-  "registry_version": "1.3",
+  "registry_version": "1.4",
   "capabilities": {
     "status": "Read PC, media and browser state.",
     "media": "Control YouTube (including search) and Windows media sessions.",
@@ -9,7 +9,9 @@
     "lock": "Lock the Windows session.",
     "power": "Sleep, restart or shut down the PC (always confirmed).",
     "pointer": "Move the Windows cursor, click, scroll and drag from the phone touchpad. Human-directed; reaches every app of the unlocked Windows session, not only approved apps.",
-    "keyboard": "Type literal text and press keys or tested shortcuts into whatever the PC has focused. Human-directed; reaches every app of the unlocked Windows session, not only approved apps."
+    "keyboard": "Type literal text and press keys or tested shortcuts into whatever the PC has focused. Human-directed; reaches every app of the unlocked Windows session, not only approved apps.",
+    "screen": "See this PC's screens live during a Screen view session. Human-directed; shows every app, notification and window of the unlocked Windows session, not only approved apps. Granted only in a DoMe window on the PC. Never recorded, never given to an AI.",
+    "screen_audio": "Hear the PC's sound during Screen view (everything the PC plays, including calls). Only together with `screen`; granted only in a DoMe window on the PC."
   },
   "target_schemas": {
     "youtube_target": {
@@ -1071,6 +1073,92 @@
       "alternate_capabilities": [
         "keyboard"
       ],
+      "risk": "low",
+      "confirmation": "none",
+      "timeout_ms": 5000,
+      "availability": [],
+      "verification": "response",
+      "idempotent": true,
+      "routine_allowed": false,
+      "ai_eligible": false
+    },
+    "screen.session_start": {
+      "summary": "Start, or take over, this PC's Screen view session. The phone's WebRTC offer travels inside this signed command; the PC answers with a screen_answer frame signed by its identity key (rules.screen_signaling) and captures only after DTLS connects to the certificate named in the offer (rules.screen_sessions). The result carries ids, geometry, flags and the allowance; never SDP.",
+      "since": "1.4",
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "offer_sdp"
+        ],
+        "properties": {
+          "offer_sdp": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12288,
+            "pattern": "^[\\x20-\\x7E\\r\\n]*$",
+            "description": "The phone's receive-only offer (printable ASCII and CRLF only; at most screen_sdp_max_bytes). Its a=fingerprint:sha-256 is what the PC's DTLS handshake must match. The PC applies the strict check of rules.screen_signaling (SCREEN_OFFER_INVALID)."
+          },
+          "surface": {
+            "default": "primary",
+            "oneOf": [
+              {
+                "const": "primary"
+              },
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 7
+              }
+            ],
+            "description": "Which monitor to stream: the primary one, or a surface index from a previous screen_session_result.surfaces (Phase 2 'Next screen'; Phase 1 streams the primary)."
+          },
+          "audio": {
+            "type": "boolean",
+            "default": true,
+            "description": "Ask for PC sound too. Honoured only when the grant holds screen_audio (Phase 2); the result's `audio` says whether sound is on."
+          },
+          "takeover": {
+            "type": "boolean",
+            "default": false,
+            "description": "Replace another controller's live session (it ends `takeover`). Ask mode, the post-Stop cooldown and the consent back-off still apply."
+          }
+        }
+      },
+      "target": null,
+      "result": "screen_session_result",
+      "capability": "screen",
+      "risk": "moderate",
+      "confirmation": "none",
+      "timeout_ms": 45000,
+      "availability": [
+        "windows",
+        "session_unlocked"
+      ],
+      "verification": "response",
+      "idempotent": false,
+      "routine_allowed": false,
+      "ai_eligible": false
+    },
+    "screen.session_stop": {
+      "summary": "End this controller's Screen view session on this PC (reason `stopped`). Idempotent: an unknown or already-ended id answers stopped: false.",
+      "since": "1.4",
+      "params": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "screen_session_id"
+        ],
+        "properties": {
+          "screen_session_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{22}$"
+          }
+        }
+      },
+      "target": null,
+      "result": "screen_session_stop_result",
+      "capability": "screen",
       "risk": "low",
       "confirmation": "none",
       "timeout_ms": 5000,

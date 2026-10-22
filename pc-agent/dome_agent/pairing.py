@@ -7,6 +7,12 @@ forwards a ``pairing_request`` the agent (1) ignores it unless ``code_hash`` mat
 (2) recomputes ``kid_from_jwk(public_jwk)`` and refuses a mismatch, (3) computes the 6-digit
 verification code ``HMAC(code, pairing_id|pc_id|kid)`` and shows it with the untrusted display name
 and requested scopes. Only an explicit local Approve stores the grant and sends ``pairing_decision``.
+
+Protocol 1.4 (Screen view, ``rules.pc_key_pinning``): the approve also carries ``pc_key_mac``, the HMAC over the
+PC's own identity key keyed by the same pairing code, so the phone can pin that key and later verify the PC-signed
+screen answer against it. ``screen`` and ``screen_audio`` are NEVER granted at pairing (``rules.local_permission_ui``):
+the approval window lists them greyed with "add later from Paired phones", and the grant window on the PC is the
+only way to add them.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from dome_protocol import (
     pairing_code_handle,
     pairing_verification_code,
     parse_rfc3339,
+    pc_key_mac,
 )
 
 from .frames import pairing_decision_frame
@@ -42,15 +49,33 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 Sender = Callable[[dict[str, Any]], Awaitable[bool]]
-CAPABILITIES = ("status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard")
+CAPABILITIES = ("status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard", "screen", "screen_audio")
 INPUT_CAPABILITIES = ("pointer", "keyboard")
+# Screen view (1.4): granted only in the DoMe grant window, never at pairing (rules.local_permission_ui).
+SCREEN_CAPABILITIES = ("screen", "screen_audio")
+# Everything the PC owner can only grant in a DoMe window on this PC (design §6.2 generalises INPUT_CAPABILITIES).
+LOCAL_ONLY_CAPABILITIES = INPUT_CAPABILITIES + SCREEN_CAPABILITIES
 # Shown wherever the PC owner grants pointer/keyboard (pairing approval, tray, CLI) — spec §10A-D.
 INPUT_SCOPE_EXPLANATION = (
     "Touchpad (pointer) and Keyboard let this phone move the mouse, click, scroll and type into whatever is in "
     "front on this PC, in every app of the unlocked Windows session, not only the approved apps. The approved-app "
     "list restricts structured app actions; it is not a sandbox around a real mouse and keyboard. Only the phone "
-    "you approve can use them, only while you keep remote control on, and you can switch them off here at any time."
+    "you approve can use them, only while you keep remote control on, and you can switch them off here at any time. "
+    "A phone with Keyboard can also run programs on this PC, as you could."
 )
+# The Screen view grant window (design §2.1): scope text, the scam line and the sound option, word for word.
+SCREEN_SCOPE_EXPLANATION = (
+    "Screen view lets this phone see everything on this PC's screens while a Screen view is on: every app, "
+    "notifications and messages that pop up, and anything you reveal, such as a password you show. It does not let "
+    "the phone click or type; that is Touchpad and Keyboard. DoMe shows a 'Screen view on' bar on every screen and a "
+    "red dot on the tray icon whenever someone is watching, and you can stop it there. Nothing is recorded, and the "
+    "AI never receives it."
+)
+SCREEN_SCAM_LINE = "Only allow phones that are yours. DoMe will never call you or ask you to allow Screen view."
+SCREEN_AUDIO_EXPLANATION = "PC sound is everything the PC plays, including calls."
+# Phase 1 streams no sound (KNOWN_ISSUES #27): the option can be granted ahead of time, and says so
+SCREEN_AUDIO_OPTION_LABEL = "Also allow PC sound (coming in a later update)"
+SCREEN_NOT_AT_PAIRING = "add later from Paired phones"
 
 
 @dataclass(slots=True)
@@ -68,9 +93,10 @@ class PendingPairing:
             self.pairing_id,
             self.display_name,
             self.verification_code,
-            self.requested_capabilities,
+            tuple(c for c in self.requested_capabilities if c not in SCREEN_CAPABILITIES),
             self.kid,
             self.expires_at,
+            deferred_capabilities=tuple(c for c in self.requested_capabilities if c in SCREEN_CAPABILITIES),
         )
 
 
@@ -198,6 +224,15 @@ class PairingManager:
             return None
         return pending
 
+    def approval_waiting(self) -> bool:
+        """Read-only, any thread: is a pairing approval waiting for the person at the PC right now? (The approval
+        window is a DoMe permission window: phone presses are dropped while it is up, rules.local_permission_ui.)"""
+        session = self._session
+        if session is None or session.expired:
+            return False
+        now = now_utc()
+        return any(parse_rfc3339(p.expires_at) >= now for p in list(session.requests.values()))
+
     def pending_requests(self) -> list[PendingPairing]:
         session = self.session
         if session is None:
@@ -209,15 +244,22 @@ class PairingManager:
         pending = self.pending(pairing_id)
         if pending is None:
             raise ProtocolError("PAIRING_CODE_INVALID", "No pending pairing request with that id (expired?)")
+        # screen / screen_audio are never granted at pairing, whatever the phone asked or the caller passed
+        # (rules.local_permission_ui): pairing stays one decision, Screen view is a second one at the PC.
         caps = tuple(
             c
             for c in (granted if granted is not None else pending.requested_capabilities)
-            if c in pending.requested_capabilities
+            if c in pending.requested_capabilities and c not in SCREEN_CAPABILITIES
         )
         if not caps:
             raise ProtocolError(
                 "INVALID_PARAMETERS", "At least one requested capability must be granted; decline instead"
             )
+        session = self.session
+        pc_id = self._identity.pc_id
+        assert session is not None and pc_id is not None  # pending() answered, so the live session holds the code
+        # rules.pc_key_pinning: the PC pins its identity key for this phone with a MAC only the two devices can compute.
+        mac = pc_key_mac(session.code, pairing_id, pc_id, pending.kid, self._identity.kid)
         self._store.add_grant(
             controller_id=None,
             kid=pending.kid,
@@ -227,14 +269,12 @@ class PairingManager:
             snapshot_id=self._store.current_snapshot_id(),
         )
         self._store.add_security_event("controller_paired_locally", pairing_id=pairing_id, capabilities=list(caps))
-        sent = await self._send(pairing_decision_frame(pairing_id, "approve", pending.kid, list(caps)))
+        sent = await self._send(pairing_decision_frame(pairing_id, "approve", pending.kid, list(caps), pc_key_mac=mac))
         if not sent:
             log.warning(
                 "pairing_decision could not be sent (offline); the relay will not create the controller until it is"
             )
-        session = self.session
-        if session is not None:
-            session.requests.pop(pairing_id, None)
+        session.requests.pop(pairing_id, None)
         self._ui.pairing_finished(pairing_id, "approve")
         self._session = None  # one approval per code: the code is single-use by design
         return pending

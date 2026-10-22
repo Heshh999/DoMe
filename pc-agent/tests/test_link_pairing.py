@@ -10,6 +10,7 @@ from dome_protocol import (
     normalize_pairing_code,
     pairing_code_handle,
     pairing_verification_code,
+    verify_pc_key_mac,
 )
 
 from dome_agent.api import ApiClient
@@ -118,6 +119,13 @@ async def test_pairing_happy_path(harness: AgentHarness, fake_api: FakeApi) -> N
     )
     await agent.pairing.approve(session.pairing_id, ["status", "media"])
     decision = await harness.relay.expect("pairing_decision")
+    # protocol 1.4 (rules.pc_key_pinning): the approve carries the MAC over the PC's identity key, keyed by the
+    # pairing code the server never holds, so the phone can pin that key for Screen view
+    mac = decision.pop("pc_key_mac")
+    assert verify_pc_key_mac(session.code, session.pairing_id, fake_api.pc_id, phone.kid, agent.identity.kid, mac)
+    assert not verify_pc_key_mac(
+        "ABCDE-FGHJK-MNPQR-STVWX", session.pairing_id, fake_api.pc_id, phone.kid, agent.identity.kid, mac
+    )
     assert decision == {
         "type": "pairing_decision",
         "pairing_id": session.pairing_id,
@@ -250,6 +258,71 @@ async def test_pairing_approval_offers_pointer_and_keyboard_explicitly(
     assert grant is not None and grant.capabilities == ("status", "media", "keyboard")
 
 
+async def test_screen_is_never_granted_at_pairing(harness: AgentHarness, fake_api: FakeApi) -> None:
+    """Design §2.1 step 3 / rules.local_permission_ui: a phone may ask for screen and screen_audio, the approval
+    window shows them greyed ("add later from Paired phones"), and neither an explicit list nor --yes grants them;
+    the grant window on the PC is the only way."""
+    agent = harness.agent
+    assert agent.pairing is not None
+    session = await agent.pairing.start()
+    phone = Controller(fake_api.account_id, fake_api.pc_id, display_name="Watching phone")
+    await harness.relay.send(
+        {
+            "type": "pairing_request",
+            "pairing_id": session.pairing_id,
+            "code_hash": session.code_hash,
+            "controller_display_name": phone.display_name,
+            "public_jwk": phone.jwk,
+            "kid": phone.kid,
+            "requested_capabilities": ["status", "screen", "screen_audio", "pointer"],
+            "expires_at": session.expires_at,
+        }
+    )
+    for _ in range(100):
+        if agent.pairing.pending_requests():
+            break
+        await asyncio.sleep(0.02)
+    pending = agent.pairing.pending_requests()[0]
+    # the approval window is a DoMe permission window: no phone press is injected while it waits
+    # (rules.local_permission_ui)
+    assert agent.permission_ui.is_open and agent.permission_ui.open_kinds() == ("pairing_approval",)
+    approval = pending.approval()
+    assert approval.requested_capabilities == ("status", "pointer")  # offered for a decision
+    assert approval.deferred_capabilities == ("screen", "screen_audio")  # shown greyed, never a checkbox
+    assert harness.ui.pairing_requests[-1].deferred_capabilities == ("screen", "screen_audio")
+    await agent.pairing.approve(session.pairing_id, ["status", "screen", "screen_audio", "pointer"])
+    decision = await harness.relay.expect("pairing_decision")
+    assert decision["granted_capabilities"] == ["status", "pointer"] and "pc_key_mac" in decision
+    assert not agent.permission_ui.is_open  # answered: the window is gone
+    grant = agent.store.get_grant_by_kid(phone.kid)
+    assert grant is not None and grant.capabilities == ("status", "pointer")
+    # a phone that asked for nothing but Screen view cannot be approved with it: "decline instead"
+    session = await agent.pairing.start()
+    other = Controller(fake_api.account_id, fake_api.pc_id, display_name="Screen-only phone")
+    await harness.relay.send(
+        {
+            "type": "pairing_request",
+            "pairing_id": session.pairing_id,
+            "code_hash": session.code_hash,
+            "controller_display_name": other.display_name,
+            "public_jwk": other.jwk,
+            "kid": other.kid,
+            "requested_capabilities": ["screen"],
+            "expires_at": session.expires_at,
+        }
+    )
+    for _ in range(100):
+        if agent.pairing.pending_requests():
+            break
+        await asyncio.sleep(0.02)
+    with pytest.raises(ProtocolError) as exc:
+        await agent.pairing.approve(session.pairing_id, ["screen"])
+    assert exc.value.code == "INVALID_PARAMETERS" and agent.store.get_grant_by_kid(other.kid) is None
+    assert agent.permission_ui.is_open
+    await agent.pairing.decline(session.pairing_id)
+    assert not agent.permission_ui.is_open
+
+
 def test_cli_capability_prompt_is_explicit(monkeypatch: Any, capsys: Any) -> None:
     from dome_agent import cli
 
@@ -265,6 +338,13 @@ def test_cli_capability_prompt_is_explicit(monkeypatch: Any, capsys: Any) -> Non
     assert cli._choose_capabilities(pending, True) == ["status"]  # noqa: SLF001
     assert "--yes does not cover it" in capsys.readouterr().out
     assert cli._choose_capabilities(pending, True, frozenset({"keyboard"})) == ["status", "keyboard"]  # noqa: SLF001
+    # Screen view is never granted at pairing, not even with --yes or when named (rules.local_permission_ui)
+    with_screen = {**pending, "requested_capabilities": ["status", "screen", "screen_audio"]}
+    assert cli._choose_capabilities(with_screen, True) == ["status"]  # noqa: SLF001
+    out = capsys.readouterr().out
+    assert (
+        "Screen view: not granted at pairing" in out and "PC sound: not granted at pairing" in out and "--screen" in out
+    )
     args = cli.build_parser().parse_args(["pair-approve", "x", "--yes", "--pointer"])
     assert cli._explicit_input(args) == {"pointer"}  # noqa: SLF001
     cli._print_pending(pending)  # noqa: SLF001

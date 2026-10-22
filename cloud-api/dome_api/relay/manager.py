@@ -12,7 +12,7 @@ import contextlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dome_protocol import dumps_compact
 from dome_protocol.keys import b64url_encode
@@ -30,6 +30,9 @@ from dome_api.security.ratelimit import SlidingWindowLimiter
 from dome_api.settings import Settings
 from dome_api.util import ts_required, utcnow
 
+if TYPE_CHECKING:  # the Screen view service hangs off the manager so socket-close paths can end owned sessions
+    from dome_api.screen.service import ScreenService
+
 log = get_logger("dome_api.relay")
 
 CLOSE_FRAME_TOO_LARGE = 1009
@@ -38,8 +41,22 @@ CLOSE_SUPERSEDED = 4001
 CLOSE_REVOKED = 4003
 CLOSE_AUTH_REQUIRED = 4008
 MAX_AGENT_INPUT_SESSIONS = 4
+MAX_AGENT_SCREEN_SESSIONS = 4
 # pc_state fields added in protocol 1.1; a 1.0 peer rejects unknown fields, so its copy of a state frame omits them
 PC_STATE_1_1_FIELDS = ("foreground_app", "input_session", "input_restricted")
+
+
+@dataclass(slots=True)
+class PendingScreenStart:
+    """A forwarded ``screen.session_start`` the relay still remembers (design §12): who issued it and on which socket
+    (the PC-signed answer prefers that socket), and the ledger reservation it carries. Dropped by the start's result,
+    by the ``started`` frame, or by the sweeper after the start lifetime plus the command timeout."""
+
+    controller_id: uuid.UUID
+    controller_conn_id: uuid.UUID
+    account_id: uuid.UUID
+    reservation_id: uuid.UUID
+    forwarded_at: datetime
 
 
 @dataclass(slots=True)
@@ -103,6 +120,11 @@ class AgentConn(_Conn):
         "input_sessions",
         "error_route_ok",
         "events_suppressed",
+        "protocol_versions",
+        "supports_screen",
+        "screen_sessions",
+        "screen_pending_starts",
+        "screen_final_sent",
     )
 
     def __init__(self, ws: WebSocket, pc_id: uuid.UUID, account_id: uuid.UUID) -> None:
@@ -123,6 +145,28 @@ class AgentConn(_Conn):
         # controllers verified to belong to this PC's account, for routing agent INPUT_* error frames (bounded)
         self.error_route_ok: set[uuid.UUID] = set()
         self.events_suppressed = 0  # agent-attributed rejection rows not written because the per-PC cap was hit
+        # every protocol version the agent announced in hello (rules.command_version_stamping: the relay refuses an
+        # input batch whose stamp is not compatible with them before forwarding) and whether 1.4 is among them
+        self.protocol_versions: tuple[str, ...] = ()
+        self.supports_screen = False
+        # live Screen view sessions as the AGENT reported them (screen_session frames): id -> owning controller
+        self.screen_sessions: dict[str, uuid.UUID] = {}
+        # forwarded screen.session_start commands awaiting their result / started frame: command_id -> who and what
+        self.screen_pending_starts: dict[uuid.UUID, PendingScreenStart] = {}
+        # sessions already told "final" (controller_offline / plan_disabled), so the frame goes out once
+        self.screen_final_sent: set[str] = set()
+
+    def remember_screen_session(self, screen_session_id: str, controller_id: uuid.UUID) -> None:
+        self.screen_sessions.pop(screen_session_id, None)
+        self.screen_sessions[screen_session_id] = controller_id  # newest last
+        while len(self.screen_sessions) > MAX_AGENT_SCREEN_SESSIONS:
+            oldest = next(iter(self.screen_sessions))
+            del self.screen_sessions[oldest]
+            self.screen_final_sent.discard(oldest)
+
+    def forget_screen_session(self, screen_session_id: str) -> None:
+        self.screen_sessions.pop(screen_session_id, None)
+        self.screen_final_sent.discard(screen_session_id)
 
     def remember_input_session(self, input_session_id: str, controller_id: uuid.UUID) -> None:
         for sid, owner in list(self.input_sessions.items()):
@@ -151,6 +195,7 @@ class ControllerConn(_Conn):
         "input_throttle_notified",
         "input_seq",
         "input_refused",
+        "supports_screen",
     )
 
     def __init__(self, ws: WebSocket, session_id: uuid.UUID, account_id: uuid.UUID, kid: str) -> None:
@@ -165,6 +210,7 @@ class ControllerConn(_Conn):
         self.input_throttle_notified: datetime | None = None  # last RATE_LIMITED error sent for input_batch floods
         self.input_seq: dict[str, int] = {}  # input_session_id -> highest seq forwarded on this socket (bounded)
         self.input_refused = 0  # input_batch frames refused by the per-socket input bucket (separate from commands)
+        self.supports_screen = False  # hello announced protocol 1.4: the only sockets that see screen_* frames
 
     def input_notice_due(self, now: datetime) -> bool:
         """At most one RATE_LIMITED error frame (and log line) per second for refused input batches."""
@@ -208,6 +254,15 @@ class ConnectionManager:
     # cap on agent-attributed rejection rows (relay_frame_rejected) per PC per minute, as `audited_event` caps
     # controller sockets; a buggy or compromised agent cannot grow security_events at wire speed this way
     agent_events: SlidingWindowLimiter = field(init=False)
+    # when a controller's LAST bound socket closed (rules.screen_sessions (4): a session whose owner has had no bound
+    # socket for 60 s is ended with controller_offline); dropped again when the controller binds a socket
+    controller_last_bound_at: dict[uuid.UUID, datetime] = field(default_factory=dict)
+    # set after construction (the Screen view service needs the manager and the manager calls back into it on the
+    # socket-close paths); None in unit tests that build a bare manager
+    screen: ScreenService | None = None
+    # when this process started: a controller this process has never seen bound counts as absent only from here, so a
+    # relay restart gives every Screen view owner the same grace to reconnect as a dropped socket does
+    started_at: datetime = field(default_factory=utcnow)
 
     def __post_init__(self) -> None:
         self.agent_events = SlidingWindowLimiter(self.settings.relay_security_events_per_connection_per_minute, 60)
@@ -297,11 +352,25 @@ class ConnectionManager:
     # ----- controllers ---------------------------------------------------------------------------
     def register_controller(self, conn: ControllerConn) -> None:
         self.controllers[conn.connection_id] = conn
+        if conn.controller_id is not None:
+            self.controller_last_bound_at.pop(conn.controller_id, None)
 
     def unregister_controller(self, conn: ControllerConn) -> None:
         self.controllers.pop(conn.connection_id, None)
         for pc_id in list(conn.subs):
             self._unsubscribe(conn, pc_id)
+        if conn.controller_id is not None and not self.controller_conns(conn.controller_id):
+            self.controller_last_bound_at[conn.controller_id] = utcnow()
+            if len(self.controller_last_bound_at) > 4096:  # bounded: oldest absences first
+                oldest = min(self.controller_last_bound_at, key=self.controller_last_bound_at.__getitem__)
+                del self.controller_last_bound_at[oldest]
+
+    def controller_present(self, controller_id: uuid.UUID, now: datetime, grace_seconds: float) -> bool:
+        """A bound socket exists, or the last one closed less than ``grace_seconds`` ago (a Wi-Fi blip)."""
+        if self.controller_conns(controller_id):
+            return True
+        last = self.controller_last_bound_at.get(controller_id, self.started_at)
+        return (now - last).total_seconds() < grace_seconds
 
     def _unsubscribe(self, conn: ControllerConn, pc_id: uuid.UUID) -> None:
         conn.subs.discard(pc_id)
@@ -328,7 +397,8 @@ class ConnectionManager:
     async def revoke_controller_sockets(
         self, controller_id: uuid.UUID, reason: str, *, pc_id: uuid.UUID | None = None
     ) -> int:
-        """Send ``revoked`` to every socket bound to the controller and close them (4003)."""
+        """Send ``revoked`` to every socket bound to the controller and close them (4003). A Screen view session the
+        controller owns ends within one ticket (rules.screen_sessions (4)) and its TURN credential is revoked."""
         n = 0
         for conn in self.controller_conns(controller_id):
             frame: dict[str, Any] = {"type": "revoked", "reason": reason}
@@ -338,6 +408,8 @@ class ConnectionManager:
             await conn.close(CLOSE_REVOKED)
             self.unregister_controller(conn)
             n += 1
+        if self.screen is not None:
+            await self.screen.controller_gone(controller_id, reason)
         return n
 
     async def apply_controller_revocation(
@@ -359,12 +431,21 @@ class ConnectionManager:
             await self.push_grants_snapshot(pc_id)
 
     async def close_session_sockets(self, session_id: uuid.UUID) -> int:
+        """Logout or account-session revocation: close the web session's sockets. A controller left without any bound
+        socket is gone for Screen view at once (its owned sessions end within one ticket, rules.screen_sessions (4))."""
         n = 0
+        gone: set[uuid.UUID] = set()
         for conn in self.session_conns(session_id):
             await conn.send({"type": "revoked", "reason": "session_ended"})
             await conn.close(CLOSE_REVOKED)
             self.unregister_controller(conn)
+            if conn.controller_id is not None:
+                gone.add(conn.controller_id)
             n += 1
+        if self.screen is not None:
+            for controller_id in gone:
+                if not self.controller_conns(controller_id):
+                    await self.screen.controller_gone(controller_id, "logout")
         return n
 
     async def send_to_controller(
@@ -392,19 +473,24 @@ class ConnectionManager:
         *,
         validate: bool = True,
         input_frame: bool = False,
+        screen_frame: bool = False,
         legacy_frame: dict[str, Any] | None = None,
         skip: set[uuid.UUID] | frozenset[uuid.UUID] = frozenset(),
     ) -> None:
-        """``input_frame`` marks protocol 1.1 frames, which 1.0 sockets never receive; ``legacy_frame`` is the
-        copy 1.0 sockets get instead of ``frame`` (a state frame without the 1.1 pc_state fields); ``skip`` lists
-        connection ids that already received the frame directly."""
+        """``input_frame`` marks protocol 1.1 frames, which 1.0 sockets never receive; ``screen_frame`` marks 1.4 frames
+        (``screen_session``), which only sockets that announced 1.4 receive; ``legacy_frame`` is the copy 1.0 sockets
+        get instead of ``frame`` (a state frame without the 1.1 pc_state fields); ``skip`` lists connection ids that
+        already received the frame directly."""
         for conn_id in list(self.subs.get(pc_id, ())):
             if conn_id in skip:
                 continue
             conn = self.controllers.get(conn_id)
             if conn is None:
                 continue
-            if conn.supports_input:
+            if screen_frame:
+                if conn.supports_screen:
+                    await conn.send(frame, validate=validate)
+            elif conn.supports_input:
                 await conn.send(frame, validate=validate)
             elif not input_frame:
                 await conn.send(legacy_frame if legacy_frame is not None else frame, validate=validate)
@@ -415,6 +501,24 @@ class ConnectionManager:
         written: set[uuid.UUID] = set()
         for conn in self.controller_conns(controller_id):
             if conn.supports_input and await conn.send(frame, validate=False):
+                written.add(conn.connection_id)
+        return written
+
+    async def send_screen_frame_to_controller(
+        self, controller_id: uuid.UUID, frame: dict[str, Any], *, preferred_conn_id: uuid.UUID | None = None
+    ) -> set[uuid.UUID]:
+        """Deliver a screen_answer / screen_session / SCREEN_* error frame to the controller's protocol-1.4 sockets:
+        the socket that issued the start when it is still open (the answer goes there alone), else every 1.4 socket
+        bound to the controller. Never to subscribers. Returns the connection ids written."""
+        written: set[uuid.UUID] = set()
+        if preferred_conn_id is not None:
+            conn = self.controllers.get(preferred_conn_id)
+            if conn is not None and not conn.closed and conn.controller_id == controller_id and conn.supports_screen:
+                if await conn.send(frame, validate=False):
+                    written.add(conn.connection_id)
+                    return written
+        for conn in self.controller_conns(controller_id):
+            if conn.supports_screen and await conn.send(frame, validate=False):
                 written.add(conn.connection_id)
         return written
 
@@ -551,11 +655,14 @@ class ConnectionManager:
         return frame
 
     async def push_account_snapshots(self, account_id: uuid.UUID) -> int:
-        """Fresh snapshots to every online PC of the account (a plan change, a device selection)."""
+        """Fresh snapshots to every online PC of the account (a plan change, a device selection). The account's
+        outstanding phone TURN credentials are revoked as well (design §13: plan change)."""
         pushed = 0
         for conn in list(self.agents.values()):
             if conn.account_id == account_id and not conn.closed and await self.push_grants_snapshot(conn.pc_id):
                 pushed += 1
+        if self.screen is not None:
+            await self.screen.account_plan_changed(account_id)
         return pushed
 
     async def push_grants_snapshot(self, pc_id: uuid.UUID) -> bool:

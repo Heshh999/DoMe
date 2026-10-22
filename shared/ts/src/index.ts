@@ -22,6 +22,8 @@ export {
   formatPairingCode,
   pairingCodeHandle,
   pairingVerificationCode,
+  pcKeyMac,
+  verifyPcKeyMac,
   randomNonce,
   randomUuid,
   PAIRING_ALPHABET,
@@ -48,8 +50,17 @@ export {
   type Confirmation,
   type FrameDirection,
   type BridgeDirection,
+  type ScreenDcDirection,
 } from "./registry.ts";
-export { INPUT_BATCH_PROTOCOL_VERSION, negotiateVersion, parseVersion, versionBelow } from "./versions.ts";
+export {
+  INPUT_BATCH_PROTOCOL_VERSION,
+  SCREEN_INPUT_PROTOCOL_VERSION,
+  inputBatchProtocolVersion,
+  inputEventSince,
+  negotiateVersion,
+  parseVersion,
+  versionBelow,
+} from "./versions.ts";
 export {
   minVersion,
   buildCommandPayload,
@@ -63,6 +74,8 @@ export {
   inputEventCapabilities,
   verifyAndParseCommand,
   verifyAndParseConfirmation,
+  verifyAndParseInputBatch,
+  type VerifiedInputBatch,
   type KeyRecord,
   type KeyResolver,
   type VerifiedConfirmation,
@@ -77,4 +90,23 @@ export {
   type BuildConfirmationInput,
   type VerifiedCommand,
 } from "./commands.ts";
+export {
+  SCREEN_ANSWER_TYPE,
+  SCREEN_DATA_CHANNEL_LABEL,
+  SCREEN_SDP_PATTERN,
+  screenSdpAcceptable,
+  sdpFingerprints,
+  offerDigest,
+  buildScreenAnswerPayload,
+  signScreenAnswer,
+  verifyScreenAnswer,
+  parseScreenDcMessage,
+  type ScreenAnswerPayload,
+  type BuildScreenAnswerInput,
+  type ScreenAnswerExpectation,
+  type VerifiedScreenAnswer,
+  type ScreenDcMessage,
+  type ScreenDcPhoneToPc,
+  type ScreenDcPcToPhone,
+} from "./screen.ts";
 export type * from "./generated/index.ts";

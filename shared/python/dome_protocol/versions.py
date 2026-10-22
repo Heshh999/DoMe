@@ -6,12 +6,42 @@ Kept apart from ``commands`` so the registry can check each action's ``since`` w
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 _VERSION_RE = re.compile(r"\A([0-9]+)\.([0-9]+)\Z", re.ASCII)
 
-# rules.command_version_stamping: input batches were introduced in 1.1 and are stamped with it.
+# rules.command_version_stamping: input batches were introduced in 1.1 and are stamped with it unless they
+# carry an event a later MINOR added (see ``input_batch_protocol_version``).
 INPUT_BATCH_PROTOCOL_VERSION = "1.1"
+
+# Screen view (protocol 1.4) added three input events; a batch that carries one needs a 1.4 peer.
+SCREEN_INPUT_PROTOCOL_VERSION = "1.4"
+_SCREEN_INPUT_EVENT_TYPES = frozenset({"pointer_move_to", "pointer_wheel"})
+_SCREEN_INPUT_KEYS = frozenset({"f11"})
+
+
+def input_event_since(event: Mapping[str, Any]) -> str:
+    """The protocol version that defined this ``input_event`` (1.1 for the touchpad events, 1.4 for the Screen
+    view additions ``pointer_move_to``, ``pointer_wheel`` and ``key: f11``). Unknown shapes answer the base
+    version: schema validation, not this function, rejects them."""
+    kind = event.get("type")
+    if kind in _SCREEN_INPUT_EVENT_TYPES or (kind == "key" and event.get("key") in _SCREEN_INPUT_KEYS):
+        return SCREEN_INPUT_PROTOCOL_VERSION
+    return INPUT_BATCH_PROTOCOL_VERSION
+
+
+def input_batch_protocol_version(events: Iterable[Mapping[str, Any]]) -> str:
+    """rules.command_version_stamping: the lowest protocol version that defines every event in the batch.
+
+    A phone stamps its batches with this so a 1.1 PC keeps accepting plain touchpad batches, and verifiers refuse a
+    batch stamped below what its events need (PROTOCOL_INCOMPATIBLE, ``required`` = this value)."""
+    best = INPUT_BATCH_PROTOCOL_VERSION
+    for ev in events:
+        since = input_event_since(ev)
+        if version_below(best, since):
+            best = since
+    return best
 
 
 def parse_version(version: object) -> tuple[int, int] | None:
@@ -72,6 +102,9 @@ def negotiate_version(peer_versions: Iterable[str], supported: Iterable[str]) ->
 
 __all__ = [
     "INPUT_BATCH_PROTOCOL_VERSION",
+    "SCREEN_INPUT_PROTOCOL_VERSION",
+    "input_batch_protocol_version",
+    "input_event_since",
     "negotiate_version",
     "parse_version",
     "protocol_compatible",

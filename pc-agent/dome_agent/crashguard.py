@@ -36,15 +36,34 @@ CRASH_MESSAGE = (
     "you to open it and copy its last lines, after you have read them."
 )
 
-# The same two patterns as logsetup._BEARER_RE / _LONG_TOKEN_RE (copied: this module imports nothing of DoMe).
+# The same patterns as logsetup (_BEARER_RE, _LONG_TOKEN_RE, _IPV4_RE, _IPV6_RE), copied: this module imports
+# nothing of DoMe. The address patterns exist for Screen view (design §4.4): the worker's crash log is written
+# only through here and must carry no peer address, loopback included.
 _BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 _LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_-]{40,}\b")
+_IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_IPV4_RE = re.compile(rf"(?<![A-Za-z0-9.])(?:{_IPV4_OCTET}\.){{3}}{_IPV4_OCTET}(?::\d{{1,5}})?(?!\w|\.\d)")
+_HEX4 = r"[0-9A-Fa-f]{1,4}"
+_IPV6_BODY = (
+    rf"(?:(?:{_HEX4}:){{7}}{_HEX4}"
+    rf"|(?:{_HEX4}:){{1,6}}:(?:{_HEX4}(?::{_HEX4}){{0,5}})?"
+    rf"|::(?:{_HEX4}(?::{_HEX4}){{0,6}})?)"
+)
+_IPV6_RE = re.compile(
+    rf"(?<![\w:.])(?:\[{_IPV6_BODY}(?:%[\w.-]+)?\](?::\d{{1,5}})?|{_IPV6_BODY}(?:%[\w.-]+)?)(?![\w:])"
+)
+_SDP_RE = re.compile(
+    r"(?<![\w-])(?:a=(?:fingerprint|ice-pwd|ice-ufrag|candidate|setup|rtpmap|fmtp|mid|msid|ssrc|group)|c=IN|"
+    r"m=(?:video|audio|application)|o=-)[^\r\n]*"
+)
 REDACTED = "[redacted]"
 
 
 def redact(text: str) -> str:
-    """Mask bearer tokens and long token-like strings, like every other DoMe log."""
-    return _LONG_TOKEN_RE.sub(REDACTED, _BEARER_RE.sub("Bearer " + REDACTED, text))
+    """Mask bearer tokens, long token-like strings, IPv4/IPv6 addresses (with a port) and SDP attribute lines, like
+    every other DoMe log."""
+    text = _LONG_TOKEN_RE.sub(REDACTED, _BEARER_RE.sub("Bearer " + REDACTED, text))
+    return _SDP_RE.sub(REDACTED, _IPV6_RE.sub(REDACTED, _IPV4_RE.sub(REDACTED, text)))
 
 
 def crash_log_path(argv: Sequence[str] = ()) -> Path:

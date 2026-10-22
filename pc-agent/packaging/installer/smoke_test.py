@@ -624,6 +624,9 @@ class Machine:
             "dome-native-host.exe",
             "unins000.exe",
             r"_internal\dome_protocol\_contract\actions.json",
+            "THIRD_PARTY_NOTICES.txt",
+            r"licenses\LGPL-2.1.txt",
+            r"_internal\pystray\__init__.py",
         ):
             r.check(f"installed: {rel}", (self.app / rel).exists())
         r.check("installed: no test fixtures", not (self.app / r"_internal\dome_protocol\_contract\fixtures").exists())

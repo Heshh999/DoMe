@@ -2,7 +2,9 @@
 updates when the cloud deploys, PCs later. A 1.2 phone stamps each command with its action's `since` and each
 confirmation with the protocol_version of the command it confirms, so the real agent process with the version
 checks of a 1.1 release (older_agent.py) keeps executing everything 1.1 defines, confirmed power actions included,
-through the 1.2 relay, and answers an action 1.2 added with PROTOCOL_INCOMPATIBLE."""
+through the 1.2 relay, and answers an action 1.2 added with PROTOCOL_INCOMPATIBLE. Since 1.4 the relay also refuses,
+before forwarding, an input batch stamped with a MINOR the agent did not announce (a Screen view tap), which an older
+agent would otherwise answer MALFORMED_MESSAGE."""
 
 from __future__ import annotations
 
@@ -97,3 +99,41 @@ async def test_an_agent_one_minor_behind_refuses_only_the_actions_it_predates(ag
     assert res["state"] == "succeeded" and res["result"]["apps"] == [], res
     res = await run_command(phone, agent.pc_id, "system.ping")
     assert res["state"] == "succeeded" and res["result"]["protocol_version"] == OLDER, res
+
+
+async def test_the_relay_refuses_a_screen_view_tap_to_an_agent_that_predates_it(agent: RealAgent, phone: Any) -> None:
+    """Protocol 1.4 (rules.command_version_stamping, PROTOCOL.md §20): a Screen view tap is an input batch with
+    `pointer_move_to`, stamped 1.4. An agent from before 1.4 would answer it MALFORMED_MESSAGE, so the relay's stamp
+    gate refuses it with PROTOCOL_INCOMPATIBLE {peer: agent, required: 1.4} and never forwards it (an agent-origin
+    PROTOCOL_INCOMPATIBLE is never routed to a phone); the same phone's plain touchpad batches, stamped 1.1, keep
+    reaching the PC in the same session."""
+    res = await agent.control("grant", controller_id=phone.controller_id, add=["pointer"])
+    assert "pointer" in res["capabilities"]
+    deadline = time.monotonic() + 15
+    while True:
+        grants = await phone.browser.get(f"/v1/pcs/{agent.pc_id}/grants")
+        if any(g["controller_id"] == phone.controller_id and "pointer" in g["capabilities"] for g in grants["grants"]):
+            break
+        assert time.monotonic() < deadline, "the pointer grant never reached the relay"
+        await asyncio.sleep(0.2)
+    res = await run_command(phone, agent.pc_id, "input.session_start", {})
+    assert res["state"] == "succeeded" and res["result"]["pointer"] is True, res
+    sid = res["result"]["input_session_id"]
+
+    tap = [
+        {"type": "pointer_move_to", "x": 32768, "y": 32768, "gen": 1},
+        {"type": "pointer_button", "button": "left", "action": "click"},
+    ]
+    sent = await phone.input_batch(agent.pc_id, sid, 1, tap)
+    assert stamp(sent) == "1.4"
+    err = await phone.recv_type("error", timeout=10)
+    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE", err
+    assert err["error"]["detail"] == {"peer": "agent", "required": "1.4"} and err["ref_pc_id"] == agent.pc_id, err
+
+    sent = await phone.input_batch(agent.pc_id, sid, 2, [{"type": "pointer_move", "dx": 3, "dy": 4}])
+    assert stamp(sent) == "1.1"
+    while True:
+        ack = await phone.recv_type("input_ack", timeout=10, input_session_id=sid)
+        if ack["last_seq"] >= 2:
+            break
+    assert ack["accepted_events"] == 1 and ack["dropped_events"] == 0, ack  # the tap's events never reached the PC

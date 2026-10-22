@@ -64,3 +64,37 @@ modified; each item records the workaround used here.
     request" and offers "Refresh your requests" before a deliberate resend (DECISIONS 41). Suggested
     (minor, next revision): optional `client_request_id` (UUID) in `support_ticket_request`, with the
     server returning the existing ticket for a repeated id.
+
+12. **No Screen view switch in `plans_response`.** The 1.4 work brief gates the Screen tile on `GET /v1/plans`
+    `screen_view_enabled`, but `plans_response` is a closed schema without that field. cloud-api already
+    reports the operator switch as `screen_view: "on" | "off"` in the public `GET /healthz`, whose body has
+    no schema in `rest.schema.json`; `lib/api.ts::screenViewSwitch` reads that one string tolerantly and
+    treats anything else as "unknown" (the "Coming" card stays, DECISIONS 68). Suggested (next MINOR):
+    `plans_response.screen_view_enabled: boolean`, or a `health_response` definition.
+
+13. **No step-down carrier.** §16's "Weak connection: lowering quality" row has no message in
+    `screen_dc_pc_to_phone` (`state` carries `encoder` and `data_saver` only), so the phone cannot show it
+    (KNOWN_ISSUES 30). Suggested: optional `state.quality: "full" | "reduced"`.
+
+14. **`SCREEN_UNSUPPORTED_BROWSER` is client-only**, like `NETWORK` and `NO_ANSWER` (items 4 and 10): a
+    browser without `RTCPeerConnection` fails every start honestly before anything is sent. `labels.ts`
+    holds its copy.
+
+15. **A consent back-off refusal is indistinguishable from a Deny.** Both are `SCREEN_CONSENT_DECLINED`
+    without detail; §16 wants "Not allowed at the PC. Try again in a few minutes." after a refusal. The
+    phone infers the back-off from timing (KNOWN_ISSUES 36). Suggested: `error.detail.reason:
+    "denied" | "blocked" | "backoff"` (the agent's history already records these reasons).
+
+16. **`consent: pending` is the phone's own state.** The contract's result is terminal (`consent:
+    not_required | granted`), so "Waiting for someone at the PC to allow this… (30)" is shown when the
+    PC acknowledged the start (`executing`) and 2 s pass without a result — a slow start without a
+    window shows the line briefly too. The countdown runs from the acknowledgement, not from the window's
+    own clock.
+
+17. **`ACTION_UNAVAILABLE` with `detail.reason: "screen_view_not_included"`** (pc-agent CONTRACT_ISSUES
+    #24): a PC build without the media stack refuses a start with it; the phone reads the reason (an
+    additive detail `errors.json` does not list) to show the honest copy. Proposed: name the detail, or a
+    `screen_view` capability flag in the agent's `hello`, at the next contract round.
+
+18. **`screen_session{paused|resumed}` arrive per pause cause** (pc-agent CONTRACT_ISSUES #25): the phone
+    tracks the causes as a set; `rules.screen_sessions` does not say whether pauses nest.

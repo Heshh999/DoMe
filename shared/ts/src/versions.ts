@@ -5,8 +5,42 @@
  * have to mirror it: everything here is used unchanged in every bundle.
  */
 
-/** rules.command_version_stamping: input batches were introduced in 1.1 and are stamped with it. */
+/**
+ * rules.command_version_stamping: input batches were introduced in 1.1 and are stamped with it unless they carry an event a
+ * later MINOR added (see `inputBatchProtocolVersion`).
+ */
 export const INPUT_BATCH_PROTOCOL_VERSION = "1.1";
+
+/** Screen view (protocol 1.4) added three input events; a batch that carries one needs a 1.4 peer. */
+export const SCREEN_INPUT_PROTOCOL_VERSION = "1.4";
+const SCREEN_INPUT_EVENT_TYPES = new Set(["pointer_move_to", "pointer_wheel"]);
+const SCREEN_INPUT_KEYS = new Set(["f11"]);
+
+/**
+ * The protocol version that defined this `input_event`: 1.1 for the touchpad events, 1.4 for the Screen view additions
+ * `pointer_move_to`, `pointer_wheel` and `key: f11`. Unknown shapes answer the base version; schema validation rejects them.
+ */
+export function inputEventSince(event: { type?: unknown; key?: unknown }): string {
+  const kind = typeof event.type === "string" ? event.type : "";
+  if (SCREEN_INPUT_EVENT_TYPES.has(kind) || (kind === "key" && typeof event.key === "string" && SCREEN_INPUT_KEYS.has(event.key))) {
+    return SCREEN_INPUT_PROTOCOL_VERSION;
+  }
+  return INPUT_BATCH_PROTOCOL_VERSION;
+}
+
+/**
+ * rules.command_version_stamping: the lowest protocol version that defines every event in the batch. The phone stamps its
+ * batches with it so a 1.1 PC keeps accepting plain touchpad batches; verifiers refuse a batch stamped below what its
+ * events need (PROTOCOL_INCOMPATIBLE, `required` = this value).
+ */
+export function inputBatchProtocolVersion(events: readonly { type?: unknown; key?: unknown }[]): string {
+  let best = INPUT_BATCH_PROTOCOL_VERSION;
+  for (const ev of events) {
+    const since = inputEventSince(ev);
+    if (versionBelow(best, since)) best = since;
+  }
+  return best;
+}
 
 /** `[major, minor]` for a strict `MAJOR.MINOR` string (ASCII digits only), else null. */
 export function parseVersion(version: unknown): [number, number] | null {

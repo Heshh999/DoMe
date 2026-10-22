@@ -440,6 +440,51 @@ button stops before changing anything and says which name to fix.
    Stripe first. Deleting only some of the seven stops the next Deploy instead ("Payments are half set
    up").
 
+## 11B. Screen view (beta) *(per vendor docs, not yet exercised)*
+
+Screen view shows your PC's screen on the phone. It is built (protocol 1.4) but **off**, and it stays
+off until you turn it on. Read this whole section before you do.
+
+**The switch is for everyone at once.** `DOME_SCREEN_VIEW_ENABLED` is one switch for the whole
+service, not per account: turned on, every signed-in account sees the "Screen view (beta)" tile, while
+the website's FAQ and pricing still say "Coming" until the launch gate in `docs/ACCEPTANCE.md`
+Scenario 26 is met. Turn it on in **staging** first; leave production off until the device round and
+the launch gate are done.
+
+**A PC needs a Windows build that includes Screen view.** Every DoMe build made so far does not
+(the PC answers "This version of DoMe on your PC doesn't include Screen view yet"). The first one
+needs the LGPL video library built by GitHub > Actions > **ffmpeg-lgpl** > **Run workflow** (never
+run yet): an engineer then pins it and makes a new Windows build.
+
+Steps, per environment (staging first):
+
+1. **Relay server key (optional but needed on mobile data).** In the Cloudflare account you use for
+   the domain: Dashboard > **Realtime** > **TURN Server** > **Create**, named `domeremote-staging`
+   (later `domeremote-production`). Copy the **key id** and the **API token** with Cloudflare's copy
+   buttons. Also create one read-only API token for analytics so DoMe can read its own TURN usage every
+   hour (an engineer names the exact permission). Check whether Cloudflare asks for a payment method
+   and turn on its usage notifications (`docs/design/screen-view.md` §20; free up to 1,000 GB a month,
+   then $0.05/GB, to verify on the vendor page). Without a key Screen view still works where a direct
+   connection exists (most home Wi-Fi), with an honest message elsewhere.
+2. In GitHub > Settings > **Environments** > **staging**: add `DOME_TURN_KEY_ID` under **Environment
+   variables**, and `DOME_TURN_API_TOKEN` and `DOME_TURN_ANALYTICS_TOKEN` under **Environment secrets**
+   (never as variables, never as repository secrets).
+3. Add the **Environment variable** `DOME_SCREEN_VIEW_ENABLED` = `true` (absent or `false` keeps it off).
+4. Run **Deploy** for staging as usual. The summary says "Screen view: ON (beta)" and whether the relay server
+   is on; `https://staging.domeremote.com/healthz` shows `screen_view: on`, `turn: ok` and
+   `turn_month_gb`.
+5. Re-pair your iPhone with the PC once (on the PC: tray > Paired phones > remove the phone, then pair
+   again), so the phone pins the PC's key; without it the phone says "Pair again".
+6. On the PC: tray > Paired phones > your phone > **Allow Screen view…** (only there, never from the
+   phone).
+
+Once a month: compare Cloudflare's TURN usage with `/healthz` `turn_month_gb` (`turn_month_basis`
+says whether it is Cloudflare's own figure or DoMe's estimate); if they differ by more than 10 % or
+usage nears 1,000 GB, tell an engineer.
+
+To turn Screen view off again: set `DOME_SCREEN_VIEW_ENABLED` to `false` (or delete it) and run Deploy.
+Sessions that are running continue until they stop; nothing new starts.
+
 ## 12. Redirects and DNSSEC *(per vendor docs, not yet exercised)*
 
 Only `https://domeremote.com` serves DoMe. The other names send visitors there. All of this is in
@@ -506,6 +551,11 @@ yourself even when the headline says "needs an engineer".
 | "... holds a product id (`prod_...`), not a price id", "... is not a Stripe price id" or "... hold the same price id" | In Stripe > **Product catalog**, open the product, click the price named in the summary and copy its id (`price_...`). Each of the five variables needs a different price (section 11A, step 6). |
 | "The variable `DOME_STRIPE_PRICE_...` holds a Stripe secret instead of a price id" | Variables are not hidden, so that key or signing secret must be replaced: follow the summary (Stripe **Roll key**, or roll the webhook's **Signing secret**), paste the new one under **Environment secrets**, and put the `price_...` id in the variable. |
 | "`DOME_STRIPE_SECRET_KEY` (or `DOME_STRIPE_WEBHOOK_SECRET`) is saved as an Environment **variable**" | Roll it in Stripe as the summary says, add the new value under **Environment secrets** with the same name, and delete the **variable** (bin icon). Run Deploy again. |
+| "Screen view's relay server is half set up in the ... environment: ... is missing" | Both come from Cloudflare > **Realtime** > **TURN Server** > the key for that environment: the key id is the **variable** `DOME_TURN_KEY_ID`, the token is the **secret** `DOME_TURN_API_TOKEN` (section 11B). Add the missing one, or delete every `DOME_TURN_` value from that environment to keep the relay server off. Run Deploy again. Nothing was changed. |
+| "`DOME_TURN_API_TOKEN` (or `DOME_TURN_ANALYTICS_TOKEN`) is saved as an Environment **variable**" | Variables are not hidden, so treat that token as seen by others: delete it in Cloudflare and create a new one as the summary says, paste the new one under **Environment secrets** with the same name, and delete the **variable** (bin icon). Run Deploy again. |
+| "`DOME_TURN_ANALYTICS_TOKEN` is set, but the relay server key is not" | Add `DOME_TURN_KEY_ID` and `DOME_TURN_API_TOKEN` too (section 11B), or delete the analytics token. |
+| "The variable `DOME_SCREEN_VIEW_ENABLED` must be `true` or `false`" | Fix the variable's value (exactly `true` or `false`), or delete it to keep Screen view off. |
+| "The variable `DOME_TURN_KEY_ID` is not a TURN key id" or "... contains a space, a quote or #, or is too short to be a whole token" | Copy the value again from Cloudflare > **Realtime** > **TURN Server** with the copy button and paste it over the old one. |
 | "Fly did not remove the secrets (DOME_STRIPE_...)" | Fly did not do that step; nothing was deployed. Run Deploy again; if it repeats, share the run link with an engineer. |
 | "/v1/plans reports billing ..., but this deploy configured ..." or "/v1/plans did not answer with a billing mode" | Share the run link with an engineer. |
 | Note: "Billing was switched **off** by this deploy" | Expected only if you deleted all seven Stripe values on purpose (section 11A, step 9). Existing subscriptions keep charging at Stripe: cancel them there, or put the seven values back and run Deploy. |
@@ -550,6 +600,10 @@ yourself even when the headline says "needs an engineer".
 | `DOME_STRIPE_SECRET_KEY` (optional: payments) | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret, never a variable) | Stripe > **Developers** > **API keys** > Secret key: `sk_test_...` (Test mode; the only kind staging accepts) or `sk_live_...` (Live mode, production only) |
 | `DOME_STRIPE_WEBHOOK_SECRET` (optional: payments) | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a repository secret, never a variable) | Stripe > **Developers** > **Webhooks** > the endpoint `https://staging.domeremote.com/v1/billing/webhook` (staging) or `https://domeremote.com/v1/billing/webhook` (production) > Signing secret (`whsec_...`) |
 | `DOME_STRIPE_PRICE_PRO_MONTHLY`, `DOME_STRIPE_PRICE_PRO_ANNUAL`, `DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY`, `DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL`, `DOME_STRIPE_PRICE_TOPUP` (optional: payments) | no | GitHub > Environments > staging / production > Environment **variables** | Stripe > **Product catalog** > the product > the price: its `price_...` id (Pro monthly, Pro yearly, Pro Plus monthly, Pro Plus yearly, AI top-up), from the same mode (Test or Live) as the secret key. All seven Stripe values or none (section 11A) |
+| `DOME_SCREEN_VIEW_ENABLED` (optional: Screen view) | no | GitHub > Environments > staging / production > Environment **variables** | `true` turns Screen view on for **every** account of that environment; absent or `false` = off (section 11B) |
+| `DOME_TURN_KEY_ID` (optional: Screen view relay server) | no | GitHub > Environments > staging / production > Environment **variables** | Cloudflare > **Realtime** > **TURN Server** > the key: its id (one key per environment) |
+| `DOME_TURN_API_TOKEN` (optional, with the key id) | **yes** | GitHub > Environments > staging / production > Environment **secrets** (never a variable, never a repository secret) | Cloudflare > **Realtime** > **TURN Server** > the key: its API token |
+| `DOME_TURN_ANALYTICS_TOKEN` (optional, with both above) | **yes** | GitHub > Environments > staging / production > Environment **secrets** | Cloudflare > API tokens: a read-only analytics token (the engineer names the permission) |
 | `FLY_ORG` (optional) | no | GitHub > Environments > staging **and** production > Environment **variables** | only if not your Personal organization |
 | `FLY_STAGING_APP`, `FLY_PRODUCTION_APP` (optional) | no | GitHub > Settings > Secrets and variables > Actions > **Variables** (repository) | only if a summary says the app name is taken |
 | Session secret, entitlement signing key, production's database password | **yes** | nowhere: the Deploy button creates them inside Fly | generated during the first deploy |
@@ -577,6 +631,11 @@ summary lists them again until an engineer closes them:
 - signing in yourself on production (the button cannot test sign-in);
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).
+
+Before `DOME_SCREEN_VIEW_ENABLED` is `true` in **production** (section 11B), also: the device round on
+your PC and iPhone (`docs/ACCEPTANCE.md` Scenario 26), a signed Windows build that includes Screen view,
+counsel's answer on H.264, and the privacy notice naming the connection relay provider as a
+sub-processor (the draft on the Privacy page carries a FOUNDER note for it).
 
 ## 17. Code signing and releases *(per vendor docs, not yet exercised)*
 

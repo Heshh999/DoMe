@@ -3,7 +3,7 @@
  * covered by the cross-language fixtures.
  */
 import { ProtocolError } from "./errors.ts";
-import { b64url } from "./keys.ts";
+import { b64url, unb64url } from "./keys.ts";
 
 // Crockford base32: no I, L, O, U; case-insensitive on input.
 export const PAIRING_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -71,6 +71,32 @@ export async function pairingVerificationCode(code: string, pairingId: string, p
   let n = 0n;
   for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(mac[i] ?? 0);
   return (n % 1_000_000n).toString().padStart(6, "0");
+}
+
+/**
+ * The PC pins its identity key for the phone at pairing (rules.pc_key_pinning, protocol 1.4):
+ * base64url(HMAC-SHA256(key = normalised pairing code, msg = "dome-pair-pc-key-v1|" + pairingId + "|" + pcId + "|" +
+ * controllerKid + "|" + pcKid)), all 32 bytes. Computed by the PC; the phone only verifies (`verifyPcKeyMac`).
+ */
+export async function pcKeyMac(code: string, pairingId: string, pcId: string, controllerKid: string, pcKid: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(normalizePairingCode(code)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return b64url(await crypto.subtle.sign("HMAC", key, encoder.encode(`dome-pair-pc-key-v1|${pairingId}|${pcId}|${controllerKid}|${pcKid}`)));
+}
+
+/**
+ * Constant-time check of `pairing_status_response.pc_key.mac` with the code the phone still holds (WebCrypto HMAC
+ * verify). False for anything that is not a 43-character base64url string.
+ */
+export async function verifyPcKeyMac(code: string, pairingId: string, pcId: string, controllerKid: string, pcKid: string, mac: unknown): Promise<boolean> {
+  if (typeof mac !== "string" || mac.length !== 43) return false;
+  let raw: Uint8Array;
+  try {
+    raw = unb64url(mac, 32);
+  } catch {
+    return false;
+  }
+  const key = await crypto.subtle.importKey("raw", encoder.encode(normalizePairingCode(code)), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  return crypto.subtle.verify("HMAC", key, raw as BufferSource, encoder.encode(`dome-pair-pc-key-v1|${pairingId}|${pcId}|${controllerKid}|${pcKid}`) as BufferSource);
 }
 
 export function randomNonce(): string {

@@ -28,7 +28,9 @@
         "lock",
         "power",
         "pointer",
-        "keyboard"
+        "keyboard",
+        "screen",
+        "screen_audio"
       ]
     },
     "plan_id": {
@@ -580,7 +582,7 @@
       }
     },
     "pairing_status_response": {
-      "description": "POST /v1/pairing/claim (202) and GET /v1/pairing/{pairing_id}. `claimed` = waiting for approval on the PC (which may be offline; the relay re-delivers the request when it connects).",
+      "description": "POST /v1/pairing/claim (202) and GET /v1/pairing/{pairing_id}. `claimed` = waiting for approval on the PC (which may be offline; the relay re-delivers the request when it connects). Since 1.4 an approved pairing whose agent sent pc_key_mac also carries pc_key{public_jwk, mac}: the PC's identity key and the MAC the phone verifies with the pairing code before pinning it (rules.pc_key_pinning). Never present before approval.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -626,6 +628,23 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/capability"
+          }
+        },
+        "pc_key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "public_jwk",
+            "mac"
+          ],
+          "properties": {
+            "public_jwk": {
+              "$ref": "relay-frames.schema.json#/$defs/ec_public_jwk"
+            },
+            "mac": {
+              "$ref": "#/$defs/b64url_sha256",
+              "description": "pairing_decision.pc_key_mac, verbatim."
+            }
           }
         }
       }

@@ -92,3 +92,36 @@ next protocol MINOR bump.
     it. cloud-api therefore sends `pro` for every paid plan in that body and in the assertion's `plan` claim
     (DECISIONS #69). Proposed for a later MINOR: give `agent_entitlement_response.plan` its own enum
     `[free, pro]` with a comment, so the contract states what the code guarantees.
+
+## Protocol 1.4 (Screen view, Phase 1; WP1.2, 2026-10-21)
+
+19. **`plans_response` has no `screen_view_enabled`.** The design (§12) and the WP1.2 brief want `GET /v1/plans` to say
+    whether the operator switch is on, but `rest.schema.json → plans_response` is closed (`additionalProperties:
+    false`) and names only `plans`, `pricing`, `billing_enabled`, `billing_mode`, `ai_enabled`. The API validates every
+    body it returns, so the field is **not** sent. Workaround: the switch is visible at `GET /healthz` (`screen_view`:
+    `on` / `off`, no contract) and a phone that asks anyway gets `SCREEN_VIEW_DISABLED` on `screen_ice_request`, which
+    the §16 copy already covers. Proposed: `screen_view_enabled: boolean` (required) on `plans_response`; the code adds
+    it the day the schema does (`routes/plans.py`, one line).
+20. **`relay_screen_allowance.reason` has no value for "the relay never reserved this session".** Worked around
+    (2026-10-22): a `screen_usage` for a session id the ledger does not know is first bound to the PC's newest
+    session-less reservation of the last 105 s (a start whose pending entry was lost with the agent socket or a relay
+    restart, KNOWN_ISSUES #29); if there is none it gets **no answer**, so the agent ends at its ticket's deadline with
+    `allowance_unconfirmed` instead of reading a reason-less `final` as `allowance_exhausted` (which the phone showed as
+    "You've used Free Screen view for now"). A session the relay already settled still gets `final` with no reason.
+    Proposed, still: a fourth reason `unknown_session`.
+21. **`agent_screen_session` carries no `command_id`.** The relay binds a `started` frame to its ledger reservation
+    through the `screen_session_id` the result carried, or, when `started` arrives first, through the controller's one
+    pending start on that PC. Both work for Phase 1 (one session per PC, one pending start per controller) but the
+    second is a guess the agent could make exact. Proposed: an optional `command_id` on `started` (the start it answers).
+22. **`relay_screen_ice_servers` cannot say why TURN is `disabled`.** The relay knows which cap or guard refused
+    (daily GB, monthly mints, the hard cap); the phone only learns `turn: disabled` and shows the §16 copy "could only
+    try a direct connection right now". Proposed: an optional `turn_reason: cap_daily | cap_monthly_mints | guard_hard`.
+23. **`rules.screen_metering` (3) says the pause discount is "at most 120 s per session"; the relay caps it per window**
+    (2026-10-22). Only `paused -> resumed` pairs the relay saw during a started session count (the open-pause term that
+    `test_pauses_are_discounted_only_as_pairs_the_relay_saw_and_at_most_120s` used to assert is gone: the rule was
+    right), and the 120 s are shared by every session of one Free window, which is stricter than "per session" (a
+    patched agent that pauses and ends every session would otherwise turn 600 s into hours). A session that spans two
+    windows can be discounted in each. Proposed wording: "at most `screen_secure_desktop_pause_max_seconds` per
+    allowance window". Likewise the relay forgives a start refused at the PC (`SCREEN_CONSENT_DECLINED` /
+    `_TIMEOUT`, no `started`, within the consent timeout + 5 s) on a counter of its own, three per window, which
+    `rules.screen_metering` (3) does not mention (it names only `connection_failed`).

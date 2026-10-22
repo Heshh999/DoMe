@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -17,6 +18,7 @@ Env = Literal["development", "staging", "production", "test"]
 AiProvider = Literal["", "anthropic", "fake"]
 BillingProvider = Literal["", "stripe", "fake"]
 BillingMode = Literal["off", "test", "live"]
+TurnProvider = Literal["", "cloudflare", "none", "fake"]
 # the seven Stripe values that must be set together (docs/BILLING.md §5; a half-configured set refuses start-up)
 _STRIPE_FIELDS = (
     "stripe_secret_key",
@@ -28,6 +30,10 @@ _STRIPE_FIELDS = (
     "stripe_price_topup",
 )
 _PRICE_ID = r"^(price_[A-Za-z0-9_]{4,})?$"
+# The two Cloudflare TURN values minting needs (docs/design/screen-view.md §13, §20): both or neither. The analytics
+# token (hourly usage reconciliation) is optional and only accepted together with them.
+_TURN_FIELDS = ("turn_key_id", "turn_api_token")
+_STUN_URL = re.compile(r"^stuns?:[^\s]+$")
 # The Anthropic SDK reads these from the environment (base URL, logging, extra headers, credentials): a stray one
 # could redirect the key and the owner's words, log request bodies or add headers (docs/design/assistant.md §3.11).
 _ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"
@@ -153,6 +159,35 @@ class Settings(BaseSettings):
     ai_dev_grant_interpretations: int = Field(default=0, ge=0)
     ai_dev_grant_cost_cap_cents: int = Field(default=0, ge=0)
 
+    # Screen view, Phase 1 beta (docs/design/screen-view.md §12, §13; protocol 1.4). Off by default: the operator
+    # switch refuses every screen_ice_request and screen.session_start with SCREEN_VIEW_DISABLED until the launch gate;
+    # running sessions are never cut by the switch. The relay server (TURN) for the PHONE is minted through the
+    # Cloudflare Realtime TURN API only when the key id and the API token are both set; without them Screen view works
+    # where a direct connection exists (`turn: unavailable`, an honest reason). The PC never holds a TURN credential.
+    screen_view_enabled: bool = False
+    turn_provider: TurnProvider = ""  # "" = cloudflare when the two TURN values are set, else none; fake = tests only
+    turn_key_id: str = Field(default="", pattern=r"^[A-Za-z0-9_-]{0,128}$")
+    turn_api_token: SecretStr = SecretStr("")
+    # read-only analytics scope for the hourly usage reconciliation; without it the provisional bound feeds the guard
+    turn_analytics_token: SecretStr = SecretStr("")
+    # the graduated monthly guard on the provider's figures (never on agent reports): Data saver for relayed Free
+    # sessions past the soft cap, STUN only for Free past the hard cap
+    screen_turn_soft_cap_gb: int = Field(default=700, ge=1)
+    screen_turn_hard_cap_gb: int = Field(default=900, ge=1)
+    # per-account caps: relayed GB per UTC day on Free, credentials minted per account per calendar month
+    screen_turn_free_daily_gb: int = Field(default=2, ge=1)
+    screen_turn_mints_per_account_month: int = Field(default=600, ge=1)
+    screen_turn_ttl_unlimited_seconds: int = Field(default=14400, ge=60, le=86400)
+    screen_turn_reconcile_interval_seconds: float = Field(default=3600.0, gt=0)
+    # comma-separated STUN urls handed to both devices (free, no key); never a TURN url
+    screen_stun_urls: str = "stun:stun.cloudflare.com:3478"
+    # a shorter Free allowance for testing on staging or in development; refused in production (the Free limit binds
+    # the founder too, docs/design/screen-view.md §22)
+    screen_free_seconds_override: int = Field(default=0, ge=0)
+    # where the relay-clock charge of a session starts: when the start was forwarded (default) or at the first
+    # `started` frame the relay saw (rules.screen_metering (3))
+    screen_charge_from: Literal["forwarded", "started"] = "forwarded"
+
     @model_validator(mode="before")
     @classmethod
     def _v_renamed_ai_key(cls, data: Any) -> Any:
@@ -253,6 +288,7 @@ class Settings(BaseSettings):
             raise ValueError(f"DOME_STATIC_DIR {self.static_dir} is not a directory")
         self._v_billing()
         self._v_ai()
+        self._v_screen()
         return self
 
     def _v_billing(self) -> None:
@@ -332,6 +368,45 @@ class Settings(BaseSettings):
                     "(ai_cost_cap_cents_per_week / DOME_AI_DEV_GRANT_COST_CAP_CENTS x 10000 >= "
                     "DOME_AI_TURN_RESERVE_MICRO_USD); every turn would fail otherwise"
                 )
+
+    def _v_screen(self) -> None:
+        """Screen view start-up checks (docs/design/screen-view.md §12, §13). Messages name variables, never values."""
+        if self.turn_provider == "fake" and self.env in ("staging", "production"):
+            raise ValueError(f"DOME_TURN_PROVIDER=fake is for development and tests only, not {self.env}")
+        values = {name: self._turn_value(name) for name in _TURN_FIELDS}
+        if any(values.values()) and not all(values.values()):
+            missing = ", ".join(f"DOME_{name.upper()}" for name, value in values.items() if not value)
+            raise ValueError(
+                f"Screen view's relay server is half configured: {missing} must be set as well (or both "
+                "DOME_TURN_KEY_ID and DOME_TURN_API_TOKEN cleared); without them Screen view works only where a direct "
+                "connection exists"
+            )
+        if self.turn_analytics_token.get_secret_value().strip() and not all(values.values()):
+            raise ValueError(
+                "DOME_TURN_ANALYTICS_TOKEN is set but DOME_TURN_KEY_ID and DOME_TURN_API_TOKEN are not; the usage "
+                "reconciliation only makes sense with a TURN key"
+            )
+        if self.turn_provider == "cloudflare" and not all(values.values()):
+            raise ValueError("DOME_TURN_PROVIDER=cloudflare requires DOME_TURN_KEY_ID and DOME_TURN_API_TOKEN")
+        if self.turn_provider == "none" and any(values.values()):
+            raise ValueError("DOME_TURN_PROVIDER=none with DOME_TURN_* values set: clear one or the other")
+        if self.env == "production" and self.screen_free_seconds_override:
+            raise ValueError(
+                "DOME_SCREEN_FREE_SECONDS_OVERRIDE must be 0 in production (the Free limit binds everyone)"
+            )
+        if self.screen_turn_soft_cap_gb >= self.screen_turn_hard_cap_gb:
+            raise ValueError("DOME_SCREEN_TURN_SOFT_CAP_GB must be below DOME_SCREEN_TURN_HARD_CAP_GB")
+        if not self.stun_url_list:
+            raise ValueError("DOME_SCREEN_STUN_URLS must name at least one stun: or stuns: url")
+        for url in self.stun_url_list:
+            if not _STUN_URL.match(url) or len(url) > 256:
+                raise ValueError(
+                    "DOME_SCREEN_STUN_URLS entries must be stun: or stuns: urls without spaces (never turn:)"
+                )
+
+    def _turn_value(self, name: str) -> str:
+        value = getattr(self, name)
+        return str(value.get_secret_value() if isinstance(value, SecretStr) else value).strip()
 
     # ----- derived -----------------------------------------------------------------------------
     @property
@@ -414,6 +489,27 @@ class Settings(BaseSettings):
     @property
     def topup_price_id(self) -> str:
         return self.stripe_price_topup
+
+    # ----- Screen view ----------------------------------------------------------------------------
+    @property
+    def effective_turn_provider(self) -> TurnProvider:
+        """``cloudflare`` when the key id and token are set and no provider was named; ``fake`` only when asked for."""
+        if self.turn_provider:
+            return self.turn_provider
+        return "cloudflare" if all(self._turn_value(n) for n in _TURN_FIELDS) else "none"
+
+    @property
+    def turn_configured(self) -> bool:
+        """A TURN credential can be minted for the phone (Cloudflare with both values, or the fake in tests)."""
+        return self.effective_turn_provider in ("cloudflare", "fake")
+
+    @property
+    def turn_reconciliation_configured(self) -> bool:
+        return self.turn_configured and bool(self.turn_analytics_token.get_secret_value().strip())
+
+    @property
+    def stun_url_list(self) -> list[str]:
+        return [u.strip() for u in self.screen_stun_urls.split(",") if u.strip()]
 
     @property
     def validate_rest_responses(self) -> bool:

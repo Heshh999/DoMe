@@ -17,7 +17,11 @@ functions so it can be unit-tested on Linux; only :class:`WindowsInput` loads ``
             split across two ``SendInput`` calls; ``\\n`` / ``\\r\\n`` are rendered as the Enter key and
             ``\\t`` as Tab because applications do not accept U+000A/U+0009 through ``WM_CHAR`` reliably
 * keys:     named keys → virtual-key codes (extended keys carry ``KEYEVENTF_EXTENDEDKEY`` and their scan
-            code from ``MapVirtualKeyW`` where available)
+            code from ``MapVirtualKeyW`` where available); ``f11`` (1.4) is ``VK_F11``
+* move_to:  Screen view's absolute pointer (``pointer_move_to``, design §8.2): the agent maps the normalised
+            position onto the streamed monitor in PHYSICAL pixels and this adapter calls ``SetCursorPos`` with the
+            thread per-monitor DPI aware (v2), then reads it back with ``GetCursorPos``. Exact pixels, no
+            acceleration. ``wheel`` sends ``pointer_wheel``'s raw delta (120 = one notch) as ``mouseData``.
 * shortcut: ``VK_CONTROL`` down, key down/up, ``VK_CONTROL`` up in one call; if the call did not insert
             every event the modifier is released by a separate call, always
 * results:  ``SendInput`` returning fewer events than requested → ``INPUT_INJECTION_FAILED``;
@@ -34,7 +38,9 @@ functions so it can be unit-tested on Linux; only :class:`WindowsInput` loads ``
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
+from collections.abc import Iterator
 from ctypes import wintypes
 from typing import Any
 
@@ -86,6 +92,8 @@ VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
 VK_DELETE = 0x2E
+VK_F11 = 0x7A
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4  # same value as window_control.py (not imported: it imports us)
 
 ERROR_ACCESS_DENIED = 5
 MAPVK_VK_TO_VSC = 0
@@ -114,6 +122,7 @@ VK_FOR_KEY: dict[str, int] = {
     "end": VK_END,
     "page_up": VK_PRIOR,
     "page_down": VK_NEXT,
+    "f11": VK_F11,
 }
 EXTENDED_KEYS = frozenset(
     {VK_DELETE, VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, VK_HOME, VK_END, VK_PRIOR, VK_NEXT}
@@ -242,6 +251,29 @@ def scroll_inputs(dx: int, dy: int) -> list[INPUT]:
         out.append(mouse_input(MOUSEEVENTF_WHEEL, data=int(dy) * WHEEL_DELTA))
     if dx:
         out.append(mouse_input(MOUSEEVENTF_HWHEEL, data=int(dx) * WHEEL_DELTA))
+    return out
+
+
+def _reset_last_error() -> None:
+    """``ctypes.set_last_error(0)`` where it exists (Windows only); ``move_to`` is exercised against a scripted
+    ``user32`` on Linux, where ctypes has no thread-local last error."""
+    setter = getattr(ctypes, "set_last_error", None)
+    if setter is not None:
+        setter(0)
+
+
+def _last_error() -> int:
+    getter = getattr(ctypes, "get_last_error", None)
+    return int(getter()) if getter is not None else 0
+
+
+def wheel_inputs(dx: int, dy: int) -> list[INPUT]:
+    """``pointer_wheel`` (1.4): the raw delta in wheel units, not notches (smooth two-finger scrolling)."""
+    out: list[INPUT] = []
+    if dy:
+        out.append(mouse_input(MOUSEEVENTF_WHEEL, data=int(dy)))
+    if dx:
+        out.append(mouse_input(MOUSEEVENTF_HWHEEL, data=int(dx)))
     return out
 
 
@@ -440,6 +472,13 @@ class WindowsInput:
             user32.MapVirtualKeyW.restype = wintypes.UINT
             user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
             user32.OpenInputDesktop.restype = wintypes.HANDLE
+            user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+            user32.SetCursorPos.restype = wintypes.BOOL
+            user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+            user32.GetCursorPos.restype = wintypes.BOOL
+            with contextlib.suppress(AttributeError):  # Windows 10 1607+
+                user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+                user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
             user32.CloseDesktop.argtypes = [wintypes.HANDLE]
             user32.GetUserObjectInformationW.argtypes = [
                 wintypes.HANDLE,
@@ -491,6 +530,49 @@ class WindowsInput:
 
     def scroll(self, dx: int, dy: int) -> None:
         self._send(scroll_inputs(dx, dy), "scrolling")
+
+    def wheel(self, dx: int, dy: int) -> None:
+        self._send(wheel_inputs(dx, dy), "scrolling")
+
+    def move_to(self, x: int, y: int) -> None:
+        """``SetCursorPos`` in physical virtual-desktop pixels, read back with ``GetCursorPos`` (design §8.2). The
+        agent is DPI-unaware; without the per-monitor context Windows would virtualise both calls on scaled
+        displays. Not yet verified on a device (mixed-DPI, rotated and HDR monitors in particular)."""
+        user32 = self._libs()
+        with self._per_monitor_dpi(user32):
+            _reset_last_error()
+            if not user32.SetCursorPos(int(x), int(y)):
+                err = _last_error()
+                if err == ERROR_ACCESS_DENIED and self.input_restricted():
+                    raise ProtocolError(
+                        "INPUT_RESTRICTED",
+                        "Windows refused moving the pointer: a protected screen is in front.",
+                    )
+                raise ProtocolError("INPUT_INJECTION_FAILED", f"Windows refused SetCursorPos (error {err}).")
+            point = wintypes.POINT()
+            if user32.GetCursorPos(ctypes.byref(point)) and (int(point.x), int(point.y)) != (int(x), int(y)):
+                # Windows clamps to the desktop and may refuse while a secure desktop is up: never claim the pixel.
+                raise ProtocolError("INPUT_INJECTION_FAILED", "Windows placed the pointer elsewhere than asked.")
+
+    def cursor_position(self) -> tuple[int, int] | None:
+        user32 = self._libs()
+        with self._per_monitor_dpi(user32):
+            point = wintypes.POINT()
+            if not user32.GetCursorPos(ctypes.byref(point)):
+                return None
+            return int(point.x), int(point.y)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _per_monitor_dpi(user32: Any) -> Iterator[None]:
+        """The same block as ``window_control.per_monitor_dpi`` (not imported: that module imports this one)."""
+        setter = getattr(user32, "SetThreadDpiAwarenessContext", None)
+        previous = setter(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) if setter is not None else None
+        try:
+            yield
+        finally:
+            if setter is not None and previous:
+                setter(previous)
 
     def text(self, text: str) -> None:
         for kind, value in text_segments(text):

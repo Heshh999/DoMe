@@ -22,6 +22,7 @@ def build_windows_platform() -> PlatformSet:
     from .media import WindowsMedia
     from .nativehost import WindowsNativeHostRegistrar
     from .power import WindowsPower
+    from .screen import WindowsScreen
     from .session import WindowsSession
     from .startup import WindowsStartup
     from .volume import WindowsVolume
@@ -36,6 +37,7 @@ def build_windows_platform() -> PlatformSet:
         startup=WindowsStartup(),
         native_host=WindowsNativeHostRegistrar(),
         input=WindowsInput(),
+        screen=WindowsScreen(),
     )
 
 

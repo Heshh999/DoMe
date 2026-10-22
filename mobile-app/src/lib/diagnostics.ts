@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION, REGISTRY_VERSION } from "@dome/protocol";
 import type { CommandRecord } from "./commands.ts";
 import type { InputSessionState } from "./input.ts";
 import { recentLogs, type LogEntry } from "./log.ts";
+import type { ScreenSessionState } from "./screen.ts";
 import { detectQrSupport } from "./qr.ts";
 import type { RelayStatus } from "./relay.ts";
 
@@ -24,6 +25,8 @@ export interface DiagnosticsInput {
   plan: string | null;
   /** Manual-input session summary (phase, counts, codes — never events or text). */
   input?: InputSessionState;
+  /** Screen view session summary (phase, path, codes — never an SDP, address, credential or frame; rules.screen_content). */
+  screen?: ScreenSessionState;
 }
 
 export interface DiagnosticsReport {
@@ -36,6 +39,7 @@ export interface DiagnosticsReport {
   selected_pc_id: string | null;
   commands: Array<{ command_id: string; pc_id: string; action: string; state: string; origin: string | null; error_code: string | null; duration_ms: number | null; created_at: string; no_answer: boolean }>;
   input: { phase: string; pc_id: string | null; pointer: boolean; keyboard: boolean; seq: number; batches_sent: number; last_ack_seq: number | null; accepted_events: number | null; dropped_events: number | null; problem_code: string | null; end_reason: string | null } | null;
+  screen: { phase: string; pc_id: string | null; verified: boolean; path: string | null; turn: string | null; encoder: string | null; retries: number; stalled: boolean; problem_code: string | null; end_reason: string | null; live_seconds: number | null } | null;
   log: LogEntry[];
 }
 
@@ -104,6 +108,21 @@ export function buildDiagnostics(input: DiagnosticsInput): DiagnosticsReport {
           dropped_events: input.input.lastAck?.droppedEvents ?? null,
           problem_code: input.input.problem?.code ?? null,
           end_reason: input.input.endReason,
+        }
+      : null,
+    screen: input.screen
+      ? {
+          phase: input.screen.phase,
+          pc_id: input.screen.pcId,
+          verified: input.screen.verified,
+          path: input.screen.path,
+          turn: input.screen.turn,
+          encoder: input.screen.encoder,
+          retries: input.screen.retries,
+          stalled: input.screen.stalled,
+          problem_code: input.screen.problem?.code ?? null,
+          end_reason: input.screen.endReason,
+          live_seconds: input.screen.liveSeconds,
         }
       : null,
     log: recentLogs(),

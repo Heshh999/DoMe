@@ -14,6 +14,8 @@ from dome_agent.store import Store
 from dome_agent.testing.fake_extension import FakeExtension, FakeTab
 from dome_agent.testing.fake_platform import FakeState, build_fake_platform
 from dome_agent.testing.fake_relay import FakeApi, FakeRelay
+from dome_agent.testing.fake_screen_worker import FakeScreenWorkerLauncher
+from dome_agent.testing.fake_ui import FakeScreenUI
 
 from .helpers import Controller, link_identity
 
@@ -73,15 +75,27 @@ def controller(fake_api: FakeApi) -> Controller:
 
 
 class AgentHarness:
-    """Agent + fake relay/api/platform wired like production, but every seam observable."""
+    """Agent + fake relay/api/platform wired like production, but every seam observable. Screen view runs with
+    the in-process fake worker (``screen_worker``) and a fake UI that can create the bars (``ui``)."""
 
-    def __init__(self, agent: Agent, relay: FakeRelay, api: FakeApi, state: FakeState, settings: Settings) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        relay: FakeRelay,
+        api: FakeApi,
+        state: FakeState,
+        settings: Settings,
+        ui: FakeScreenUI | None = None,
+        screen_worker: FakeScreenWorkerLauncher | None = None,
+    ) -> None:
         self.agent = agent
         self.relay = relay
         self.api = api
         self.fake = state
         self.settings = settings
         self.extension: FakeExtension | None = None
+        self.ui = ui if ui is not None else FakeScreenUI()
+        self.screen_worker = screen_worker if screen_worker is not None else FakeScreenWorkerLauncher()
 
     async def connect_extension(self, *tabs: FakeTab, op_delay: float = 0.0, **kw: Any) -> FakeExtension:
         ext = FakeExtension(self.settings.state_dir, op_delay=op_delay, **kw)
@@ -140,9 +154,11 @@ async def harness(
     controller.grant_locally(store)
     store.close()
     fake_relay.controllers.append(controller.snapshot_entry())
-    agent = Agent(settings, platform=build_fake_platform(fake_state))
+    ui = FakeScreenUI()
+    screen_worker = FakeScreenWorkerLauncher()
+    agent = Agent(settings, ui=ui, platform=build_fake_platform(fake_state), screen_launcher=screen_worker)
     await agent.start()
-    h = AgentHarness(agent, fake_relay, fake_api, fake_state, settings)
+    h = AgentHarness(agent, fake_relay, fake_api, fake_state, settings, ui=ui, screen_worker=screen_worker)
     await fake_relay.wait_connected()
     await h.wait_snapshot_applied()
     try:

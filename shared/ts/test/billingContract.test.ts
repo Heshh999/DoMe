@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { ERRORS, PLANS, PROTOCOL_VERSION, ProtocolError, schemas } from "../src/index.ts";
 import type { rest } from "../src/generated/index.ts";
 
-// Protocol 1.3 billing bodies (docs/PROTOCOL.md §20): the same accept/refuse decisions as
+// Protocol 1.3 billing bodies (docs/BILLING.md; shared/protocol/README.md "Protocol 1.3"): the same accept/refuse decisions as
 // shared/python/tests/test_billing_contract.py, plus the shared allowance fixture's arithmetic.
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -100,7 +100,7 @@ describe("billing REST bodies (protocol 1.3)", () => {
       ok(name, value);
       bad(name, { ...(value as object), extra: 1 });
     }
-    expect(PROTOCOL_VERSION).toBe("1.3");
+    expect(PROTOCOL_VERSION).toBe("1.4"); // 1.3 added the billing shapes; 1.4 (Screen view) is current
   });
 
   it("pins plan ids, intervals and modes", () => {

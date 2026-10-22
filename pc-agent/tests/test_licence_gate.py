@@ -97,7 +97,13 @@ def test_planted_libx264_in_a_folder_fails_name_and_allow_list(tmp_path: Path) -
     (tmp_path / "sub" / "libx264-165.dll").write_bytes(b"")
     report = gate.collect_folder(tmp_path)
     [planted] = report["dlls"]
-    assert planted == {"name": "libx264-165.dll", "imports": [], "exports": [], "pe_parsed": False}
+    assert planted == {
+        "name": "libx264-165.dll",
+        "path": "sub/libx264-165.dll",
+        "imports": [],
+        "exports": [],
+        "pe_parsed": False,
+    }
     found = rules(gate.evaluate(report, dlls_only=True))
     assert {"R1", "R2"} <= found
     assert "R9" in found  # an unreadable PE fails closed too

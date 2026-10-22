@@ -49,6 +49,8 @@ const TITLES: Record<ActionName, string> = {
   "power.cancel": "Cancel countdown",
   "input.session_start": "Start touchpad/keyboard",
   "input.session_stop": "Stop touchpad/keyboard",
+  "screen.session_start": "Start Screen view",
+  "screen.session_stop": "Stop Screen view",
 };
 
 export function actionTitle(action: string): string {
@@ -154,6 +156,10 @@ export function describeAction(action: string, params: Record<string, unknown>, 
       return params.takeover ? "Take over the touchpad and keyboard on the PC" : "Start the touchpad and keyboard on the PC";
     case "input.session_stop":
       return "Stop the touchpad and keyboard";
+    case "screen.session_start":
+      return params.takeover ? "Take over Screen view of the PC" : "Show the PC's screen on this phone";
+    case "screen.session_stop":
+      return "Stop Screen view";
   }
 }
 
@@ -173,6 +179,8 @@ export function capabilityLabel(cap: string): string {
     power: "Sleep, restart, shut down (always confirmed)",
     pointer: "Touchpad: move the cursor, click, scroll, drag",
     keyboard: "Keyboard: type text, press keys and shortcuts",
+    screen: "Screen view: see this PC's screens live on the phone",
+    screen_audio: "PC sound during Screen view (coming in a later update)",
   };
   return labels[cap] ?? cap;
 }
@@ -182,6 +190,17 @@ export function isInputCapability(cap: string): boolean {
   return cap === "pointer" || cap === "keyboard";
 }
 
+/** True for the two Screen view capabilities (protocol 1.4), granted only in a DoMe window on the PC. */
+export function isScreenCapability(cap: string): boolean {
+  return cap === "screen" || cap === "screen_audio";
+}
+
+/** Fixed explanation of the Screen view permission (docs/design/screen-view.md §2.1), shown wherever the grant appears. */
+export const SCREEN_SCOPE_EXPLANATION = "Screen view lets this phone see everything on the PC's screens while a Screen view is on: every app, notifications and messages that pop up, and anything revealed there. It does not let the phone click or type; that is Touchpad and Keyboard. The PC shows a 'Screen view on' bar on every screen whenever someone is watching. Nothing is recorded, and the AI never receives it. Only the PC owner can allow it, in a DoMe window on the PC.";
+
+/** Codes the phone raises itself for Screen view (not in errors.json, like NETWORK and NO_ANSWER). */
+export const SCREEN_UNSUPPORTED_BROWSER = "SCREEN_UNSUPPORTED_BROWSER";
+
 /** Fixed, spec-mandated explanation of the manual-input permission (spec §10A D). */
 export const INPUT_SCOPE_EXPLANATION = "Touchpad and keyboard input reaches every app of the unlocked Windows session, not only the approved apps — exactly like a mouse and keyboard plugged into the PC. The approved-app list limits structured app actions; it is not a sandbox around manual input. The PC owner grants and removes these permissions on the PC itself (DoMe tray → Paired phones).";
 
@@ -189,6 +208,8 @@ export const INPUT_SCOPE_EXPLANATION = "Touchpad and keyboard input reaches ever
 export function supportCategoryFor(code: string | null | undefined): "connection" | "pairing" | "media" | "input" | "apps" | "power" | "install" | "billing" | "account" | "other" {
   if (!code) return "other";
   if (code.startsWith("INPUT_")) return "input";
+  if (code === "SCREEN_PC_UNVERIFIED" || code === "SCREEN_ANSWER_INVALID") return "pairing";
+  if (code.startsWith("SCREEN_")) return "connection";
   if (code.startsWith("PAIRING_") || code === "CONTROLLER_REVOKED" || code === "UNKNOWN_KEY" || code === "GRANT_MISSING" || code === "SIGNATURE_INVALID") return "pairing";
   if (code.startsWith("PC_") || code === "NETWORK" || code === "OUTCOME_UNKNOWN" || code === "COMMAND_EXPIRED" || code === "PROTOCOL_INCOMPATIBLE" || code === "RATE_LIMITED" || code === "QUEUE_FULL") return "connection";
   if (code.startsWith("EXTENSION_") || code.startsWith("TARGET_") || code.startsWith("TAB_") || code.startsWith("SEARCH_") || code === "BROWSER_NOT_RUNNING" || code === "UNSUPPORTED_CONTEXT" || code === "ACTIVATION_REQUIRED") return "media";
@@ -272,6 +293,7 @@ export function errorMessage(error: { code: string; message?: string } | null | 
   }
   if (error.code === "UNSUPPORTED_CONTEXT" && ctx?.action === "youtube.open_result") return "That tab on the PC is not showing the search results any more.";
   if (error.code === "ACTIVATION_REQUIRED" && ctx?.action === "youtube.set_paused") return "The browser on the PC blocked starting the video without a click there.";
+  if (error.code === "PROTOCOL_INCOMPATIBLE" && isScreenAction(ctx)) return "Update DoMe on your PC to use Screen view.";
   const known = ERRORS[error.code];
   if (known) return known.user_message;
   if (error.code === "NETWORK") return error.message ?? "You appear to be offline.";
@@ -281,8 +303,12 @@ export function errorMessage(error: { code: string; message?: string } | null | 
   if (error.code === "LINK_EXPIRED") return "The link code expired or was already used. Start again on the PC.";
   if (error.code === "LINK_DENIED") return "Linking this PC was declined.";
   if (error.code === "NO_ANSWER") return "The PC did not answer in time. Nothing is known to have run.";
+  if (error.code === SCREEN_UNSUPPORTED_BROWSER) return "This browser can't show your PC's picture. Open DoMe in your phone's browser or from the home-screen icon.";
   return "Something went wrong. Try again.";
 }
+
+/** The two Screen view actions: an incompatible PC gets the design's own line (§16), not the generic update message. */
+const isScreenAction = (ctx?: ErrorContext) => !!ctx?.action?.startsWith("screen.");
 
 /** Specific next steps per error code (spec §11), more specific where the action tells more; pages add their own. */
 export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
@@ -408,6 +434,39 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
       return ["The window in front of the PC changed, so remaining keys were not pressed into the wrong window.", "Check what is in front on the PC, click where you want to type, then continue."];
     case "NO_ANSWER":
       return ["The PC did not answer in time.", "Check the PC shows Online under Health, then try again."];
+    // Screen view (protocol 1.4, docs/design/screen-view.md §16)
+    case "SCREEN_PC_UNVERIFIED":
+      return ["Pair this phone with your PC again so it can check it is really your PC.", "On the PC: DoMe tray › Paired phones › remove this phone, then pair."];
+    case "SCREEN_ANSWER_INVALID":
+      return ["Nothing was shown: the answer did not come from the PC key this phone trusts.", "If the PC was set up again, pair this phone with it again. Otherwise get help: this should not happen."];
+    case "SCREEN_SESSION_OWNED":
+      return ["Another phone is viewing this PC right now.", "Choose Take over to end its view, or wait until it stops."];
+    case "SCREEN_SESSION_REQUIRED":
+      return ["Taps on the picture need a live Screen view on this PC.", "Show the screen again, then tap."];
+    case "SCREEN_GEOMETRY_CHANGED":
+      return ["The PC's screen layout changed, so that tap was not sent.", "Wait for the picture to settle, then tap again."];
+    case "SCREEN_ALLOWANCE_EXHAUSTED":
+      return ["Free Screen view is 10 minutes per 5-hour window; the app shows when it refreshes.", "The touchpad and remote still work meanwhile."];
+    case "SCREEN_OFFER_INVALID":
+      return ["Try again.", "If it repeats, reload the app; the connection request it built was not accepted by the PC."];
+    case "SCREEN_CAPTURE_UNAVAILABLE":
+      return ["Close other apps that may be capturing or recording the PC's screen.", "Then try again. Some displays are not supported yet."];
+    case "SCREEN_ENCODER_UNAVAILABLE":
+      return ["This PC has no video encoder DoMe can use.", "Update the graphics driver on the PC, or get help."];
+    case "SCREEN_CONNECTION_FAILED":
+      return ["Your phone and PC could not reach each other on this network.", "Try again, or try another network. The touchpad and remote still work."];
+    case "SCREEN_CONSENT_DECLINED":
+      return ["Someone at the PC did not allow this view.", "Ask them, or allow it on the PC yourself; try again in a few minutes."];
+    case "SCREEN_CONSENT_TIMEOUT":
+      return ["No one answered at the PC within 30 seconds.", "Someone at the PC must choose Allow when the window appears."];
+    case "SCREEN_VIEW_DISABLED":
+      return ["Screen view is switched off for now.", "The touchpad and remote still work."];
+    case "INPUT_PAUSED_ON_PC":
+      return ["A DoMe window is open on the PC, so phone taps are paused until it closes.", "Someone at the PC must answer it."];
+    case "INPUT_TARGET_RESERVED":
+      return ["That tap would have landed on DoMe's own 'Screen view on' bar, so it was not sent.", "Tap elsewhere."];
+    case SCREEN_UNSUPPORTED_BROWSER:
+      return ["Open DoMe in your phone's own browser, or from the home-screen icon, and try again."];
     default:
       return [];
   }

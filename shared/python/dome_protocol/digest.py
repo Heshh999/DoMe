@@ -78,6 +78,26 @@ def pairing_verification_code(code: str, pairing_id: str, pc_id: str, kid: str) 
     return f"{number:06d}"
 
 
+def pc_key_mac(code: str, pairing_id: str, pc_id: str, controller_kid: str, pc_kid: str) -> str:
+    """The PC pins its identity key for the phone at pairing (rules.pc_key_pinning, protocol 1.4).
+
+    base64url(HMAC-SHA256(key = normalised pairing code, msg = "dome-pair-pc-key-v1|" + pairing_id + "|" + pc_id +
+    "|" + controller_kid + "|" + pc_kid)), all 32 bytes. The backend never holds the code, so it cannot forge a MAC
+    for a substitute PC key; the phone verifies it with ``verify_pc_key_mac`` before storing the pin.
+    """
+    key = normalize_pairing_code(code).encode("ascii")
+    msg = f"dome-pair-pc-key-v1|{pairing_id}|{pc_id}|{controller_kid}|{pc_kid}".encode()
+    return b64url_encode(hmac.new(key, msg, hashlib.sha256).digest())
+
+
+def verify_pc_key_mac(code: str, pairing_id: str, pc_id: str, controller_kid: str, pc_kid: str, mac: object) -> bool:
+    """Constant-time check of ``pairing_status_response.pc_key.mac`` against the code the phone still holds."""
+    if not isinstance(mac, str):
+        return False
+    expected = pc_key_mac(code, pairing_id, pc_id, controller_kid, pc_kid)
+    return hmac.compare_digest(expected.encode("ascii"), mac.encode("utf-8", errors="surrogatepass"))
+
+
 __all__ = [
     "PAIRING_ALPHABET",
     "PAIRING_CODE_SYMBOLS",
@@ -88,5 +108,7 @@ __all__ = [
     "normalize_pairing_code",
     "pairing_code_handle",
     "pairing_verification_code",
+    "pc_key_mac",
     "sha256_b64url",
+    "verify_pc_key_mac",
 ]

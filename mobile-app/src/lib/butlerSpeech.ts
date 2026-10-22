@@ -165,6 +165,10 @@ export function actionPhrase(step: { action: string; params: Record<string, unkn
     case "input.session_start":
     case "input.session_stop":
       return "use the touchpad";
+    // Screen view is human-only (ai_eligible false): never planned, named only so the switch stays exhaustive
+    case "screen.session_start":
+    case "screen.session_stop":
+      return "use Screen view";
   }
 }
 
@@ -300,6 +304,8 @@ export function stepSentence(step: { action: string; params: Record<string, unkn
       return r.canceled ? "Cancelled." : "Nothing was counting down.";
     case "input.session_start":
     case "input.session_stop":
+    case "screen.session_start":
+    case "screen.session_stop":
       return "Done.";
   }
 }

@@ -155,6 +155,7 @@ def test_first_staging_run_sets_up_everything_in_order(world: World) -> None:
         "--primary-region", "iad", "--ha=false", "--no-public-ips", "--yes",
         "-e", "DOME_ENV=staging", "-e", "DOME_PUBLIC_ORIGIN=https://staging.domeremote.com",
         "-e", f"DOME_OIDC_ISSUER=https://{ISSUER_HOST}", "-e", f"DOME_OIDC_CLIENT_ID={CLIENT_ID}",
+        "-e", "DOME_SCREEN_VIEW_ENABLED=false",
     ]  # fmt: skip
     [docker] = world.calls("docker")
     assert docker["argv"] == [

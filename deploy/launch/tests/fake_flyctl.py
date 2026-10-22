@@ -13,10 +13,12 @@ Output shapes follow the flyctl v0.4.110 source (read 2026-10-14, see deploy/REA
 
 * ``secrets unset --stage -a <app> NAME...`` removes those names (v0.4.110 unset.go shares the ``--stage`` flag).
 * ``deploy`` refuses, like the app's start-up check (cloud-api settings.py ``_v_billing``), when only some of the seven
-  Stripe values reach the app (Fly secrets plus ``-e``); the ``-e`` values are kept in the app's ``deployed_env``.
+  Stripe values reach the app (Fly secrets plus ``-e``), and (``_v_screen``) when the Screen view relay server has a
+  token without a key id or the reverse; the ``-e`` values are kept in the app's ``deployed_env``.
 
 Every call is appended to the log file as ``{"tool", "argv", "stdin", "env_has_client_secret",
-"env_has_database_url", "env_has_fly_token", "env_has_gh_token", "env_has_stripe_secret"}``. Failures are injected through
+"env_has_database_url", "env_has_fly_token", "env_has_gh_token", "env_has_stripe_secret", "env_has_turn_secret"}``.
+Failures are injected through
 ``state["fail"]``, keyed by the first two arguments (``"secrets list"``) with ``{"exit": n, "stdout": "...",
 "stderr": "..."}``.
 """
@@ -222,6 +224,12 @@ def flyctl(argv: list[str], stdin: str, state: dict[str, Any]) -> int:
         if stripe and len(stripe) != len(STRIPE_NAMES):
             _out("Running release_command\nValueError: billing is half configured\n")
             return 1
+        if bool(deployed_env.get("DOME_TURN_KEY_ID")) != ("DOME_TURN_API_TOKEN" in app["secrets"]):
+            _out("Running release_command\nValueError: Screen view's relay server is half configured\n")
+            return 1
+        if "DOME_TURN_ANALYTICS_TOKEN" in app["secrets"] and "DOME_TURN_API_TOKEN" not in app["secrets"]:
+            _out("Running release_command\nValueError: DOME_TURN_ANALYTICS_TOKEN is set but\n")
+            return 1
         count = state.get("machines_after_deploy", 1)
         app["machines"] = [
             {"id": f"m{i}", "state": "started", "config": {"metadata": {"fly_process_group": "app"}}}
@@ -293,6 +301,9 @@ def main() -> int:
                     "env_has_database_url": "DEPLOY_DATABASE_URL" in os.environ,
                     "env_has_fly_token": "FLY_API_TOKEN" in os.environ,
                     "env_has_gh_token": "GH_TOKEN" in os.environ,
+                    "env_has_turn_secret": any(
+                        n in os.environ for n in ("DOME_TURN_API_TOKEN", "DOME_TURN_ANALYTICS_TOKEN")
+                    ),
                     "env_has_stripe_secret": any(
                         n in os.environ for n in ("DOME_STRIPE_SECRET_KEY", "DOME_STRIPE_WEBHOOK_SECRET")
                     ),

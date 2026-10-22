@@ -171,11 +171,11 @@
         },
         "ref_input_session_id": {
           "$ref": "#/$defs/input_session_id",
-          "description": "Manual-input rejections (INPUT_*): the input session the refused batch named. The phone ignores errors for a session it no longer runs."
+          "description": "Manual-input rejections (INPUT_*, and since 1.4 the Screen view rejections of input batches SCREEN_SESSION_REQUIRED / SCREEN_GEOMETRY_CHANGED): the input session the refused batch named. The phone ignores errors for a session it no longer runs."
         },
         "ref_controller_id": {
           "$ref": "#/$defs/uuid",
-          "description": "Agent → relay only, on INPUT_* rejections: the controller whose batch was refused. The relay routes the frame to that controller's 1.1 sockets (after checking the controller belongs to the PC's account) and strips this field."
+          "description": "Agent → relay only, on INPUT_* and SCREEN_* rejections: the controller whose batch was refused. The relay routes the frame to that controller's sockets of a compatible version (1.1 for INPUT_*, 1.4 for SCREEN_*; after checking the controller belongs to the PC's account) and strips this field."
         }
       },
       "description": "Relay or agent → peer. Used only when no command_id can be associated (malformed frame, protocol incompatibility, subscription errors, manual-input batch rejections). Command-scoped failures are always `result` frames."
@@ -322,6 +322,48 @@
             },
             "connection_id": {
               "$ref": "#/$defs/uuid"
+            },
+            "screen": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "granted_until",
+                "unlimited",
+                "stun_urls"
+              ],
+              "properties": {
+                "granted_until": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/timestamp"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "End of the first allowance ticket; null only when unlimited is true."
+                },
+                "unlimited": {
+                  "type": "boolean"
+                },
+                "stun_urls": {
+                  "type": "array",
+                  "maxItems": 4,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "pattern": "^stuns?:[^\\s]+$"
+                  },
+                  "description": "STUN only: the PC never holds a TURN credential (rules.screen_signaling)."
+                },
+                "relayed_max_kbps": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 20000,
+                  "description": "Present when the relay asks for Data saver on relayed paths (the monthly TURN guard, rules.screen_metering)."
+                }
+              },
+              "description": "Since 1.4, present only on a forwarded screen.session_start: the first allowance ticket and the PC's STUN servers (rules.screen_sessions / screen_signaling). Absent on every other command."
             }
           }
         }
@@ -444,7 +486,9 @@
                     "lock",
                     "power",
                     "pointer",
-                    "keyboard"
+                    "keyboard",
+                    "screen",
+                    "screen_audio"
                   ]
                 }
               },
@@ -521,7 +565,9 @@
               "lock",
               "power",
               "pointer",
-              "keyboard"
+              "keyboard",
+              "screen",
+              "screen_audio"
             ]
           }
         },
@@ -531,7 +577,7 @@
       }
     },
     "pairing_decision": {
-      "description": "Agent → relay after the local approve/decline. On approve, `kid` must equal the kid the agent computed from the JWK it stored; the relay only then creates the controller/grant rows.",
+      "description": "Agent → relay after the local approve/decline. On approve, `kid` must equal the kid the agent computed from the JWK it stored; the relay only then creates the controller/grant rows. Since 1.4 an approve carries pc_key_mac (rules.pc_key_pinning); the relay stores it and returns it with the PC's public key in pairing_status_response.pc_key once approved. Agents older than 1.4 send none, and such a pairing cannot use Screen view until the phone pairs again.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -573,9 +619,16 @@
               "lock",
               "power",
               "pointer",
-              "keyboard"
+              "keyboard",
+              "screen",
+              "screen_audio"
             ]
           }
+        },
+        "pc_key_mac": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "description": "base64url(HMAC-SHA256(key = normalised pairing code, msg = 'dome-pair-pc-key-v1|' + pairing_id + '|' + pc_id + '|' + controller_kid + '|' + pc_kid)), 32 bytes untruncated. Only on approve."
         }
       }
     },
@@ -1232,6 +1285,9 @@
         },
         {
           "$ref": "#/$defs/controller_input_batch"
+        },
+        {
+          "$ref": "#/$defs/controller_screen_ice_request"
         }
       ]
     },
@@ -1272,6 +1328,15 @@
         },
         {
           "$ref": "#/$defs/agent_input_session"
+        },
+        {
+          "$ref": "#/$defs/relay_screen_ice_servers"
+        },
+        {
+          "$ref": "#/$defs/relay_screen_answer"
+        },
+        {
+          "$ref": "#/$defs/agent_screen_session"
         }
       ]
     },
@@ -1315,6 +1380,15 @@
         },
         {
           "$ref": "#/$defs/agent_grant_update"
+        },
+        {
+          "$ref": "#/$defs/agent_screen_answer"
+        },
+        {
+          "$ref": "#/$defs/agent_screen_session"
+        },
+        {
+          "$ref": "#/$defs/agent_screen_usage"
         }
       ]
     },
@@ -1352,6 +1426,9 @@
         },
         {
           "$ref": "#/$defs/relay_to_agent_input_batch"
+        },
+        {
+          "$ref": "#/$defs/relay_screen_allowance"
         }
       ]
     },
@@ -1612,11 +1689,12 @@
                 "home",
                 "end",
                 "page_up",
-                "page_down"
+                "page_down",
+                "f11"
               ]
             }
           },
-          "description": "One press-and-release of a named key."
+          "description": "One press-and-release of a named key. f11 (since 1.4) toggles full screen in apps that are not approved; approved apps have app.set_fullscreen."
         },
         {
           "type": "object",
@@ -1641,6 +1719,62 @@
             }
           },
           "description": "Tested shortcut; the modifier is released after the key. ctrl_l is the browser address bar and is only offered in browser contexts."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "x",
+            "y",
+            "gen"
+          ],
+          "properties": {
+            "type": {
+              "const": "pointer_move_to"
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "gen": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "description": "Since 1.4 (Screen view). Absolute cursor position normalised to 0..65535 over the streamed surface at geometry generation `gen`, never PC pixels; the PC maps it to physical pixels of that monitor. Needs a live screen session owned by the batch's controller (SCREEN_SESSION_REQUIRED) and gen == current (SCREEN_GEOMETRY_CHANGED). Within a batch the last position wins; never summed."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "dx",
+            "dy"
+          ],
+          "properties": {
+            "type": {
+              "const": "pointer_wheel"
+            },
+            "dx": {
+              "type": "integer",
+              "minimum": -1200,
+              "maximum": 1200
+            },
+            "dy": {
+              "type": "integer",
+              "minimum": -1200,
+              "maximum": 1200
+            }
+          },
+          "description": "Since 1.4 (Screen view). Wheel motion in Windows wheel units (120 = one notch, |dx|,|dy| <= input_wheel_max) for smooth two-finger scrolling; positive dy scrolls content up, like pointer_scroll. Raw delta to MOUSEEVENTF_WHEEL / HWHEEL."
         }
       ]
     },
@@ -1918,11 +2052,677 @@
               "lock",
               "power",
               "pointer",
-              "keyboard"
+              "keyboard",
+              "screen",
+              "screen_audio"
             ]
           }
         }
       }
+    },
+    "screen_session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
+    "screen_allowance_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unlimited",
+        "remaining_seconds",
+        "resets_at"
+      ],
+      "properties": {
+        "unlimited": {
+          "type": "boolean"
+        },
+        "remaining_seconds": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resets_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "The Free allowance as the relay knows it (rules.screen_metering): unlimited: true on plans with screen_view_seconds_per_window null (then both other fields are null). Display only on the phone; the ledger is authoritative."
+    },
+    "screen_rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "w": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "h": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "description": "A rectangle normalised to 0..65535 over the streamed surface (the same units as pointer_move_to)."
+    },
+    "screen_ice_server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "urls"
+      ],
+      "properties": {
+        "urls": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 256,
+            "pattern": "^(?:stuns?|turns?):[^\\s]+$"
+          }
+        },
+        "username": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "credential": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "description": "One RTCIceServer for the phone. A TURN entry carries a credential minted for this controller only, revoked by the relay on every §13 path (rules.screen_signaling). Never logged; never sent to the PC."
+    },
+    "controller_screen_ice_request": {
+      "description": "Controller → relay (bound socket announcing 1.4). Ask for ICE servers and the current allowance before building the offer; the relay mints the phone's TURN credential here (rules.screen_signaling).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_ice_request"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "relay_screen_ice_servers": {
+      "description": "Relay → controller, the answer to screen_ice_request. turn: available (a TURN credential is in ice_servers), unavailable (no TURN key configured: STUN only) or disabled (a per-account cap or the monthly guard refused TURN: STUN only, the phone says so). A refusal of the request itself is an error frame (SCREEN_VIEW_DISABLED, SCREEN_ALLOWANCE_EXHAUSTED, GRANT_MISSING, PC_OFFLINE, PC_RECONNECTING, RATE_LIMITED, PROTOCOL_INCOMPATIBLE) with ref_pc_id.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "ice_servers",
+        "expires_at",
+        "allowance",
+        "turn"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_ice_servers"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "ice_servers": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/screen_ice_server"
+          }
+        },
+        "expires_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the TURN credential expires (TTL = remaining allowance + 60 s on Free, the session maximum on unlimited plans); null when no credential was minted."
+        },
+        "allowance": {
+          "$ref": "#/$defs/screen_allowance_state"
+        },
+        "turn": {
+          "type": "string",
+          "enum": [
+            "available",
+            "unavailable",
+            "disabled"
+          ]
+        }
+      }
+    },
+    "screen_answer_payload": {
+      "description": "The payload the PC signs with its identity key (envelope kid = pc_kid) to answer one screen.session_start (rules.screen_signaling). offer_digest is base64url SHA-256 of the exact offer_sdp bytes it answers; answer_sdp is the send-only answer with the per-session DTLS fingerprint. Lifetime at most screen_answer_lifetime_seconds. Never journaled, never in a result.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "account_id",
+        "pc_id",
+        "controller_id",
+        "command_id",
+        "screen_session_id",
+        "offer_digest",
+        "answer_sdp",
+        "issued_at",
+        "expires_at"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_answer"
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "account_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "command_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "screen_session_id": {
+          "$ref": "#/$defs/screen_session_id"
+        },
+        "offer_digest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "answer_sdp": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12288,
+          "pattern": "^[\\x20-\\x7E\\r\\n]*$"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "agent_screen_answer": {
+      "description": "Agent → relay. The PC-signed answer (envelope over screen_answer_payload) for the controller named by ref_controller_id. The relay checks that this controller belongs to the PC's account and holds a live screen grant, strips ref_controller_id and delivers relay_screen_answer only to that controller's 1.4 sockets, preferring the one that issued the command; never to subscribers, never logged, no commands row.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "envelope",
+        "ref_controller_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_answer"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        },
+        "ref_controller_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "relay_screen_answer": {
+      "description": "Relay → the issuing controller. The PC-signed answer, verbatim. The phone accepts it only under the checks of rules.screen_signaling (6) against the PC key pinned at pairing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "envelope"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_answer"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "envelope": {
+          "$ref": "#/$defs/envelope"
+        }
+      }
+    },
+    "agent_screen_session": {
+      "description": "Agent → relay → the owner and the PC's 1.4 subscribers. Screen view lifecycle (rules.screen_sessions): started (after DTLS connected and the first frame was sent; `path` says whether media is direct or relayed), paused / resumed (reason secure_desktop or indicator) and ended with the reason. live_seconds is informational: the ledger is settled on the relay's clock. No names, no SDP, no addresses.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "screen_session_id",
+        "controller_id",
+        "event",
+        "reason",
+        "live_seconds",
+        "at"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_session"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "screen_session_id": {
+          "$ref": "#/$defs/screen_session_id"
+        },
+        "controller_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "event": {
+          "type": "string",
+          "enum": [
+            "started",
+            "paused",
+            "resumed",
+            "ended"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "started",
+            "stopped",
+            "stopped_on_pc",
+            "replaced",
+            "viewer_gone",
+            "takeover",
+            "controller_revoked",
+            "controller_offline",
+            "grant_removed",
+            "plan_disabled",
+            "remote_disabled",
+            "session_locked",
+            "secure_desktop",
+            "indicator",
+            "allowance_exhausted",
+            "allowance_unconfirmed",
+            "max_duration",
+            "capture_failed",
+            "connection_failed",
+            "agent_restart"
+          ],
+          "description": "`started` on event started; secure_desktop or indicator on paused / resumed; an end reason on ended."
+        },
+        "path": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "relayed"
+          ],
+          "description": "On started (and resumed): how the media flows."
+        },
+        "live_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "agent_screen_usage": {
+      "description": "Agent → relay, about screen_allowance_renew_before_seconds before the current ticket's granted_until (and at most twice per minute per session): ask for the next allowance chunk. live_seconds, relayed and relayed_bytes are informational only; the relay never charges or discounts on them (rules.screen_metering).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pc_id",
+        "screen_session_id",
+        "live_seconds",
+        "relayed",
+        "relayed_bytes"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_usage"
+        },
+        "pc_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "screen_session_id": {
+          "$ref": "#/$defs/screen_session_id"
+        },
+        "live_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relayed": {
+          "type": "boolean"
+        },
+        "relayed_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "relay_screen_allowance": {
+      "description": "Relay → agent: the next allowance ticket, in answer to screen_usage or sent at once when the owning controller went offline (reason controller_offline). final: true means no further ticket will come; granted_until null with final means stop now. When granted_until passes without a new ticket the agent ends the session (rules.screen_sessions (4)).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "screen_session_id",
+        "granted_until",
+        "unlimited",
+        "final"
+      ],
+      "properties": {
+        "type": {
+          "const": "screen_allowance"
+        },
+        "screen_session_id": {
+          "$ref": "#/$defs/screen_session_id"
+        },
+        "granted_until": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unlimited": {
+          "type": "boolean"
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "controller_offline",
+            "allowance_exhausted",
+            "plan_disabled"
+          ]
+        },
+        "resets_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "screen_dc_phone_to_pc": {
+      "description": "Data-channel messages the phone may send (dome-screen-v1, DTLS-authenticated): hb renews the viewer lease, keyframe asks for an IDR, bye ends the session (`stopped`), audio{on} mutes or unmutes PC sound (Phase 2). Nothing here can inject input or run anything.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "hb"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "keyframe"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "bye"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "on"
+          ],
+          "properties": {
+            "type": {
+              "const": "audio"
+            },
+            "on": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "screen_dc_pc_to_phone": {
+      "description": "Data-channel messages the PC may send: geometry (a new generation: the streamed surface, its size and rotation, and DoMe's own reserved rectangles that taps must avoid), state (sending, or paused with the cause; encoder and data_saver as hints for the Health note and the badge), allowance (the ticket the PC last received, for the countdown) and restricted (input is currently refused on the PC and why). Phase 2/3 add cursor_shape, cursor_pos and roi.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "gen",
+            "surface_index",
+            "width",
+            "height",
+            "rotation",
+            "reserved"
+          ],
+          "properties": {
+            "type": {
+              "const": "geometry"
+            },
+            "gen": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "surface_index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16384
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16384
+            },
+            "rotation": {
+              "type": "integer",
+              "enum": [
+                0,
+                90,
+                180,
+                270
+              ]
+            },
+            "reserved": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/screen_rect"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "state"
+          ],
+          "properties": {
+            "type": {
+              "const": "state"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "sending",
+                "paused"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "secure_desktop",
+                "indicator"
+              ]
+            },
+            "encoder": {
+              "type": "string",
+              "enum": [
+                "h264",
+                "vp8"
+              ]
+            },
+            "data_saver": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "unlimited",
+            "remaining_seconds",
+            "resets_at"
+          ],
+          "properties": {
+            "type": {
+              "const": "allowance"
+            },
+            "unlimited": {
+              "type": "boolean"
+            },
+            "remaining_seconds": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resets_at": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "restricted"
+          ],
+          "properties": {
+            "type": {
+              "const": "restricted"
+            },
+            "restricted": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "elevated",
+                "secure_desktop",
+                "locked",
+                "permission_ui"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "screen_dc_message": {
+      "description": "Every message on the dome-screen-v1 data channel, in either direction (rules.screen_content): a JSON object of at most screen_dc_message_max_bytes with a closed vocabulary; each side validates against its own inbound direction (screen_dc_phone_to_pc on the PC, screen_dc_pc_to_phone on the phone) and drops anything else.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/screen_dc_phone_to_pc"
+        },
+        {
+          "$ref": "#/$defs/screen_dc_pc_to_phone"
+        }
+      ]
     }
   }
 }

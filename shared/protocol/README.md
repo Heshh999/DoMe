@@ -18,7 +18,7 @@ between the phone PWA, the cloud backend/relay, the Windows agent and the browse
 | `schemas/entitlement.schema.json` | Claims of the EdDSA entitlement assertion and its refresh rule |
 | `schemas/rest.schema.json` | REST request/response bodies that cross component boundaries |
 | `version.json` → `rules` | Normative behavioural rules (terminal result, duplicates, snapshot semantics, pairing, identity binding, caching, in-flight deadlines, coalescing) |
-| `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations; `assistant-plan-cases.json` (AI-shaped plans and their structure verdict, run by cloud-api and the phone) |
+| `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations (`es256-*.json`, signed with the committed TEST keys `test-controller-key.pem` and, since 1.4, `test-pc-key.pem`: commands, confirmations, the PC-signed screen answer and the pairing `pc_key_mac`); `strict-json-cases.json` (parser, pattern, timestamp, negotiation and SDP-shape decisions); `assistant-plan-cases.json` (AI-shaped plans and their structure verdict, run by cloud-api and the phone); `ai-window-cases.json` |
 
 Rules:
 
@@ -106,6 +106,45 @@ for every paid plan (`entitlement.schema.json` is unchanged) and cloud-api answe
 
 Library helpers: no helper changes. `PlanId` in `shared/ts` admits `pro_plus` through the regenerated
 `src/generated/rest.ts`; `Registry.plan()` in `shared/python` reads the new plan as any other.
+
+## Protocol 1.4 — Screen view, Phase 1 (2026-10-21)
+
+Additive MINOR for roadmap #52 (`docs/design/screen-view.md` §11, ADR-0002, `docs/PROTOCOL.md` §20). The picture travels
+WebRTC peer to peer between the PC and the phone; the relay carries only signed signaling frames. 1.2 agents and 1.3
+phones stay compatible: they never receive a `screen_*` frame, and the relay refuses `screen.*` commands and 1.4-stamped
+input batches to an agent that did not announce 1.4 **before forwarding** (`PROTOCOL_INCOMPATIBLE detail{peer: "agent",
+required: "1.4"}`), because the shipped agent validates a batch's schema before its stamp and would answer
+`MALFORMED_MESSAGE`. Deploy the cloud (relay + PWA) first, then the agent; the browser extension is untouched (its
+generated validators did not change).
+
+| Addition or change | Where |
+| --- | --- |
+| `protocol_version` and `registry_version` 1.4 | `version.json`, `actions.json` |
+| Capabilities `screen` and `screen_audio` (granted only in a DoMe window on the PC; `screen_audio` only with `screen`) in `actions.json → capabilities` and every capability enum (`grants_snapshot`, `pairing_request`, `pairing_decision`, `agent_grant_update`, `rest.schema.json → capability`) | `actions.json`, `relay-frames.schema.json`, `rest.schema.json` |
+| Actions `screen.session_start{offer_sdp, surface?, audio?, takeover?}` (`since` 1.4, capability `screen`, risk `moderate`, no confirmation, `timeout_ms` 45000, availability `windows` + `session_unlocked`, `ai_eligible: false`, `routine_allowed: false`) and `screen.session_stop{screen_session_id}` (idempotent) | `actions.json`; results `screen_session_result`, `screen_session_stop_result` (+ `screen_surface`) in `results.schema.json` |
+| Frames `controller_screen_ice_request` → `relay_screen_ice_servers`; `agent_screen_answer` (envelope + `ref_controller_id`) → `relay_screen_answer` (`pc_id` + envelope); `agent_screen_session` (events `started`/`paused`/`resumed`/`ended`, reasons incl. `controller_offline`, `path`, `live_seconds`; also the relay → controller form); `agent_screen_usage` → `relay_screen_allowance` (`granted_until`, `unlimited`, `final`, `reason?`, `resets_at?`); optional `relay.screen{granted_until, unlimited, stun_urls, relayed_max_kbps?}` on `relay_to_agent_command` | `relay-frames.schema.json` (all four direction `oneOf` lists) |
+| Defs `screen_answer_payload` (PC-signed, `offer_digest`, ≤ 12 KiB `answer_sdp`), `screen_dc_message` = `screen_dc_phone_to_pc` (`hb`, `keyframe`, `bye`, `audio{on}`) ∪ `screen_dc_pc_to_phone` (`geometry`, `state`, `allowance`, `restricted`), `screen_allowance_state`, `screen_ice_server`, `screen_rect`, `screen_session_id` | `relay-frames.schema.json` |
+| `input_event` gains `pointer_move_to{x, y, gen}` (0..65535, needs a live screen session of the same controller), `pointer_wheel{dx, dy}` (±`input_wheel_max`) and `key: f11`; `pairing_decision.pc_key_mac`; `error_frame` `ref_*` descriptions cover `SCREEN_*` rejections | `relay-frames.schema.json` |
+| `pairing_status_response.pc_key{public_jwk, mac}` (approved pairings only) | `rest.schema.json` |
+| Limits `screen_sdp_max_bytes` 12288, `screen_start_command_lifetime_seconds` 60, `screen_answer_lifetime_seconds` 60, `screen_heartbeat_seconds` 2, `screen_lease_seconds` 8, `screen_connect_timeout_seconds` 20, `screen_allowance_chunk_seconds` 60, `screen_allowance_renew_before_seconds` 20, `screen_session_max_seconds` 14400, `screen_consent_timeout_seconds` 30, `screen_pc_stop_cooldown_default_seconds` 600, `screen_secure_desktop_pause_max_seconds` 120, `screen_dc_message_max_bytes` 1024, `screen_geometry_generations_kept` 4, `input_wheel_max` 1200 | `version.json → limits` |
+| Rules `screen_sessions`, `screen_signaling`, `pc_key_pinning`, `screen_metering`, `screen_content`, `local_permission_ui`; amended `command_version_stamping` (content-based batch stamp; version checks BEFORE schema validation; the relay shields pre-1.4 agents), `grant_update`, `ai_eligibility`, `pairing_secret`, `input_sessions`, `controller_socket_identity` | `version.json → rules` |
+| Errors `SCREEN_SESSION_OWNED`, `SCREEN_SESSION_REQUIRED`, `SCREEN_ALLOWANCE_EXHAUSTED` (`detail.resets_at`), `SCREEN_OFFER_INVALID`, `SCREEN_CAPTURE_UNAVAILABLE` (`detail: indicator \| busy \| unsupported_display \| driver \| remote_session`), `SCREEN_ENCODER_UNAVAILABLE`, `SCREEN_CONNECTION_FAILED`, `SCREEN_CONSENT_DECLINED`, `SCREEN_CONSENT_TIMEOUT`, `SCREEN_GEOMETRY_CHANGED`, `SCREEN_VIEW_DISABLED`, `INPUT_PAUSED_ON_PC`, `INPUT_TARGET_RESERVED`; phone-side only `SCREEN_PC_UNVERIFIED`, `SCREEN_ANSWER_INVALID` | `errors.json` |
+| Plan fields `screen_view_seconds_per_window` (free 600, pro `null`, pro_plus `null`), `screen_view_window_hours` 5, `screen_ice_rate_limit{per_minute 6, burst 6, account_per_hour 60}`, `screen_start_rate_limit{per_minute 6, burst 6}`; read by cloud-api only, the entitlement assertion is unchanged | `plans.json` |
+| Fixtures: `screen` section in both `es256-*.json` (a PC-signed answer the phone accepts, one altered after signing, one signed by an unpinned key, one stamped 1.5; `pc_key_mac` vector; `test-pc-key.pem`); `sdp_cases` | `fixtures/` |
+
+Library helpers: Python `build_screen_answer_payload`, `verify_screen_answer_payload` (→ `VerifiedScreenAnswer`),
+`screen_sdp_acceptable`, `sdp_fingerprints`, `offer_digest`, `parse_screen_dc_message`, `pc_key_mac`,
+`verify_pc_key_mac`, `input_event_since`, `input_batch_protocol_version`, `SCREEN_INPUT_PROTOCOL_VERSION`,
+`VerifiedInputBatch.required_protocol_version`, `Schemas.validate_screen_answer_payload`,
+`Schemas.validate_screen_dc_message(direction, …)`; `input_event_capabilities` knows the new events and
+`build_input_batch_payload` stamps by content. TypeScript mirrors in `screen.ts` (`buildScreenAnswerPayload`,
+`signScreenAnswer`, `verifyScreenAnswer`, `screenSdpAcceptable`, `sdpFingerprints`, `offerDigest`,
+`parseScreenDcMessage`), `digest.ts` (`pcKeyMac`, `verifyPcKeyMac`), `versions.ts` (`inputEventSince`,
+`inputBatchProtocolVersion`, `SCREEN_INPUT_PROTOCOL_VERSION`; Ajv-free), `commands.ts` (new `InputEvent` members,
+`verifyAndParseInputBatch`) and `schemas.validateScreenAnswerPayload` / `validateScreenDcMessage`. **Check order:**
+every verifier in both libraries now checks protocol compatibility and `since` before schema validation, so a payload
+from a newer MINOR yields `PROTOCOL_INCOMPATIBLE` instead of `MALFORMED_MESSAGE`. Design brief:
+`docs/design/screen-view.md`; transport decision: `docs/adr/0002-screen-view-transport.md`.
 
 ## AI assistant, step 1 — REST additions without a version bump (2026-10-11)
 

@@ -8,8 +8,8 @@ const RESULTS_TAB = { ...TAB, tab_token: "BBBBBBBBBBBBBBBBBBBBBB", script_attach
 
 describe("registry", () => {
   it("loads a consistent action registry", () => {
-    expect(PROTOCOL_VERSION).toBe("1.3");
-    expect(REGISTRY_VERSION).toBe("1.3");
+    expect(PROTOCOL_VERSION).toBe("1.4");
+    expect(REGISTRY_VERSION).toBe("1.4");
     const start = registry.get("input.session_start");
     expect(capabilitySatisfied(start, ["keyboard"])).toBe(true);
     expect(capabilitySatisfied(start, ["media"])).toBe(false);
@@ -76,8 +76,10 @@ describe("registry", () => {
     expect(protocolCompatible("1.0", ["1.2"])).toBe(true);
     expect(protocolCompatible("1.2", ["1.3"])).toBe(true); // a 1.2 agent keeps talking to a 1.3 relay
     expect(protocolCompatible("1.3", ["1.3"])).toBe(true);
+    expect(protocolCompatible("1.3", ["1.4"])).toBe(true); // a 1.3 relay build keeps talking to a 1.4 one
     expect(protocolCompatible("1.3", ["1.2"])).toBe(false);
     expect(protocolCompatible("1.4", ["1.3"])).toBe(false);
+    expect(protocolCompatible("1.5", ["1.4"])).toBe(false);
     expect(protocolCompatible("2.0", ["1.2"])).toBe(false);
     expect(protocolCompatible("x", ["1.0"])).toBe(false);
     expect(protocolCompatible("1.0\n", ["1.0"])).toBe(false);
@@ -96,7 +98,7 @@ describe("registry", () => {
 describe("protocol 1.2", () => {
   it("marks every action with the version that introduced it", () => {
     for (const [name, spec] of registry.actions()) {
-      const expected = NEW_IN_1_2.includes(name) ? "1.2" : name.startsWith("input.") ? "1.1" : "1.0";
+      const expected = name.startsWith("screen.") ? "1.4" : NEW_IN_1_2.includes(name) ? "1.2" : name.startsWith("input.") ? "1.1" : "1.0";
       expect([name, spec.since, minVersion(name)]).toEqual([name, expected, expected]);
     }
     expect(() => minVersion("app.nope")).toThrow(/UNKNOWN_ACTION/);

@@ -10,23 +10,36 @@ without a display. pystray/tkinter/Pillow are imported lazily so importing this 
 display.
 
 Menu: status line · **Disable/Enable remote control** (local flag; no remote frame can change it) ·
-Stop manual input · Paired phones ▸ (per phone: Allow touchpad / Allow keyboard, with the broad-scope
-explanation on first enable) · Pair a phone… · Add an app… · Approved apps… (list, add, re-approve,
-remove, *Full screen with F11* per app: :class:`ApprovedAppsWindow`) · Start at login · Reconnect ·
-Diagnostics… (saves the bundle and shows the status in plain words) · Quit. ``show_main`` (second launch
-of DoMe) opens the status window and notifies.
+Stop manual input · Stop Screen view · Paired phones ▸ (per phone: Allow touchpad / Allow keyboard, with the
+broad-scope explanation on first enable; Allow Screen view… opens the grant window, Turn off Screen view) ·
+Pair a phone… · Add an app… · Approved apps… (list, add, re-approve, remove, *Full screen with F11* per app:
+:class:`ApprovedAppsWindow`) · Screen view history… · Start at login · Reconnect · Diagnostics… (saves the
+bundle and shows the status in plain words) · Quit. ``show_main`` (second launch of DoMe) opens the status
+window and notifies.
+
+Screen view (protocol 1.4, design §2.1, §2.3, §7, §15 ``indicator.py`` folded in here): the grant window (scope
+text, scam line, options, Allow after a 5 s hold: :class:`ScreenGrantWindow`), the consent window (Deny, Allow
+after 1 s, Block this phone for 1 hour, Turn off Screen view for this phone: :class:`ScreenConsentWindow`), one
+"Screen view on" bar per monitor (:class:`ScreenBarsController`: borderless topmost ``Toplevel`` windows, on Windows
+``WS_EX_NOACTIVATE`` + ``WS_EX_TOOLWINDOW`` and ``SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)``, confirmed to
+exist before the agent spawns the worker), a red badge on the tray icon while a session is live, the
+Ctrl+Alt+Shift+S hotkey (:class:`HotkeyListener`, Windows only). The pure button logic lives in
+``screen/consent.py`` (``GrantWindowModel``, ``ConsentWindowModel``) and is unit-tested; the tkinter windows, the
+display affinity and the hotkey are **not yet verified on a device**.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ntpath
 import os
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable, Coroutine, Iterable, Mapping
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -45,10 +58,30 @@ from .approved_apps import (
     suggest_display_name,
 )
 from .logsetup import get_logger
-from .pairing import INPUT_CAPABILITIES, INPUT_SCOPE_EXPLANATION
+from .pairing import (
+    INPUT_CAPABILITIES,
+    INPUT_SCOPE_EXPLANATION,
+    SCREEN_AUDIO_EXPLANATION,
+    SCREEN_AUDIO_OPTION_LABEL,
+    SCREEN_NOT_AT_PAIRING,
+    SCREEN_SCAM_LINE,
+    SCREEN_SCOPE_EXPLANATION,
+)
+from .platform.protocol import Monitor
+from .screen import NOT_INCLUDED_MESSAGE
+from .screen.consent import COOLDOWN_CHOICES, ConsentWindowModel, GrantWindowModel
 from .settings import Settings, command_name
 from .store import ApprovedAppRow
-from .ui import PairingApproval, PairingDisplay, StatusView
+from .ui import (
+    PairingApproval,
+    PairingDisplay,
+    Rect,
+    ScreenBarRequest,
+    ScreenBars,
+    ScreenConsentRequest,
+    ScreenGrantRequest,
+    StatusView,
+)
 
 log = get_logger(__name__)
 
@@ -64,7 +97,23 @@ _COLOURS = {
     "stopped": (120, 120, 120),
     "offline": (120, 120, 120),
     "disabled": (200, 60, 60),
+    "screen_view": (225, 30, 30),  # a Screen view is live: the red dot the scope text promises (design §2.1)
 }
+SCREEN_BAR_HEIGHT = 36  # pixels of the Tk window (physical: the Tk thread is per-monitor DPI aware on Windows)
+SCREEN_BAR_RESERVED_HEIGHT = 56  # the band reserved for taps when a bar's real rectangle cannot be read (not Windows)
+SCREEN_UI_STALE_SECONDS = 3.0  # the Tk thread's bar check runs every second; older than this, the thread is frozen
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+SCREEN_HOTKEY_TEXT = "Ctrl+Alt+Shift+S"
+# Win32 for the bars (Windows only; design §7): never activated, never captured where the OS allows it.
+GWL_EXSTYLE = -20
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TOOLWINDOW = 0x00000080
+WDA_MONITOR = 0x00000001
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x0001, 0x0002, 0x0004, 0x4000
+VK_S = 0x53
+WM_HOTKEY = 0x0312
+WM_QUIT = 0x0012
 
 
 # The DoMe app icon (brand/icon.svg rendered by brand/scripts/export.mjs, copied here by
@@ -164,6 +213,9 @@ class TkThread:
             log.error("tkinter is not available; pairing windows disabled (use the CLI)")
             self._ready.set()
             return
+        # Monitor rectangles are physical pixels (per-monitor v2, platform/windows/screen.py): the windows this thread
+        # creates use the same space, so a bar's geometry lands on its monitor at any scaling (design §7).
+        _thread_per_monitor_dpi()
         try:
             self._root = tk.Tk()
         except Exception as exc:  # noqa: BLE001 - TclError: no display / desktop to open windows on
@@ -209,6 +261,9 @@ class TrayUI:
         self._pairing_window: Any = None
         self._approval_windows: dict[str, Any] = {}
         self._apps_window: ApprovedAppsWindow | None = None
+        self._grant_windows: dict[str, ScreenGrantWindow] = {}
+        self._consent_windows: dict[str, ScreenConsentWindow] = {}
+        self._bars = ScreenBarsController(self._tk, on_display_change=self._display_changed)
 
     # ----- wiring ---------------------------------------------------------------------------------------------
     def bind(self, agent: Any, loop: asyncio.AbstractEventLoop) -> None:
@@ -250,6 +305,8 @@ class TrayUI:
         self._status = status
         if self._icon is not None:
             key = "disabled" if not status.remote_enabled else status.connection
+            if status.screen_session is not None:
+                key = "screen_view"  # someone is watching: the badge says so whatever the connection state
             try:
                 self._icon.icon = _icon_image(_COLOURS.get(key, _COLOURS["offline"]))
                 self._icon.title = f"DoMe — {self._status_line()}"
@@ -288,6 +345,67 @@ class TrayUI:
                 self._pairing_window = None
 
         self._tk.post(_close)
+
+    # ----- Screen view (AgentUI) -----
+    def show_screen_grant(self, request: ScreenGrantRequest) -> None:
+        if self._tk.root is None:
+            request.respond(None)  # no windows here: widening is impossible (rules.local_permission_ui)
+            return
+        self._tk.post(lambda: self._open_screen_grant_window(request))
+
+    def show_screen_consent(self, request: ScreenConsentRequest) -> None:
+        if self._tk.root is None:
+            return  # nobody can answer: the agent times out
+        self._tk.post(lambda: self._open_screen_consent_window(request))
+
+    def close_screen_consent(self, request_id: str) -> None:
+        def _close() -> None:
+            win = self._consent_windows.pop(request_id, None)
+            if win is not None:
+                win.close(answered=True)
+
+        self._tk.post(_close)
+
+    def show_screen_bars(self, request: ScreenBarRequest) -> Future[ScreenBars]:
+        return self._bars.show(request)
+
+    def hide_screen_bars(self) -> None:
+        self._bars.hide()
+
+    def screen_bars_present(self) -> bool:
+        return self._bars.present()
+
+    def screen_ui_alive(self) -> bool:
+        return self._bars.ui_alive()
+
+    def _display_changed(self) -> None:
+        agent = self.agent
+        if agent is not None:
+            self._call(_notify_display_change(agent))
+
+    def _open_screen_grant_window(self, request: ScreenGrantRequest) -> None:
+        root = self._tk.root
+        if root is None:
+            request.respond(None)
+            return
+        existing = self._grant_windows.pop(request.controller_id, None)
+        if existing is not None:
+            existing.close(cancel=True)
+
+        def closed() -> None:
+            self._grant_windows.pop(request.controller_id, None)
+
+        self._grant_windows[request.controller_id] = ScreenGrantWindow(root, request, on_closed=closed)
+
+    def _open_screen_consent_window(self, request: ScreenConsentRequest) -> None:
+        root = self._tk.root
+        if root is None:
+            return
+
+        def closed() -> None:
+            self._consent_windows.pop(request.request_id, None)
+
+        self._consent_windows[request.request_id] = ScreenConsentWindow(root, request, on_closed=closed)
 
     # ----- tk windows (Tk thread only) ------------------------------------------------------------------------
     def _open_pairing_window(self, display: PairingDisplay) -> None:
@@ -360,6 +478,12 @@ class TrayUI:
         tk.Label(win, text="Requested permissions: " + ", ".join(base), font=("Segoe UI", 10)).pack(
             padx=16, pady=(8, 4)
         )
+        for cap in approval.deferred_capabilities:  # screen / screen_audio: never at pairing (design §2.1 step 3)
+            label = "Screen view" if cap == "screen" else "PC sound"
+            box = tk.Checkbutton(
+                win, text=f"{label} ({SCREEN_NOT_AT_PAIRING})", state="disabled", font=("Segoe UI", 10)
+            )
+            box.pack(anchor="w", padx=24)
         input_vars: dict[str, Any] = {}
         requested_input = [c for c in INPUT_CAPABILITIES if c in approval.requested_capabilities]
         if requested_input:
@@ -431,6 +555,8 @@ class TrayUI:
             return "Re-link required"
         if not s.remote_enabled:
             return "Remote control OFF"
+        if s.screen_session is not None:
+            return f"Screen view on ({s.screen_session.phone_name})"
         return {
             "connected": "Connected",
             "connecting": "Connecting…",
@@ -521,6 +647,22 @@ class TrayUI:
             if self.agent is not None:
                 self._call(self.agent.input.end("stopped"))
 
+        def stop_screen(icon: Any, item: Any) -> None:
+            if self.agent is not None:
+                self._call(self.agent.screen.stop_on_pc("tray"))
+
+        def screen_live(_: Any) -> bool:
+            return self._status.screen_session is not None
+
+        def screen_history(icon: Any, item: Any) -> None:
+            if self.agent is None or self._tk.root is None:
+                return
+            lines = self.agent.screen.history.lines()
+            text = "Screen view history (the last 20 sessions and refused starts; phone, time, duration, reason):\n\n"
+            text += "\n".join(lines) if lines else "No Screen view sessions yet."
+            text += f"\n\nClear it with: {command_name()} screen-history --clear"
+            self._tk.post(lambda: self._show_text_window("Screen view history", text))
+
         def phones_items() -> list[Any]:
             """One submenu per paired phone with checkable 'Allow touchpad' / 'Allow keyboard' items.
 
@@ -559,13 +701,46 @@ class TrayUI:
 
                 return _toggle
 
+            def screen_included() -> bool:
+                # A build without the media stack: Screen view is not offered at all, and says why
+                agent = self.agent
+                return agent is None or bool(getattr(getattr(agent, "screen", None), "media_available", True))
+
+            def allow_screen(icon: Any, item: Any) -> None:
+                # Never a silent checkbox: the grant window with the scope text and the 5 s hold (design §2.1)
+                if self.agent is None:
+                    return
+                if not screen_included():
+                    self.notify("DoMe", NOT_INCLUDED_MESSAGE)
+                    return
+                if self._tk.root is None:
+                    self.notify("DoMe", "DoMe cannot open windows here, so Screen view cannot be allowed on this PC.")
+                    return
+                self._call(self.agent.request_screen_grant(controller_id))
+
+            def turn_off_screen(icon: Any, item: Any) -> None:
+                # While this phone is watching it is a Stop at the desk too: the PC-wide cooldown starts before the
+                # grant narrows (design §6.3); otherwise the grant simply narrows.
+                if self.agent is not None:
+                    self._call(self.agent.screen.turn_off_on_pc(controller_id, "tray"))
+
+            def screen_label(_: Any) -> str:
+                if not screen_included():
+                    return "Screen view: not in this version of DoMe"
+                return "Screen view settings…" if checked("screen")(None) else "Allow Screen view…"
+
             return pystray.Menu(
                 pystray.MenuItem("Allow touchpad", toggle("pointer"), checked=checked("pointer")),
                 pystray.MenuItem("Allow keyboard", toggle("keyboard"), checked=checked("keyboard")),
+                pystray.MenuItem(screen_label, allow_screen, enabled=lambda _item: screen_included()),
+                pystray.MenuItem("Turn off Screen view", turn_off_screen, visible=checked("screen")),
                 pystray.MenuItem(
                     "What this allows…",
                     lambda icon, item: self._tk.post(
-                        lambda: self._show_text_window("Touchpad and keyboard access", INPUT_SCOPE_EXPLANATION)
+                        lambda: self._show_text_window(
+                            "Touchpad, keyboard and Screen view access",
+                            INPUT_SCOPE_EXPLANATION + "\n\n" + SCREEN_SCOPE_EXPLANATION + "\n\n" + SCREEN_SCAM_LINE,
+                        )
                     ),
                 ),
             )
@@ -580,10 +755,12 @@ class TrayUI:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(toggle_label, toggle_remote),
             pystray.MenuItem("Stop manual input", stop_input),
+            pystray.MenuItem("Stop Screen view", stop_screen, enabled=screen_live),
             pystray.MenuItem("Paired phones", pystray.Menu(phones_items)),
             pystray.MenuItem("Pair a phone…", pair),
             pystray.MenuItem("Add an app…", add_app),
             pystray.MenuItem("Approved apps…", apps),
+            pystray.MenuItem("Screen view history…", screen_history),
             pystray.MenuItem("Start at login", toggle_startup, checked=startup_checked),
             pystray.MenuItem("Reconnect", reconnect),
             pystray.MenuItem("Diagnostics…", diagnostics),
@@ -1140,9 +1317,573 @@ def _status_text(agent: Any) -> str:
         lines.append(
             f"Manual input session: {session['state']} (pointer={session['pointer']}, keyboard={session['keyboard']})"
         )
+    screen = status.get("screen") or {}
+    live = screen.get("session")
+    if live:
+        lines.append("")
+        lines.append(
+            f"Screen view: {live['state']} for {live['controller_id']} since {live.get('started_at')} "
+            f"({live.get('live_seconds')} s, {live.get('path') or 'connecting'}). Stop: tray > Stop Screen view, "
+            f"the bar, or {SCREEN_HOTKEY_TEXT}."
+        )
+    history = screen.get("history") or []
+    if history:
+        lines.append("")
+        lines.append("Screen view history (newest first):")
+        for row in history[:20]:
+            when = str(row.get("started_at", "")).replace("T", " ")[:16]
+            what = (
+                f"start refused ({row.get('reason')})"
+                if row.get("kind") == "refused"
+                else f"{row.get('live_seconds')} s, {row.get('reason')}"
+            )
+            lines.append(f"  {when}  {row.get('display_name')}: {what}")
     lines.append("")
     lines.append("Use the tray menu for pairing, apps, permissions, Disable remote control and Quit.")
     return "\n".join(lines)
+
+
+async def _notify_display_change(agent: Any) -> None:
+    agent.screen.on_display_change()
+
+
+# ----- Screen view windows (Tk thread only) -----------------------------------------------------------------------
+class ScreenGrantWindow:
+    """The grant window (design §2.1): scope text, scam line, PC sound, start mode, cooldown; Allow after 5 s."""
+
+    def __init__(self, root: Any, request: ScreenGrantRequest, *, on_closed: Callable[[], None]) -> None:
+        import time as _time
+        import tkinter as tk
+
+        self._request = request
+        self._on_closed = on_closed
+        self._answered = False
+        self._model = GrantWindowModel(opened_at=_time.monotonic())
+        win = tk.Toplevel(root)
+        self._win = win
+        win.title("Allow Screen view?")
+        win.resizable(False, False)
+        name = request.display_name
+        tk.Label(win, text=f"Allow Screen view for {name}?", font=("Segoe UI", 12, "bold")).pack(padx=16, pady=(16, 4))
+        tk.Label(win, text=SCREEN_SCOPE_EXPLANATION, wraplength=460, justify="left", font=("Segoe UI", 10)).pack(
+            padx=16, pady=(4, 8)
+        )
+        tk.Label(
+            win, text=SCREEN_SCAM_LINE, wraplength=460, justify="left", font=("Segoe UI", 10, "bold"), fg=_ERROR_FG
+        ).pack(padx=16, pady=(0, 8))
+        self._audio = tk.BooleanVar(master=win, value=request.screen_audio)
+        tk.Checkbutton(win, text=SCREEN_AUDIO_OPTION_LABEL, variable=self._audio, font=("Segoe UI", 10)).pack(
+            anchor="w", padx=24
+        )
+        tk.Label(win, text=SCREEN_AUDIO_EXPLANATION, wraplength=440, justify="left", font=("Segoe UI", 9)).pack(
+            anchor="w", padx=(46, 16)
+        )
+        tk.Label(win, text=f"When {name} starts Screen view:", font=("Segoe UI", 10)).pack(
+            anchor="w", padx=24, pady=(8, 0)
+        )
+        self._ask = tk.BooleanVar(master=win, value=request.ask_each_time)
+        tk.Radiobutton(
+            win, text="Start right away (the bar still shows)", variable=self._ask, value=False, font=("Segoe UI", 10)
+        ).pack(anchor="w", padx=40)
+        tk.Radiobutton(
+            win, text="Ask on this PC each time", variable=self._ask, value=True, font=("Segoe UI", 10)
+        ).pack(anchor="w", padx=40)
+        tk.Label(
+            win,
+            text="After someone at this PC presses Stop, ask before the next start for:",
+            wraplength=440,
+            justify="left",
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=24, pady=(8, 0))
+        self._cooldown_text = tk.StringVar(master=win, value=_cooldown_label(request.cooldown_seconds))
+        tk.OptionMenu(win, self._cooldown_text, *[label for _s, label in COOLDOWN_CHOICES]).pack(anchor="w", padx=40)
+        buttons = tk.Frame(win)
+        buttons.pack(padx=16, pady=(12, 16))
+        tk.Button(buttons, text="Cancel", width=12, command=self._cancel).pack(side="left", padx=8)
+        self._allow: Any = tk.Button(buttons, text="Allow", width=14, command=self._allow_pressed, state="disabled")
+        self._allow.pack(side="left", padx=8)
+        win.protocol("WM_DELETE_WINDOW", self._cancel)
+        _bring_to_front(win)
+        self._tick()
+
+    def _tick(self) -> None:
+        import time as _time
+
+        if self._answered:
+            return
+        now = _time.monotonic()
+        if self._model.allow_enabled(now):
+            self._allow.configure(text="Allow", state="normal")
+            return
+        self._allow.configure(text=f"Allow ({self._model.hold_remaining(now)})", state="disabled")
+        self._win.after(250, self._tick)
+
+    def _allow_pressed(self) -> None:
+        import time as _time
+
+        try:
+            decision = self._model.decide(
+                _time.monotonic(),
+                screen_audio=bool(self._audio.get()),
+                ask_each_time=bool(self._ask.get()),
+                cooldown_seconds=_cooldown_seconds(self._cooldown_text.get()),
+            )
+        except ValueError:
+            return
+        self._finish(decision)
+
+    def _cancel(self) -> None:
+        self._finish(None)
+
+    def close(self, *, cancel: bool) -> None:
+        if cancel:
+            self._finish(None)
+
+    def _finish(self, decision: Any) -> None:
+        if self._answered:
+            return
+        self._answered = True
+        try:
+            self._request.respond(decision)
+        finally:
+            with contextlib.suppress(Exception):
+                self._win.destroy()
+            self._on_closed()
+
+
+def _cooldown_label(seconds: int) -> str:
+    for value, label in COOLDOWN_CHOICES:
+        if value == seconds:
+            return label
+    return COOLDOWN_CHOICES[0][1]
+
+
+def _cooldown_seconds(label: str) -> int:
+    for value, text in COOLDOWN_CHOICES:
+        if text == label:
+            return value
+    return COOLDOWN_CHOICES[0][0]
+
+
+class ScreenConsentWindow:
+    """ "<phone> wants to see this screen" (design §2.3): Deny · Allow (after 1 s) · Block 1 hour · Turn off."""
+
+    def __init__(self, root: Any, request: ScreenConsentRequest, *, on_closed: Callable[[], None]) -> None:
+        import time as _time
+        import tkinter as tk
+
+        self._request = request
+        self._on_closed = on_closed
+        self._answered = False
+        self._model = ConsentWindowModel(opened_at=_time.monotonic(), timeout_seconds=float(request.timeout_seconds))
+        win = tk.Toplevel(root)
+        self._win = win
+        win.title("Screen view")
+        win.resizable(False, False)
+        why = (
+            "after someone stopped Screen view at this PC"
+            if request.cause == "cooldown"
+            else "you asked to be asked each time"
+        )
+        tk.Label(win, text=f"{request.display_name} wants to see this screen", font=("Segoe UI", 12, "bold")).pack(
+            padx=16, pady=(16, 4)
+        )
+        tk.Label(win, text=f"Asking because {why}.", wraplength=420, justify="left", font=("Segoe UI", 10)).pack(
+            padx=16, pady=2
+        )
+        self._countdown = tk.Label(win, text="", font=("Segoe UI", 9))
+        self._countdown.pack(padx=16, pady=(4, 8))
+        row = tk.Frame(win)
+        row.pack(padx=16, pady=(4, 8))
+        tk.Button(row, text="Deny", width=12, command=lambda: self._finish("deny")).pack(side="left", padx=6)
+        self._allow: Any = tk.Button(row, text="Allow", width=12, command=self._allow_pressed, state="disabled")
+        self._allow.pack(side="left", padx=6)
+        row2 = tk.Frame(win)
+        row2.pack(padx=16, pady=(0, 16))
+        tk.Button(row2, text="Block this phone for 1 hour", command=lambda: self._finish("block")).pack(
+            side="left", padx=6
+        )
+        tk.Button(row2, text="Turn off Screen view for this phone", command=lambda: self._finish("turn_off")).pack(
+            side="left", padx=6
+        )
+        win.protocol("WM_DELETE_WINDOW", lambda: self._finish("deny"))
+        _bring_to_front(win)
+        self._tick()
+
+    def _tick(self) -> None:
+        import time as _time
+
+        if self._answered:
+            return
+        now = _time.monotonic()
+        if self._model.expired(now):
+            self.close(answered=False)  # the agent reports the timeout itself
+            return
+        self._allow.configure(state="normal" if self._model.allow_enabled(now) else "disabled")
+        self._countdown.configure(text=f"No answer within {self._model.remaining(now)} s refuses.")
+        self._win.after(250, self._tick)
+
+    def _allow_pressed(self) -> None:
+        import time as _time
+
+        if self._model.allow_enabled(_time.monotonic()):
+            self._finish("allow")
+
+    def _finish(self, action: Any) -> None:
+        if self._answered:
+            return
+        self._answered = True
+        try:
+            self._request.respond(action)
+        finally:
+            self.close(answered=True)
+
+    def close(self, *, answered: bool) -> None:
+        self._answered = True
+        with contextlib.suppress(Exception):
+            self._win.destroy()
+        self._on_closed()
+
+
+@dataclass(frozen=True, slots=True)
+class BarPlacement:
+    """Where a bar window really is: its rectangle and the rectangle of the monitor Windows says it is on, both in
+    physical pixels (``monitor`` None where that cannot be asked: not Windows)."""
+
+    window: Rect
+    monitor: Rect | None
+
+
+def bar_placement_problem(placement: BarPlacement, monitor: Monitor) -> str | None:
+    """None when the bar is on its monitor, at its top edge; else why not (fail closed: a bar off its monitor is
+    no bar). Pure; unit-tested."""
+    target = (monitor.left, monitor.top, monitor.right, monitor.bottom)
+    left, top, right, bottom = placement.window
+    if right <= left or bottom <= top:
+        return "bar has no size"
+    if placement.monitor is not None and tuple(placement.monitor) != target:
+        return "bar not on its monitor"
+    if left < target[0] or top < target[1] or right > target[2] or bottom > target[3]:
+        return "bar not on its monitor"
+    if top - target[1] > 2:
+        return "bar not at the top of its monitor"
+    return None
+
+
+def measure_bar_window(win: Any, monitor: Monitor) -> BarPlacement:
+    """The bar's real rectangle: ``GetWindowRect`` and ``MonitorFromWindow`` on Windows (the Tk thread is per-monitor
+    v2, so both are physical pixels); elsewhere (development) the band the bar was asked for. Not yet verified on a
+    device."""
+    if sys.platform != "win32":
+        return BarPlacement((monitor.left, monitor.top, monitor.right, monitor.top + SCREEN_BAR_RESERVED_HEIGHT), None)
+    import ctypes
+    from ctypes import wintypes
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MonitorFromWindow.restype = wintypes.HMONITOR
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    hwnd = wintypes.HWND(int(win.winfo_id()))
+    target = user32.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT: the top-level window Tk wraps around the frame
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(target, ctypes.byref(rect)):
+        raise OSError("GetWindowRect failed")
+    window = (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
+    hmon = user32.MonitorFromWindow(target, 0)  # MONITOR_DEFAULTTONULL: a window on no monitor is no bar
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not hmon or not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+        return BarPlacement(window, (0, 0, 0, 0))
+    r = info.rcMonitor
+    return BarPlacement(window, (int(r.left), int(r.top), int(r.right), int(r.bottom)))
+
+
+def _thread_per_monitor_dpi() -> None:
+    """Windows 10 1607+: make the calling thread per-monitor DPI aware (v2) for the windows it creates. Where that
+    is impossible the bars may land elsewhere on a scaled display, and the placement check refuses them."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        setter = getattr(user32, "SetThreadDpiAwarenessContext", None)
+        if setter is None:
+            log.warning("per-monitor DPI awareness is unavailable; Screen view bars are placement-checked")
+            return
+        setter.argtypes = [ctypes.c_void_p]
+        setter.restype = ctypes.c_void_p
+        setter(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+    except Exception as exc:  # noqa: BLE001 - the placement check still fails closed
+        log.warning("could not make the window thread DPI aware", error=exc.__class__.__name__)
+
+
+class ScreenBarsController:
+    """One "Screen view on" bar per monitor, created on the Tk thread and confirmed before the worker starts
+    (design §7). ``show`` returns a future the agent waits on for 3 s; a bar is confirmed only once its real
+    rectangle is on its monitor (``measure``; else ``created: False``, "bar not on its monitor") and that rectangle is
+    what taps are refused on. ``present`` answers from a flag the Tk thread refreshes every second (every bar still
+    exists, is viewable and on its monitor; the virtual screen size unchanged, else the agent is told of a display
+    change) and answers False once that refresh is older than 3 s: a frozen Tk thread's bars no longer repaint, so
+    capture pauses (and :meth:`ui_alive` withholds the worker's ticks). Not yet verified on a device."""
+
+    def __init__(
+        self,
+        tk_thread: TkThread,
+        *,
+        on_display_change: Callable[[], None],
+        measure: Callable[[Any, Monitor], BarPlacement] = measure_bar_window,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._tk = tk_thread
+        self._on_display_change = on_display_change
+        self._measure = measure
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._bars: list[Any] = []
+        self._bar_monitors: list[Monitor] = []
+        self._present = False
+        self._last_check: float | None = None
+        self._screen_size: tuple[int, int] | None = None
+        self._hotkey: HotkeyListener | None = None
+        self._request: ScreenBarRequest | None = None
+
+    def show(self, request: ScreenBarRequest) -> Future[ScreenBars]:
+        done: Future[ScreenBars] = Future()
+        if self._tk.root is None:
+            done.set_result(ScreenBars(created=False, detail="no display: tkinter is not available here"))
+            return done
+        self._tk.post(lambda: self._create(request, done))
+        return done
+
+    def hide(self) -> None:
+        self._tk.post(self._destroy)
+
+    def present(self) -> bool:
+        with self._lock:
+            return self._present and self._fresh_locked()
+
+    def ui_alive(self) -> bool:
+        """The Tk thread ran its bar check within :data:`SCREEN_UI_STALE_SECONDS` (the worker's ticks need it)."""
+        with self._lock:
+            return self._fresh_locked()
+
+    def _fresh_locked(self) -> bool:
+        return self._last_check is not None and self._clock() - self._last_check <= SCREEN_UI_STALE_SECONDS
+
+    # ----- Tk thread -----
+    def _create(self, request: ScreenBarRequest, done: Future[ScreenBars]) -> None:
+        import tkinter as tk
+
+        root = self._tk.root
+        self._destroy()
+        self._request = request
+        reserved: list[Rect] = []
+        try:
+            for monitor in request.monitors:
+                win = tk.Toplevel(root)
+                win.overrideredirect(True)
+                win.attributes("-topmost", True)
+                win.configure(bg="#b3261e")
+                win.geometry(f"{max(200, monitor.width)}x{SCREEN_BAR_HEIGHT}+{monitor.left}+{monitor.top}")
+                sound = " · sound on" if request.audio else ""
+                tk.Label(
+                    win,
+                    text=f"● Screen view · {request.viewer_name}{sound} · stop with {SCREEN_HOTKEY_TEXT}",
+                    bg="#b3261e",
+                    fg="white",
+                    font=("Segoe UI", 10, "bold"),
+                ).pack(side="left", padx=12)
+                menu = tk.Menu(win, tearoff=0)
+                menu.add_command(label="Stop", command=lambda: request.on_stop("bar"))
+                menu.add_command(label="Stop and turn off Screen view for this phone", command=request.on_turn_off)
+                stop = tk.Menubutton(
+                    win, text="Stop ▾", bg="white", fg="#b3261e", font=("Segoe UI", 10, "bold"), relief="raised"
+                )
+                stop.configure(menu=menu)
+                stop.pack(side="right", padx=12, pady=4)
+                win.update_idletasks()
+                if not win.winfo_exists() or not int(win.winfo_id()):
+                    raise RuntimeError("bar window not created")
+                _apply_bar_window_styles(win)
+                self._bars.append(win)
+                self._bar_monitors.append(monitor)
+                placement = self._measure(win, monitor)
+                problem = bar_placement_problem(placement, monitor)
+                if problem is not None:
+                    raise _BarMisplacedError(problem)
+                reserved.append(placement.window)  # taps on the bar's real rectangle are refused
+            self._screen_size = (int(root.winfo_screenwidth()), int(root.winfo_screenheight()))
+            self._hotkey = HotkeyListener(lambda: request.on_stop("hotkey"))
+            if not self._hotkey.start():
+                self._hotkey = None
+                for win in self._bars:
+                    for child in win.winfo_children():
+                        if isinstance(child, tk.Label):
+                            child.configure(text=f"● Screen view · {request.viewer_name} · (hotkey unavailable)")
+        except _BarMisplacedError as exc:  # fail closed: a bar that is not on its monitor is no bar
+            log.warning("Screen view bar is not on its monitor", why=str(exc))
+            self._destroy()
+            _resolve_bars(done, ScreenBars(created=False, detail=str(exc)))
+            return
+        except Exception as exc:  # noqa: BLE001 - fail closed: no bar, no capture
+            log.warning("Screen view bar could not be created", error=exc.__class__.__name__)
+            self._destroy()
+            _resolve_bars(done, ScreenBars(created=False, detail=f"bar not created ({exc.__class__.__name__})"))
+            return
+        if not _resolve_bars(done, ScreenBars(created=True, reserved=tuple(reserved))):
+            # The agent stopped waiting (3 s) and refused the start: no session owns these bars.
+            self._destroy()
+            return
+        with self._lock:
+            self._present = True
+            self._last_check = self._clock()
+        self._schedule_check()
+
+    def _schedule_check(self) -> None:
+        root = self._tk.root
+        if root is not None and self._bars:
+            root.after(1000, self._check)
+
+    def _check(self) -> None:
+        if not self._bars:
+            return
+        root = self._tk.root
+        ok = True
+        try:
+            for win, monitor in zip(self._bars, self._bar_monitors, strict=True):
+                if not win.winfo_exists() or not win.winfo_viewable():
+                    ok = False
+                    break
+                if bar_placement_problem(self._measure(win, monitor), monitor) is not None:
+                    ok = False  # moved off its monitor (a scaling change, another program): capture pauses
+                    break
+            if root is not None and self._screen_size is not None:
+                size = (int(root.winfo_screenwidth()), int(root.winfo_screenheight()))
+                if size != self._screen_size:
+                    self._screen_size = size
+                    ok = False
+                    self._on_display_change()
+        except Exception:  # noqa: BLE001 - TclError: a bar vanished
+            ok = False
+        with self._lock:
+            self._present = ok
+            self._last_check = self._clock()  # the heartbeat: this thread still runs its checks
+        self._schedule_check()
+
+    def _destroy(self) -> None:
+        with self._lock:
+            self._present = False
+        for win in self._bars:
+            with contextlib.suppress(Exception):
+                win.destroy()
+        self._bars = []
+        self._bar_monitors = []
+        if self._hotkey is not None:
+            self._hotkey.stop()
+            self._hotkey = None
+        self._request = None
+
+
+class _BarMisplacedError(Exception):
+    """A bar window exists but not on its monitor (``bar_placement_problem``)."""
+
+
+def _resolve_bars(done: Future[ScreenBars], bars: ScreenBars) -> bool:
+    """Answer the agent's wait; False when it already gave up (the future was cancelled after 3 s)."""
+    if done.done():
+        return False
+    try:
+        done.set_result(bars)
+    except InvalidStateError:  # cancelled between the check and the answer
+        return False
+    return True
+
+
+def _apply_bar_window_styles(win: Any) -> None:
+    """Windows only: ``WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`` (never takes focus, no taskbar button) and
+    ``SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`` (Windows 10 2004+), else ``WDA_MONITOR``; if both fail the
+    bar simply appears in the picture, which is harmless: its existence, not its exclusion, is the guarantee."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    hwnd = wintypes.HWND(int(win.winfo_id()))
+    parent = user32.GetAncestor(hwnd, 2)  # GA_ROOT: the top-level window Tk wraps around the frame
+    target = parent or hwnd
+    user32.GetWindowLongPtrW.restype = ctypes.c_longlong
+    user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.SetWindowLongPtrW.restype = ctypes.c_longlong
+    user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_longlong]
+    style = int(user32.GetWindowLongPtrW(target, GWL_EXSTYLE))
+    user32.SetWindowLongPtrW(target, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+    user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
+    if not user32.SetWindowDisplayAffinity(target, WDA_EXCLUDEFROMCAPTURE):
+        if not user32.SetWindowDisplayAffinity(target, WDA_MONITOR):
+            log.warning("Screen view bar: display affinity not applied; the bar will show in the picture")
+
+
+class HotkeyListener:
+    """Ctrl+Alt+Shift+S while a session is live (design §7): ``RegisterHotKey`` on a dedicated thread with its own
+    message loop (Windows only). ``start`` returns False where it cannot register (another program holds the
+    combination, or not Windows), and the bar says so. Not yet verified on a device."""
+
+    def __init__(self, on_pressed: Callable[[], None]) -> None:
+        self._on_pressed = on_pressed
+        self._thread: threading.Thread | None = None
+        self._thread_id: int | None = None
+        self._registered = threading.Event()
+        self._failed = threading.Event()
+
+    def start(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        self._thread = threading.Thread(target=self._run, name="dome-screen-hotkey", daemon=True)
+        self._thread.start()
+        self._registered.wait(2.0)
+        return self._registered.is_set() and not self._failed.is_set()
+
+    def stop(self) -> None:
+        if sys.platform != "win32":
+            return
+        if self._thread_id is None:
+            return
+        import ctypes
+
+        ctypes.WinDLL("user32", use_last_error=True).PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+
+    def _run(self) -> None:
+        if sys.platform != "win32":
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._thread_id = int(kernel32.GetCurrentThreadId())
+        if not user32.RegisterHotKey(None, 1, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, VK_S):
+            self._failed.set()
+            self._registered.set()
+            return
+        self._registered.set()
+        msg = wintypes.MSG()
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == WM_HOTKEY:
+                    with contextlib.suppress(Exception):
+                        self._on_pressed()
+        finally:
+            user32.UnregisterHotKey(None, 1)
 
 
 def startup_command() -> str:

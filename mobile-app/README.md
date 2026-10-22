@@ -386,6 +386,67 @@ scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key mate
   only while none is approved). A step that ends in FULLSCREEN_UNSUPPORTED shows the PC's message and
   a "Maximise instead" chip that fills "maximise <app>" (sent only with Send).
 
+### Screen view (beta), protocol 1.4 — `/app/screen` (docs/design/screen-view.md §2.2, §4, §8, §16; DECISIONS 66–74)
+
+Built and **unit-/component-tested in jsdom only, with a fake `RTCPeerConnection`; not yet verified on a
+device** (KNOWN_ISSUES 28). Behind the operator switch: the app reads `screen_view` from the public
+`GET /healthz` once per load (`lib/api.ts::screenViewSwitch`; CONTRACT_ISSUES 12). Until the server says
+`"on"`, the Remote page keeps the "Screen view: Coming" card and nothing else exists; with it on, the
+Remote page's tile and a Home card (`ScreenViewTile`) name the one next state ("Allow Screen view on your
+PC first", "Pair again so your phone can check it is your PC", "Update DoMe on your PC", "Ready · 7 min
+left in this window", "Free Screen view refreshes today at 4:12 pm") and open the page.
+
+- **PC key pinning** (`PairPage`, `lib/pcKeyPins.ts`; DECISIONS 67): the pairing code is held in a
+  `HeldPairingCode` from the claim until the status poll returns `approved` with `pc_key`; then
+  `verifyPcKeyMac` (WebCrypto HMAC verify, constant time) checks the PC's MAC over its identity key and
+  `{pc_id, pc_kid, pc_public_jwk, pinned_at}` is written to IndexedDB next to the controller key; then the
+  code is dropped. It is also dropped on declined, expired, 404, Cancel and unmount. A MAC that does not
+  verify pins nothing (and removes an earlier pin for that PC) and says so; an older PC that sends no key
+  pins nothing. "Forget this installation" deletes the pins with the key; sign-out keeps both.
+- **The session** (`lib/screen.ts` `ScreenSessionClient`, owned by the runtime): no pin → nothing is sent
+  (SCREEN_PC_UNVERIFIED, "pair again"); `screen_ice_request` on the bound socket → ICE servers, the
+  allowance and whether a relay server is available; a receive-only offer (video + audio transceivers,
+  the `dome-screen-v1` data channel, H.264/VP8/Opus preferences), vanilla ICE (gathering complete or
+  3 s), the strict SDP check; the offer inside the signed `screen.session_start` (60 s lifetime,
+  stamped 1.4). The PC's `screen_session_result` and its `screen_answer` frame arrive in either order;
+  the answer is applied — exactly the signed SDP — only after `verifyScreenAnswer` passed against the
+  pinned key for this account, controller, PC, command and offer. A different key is the hard stop
+  "This PC's identity changed. Pair again."; every other failure is "Couldn't confirm this is your PC.
+  Nothing was shown." There is no "continue anyway".
+- **Live**: a full-viewport stage with a thin strip (PC name · "Encrypted between your PC and this phone",
+  shown only after the answer verified · Free time left · Touchpad · Keyboard · Stop) and badges for
+  "Via relay server", "Data saver" and "Basic picture mode". `hb` on the data channel every 2 s; the
+  PC's `geometry` / `state` / `allowance` / `restricted` messages are parsed with the closed vocabulary
+  and anything else is dropped. No frame for 2 s while the PC says `sending` asks for a keyframe; 5 s →
+  one fresh signed session, at most twice, then "Couldn't connect". A screen wake lock is held while a
+  session runs. The picture is a `<video playsinline muted>` fed by `srcObject` only; a refused `play()`
+  shows "Tap to show the picture." (`components/ScreenSurface.tsx`).
+- **Taps** (`lib/screenMap.ts`, `lib/directGestures.ts`, `lib/screenInput.ts`): tap → `pointer_move_to`
+  (0..65535 over the streamed surface, at the geometry generation the phone saw) + click, sent at once;
+  a second tap within 500 ms / 12 px reuses the first position; two-finger tap → right click; press and
+  hold 350 ms → a 2.5× loupe (`ScreenLoupe`, a second `<video>` on the same stream) whose aim moves at
+  1/2.5 of the finger and clicks on lift; two fingers → pinch zoom (local only, 1–4×) or scroll
+  (`pointer_wheel`, 120 = one notch, the touchpad's direction preference); one finger pans while zoomed.
+  Taps in the letterbox bars and on DoMe's own "Screen view on" bars are dropped, never clamped; after a
+  `<video>` resize taps wait (≤ 300 ms) for the matching geometry. **Touchpad** swaps in the relative
+  touchpad over the picture (drags, with a Drag toggle). Batches with the new events are stamped 1.4
+  by the shared library; touchpad batches stay 1.1. The input session starts once the picture is live
+  (only with `pointer` or `keyboard` granted) and ends with it; a view-only grant shows "View only. Allow
+  the touchpad on your PC to tap." and sends nothing.
+- **Stopping**: Stop sends `bye` and the signed `screen.session_stop` and shows "Stopped · 3 min 12 s";
+  leaving the page (Phase 1 has no mini view), a PC switch and sign-out stop it the same way. The app
+  going to the background sends `bye` and stops (no minutes count while away); back in front with the
+  page open, one fresh session starts by itself — or a **Resume** button when the PC asked someone to
+  allow the last one — never after the PC stopped it, a refusal, a used-up allowance or a removed grant.
+- **Every §16 state** is one row of `lib/screenStatus.ts` (copy, one next action, the error code for
+  the help links), from "Allow Screen view on your PC" to "Windows is asking for permission on the PC";
+  a pause names its cause (a Windows prompt, or "A screen on the PC changed" while a bar is missing) and the
+  phone keeps the PC's pause causes as a set, so the picture comes back only when none is left; a PC whose
+  DoMe build has no Screen view says "This version of DoMe on your PC doesn't include Screen view yet";
+  the Free allowance bar and "Refreshes today at 4:12 pm" reuse `lib/billing.ts`. Nothing about a
+  session is stored; the SDP, candidates, ICE servers, credentials and the answer envelope never reach
+  the log (`log.ts` drops those keys) or diagnostics (phase, path, codes and seconds only).
+
 ### The voice assistant, step 1 — `/app/assistant` (docs/design/assistant.md §4)
 
 - **Deterministic first** (`lib/assistant.ts`, controller-tested): the words (speech, typed, or dictated
@@ -481,6 +542,28 @@ scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key mate
   "Design system and themes" above).
 
 ## Tests
+
+`pnpm check` — **84 files / 1431 tests passing, 1 skipped** (2026-10-22, Screen view beta after the review
+round; typecheck, lint, build and the bundle check clean).
+
+Screen view beta (protocol 1.4, WP1.7): `screen` (the client over
+the real runtime with `test/helpers/fakePeer.ts` and `fakeTimers.ts`: no pin → nothing sent; the ICE request,
+the receive-only offer, the signed 60 s start stamped 1.4; the answer verified against the pinned key and
+applied verbatim, every §4.3 refusal shows nothing; heartbeats, the closed data-channel vocabulary, pauses,
+stall → keyframe → at most two fresh sessions, the connect timeout and relay hint, `ended` reasons, hidden →
+`bye` + stop + resume, Stop, PC switch and sign-out, the lost socket, no SDP or credential in logs or
+diagnostics), `screenStatus` (the §16 table as copy), `screenMap` (letterbox, zoom/pan inverse, reserved
+bars, generations), `directGestures` (tap, double tap position, two-finger tap, loupe, pinch vs scroll,
+pan), `screenInput` (events per gesture, drops never clamped, the slowed loupe aim, the 1.4 stamp),
+`pcKeyPins` (valid MAC pins; wrong MAC, wrong kid, missing key or lost code leave it unpinned; the
+cross-language vector; forget-installation), `wakeLock`, `no-pixel-access` (no pixel or media API under
+`src/` but the camera QR scanner; none at all in the Screen view files), `protocol-parity` (the new
+validators and the two facade methods), and components `PairPage` (the code is held through `waiting`
+and gone after done, declined, expired, Cancel and unmount; valid MAC pins, invalid MAC or an old PC
+pins nothing), `ScreenPage` (nothing on arrival; the whole signed path to a live picture; tap → 1.4
+batch, pinch → nothing, two-finger slide → `pointer_wheel`, the loupe, Touchpad mode; Stop, leaving,
+background and return; view-only; `play()` refused; wake lock; every §16 state with its copy) and
+`ScreenViewTile` (the switch, "Coming" kept while off, every entry line).
 
 `pnpm test` — **68 files / 1218 tests, all passing** (2026-10-13, at commit 6d76945; `pnpm typecheck`,
 `pnpm lint` and `pnpm build` with its bundle check also clean).
@@ -639,3 +722,25 @@ Rotation, backgrounding, network loss:
 | Airplane mode during drag / key hold / Compose and Send | hold released on the PC within ~3 s (lease); phone shows Ended with PC_RECONNECTING; Compose shows review, never resends; after reconnect nothing stale is injected |
 | Second phone takes over | first phone shows "Another phone took over", holds released count; Take over from the first re-acquires |
 | Windows lock / UAC prompt while live | PC ends the session (PC_SESSION_LOCKED / INPUT_RESTRICTED copy); nothing typed into the secure desktop |
+
+### Manual iPhone checklist — Screen view beta (docs/design/screen-view.md §18 items 2, 3, 5, 9–11)
+
+Not run on a device: everything in Screen view is **not yet verified on a device** (KNOWN_ISSUES 28). Safari
+tab **and** Home Screen app, iOS 18.x and 26.x, a Windows PC with `screen` (and `pointer`) allowed in the DoMe
+window on the PC; record the iOS version and mode for each row:
+
+| Area | Step |
+| --- | --- |
+| Pinning | Re-pair the phone once after the 1.4 update (Done shows no warning); Screen view opens. Re-link the PC with `--new-key`: "This PC's identity changed. Pair again." and no picture. A pairing made in a Safari tab does not pin the Home Screen app (separate storage): re-pair from the app. |
+| First picture | Show screen → first frame within 4 s (Phase 0 gate); "Encrypted between your PC and this phone" appears with it; Low Power Mode → "Tap to show the picture." then the picture. |
+| Paths | Same Wi-Fi (direct), cellular (relayed: "Via relay server"), hotel-style Wi-Fi; the copy while connecting switches to "Trying the relay server…" after 5 s. |
+| Taps | At 1×, 2× and 4× and with the loupe on a 1080p and a 1440p desktop: the click lands where the crosshair or finger was; taps in the black bars and on the "Screen view on" bar do nothing; a double tap opens a desktop icon. |
+| Scroll / zoom | Two-finger scroll in a browser page (vertical and horizontal — check the horizontal direction feels right, KNOWN_ISSUES 35); pinch never scrolls; one finger pans while zoomed. |
+| Touchpad mode | Drag a window with Touchpad → Drag; the batches are the touchpad's own. |
+| Lifecycle | Background 5 s and 30 s, lock the phone, an incoming call: the PC ends within 8 s and the Free clock stops; back in front a fresh session starts by itself (or Resume after an ask-each-time start). Stop shows "Stopped · …". Leaving the page stops it. |
+| Frozen picture | Switch apps and come back: a black or frozen picture asks for a keyframe and recovers, or restarts once. |
+| Landscape | Rotate: the picture fills the screen in landscape (manifest `orientation: "any"`); safe areas respected. |
+| Wake lock | The phone does not dim while watching (Home Screen app from iOS 18.4). |
+| States on the PC | UAC prompt → "Windows is asking for permission on the PC…"; Win+L → "Your PC is locked…"; Stop on the PC's bar → "Screen view was stopped on the PC…" and no automatic restart; an elevated window → "That window runs as administrator…". |
+| Free minutes | The bar counts down while live; at 0 the PC ends it: "You've used Free Screen view for now. Refreshes … ." |
+| Battery and heat | 30 minutes of viewing: note battery used and whether the phone gets hot. |

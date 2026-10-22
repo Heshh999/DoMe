@@ -32,6 +32,18 @@ butler reply (migration 0003). Off unless configured; see "AI assistant" below.
 (no key in the build environment) and not released (`DOME_AI_ENABLED` is off in production; the plan allowances of
 protocol 1.3 describe the plans, not availability).
 
+Screen view, Phase 1 beta (protocol 1.4; `docs/design/screen-view.md` §4, §7, §10–§13, ADR 0002; migration
+`0005_screen_view`): the relay half of the live PC picture. Routing of the `screen.*` commands and the four 1.4 frames,
+the start hook (kill switch, plan allowance, owner presence), the screen ledger settled on the relay's clock with
+pull-based 60 s allowance tickets, STUN for both devices always and the phone's relay-server credential (Cloudflare
+Realtime TURN) only when configured, one outstanding credential per controller revoked on every §13 path and capped per
+account and per month, `pc_key_mac` stored at pairing and the `pc_key` returned once approved, the 1.4 stamp gate for
+input batches, and `DOME_SCREEN_VIEW_ENABLED` (off by default: every start is refused `SCREEN_VIEW_DISABLED`). See
+"Screen view (protocol 1.4)" below. **Integration-tested** against a real PostgreSQL with simulated 1.4 agents and
+phones and an in-memory fake TURN provider; the Cloudflare adapter is **unit-tested against a mock transport and has
+never been run against the real service**; nothing is device-verified (no picture reaches a phone through this
+component alone: the agent and the PWA halves are separate work packages).
+
 ## AI assistant (step 1)
 
 Design: `docs/design/assistant.md`; contract: `docs/PROTOCOL.md` §19 (PWA-only bodies, no version bump). Code:
@@ -123,6 +135,78 @@ Logs: one line per operation (`billing.checkout`, `billing.webhook`, `billing.tr
 with codes, account ids, plan names and counts; never an email, a body, a signature or a Stripe key. Evidence:
 **integration-tested (fake provider)** in `tests/test_billing_*.py`; the Stripe adapter is **unit-tested** against the
 SDK's signature helper and object models; **not sandbox-provider-tested**.
+
+## Screen view (protocol 1.4)
+
+Design: `docs/design/screen-view.md` (§4 security model, §7 phone↔PC flow, §10 plans, §11 "Peers", §12 relay, §13
+revocation); contract: `shared/protocol/version.json → rules.screen_sessions`, `rules.screen_metering`,
+`rules.screen_content`, `plans.json → screen_view_*`. Code: `dome_api/screen/` (`metering.py` the ledger, `turn.py` the
+provider interface with the Cloudflare adapter, `FakeTurn` and `TurnService`, `service.py` the orchestration and the
+sweeper), the screen steps of `relay/router.py` (`route_command` step 8a, `route_screen_ice_request`, the stamp gate in
+`route_input_batch`), the three agent frames in `relay/agent_ws.py`, presence and the screen hooks in `relay/manager.py`,
+`routes/pairing.py` (`pc_key`) and `routes/health.py`. The relay never sees media: SDP travels inside the signed
+`screen.session_start` command (phone) and `screen_answer` (PC), is forwarded verbatim and never logged.
+
+| From | Frame | What the relay does |
+| --- | --- | --- |
+| phone | `screen_ice_request{pc_id}` | 1.4 socket only; plan rate limit per controller and per account (`screen_ice_rate_limit`); a grant with the `screen` capability. Answers `screen_ice_servers{ice_servers, expires_at, allowance, turn}`: the STUN urls always, plus one TURN entry minted by the provider when configured (`turn: available`); otherwise `turn: unavailable` (no keys, provider failure, breaker open) or `disabled` (a cap or the monthly guard). Refusals are `error{code, ref_pc_id}` plus a `screen_ice_rejected` event. |
+| phone | signed `command` `screen.session_start` | Step 8a of `route_command`: the PC must announce 1.4 (`PROTOCOL_INCOMPATIBLE` for every `screen` command otherwise), the switch (`SCREEN_VIEW_DISABLED`), `screen_start_rate_limit`, then `metering.reserve_start` in the command's transaction (`SCREEN_ALLOWANCE_EXHAUSTED` with `resets_at` and a `screen_allowance_exhausted` event; the PC never sees the command). The forwarded command carries `relay.screen{granted_until, unlimited, stun_urls, relayed_max_kbps?}` (the last only in Data saver). The PC's `result` binds its `screen_session_id` to the reservation, or settles it (`connection_failed` / `start_failed`, a `screen_consent_declined` event for `SCREEN_CONSENT_*`) and revokes the TURN credential. The PC owns the single session per PC (`SCREEN_SESSION_OWNED` comes back as its result and is settled like any refused start; a `takeover` start's `ended{takeover}` settles the first phone's reservation and revokes its credential while the new one keeps its own); the relay remembers each forwarded start for 105 s. `screen.session_stop` needs only the 1.4 agent: it passes the switch, so a phone can always stop. |
+| PC | `screen_answer{envelope, ref_controller_id}` (the PC-signed `screen_answer_payload`) | Delivered verbatim, `ref_controller_id` stripped, to the controller that holds the screen grant and issued the start (its socket first, any other 1.4 socket of that controller otherwise); dropped with a log line when the grant is gone. |
+| PC | `screen_session{event}` | `started` / `paused` / `resumed` / `ended` mark the ledger (`started` opens the charge, pauses the relay saw are discounted up to 120 s, `ended` settles); the `screen_session_started` / `screen_session_ended` events carry ids, the path or the reason and the relay-charged seconds, and the one log line per end a duration bucket only; delivered to the owner and the 1.4 subscribers. |
+| PC | `screen_usage{screen_session_id}` | Budget 2 per minute per session. Answers `screen_allowance`: the next ticket (`granted_until` at most 60 s ahead, `remaining_seconds` / `resets_at` on Free, `unlimited: true` on paid plans, still in chunks), or `final: true` with the honest reason: `controller_offline` (no bound socket of the owner for 60 s, or logout / session revocation / controller revocation at once), `plan_disabled`, exhausted (`resets_at`), an unknown session (no reason). The agent's own figures in the frame are read by nobody (rules.screen_metering (3)). |
+| PC | `pairing_decision{…, pc_key_mac}` | Stored on the pairing row; `pairing_status_response.pc_key{public_jwk, mac}` once approved, and an approved row stays readable for 300 s (`PAIRING_APPROVED_READABLE_SECONDS`, a tested invariant) so the phone can pin the key. |
+| PC | `agent_error` with a `SCREEN_*` code | Delivered to the controller's 1.4 sockets only. |
+| phone | `input_batch` stamped 1.4 | Stamp gate: a batch whose `protocol_version` the PC did not announce is refused `PROTOCOL_INCOMPATIBLE{peer: agent, required}` by the relay after the signature check and before forwarding (design §8.1), because a shipped 1.2 agent would answer `MALFORMED_MESSAGE`. |
+
+**Ledger** (`metering.py`, tables `screen_view_windows`, `screen_reservations`, `screen_accounts`): one rolling window
+per account (`screen_view_window_hours`, 5 h) with `used_seconds` and `reserved_seconds`; one reservation per start,
+`reserved` → `live` → `settled` / `swept`. Time is settled on the relay's clock in 60 s chunks rounded up to 10 s and
+capped at what was reserved; a start that never reached `started`, lasted ≤ 20 s and is one of at most three such
+attempts in the window costs nothing; a window that ends mid-session rolls the segment into the next one; a session
+whose ticket expired without a renewal (no `screen_usage`, PC gone) is swept 10 s after `granted_until` and charged in
+full; paid plans go through the same chunks with `unlimited: true` so a revocation still lands within one ticket. The
+account row is locked for every write, so parallel starts, renewals and the sweeper agree
+(`tests/test_screen_metering.py` runs them from separate sessions). `DOME_SCREEN_CHARGE_FROM=started` moves the start of
+the charge from the forwarded command to the PC's `started` event (default `forwarded`, rules.screen_metering).
+
+**TURN** (`turn.py`, tables `turn_credentials`, `turn_usage_days`): the phone alone gets a relay-server credential
+(the PC is on the owner's network; spec §4). `CloudflareTurn` mints short-lived credentials from the Cloudflare
+Realtime TURN API with `DOME_TURN_KEY_ID` / `DOME_TURN_API_TOKEN` (httpx, 3 s timeout), revokes them, and with
+`DOME_TURN_ANALYTICS_TOKEN` reads the account's daily egress through the GraphQL analytics API once an hour
+(`reconcile`). One outstanding credential per controller (`controller_id` is the primary key): a new mint revokes the
+previous one; TTL = remaining allowance + 60 s capped at 3600 s on Free, `DOME_SCREEN_TURN_TTL_UNLIMITED_SECONDS` on
+paid plans. Revoked at the provider and marked with the reason on every §13 path: `start_refused`, `session_ended`,
+`controller_offline`, `grant_narrowed` (the `screen` capability left a `grant_update`), `plan_change` (the whole
+account), `cap_reached`, `swept` (ticket expired), `no_start` (minted but no start within the lifetime), `replaced`,
+plus logout / session revocation / controller revocation through `ConnectionManager` (`controller_gone`). Caps use the
+larger of the reconciled figure and a provisional bound (outstanding + charged seconds, and the TTL of session-less
+credentials, at 0.5 GB/h): `DOME_SCREEN_TURN_FREE_DAILY_GB` per Free account and day,
+`DOME_SCREEN_TURN_MINTS_PER_ACCOUNT_MONTH` per account; the monthly guard gives relayed Free sessions Data saver
+(`relayed_max_kbps: 500`) past `DOME_SCREEN_TURN_SOFT_CAP_GB` and STUN only past `DOME_SCREEN_TURN_HARD_CAP_GB`
+(`turn_cap_reached{cap: soft | hard | daily | monthly_mints}` events; `soft` is written with each start Data saver
+applies to). Three provider failures open a 300 s breaker (STUN only, `turn: unavailable`). Without
+the two values the provider is `none`: Screen view works only where a direct connection exists, and the answer says
+so (`turn: unavailable`, `/healthz turn: unconfigured`). `FakeTurn` (`DOME_TURN_PROVIDER=fake`, development/test) records
+mints and revocations and serves scripted usage rows. A credential never appears in a log line (`credential`,
+`username`, `ice_servers` are redacted keys; addresses in free text are masked).
+
+**Settings** (`dome_api/settings.py`, refused at start-up with the variable named): the two TURN values both or
+neither, the analytics token only with them, `fake` outside development/test, `DOME_SCREEN_FREE_SECONDS_OVERRIDE` in
+production, a soft cap not below the hard cap, a `turn:` url in `DOME_SCREEN_STUN_URLS`. `GET /v1/plans` is unchanged
+(`screen_view_enabled` would need a contract change, CONTRACT_ISSUES #19); `/healthz` carries `screen_view` (`on` /
+`off`), `turn` (`ok` / `unconfigured` / `error` while the breaker is open), `turn_month_gb` (the figure the monthly
+guard uses), `turn_month_basis` (`reconciled` while the latest reconciliation pass is under 3 h old, else
+`provisional`), `turn_month_gb_provisional` and `turn_reconciled_at`, cached for a minute. The sweeper and the hourly reconciliation run in the process
+(`DOME_SCREEN_TURN_RECONCILE_INTERVAL_SECONDS`); there is no one-pass CLI for them yet.
+
+Evidence: **integration-tested** in `tests/test_screen_routing.py` (every row of the table, the lying agent, the
+budget, one session per PC with a refused second phone and a takeover, the start rate limit, a stop past the switch, the sweeper, the no-start revocation, logout / session revocation / controller revocation / 60 s absence /
+grant narrowing ending a session within one ticket, the stamp gate, `pc_key_mac`, no SDP or credential in the logs),
+`tests/test_screen_metering.py` (every ledger rule including concurrency and the window roll-over),
+`tests/test_screen_turn.py` (`TurnService` with `FakeTurn`; the Cloudflare adapter against an `httpx.MockTransport`,
+including the 204 revoke and the GraphQL usage shape), `tests/test_screen_settings.py` (including the address masking and the redacted keys), `tests/test_screen_migration.py`
+(0005 down and up, `alembic check`). **Not verified against the real Cloudflare service** (the request and response
+shapes follow its documentation and may need a fix on first contact: KNOWN_ISSUES), **not device-verified**.
 
 ## Manual input (protocol 1.1)
 
@@ -319,6 +403,18 @@ misconfiguration stops the process with a plain error.
 | `DOME_AI_TURN_RESERVE_MICRO_USD` | `250000` | ≥ 10 000; reserved per turn before the call. With the assistant on, start-up refuses a value below the worst case of one turn for `DOME_AI_MODEL` and `DOME_AI_MAX_OUTPUT_TOKENS` (one attempt plus one fallback attempt, `pricing.worst_case_turn_micro_usd`). |
 | `DOME_AI_FAILED_TURNS_PER_PERIOD` | `20` | 1–1000; timeouts, refusals and invalid outputs per account and **weekly window** (the name is kept) before `AI_ALLOWANCE_EXHAUSTED` (`failures`). |
 | `DOME_AI_DEV_GRANT_INTERPRETATIONS` / `DOME_AI_DEV_GRANT_COST_CAP_CENTS` | `0` / `0` | Development/test allowance: raises the 5-hour and the weekly window and the weekly cost cap to max(plan, grant) (a Free account with a grant gets windows instead of its taste); refused outside `development` and `test`. |
+| `DOME_SCREEN_VIEW_ENABLED` | `false` | Kill switch of Screen view. Off: every `screen.session_start` and `screen_ice_request` is refused `SCREEN_VIEW_DISABLED`; the ledger, the TURN tables and the pairing `pc_key` keep working. |
+| `DOME_TURN_KEY_ID` / `DOME_TURN_API_TOKEN` | `` | Cloudflare Realtime TURN key id (`[A-Za-z0-9_-]`, ≤ 128) and its API token. Both or neither: a half set refuses start-up naming the missing variable. Never logged. |
+| `DOME_TURN_ANALYTICS_TOKEN` | `` | Read-only analytics token for the hourly egress reconciliation; only with the two values above. Without it the caps run on the provisional bound alone. |
+| `DOME_TURN_PROVIDER` | `` | Blank = `cloudflare` when the two values are set, else `none` (STUN only); `fake` = the in-memory stand-in (refused in staging and production); `cloudflare` without the values and `none` with them refuse start-up. |
+| `DOME_SCREEN_TURN_SOFT_CAP_GB` / `DOME_SCREEN_TURN_HARD_CAP_GB` | `700` / `900` | Monthly guard on relayed traffic (GB, soft < hard): Data saver for relayed Free sessions past the soft cap, STUN only for Free past the hard cap. |
+| `DOME_SCREEN_TURN_FREE_DAILY_GB` | `2` | Relayed GB one Free account may cause per UTC day before its credentials are revoked and no new one is minted (`turn_cap_reached`). |
+| `DOME_SCREEN_TURN_MINTS_PER_ACCOUNT_MONTH` | `600` | Credentials one account may mint per calendar month. |
+| `DOME_SCREEN_TURN_TTL_UNLIMITED_SECONDS` | `14400` | 60–86400; credential lifetime on paid plans (Free: remaining allowance + 60 s, at most 3600). |
+| `DOME_SCREEN_TURN_RECONCILE_INTERVAL_SECONDS` | `3600` | Period of the usage reconciliation and the expired-credential sweep. |
+| `DOME_SCREEN_STUN_URLS` | `stun:stun.cloudflare.com:3478` | Comma-separated `stun:` / `stuns:` urls handed to both devices (a `turn:` url is refused: TURN comes from the provider). |
+| `DOME_SCREEN_FREE_SECONDS_OVERRIDE` | `0` | Development/staging only: a shorter Free allowance per window for testing; 0 = `plans.json` (600); refused in production. |
+| `DOME_SCREEN_CHARGE_FROM` | `forwarded` | `forwarded` (the charge starts when the start command leaves the relay) or `started` (at the PC's `started` event). |
 
 ### Client addresses behind a proxy
 
@@ -370,7 +466,17 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy dome_api tests
 ```
 
-Current counts (2026-10-20, plans and billing, protocol 1.3): **444 passed, 1 skipped**; mypy strict clean on 95
+Current counts (2026-10-21, Screen view Phase 1 relay half, protocol 1.4): **532 passed, 1 skipped**; mypy strict
+clean on 104 files; ruff and ruff format clean. New:
+`tests/test_screen_routing.py` (23, the relay paths end to end with 1.4 simulators and `FakeTurn`),
+`tests/test_screen_metering.py` (14, the ledger from several database sessions), `tests/test_screen_turn.py`
+(15: `TurnService`, caps, breaker, revocation paths, the Cloudflare adapter against a mock transport),
+`tests/test_screen_settings.py` (9), `tests/test_screen_migration.py` (1, 0005 down and up). Changed in expectation:
+`test_relay_routing.py` and `test_auth_and_sessions.py` pin 1.4 where they pinned 1.3 (both simulators now announce
+`("1.0", "1.1", "1.2", "1.3", "1.4")`); the harness gained `AgentSim.screen_answer` / `screen_session` /
+`screen_usage` / `screen_result`, `ControllerSim.screen_ice_request` / `screen_start`, `decide_pairing(pin_pc_key=)`,
+the `screen` fixture (switch on, `FakeClock`, `FakeTurn`) and `fake_turn()` / `screen_clock()`. Before that:
+(2026-10-20, plans and billing, protocol 1.3): **444 passed, 1 skipped**; mypy strict clean on 95
 files; ruff and ruff format clean. New: `tests/test_billing_*.py` (settings and the CLI pass, checkout and portal,
 webhook, lifecycle with an injected clock, top-ups, the Stripe adapter without the network, the 0004 migration down
 and up) and the rewritten `tests/test_assistant_metering.py` (windows, taste, top-up order, the shared
@@ -405,13 +511,18 @@ frame against `relay-frames.schema.json`.
   in-flight commands `outcome_unknown` / `expired` (start-up sweep) and agents reconnect with backoff.
 - Logs are JSON on stderr. Keys such as `token`, `pc_credential`, `code_hash`, `challenge_text`,
   `payload`, `sig`, `title`, `email`, `text` (typed keyboard content), the assistant's `reply`, `choices`, `query`,
-  `recent`, `persona`, `context`, `steps`, `params`, `user_json`, `system_text`, and anything ending in
-  `_token/_secret/_code/_credential/_key` are redacted; URLs are logged as paths only. Input batches are never logged (not even on rejection
+  `recent`, `persona`, `context`, `steps`, `params`, `user_json`, `system_text`, the Screen view keys `offer_sdp`,
+  `answer_sdp`, `sdp`, `candidate(s)`, `ice_servers`, `credential`, `username`, and anything ending in
+  `_token/_secret/_code/_credential/_key` are redacted; IPv4/IPv6 addresses in free text are masked; URLs are logged as
+  paths only. Input batches are never logged (not even on rejection
   beyond the error code), so typed text exists only in transit through this process.
-- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`, `0004_billing`. `dome-api` applies them at start-up;
+- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`, `0004_billing`, `0005_screen_view`. `dome-api`
+  applies them at start-up;
   on Fly.io the `release_command` applies them and the process starts with `--skip-migrations`.
 - `GET /healthz` (no auth, `no-store`): `status` (`ok`/`degraded`, 200/503), `version`, `commit` (the build
-  commit or null), `database`, `forwarded_client` (above) and the relay counts. The database pool recycles
+  commit or null), `database`, `forwarded_client` (above), the relay counts, and the Screen view fields `screen_view`,
+  `turn`, `turn_month_gb`, `turn_month_basis`, `turn_month_gb_provisional`, `turn_reconciled_at` (cached for a minute;
+  never a secret). The database pool recycles
   connections after 600 s and pre-pings (Fly Managed Postgres guidance; staging's Neon database closes every
   connection when its compute suspends, and pre-ping replaces them: `tests/test_database_url.py`). A
   `DATABASE_URL` query such as Neon's `?sslmode=require&channel_binding=require` reaches libpq unchanged.

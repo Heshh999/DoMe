@@ -1,22 +1,42 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec for DoMe on Windows: ONE folder, dist\DoMe\, holding both programs and the runtime
 # they share:
-#   DoMe.exe              the tray agent and its command line (`DoMe.exe` alone means `run`)
+#   DoMe.exe              the tray agent and its command line (`DoMe.exe` alone means `run`); also the
+#                         Screen view worker, `DoMe.exe screen-worker` (an argv dispatch in cli.main, started
+#                         only by the running agent, design §5.1), so the worker needs no program of its own
 #   dome-native-host.exe  the Chrome/Edge native-messaging host (started by the browser)
 #   _internal\            Python, the libraries, the protocol contract (dome_protocol/_contract), the tray icon
-# The installer (packaging/installer/DoMe.iss) ships this folder as it is. A shared folder instead of a
+# The installer (packaging/installer/DoMe.iss) ships this folder as it is, plus THIRD_PARTY_NOTICES.txt and
+# licenses\ that build_installer.py writes next to the programs after PyInstaller. A shared folder instead of a
 # one-file host: the browser starts the host every few seconds while DoMe is not running, and a one-file
 # build would unpack itself to %TEMP% on every start; install-native-host finds the host next to DoMe.exe.
 # Both are windowed (console=False). Their entry scripts (agent_entry.py, native_host_entry.py) catch
 # every exception (dome_agent.crashguard: logs\crash.log, exit code 70), so the bootloader's modal error
 # box never appears for a Python error; Setup runs DoMe.exe commands and must never wait on such a box.
+#
+# Screen view (docs/design/screen-view.md §5, §15; WP1.6) is built in only when the build environment has the
+# `screen` extra (aiortc, av). windows-installer.yml and release.yml install it only when pyproject.toml pins
+# av on Windows to DoMe's own LGPL wheel (`licence_gate.py shipping-av`), so the stock PyPI av wheel, which
+# bundles GPL x264/x265, never reaches a Windows build; without the extra the folder has no aiortc and no av,
+# and `DoMe.exe screen-worker --self-test` reports them missing. Either way, after the build, the licence gate
+# checks dist\DoMe (`licence_gate.py collect --folder` + `check --frozen`) and the workflows run the worker's
+# self-test. Three collection rules:
+#   * aiortc.contrib (MediaRecorder, MediaPlayer, signaling helpers) is never bundled (design §5.1, §17.2);
+#   * aiortc.rtcrtpsender also goes in as its .py source: the worker's PLI hook check reads that method's
+#     source with inspect.getsource (dome_agent/screen/worker/rtc.py), which finds nothing in a frozen PYZ;
+#   * pystray (LGPL-3.0) goes in as plain .py files under _internal\pystray, so a user can replace it, as
+#     THIRD_PARTY_NOTICES.txt says.
+# build_installer.py checks all three in the built folder.
+#
 # Build (Windows, from pc-agent):
-#   uv sync --locked --extra build
+#   uv sync --locked --extra build [--extra screen]
 #   uv run --no-sync pyinstaller --noconfirm --clean packaging\dome-agent.spec
-# or packaging\installer\build_installer.py, which also checks the folder and compiles the installer.
+# or packaging\installer\build_installer.py, which also writes the notices, checks the folder and compiles the
+# installer.
+import importlib.util
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent  # pc-agent/
 CONTRACT = ROOT.parent / "shared" / "protocol"
@@ -27,6 +47,9 @@ ICON = ROOT.parent / "brand" / "exports" / "windows" / "dome.ico"
 if not ICON.is_file():
     raise SystemExit(f"brand icon missing: {ICON}")
 
+SCREEN_VIEW = all(importlib.util.find_spec(name) is not None for name in ("aiortc", "av"))
+print(f"dome-agent.spec: Screen view {'built in' if SCREEN_VIEW else 'left out (no aiortc/av in this environment)'}")
+
 agent_hidden = ["dome_agent.actions.system", "dome_agent.actions.youtube", "dome_agent.actions.media", "dome_agent.actions.volume",
                 "dome_agent.actions.windows", "dome_agent.actions.apps", "dome_agent.actions.power",
                 "dome_agent.platform.windows.apps", "dome_agent.platform.windows.media", "dome_agent.platform.windows.nativehost",
@@ -35,17 +58,32 @@ agent_hidden = ["dome_agent.actions.system", "dome_agent.actions.youtube", "dome
                 "win32security", "win32process", "win32api", "win32gui", "win32con", "ntsecuritycon", "comtypes", "pycaw.pycaw"]
 agent_hidden += collect_submodules("winsdk.windows.media.control")
 agent_hidden += collect_submodules("winsdk.windows.foundation")
+# The Screen view modules of the agent itself are in every build (the worker's `screen-worker` dispatch must
+# answer even without aiortc); the worker imports aiortc and av lazily, so they are only analysed when present.
+agent_hidden += ["dome_agent.actions.screen", "dome_agent.platform.windows.screen", "dome_agent.screen.supervisor",
+                 "dome_agent.screen.worker.main", "dome_agent.screen.worker.pipe", "dome_agent.screen.worker.encode",
+                 "dome_agent.screen.worker.fake", "win32job"]
+agent_binaries = []
+agent_collection_mode = {"pystray": "py"}
+if SCREEN_VIEW:
+    agent_hidden += ["dome_agent.screen.worker.rtc", "dome_agent.screen.worker.track", "dome_agent.screen.worker.capture_dda",
+                     "dome_agent.screen.worker.capture_wgc"]
+    agent_hidden += collect_submodules("aiortc", filter=lambda name: not name.startswith("aiortc.contrib"))
+    # google-crc32c (an aiortc dependency) loads its DLL from google_crc32c\extra-dll on Windows.
+    agent_binaries += collect_dynamic_libs("google_crc32c")
+    agent_collection_mode["aiortc.rtcrtpsender"] = "pyz+py"
 
 agent = Analysis(
     [str(ROOT / "packaging" / "agent_entry.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=agent_binaries,
     datas=[*CONTRACT_DATAS, (str(ROOT / "dome_agent" / "assets"), "dome_agent/assets")],
     hiddenimports=agent_hidden,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["dome_agent.testing"],
+    excludes=["dome_agent.testing", "aiortc.contrib"],
     noarchive=False,
+    module_collection_mode=agent_collection_mode,
 )
 host = Analysis(
     [str(ROOT / "packaging" / "native_host_entry.py")],
@@ -56,7 +94,7 @@ host = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=["dome_agent.testing", "dome_agent.tray", "pystray", "PIL", "tkinter", "winsdk", "pycaw", "comtypes", "psutil",
-              "websockets", "httpx"],
+              "websockets", "httpx", "dome_agent.screen", "aiortc", "aioice", "av", "pylibsrtp", "google_crc32c"],
     noarchive=False,
 )
 agent_exe = EXE(

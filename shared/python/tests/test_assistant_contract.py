@@ -261,7 +261,7 @@ def test_plan_fields():
 
 def test_search_rule_clause():
     reg = load_registry()
-    assert reg.protocol_version == "1.3" and reg.registry_version == "1.3"
+    assert reg.protocol_version == "1.4" and reg.registry_version == "1.4"
     from dome_protocol.registry import _load_json
 
     rule = _load_json("version.json")["rules"]["search_queries"]

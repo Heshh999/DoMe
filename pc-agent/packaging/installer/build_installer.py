@@ -8,9 +8,19 @@ Steps:
 
 1. Reads the version from ``pyproject.toml`` (X.Y.Z) and checks it equals ``dome_agent.__version__``.
 2. Runs PyInstaller on ``packaging/dome-agent.spec``: ``dist/DoMe/`` holds ``DoMe.exe``,
-   ``dome-native-host.exe`` and ``_internal/``.
-3. Checks that folder: both programs, the protocol contract, the tray icon, and NO test fixtures or
-   private keys (the old spec shipped ``shared/protocol/fixtures/test-controller-key.pem``).
+   ``dome-native-host.exe`` and ``_internal/``. Screen view is built in when the environment has the ``screen``
+   extra (aiortc, av; the workflows install it only once ``licence_gate.py shipping-av`` says the LGPL av wheel
+   is pinned for Windows). Then writes ``THIRD_PARTY_NOTICES.txt`` and ``licenses/`` next to the programs
+   (``licence_gate.py bundle-notices``: the hand-written Part 1 in ``packaging/THIRD_PARTY_NOTICES.txt`` and
+   every installed package's own licence files).
+3. Checks that folder: both programs, the protocol contract, the tray icon, the notices and licence texts,
+   pystray (LGPL-3.0) as replaceable ``.py`` files, and NO test fixtures or private keys (the old spec shipped
+   ``shared/protocol/fixtures/test-controller-key.pem``). Where PyInstaller is importable it also reads the
+   programs' own archives: ``aiortc.contrib`` and ``dome_agent.testing`` are never inside, ``DoMe.exe`` always
+   carries the ``screen-worker`` dispatch, aiortc is inside exactly when Screen view is (with
+   ``aiortc/rtcrtpsender.py`` as source for the worker's PLI hook check), and the browser helper carries no
+   Screen view code. The licence gate on the folder and the worker's ``--self-test`` are separate workflow
+   steps (``licence_gate.py check --frozen`` and ``screen-self-test``).
 4. Compiles ``packaging/installer/DoMe.iss`` with ISCC (Inno Setup 6) into
    ``dist/installer/DoMe-Setup-<version>.exe`` and writes ``SHA256SUMS`` and ``BUILD-INFO.txt`` next to it.
    The build number (``GITHUB_RUN_NUMBER``) and commit go into the file's version information and
@@ -63,10 +73,11 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 PC_AGENT = Path(__file__).resolve().parents[2]
@@ -75,6 +86,9 @@ SPEC = PC_AGENT / "packaging" / "dome-agent.spec"
 ISS = PC_AGENT / "packaging" / "installer" / "DoMe.iss"
 ICON = REPO / "brand" / "exports" / "windows" / "dome.ico"
 MANIFEST_MODULE = PC_AGENT / "dome_agent" / "bridge" / "manifest.py"
+LICENCE_GATE = PC_AGENT / "packaging" / "licence_gate.py"
+NOTICES_HEAD = PC_AGENT / "packaging" / "THIRD_PARTY_NOTICES.txt"
+LICENCES = PC_AGENT / "packaging" / "licenses"
 TIMESTAMP_URL = "http://timestamp.digicert.com"
 # Azure Artifact Signing's timestamp service (vendor docs, how-to-signing-integrations, read 2026-10-20).
 ARTIFACT_SIGNING_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
@@ -168,6 +182,70 @@ def exe_name(stem: str) -> str:
     return f"{stem}.exe" if os.name == "nt" else stem
 
 
+def licence_gate() -> ModuleType:
+    """``packaging/licence_gate.py`` (a script, not a package): loaded once by path."""
+    loaded = sys.modules.get("licence_gate")
+    if loaded is not None and getattr(loaded, "__file__", None) == str(LICENCE_GATE):
+        return loaded
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("licence_gate", LICENCE_GATE)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"build_installer: cannot load {LICENCE_GATE}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["licence_gate"] = module  # dataclasses look their module up while the file executes
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_notices(app: Path) -> None:
+    """``THIRD_PARTY_NOTICES.txt`` and ``licenses/`` for the folder, from this (the build) environment."""
+    missing = licence_gate().bundle_notices(NOTICES_HEAD, LICENCES, app)
+    for item in missing:
+        print(f"build_installer: WARNING: no licence text found for {item} (THIRD_PARTY_NOTICES.txt says so)")
+    print(f"notices written: {app / 'THIRD_PARTY_NOTICES.txt'} ({len(missing)} licence text(s) not found)")
+
+
+def screen_view_included(app: Path) -> bool:
+    """Screen view is in the folder when PyAV is (``_internal/av``); the spec adds both together."""
+    return (app / "_internal" / "av").is_dir()
+
+
+def frozen_modules(program: Path) -> set[str] | None:
+    """Every entry of a PyInstaller program's archive and of its PYZ (module names), or None where PyInstaller
+    is not installed (the release sign job reuses a folder the build job already checked)."""
+    try:
+        from PyInstaller.archive.readers import pkg_archive_contents  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return set(pkg_archive_contents(str(program)))
+
+
+def _under(modules: Iterable[str], package: str) -> list[str]:
+    return sorted(m for m in modules if m == package or m.startswith(package + "."))
+
+
+def check_frozen_modules(agent: set[str], host: set[str], *, screen: bool) -> list[str]:
+    """Problems with what the two programs carry (design §5.1, §17.2): never aiortc.contrib or the test doubles;
+    the screen-worker dispatch always; aiortc exactly when Screen view is built in; no Screen view in the host."""
+    problems: list[str] = []
+    for package in ("aiortc.contrib", "dome_agent.testing"):
+        if _under(agent, package):
+            problems.append(f"DoMe must not carry {package}: {_under(agent, package)[:5]}")
+    if "dome_agent.screen.worker.main" not in agent:
+        problems.append("DoMe lacks dome_agent.screen.worker.main (the screen-worker dispatch)")
+    if screen:
+        for module in ("aiortc.rtcrtpsender", "dome_agent.screen.worker.rtc", "dome_agent.screen.worker.track"):
+            if module not in agent:
+                problems.append(f"Screen view is built in but DoMe lacks {module}")
+    elif _under(agent, "aiortc"):
+        problems.append("Screen view is left out but DoMe carries aiortc")
+    for package in ("aiortc", "av", "dome_agent.screen"):
+        if _under(host, package):
+            problems.append(f"the browser helper must not carry {package}")
+    return problems
+
+
 def run_pyinstaller(dist: Path, work: Path) -> None:
     if not ICON.is_file():
         raise SystemExit(f"build_installer: brand icon missing: {ICON}")
@@ -198,6 +276,19 @@ def check_folder(app: Path) -> list[str]:
     for path in app.rglob("*"):
         if path.is_file() and path.suffix.lower() in (".pem", ".key") and b"PRIVATE KEY-----" in path.read_bytes():
             problems.append(f"a private key must not be shipped: {path}")
+    gate = licence_gate()
+    notices = [app / gate.NOTICES_NAME, *(app / "licenses" / name for name in gate.LICENCE_FILES)]
+    problems += [f"missing: {p}" for p in notices if not p.is_file()]
+    if not (app / "_internal" / "pystray" / "__init__.py").is_file():
+        problems.append("pystray (LGPL-3.0) must be shipped as replaceable .py files in _internal/pystray (spec)")
+    screen = screen_view_included(app)
+    if screen and not (app / "_internal" / "aiortc" / "rtcrtpsender.py").is_file():
+        problems.append("Screen view is built in but _internal/aiortc/rtcrtpsender.py (the PLI hook check) is missing")
+    agent, host = frozen_modules(app / exe_name("DoMe")), frozen_modules(app / exe_name("dome-native-host"))
+    if agent is not None and host is not None:
+        problems += check_frozen_modules(agent, host, screen=screen)
+    else:
+        print("PyInstaller is not installed here: the programs' archives were checked when the folder was built")
     return problems
 
 
@@ -359,6 +450,13 @@ def human_size(size: int) -> str:
     return f"{size / 1_000_000:.0f} MB"
 
 
+def screen_view_note(app: Path) -> str:
+    """The BUILD-INFO.txt and release-notes wording: honest about what was and was not verified."""
+    if screen_view_included(app):
+        return "included (beta, not yet verified on a device)"
+    return "not included in this build"
+
+
 # Smart App Control (Windows 11) checks every file Windows loads; only DoMe.exe, the browser helper, Setup and the
 # uninstaller are signed, not the bundled libraries (docs/SECURITY.md T12). The same words as the Download page.
 SMART_APP_CONTROL_NOTE = (
@@ -378,6 +476,7 @@ def write_release_notes(
     browser_addon: bool,
     repo: str,
     method: str = "Azure Artifact Signing",
+    screen_note: str = "",
 ) -> Path:
     """``RELEASE-NOTES.md``, the GitHub release's text (it stays editable after publishing: an acceptance
     record from a real PC is added there by hand)."""
@@ -387,6 +486,7 @@ def write_release_notes(
         else "- YouTube control in Chrome or Edge: **not included in this version.** Everything else in DoMe is "
         "included; a later version adds it.\n"
     )
+    screen = f"- Screen view (a live picture of the PC on the phone): {screen_note}.\n" if screen_note else ""
     text = (
         f"# DoMe for Windows {version}\n\n"
         f"- File: `{setup.name}` ({human_size(size)}, {size} bytes)\n"
@@ -396,6 +496,7 @@ def write_release_notes(
         f"{publisher} before you continue. DoMe never asks you to turn off antivirus or other protection.\n"
         f"{SMART_APP_CONTROL_NOTE}\n"
         f"{addon}"
+        f"{screen}"
         f"- How to install, check the file and uninstall: https://github.com/{repo}/blob/HEAD/docs/WINDOWS_INSTALL.md\n\n"
         "## What was tested\n\n"
         "Tested: install, upgrade, uninstall and the signatures on GitHub's Windows Server runner "
@@ -419,11 +520,14 @@ def build_info(
     kind: str,
     signed_note: str,
     addon_note: str,
+    screen_note: str = "",
 ) -> str:
+    screen = f"screen view: {screen_note}\n" if screen_note else ""
     return (
         f"{setup.name}\nversion: {version}\nbuild: {build_tag} (build {build_number})\ncommit: {commit}\n"
         f"{built_from}{source}sha256: {digest}\nkind: {kind}\nsignature: {signed_note}\n"
         f"browser add-on: {addon_note}\n"
+        f"{screen}"
         "note: every test build of the same version (X.Y.Z) can replace any other; this file tells them apart\n"
     )
 
@@ -489,6 +593,7 @@ def finish(
         kind=kind,
         signed_note=signed_note,
         addon_note=addon_note,
+        screen_note=screen_view_note(app),
     )
     (out_dir / "BUILD-INFO.txt").write_bytes(info.encode("utf-8"))
     print(info)
@@ -499,6 +604,7 @@ def finish(
     summary = (
         f"### DoMe Setup {build_tag} (build {build_number})\n\n"
         f"- File: `{setup.name}`\n- SHA-256: `{digest}`\n- Kind: {kind}\n- Signature: {signed_note}\n"
+        f"- Screen view: {screen_view_note(app)}\n"
     )
     if release:
         common: dict[str, Any] = {
@@ -512,7 +618,7 @@ def finish(
         }
         manifest = write_manifest(out_dir, now=now, **common)
         method = "Azure Artifact Signing" if signing and signing.kind == "artifact-signing" else "a code-signing certificate"
-        write_release_notes(out_dir, method=method, **common)
+        write_release_notes(out_dir, method=method, screen_note=screen_view_note(app), **common)
         outputs += f"manifest={manifest}\nbrowser_addon={'false' if no_addon else 'true'}\npublisher={publisher}\n"
         summary += f"- Browser add-on: {addon_note}\n- Version information: `{manifest.name}` (not signed yet)\n"
     append("GITHUB_OUTPUT", outputs)
@@ -601,10 +707,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.skip_pyinstaller:
         run_pyinstaller(dist, args.work.resolve())
+        write_notices(app)
     problems = check_folder(app)
     if problems:
         return fail("the PyInstaller folder is not right:\n  " + "\n  ".join(problems))
     print(f"PyInstaller folder OK: {app} ({folder_size(app) / 1_000_000:.1f} MB)")
+    print(f"Screen view: {screen_view_note(app)}")
+    append("GITHUB_OUTPUT", f"screen_view={'included' if screen_view_included(app) else 'absent'}\n")
     if args.pyinstaller_only:
         return 0
     if os.name != "nt":

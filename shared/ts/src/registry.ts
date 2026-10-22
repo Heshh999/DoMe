@@ -179,6 +179,8 @@ export const registry = {
 
 export type FrameDirection = "controller_to_relay" | "relay_to_controller" | "agent_to_relay" | "relay_to_agent";
 export type BridgeDirection = "extension_to_agent" | "agent_to_extension";
+/** Which side receives a screen data-channel message: the PC validates `phone_to_pc`, the phone `pc_to_phone`. */
+export type ScreenDcDirection = "phone_to_pc" | "pc_to_phone";
 
 export const schemas = {
   validateEnvelopeShape(value: unknown): void {
@@ -201,6 +203,16 @@ export const schemas = {
   /** relay-frames.schema.json#/$defs/input_batch_payload — the signed payload of an input_batch frame. */
   validateInputBatchPayload(value: unknown): void {
     const v = refValidator("relay-frames", "/$defs/input_batch_payload");
+    if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
+  },
+  /** relay-frames.schema.json#/$defs/screen_answer_payload — the PC-signed payload of a screen_answer frame (1.4). */
+  validateScreenAnswerPayload(value: unknown): void {
+    const v = refValidator("relay-frames", "/$defs/screen_answer_payload");
+    if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
+  },
+  /** relay-frames.schema.json#/$defs/screen_dc_<direction> — one data-channel message for the receiving side (rules.screen_content). */
+  validateScreenDcMessage(direction: ScreenDcDirection, value: unknown): void {
+    const v = refValidator("relay-frames", `/$defs/screen_dc_${direction}`);
     if (!v(value)) throwValidation(v, "MALFORMED_MESSAGE");
   },
   validateFrame(direction: FrameDirection, value: unknown): void {

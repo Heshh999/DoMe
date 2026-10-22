@@ -15,6 +15,8 @@
  *   /preview/billing          Billing (the Free plan from the fake session)
  *   /preview/command          Type a command (parses locally; plans run against the fake PC)
  *   /preview/touchpad         Touchpad (a live input session: the keyboard panel opens, acks come back)
+ *   /preview/screen           Screen view (beta): the fake server does not switch it on and the preview has no
+ *                             WebRTC peer, so it shows the honest "not switched on" state only
  *   /preview/routines, /preview/layouts, /preview/more
  *   /preview/link?user_code=ABCD-EFGH   Link a PC (the agent-link preview answers; approve is not in the preview)
  * Flags (on any route): `?offline=1` shows the offline screen; `?confirm=1` has the PC ask this phone
@@ -62,6 +64,7 @@ export const PREVIEW_ROUTES: ReadonlyArray<{ preview: string; app: string; note:
   { preview: "/preview/billing", app: "/app/billing", note: "Billing" },
   { preview: "/preview/command", app: "/app/command", note: "Type a command" },
   { preview: "/preview/touchpad", app: "/app/touchpad", note: "Touchpad" },
+  { preview: "/preview/screen", app: "/app/screen", note: "Screen view (beta): the 'not switched on' state (no WebRTC peer in the preview)" },
   { preview: "/preview/routines", app: "/app/routines", note: "Routines (Pro preview)" },
   { preview: "/preview/layouts", app: "/app/layouts", note: "Custom remotes (Pro preview)" },
   { preview: "/preview/more", app: "/app/more", note: "More" },

@@ -110,14 +110,21 @@ def pong_frame(t: str | None = None) -> dict[str, Any]:
     return frame
 
 
-def pairing_decision_frame(pairing_id: str, decision: str, kid: str, granted: list[str]) -> dict[str, Any]:
-    return {
+def pairing_decision_frame(
+    pairing_id: str, decision: str, kid: str, granted: list[str], *, pc_key_mac: str | None = None
+) -> dict[str, Any]:
+    """``pc_key_mac`` (1.4, rules.pc_key_pinning) rides only on an approve: the MAC over the PC's identity key,
+    keyed by the pairing code the server never holds, so the phone can pin that key for Screen view."""
+    frame: dict[str, Any] = {
         "type": "pairing_decision",
         "pairing_id": pairing_id,
         "decision": decision,
         "kid": kid,
         "granted_capabilities": list(dict.fromkeys(granted)),
     }
+    if pc_key_mac is not None and decision == "approve":
+        frame["pc_key_mac"] = pc_key_mac
+    return frame
 
 
 def revoke_controller_frame(controller_id: str, kid: str, reason: str = "local_revocation") -> dict[str, Any]:
@@ -174,4 +181,58 @@ def input_session_frame(
         "reason": reason,
         "holds_released": max(0, int(holds_released)),
         "at": now_text(),
+    }
+
+
+# ----- Screen view (1.4) -------------------------------------------------------------------------------------------
+SCREEN_SESSION_EVENTS = ("started", "paused", "resumed", "ended")
+
+
+def screen_answer_frame(envelope: dict[str, Any], ref_controller_id: str) -> dict[str, Any]:
+    """``agent_screen_answer``: the PC-signed answer for one controller (rules.screen_signaling (5)). The relay
+    strips the reference and delivers it to that controller's 1.4 sockets only. Never journaled, never logged."""
+    return {"type": "screen_answer", "envelope": envelope, "ref_controller_id": ref_controller_id}
+
+
+def screen_session_frame(
+    pc_id: str,
+    screen_session_id: str,
+    controller_id: str,
+    *,
+    event: str,
+    reason: str,
+    live_seconds: int,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """``agent_screen_session``: started (with ``path``), paused / resumed (reason secure_desktop | indicator) and
+    ended (the end reason). ``live_seconds`` is informational (rules.screen_metering). No names, no SDP, no address."""
+    if event not in SCREEN_SESSION_EVENTS:
+        raise ValueError(event)
+    frame: dict[str, Any] = {
+        "type": "screen_session",
+        "pc_id": pc_id,
+        "screen_session_id": screen_session_id,
+        "controller_id": controller_id,
+        "event": event,
+        "reason": reason,
+        "live_seconds": max(0, int(live_seconds)),
+        "at": now_text(),
+    }
+    if path is not None:
+        frame["path"] = path
+    return frame
+
+
+def screen_usage_frame(
+    pc_id: str, screen_session_id: str, *, live_seconds: int, relayed: bool, relayed_bytes: int
+) -> dict[str, Any]:
+    """``agent_screen_usage``: ask the relay for the next allowance ticket (rules.screen_sessions (4)). The figures
+    are informational only; the ledger is settled on the relay's clock."""
+    return {
+        "type": "screen_usage",
+        "pc_id": pc_id,
+        "screen_session_id": screen_session_id,
+        "live_seconds": max(0, int(live_seconds)),
+        "relayed": bool(relayed),
+        "relayed_bytes": max(0, int(relayed_bytes)),
     }

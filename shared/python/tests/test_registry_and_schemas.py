@@ -70,7 +70,7 @@ def signer():
 
 def test_registry_loads_and_is_consistent():
     reg = load_registry()
-    assert reg.protocol_version == "1.3" and reg.registry_version == "1.3"
+    assert reg.protocol_version == "1.4" and reg.registry_version == "1.4"
     assert "youtube.next" in reg.actions
     # manual input (rules.input_sessions / ai_eligibility): either capability permits the session actions,
     # and the human-only actions can never be AI tools or routine steps
@@ -241,8 +241,10 @@ def test_minor_version_compat():
     assert protocol_compatible("1.2", ("1.2",))
     assert protocol_compatible("1.2", ("1.3",))  # a 1.2 agent keeps talking to a 1.3 relay
     assert protocol_compatible("1.3", ("1.3",))
+    assert protocol_compatible("1.3", ("1.4",))  # a 1.3 relay build keeps talking to a 1.4 one
     assert not protocol_compatible("1.3", ("1.2",))
     assert not protocol_compatible("1.4", ("1.3",))
+    assert not protocol_compatible("1.5", ("1.4",))
     assert not protocol_compatible("2.0", ("1.2",))
     assert not protocol_compatible("x", ("1.0",))
     assert not protocol_compatible("1.0\n", ("1.0",))
@@ -328,7 +330,7 @@ RESULTS_TAB = {
 def test_since_marks_the_version_that_introduced_each_action():
     reg = load_registry()
     for name, spec in reg.actions.items():
-        expected = "1.2" if name in NEW_IN_1_2 else "1.1" if name.startswith("input.") else "1.0"
+        expected = "1.4" if name.startswith("screen.") else "1.2" if name in NEW_IN_1_2 else "1.1" if name.startswith("input.") else "1.0"
         assert spec.since == expected == reg.min_version(name), name
     for name in ("app.maximize", "app.restore", "app.set_fullscreen"):
         spec = reg.get(name)
@@ -355,7 +357,7 @@ def test_registry_refuses_an_invalid_since():
 
     docs = [_load_json(n) for n in ("actions.json", "errors.json", "version.json", "plans.json")]
     Registry(*docs)
-    for bad in ("1.4", "2.0", "0.9", "1.x", "1.2\n", ""):
+    for bad in ("1.5", "2.0", "0.9", "1.x", "1.2\n", ""):
         raw = copy.deepcopy(docs[0])
         raw["actions"]["system.ping"]["since"] = bad
         with pytest.raises(ValueError):
@@ -420,7 +422,7 @@ def test_older_actions_accept_every_stamp_from_their_since(signer, action, param
         ({"action": "app.maximize", "params": {}, "target": WINDOW, "protocol_version": "1.1"}, "PROTOCOL_INCOMPATIBLE"),
         ({"action": "app.maximize", "params": {}, "target": WINDOW, "protocol_version": "1.0"}, "PROTOCOL_INCOMPATIBLE"),
         ({"protocol_version": "1.1"}, "PROTOCOL_INCOMPATIBLE"),
-        ({"protocol_version": "1.4"}, "PROTOCOL_INCOMPATIBLE"),
+        ({"protocol_version": "1.5"}, "PROTOCOL_INCOMPATIBLE"),
         ({"action": "input.session_start", "params": {}, "target": None, "protocol_version": "1.0"}, "PROTOCOL_INCOMPATIBLE"),
         ({"params": {}}, "INVALID_PARAMETERS"),
         ({"params": {"query": ""}}, "INVALID_PARAMETERS"),

@@ -22,7 +22,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Screen view (protocol 1.4, docs/design/screen-view.md §5/§15): the WebRTC worker. Optional so the tray,
+# Setup and CI install without it; `dev` pulls it in for the Linux unit tests. On Linux and macOS `av`
+# resolves to the stock PyPI wheel, which bundles GPL x264/x265 and is for development ONLY (it never
+# ships; KNOWN_ISSUES.md). The shipping LGPL build comes from .github/workflows/ffmpeg-lgpl.yml and will be
+# pinned here as a `[tool.uv.sources]` entry with `marker = "sys_platform == 'win32'"` once released (WP0.1).
+screen = [
+    "aiortc==1.15.0",
+    "av>=14,<18",
+]
 dev = [
+    "dome-agent[screen]",
     "pytest>=8.3,<10",
     "pytest-asyncio>=0.25,<2",
     "mypy>=1.14,<3",

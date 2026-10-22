@@ -100,8 +100,18 @@ Windows installer/updater, Chrome Web Store listing, `deploy/` container/Fly.io/
 ### 3.3 What the relay can and cannot see
 
 The V1 boundary (ADR-0001 D10; spec §5) is TLS in transit plus a trusted relay. Signing
-authenticates commands; it does not hide them from the relay. Nothing in this repository is
-end-to-end encrypted or zero-knowledge, and nothing should describe it that way.
+authenticates commands; it does not hide them from the relay. Commands, typing, PC state and
+signaling are not end-to-end encrypted or zero-knowledge, and nothing should describe them that way.
+
+**Screen view media (protocol 1.4, ADR-0002) is the one exception, for the picture only.** The PC's
+picture goes from the PC's worker to the phone over WebRTC, DTLS-SRTP between the two devices: it never
+passes through the relay (when a direct path is impossible it passes through the phone's TURN relay
+server, still encrypted). The phone's DTLS fingerprint is inside its signed `screen.session_start`, the
+PC's inside an answer the PC signs with its identity key, and the phone checks that answer against a PC
+key pinned at pairing, so neither the relay nor the TURN provider can read or replace the picture. The
+relay still reads the signaling it forwards (the offer and answer SDP, with candidate addresses) without
+storing or logging it, and every Screen view command, input batch and lifecycle frame stays readable to
+it like any other. No product-wide "end-to-end encrypted" claim is made.
 
 The relay **can read**, in memory while routing:
 

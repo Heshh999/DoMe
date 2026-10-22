@@ -12,6 +12,7 @@ import { Icon, type IconName } from "../../components/icons.tsx";
 import { NowPlaying } from "../../components/NowPlaying.tsx";
 import { PcOfflineNotice } from "../../components/PcOfflineNotice.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
+import { ScreenViewTile } from "../../components/ScreenViewTile.tsx";
 import { Button, HeaderPill, Notice, Pill, SectionLabel } from "../../components/ui.tsx";
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
 import { useLabels, useLastCommandFor, useSelectedPc, useSend } from "../../app/hooks.ts";
@@ -105,6 +106,8 @@ export function DashboardPage() {
           <p className="text-xs text-text-faint">Sleep, restart and shut down always ask you to confirm on this phone first.</p>
         </div>
       </section>
+
+      <ScreenViewTile pcId={pcId} variant="home" />
 
       <Link to="/app/apps" className="dome-card dome-press flex items-center gap-4 p-4 hover:bg-surface">
         <span aria-hidden="true" className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/12 text-accent">

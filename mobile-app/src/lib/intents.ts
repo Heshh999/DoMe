@@ -1285,6 +1285,10 @@ export function commandText(s: PlanStep, apps: readonly IntentApp[] | null | und
     case "input.session_start":
     case "input.session_stop":
       return "use the touchpad";
+    // Screen view is human-only (ai_eligible false): never a typed command, named only so the switch stays exhaustive
+    case "screen.session_start":
+    case "screen.session_stop":
+      return "use Screen view";
   }
 }
 

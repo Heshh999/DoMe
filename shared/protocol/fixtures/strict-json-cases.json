@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared accept/reject decisions for the strict JSON parsers, schema pattern matching and protocol version negotiation. Both shared/python and shared/ts run every case. `expect` is 'accept' or an error code (negotiation_cases: the negotiated version or null).",
+  "$comment": "Shared accept/reject decisions for the strict JSON parsers, schema pattern matching, protocol version negotiation and (1.4) the strict SDP shape. Both shared/python and shared/ts run every case. `expect` is 'accept' or an error code (negotiation_cases: the negotiated version or null; sdp_cases: true or false from screen_sdp_acceptable / screenSdpAcceptable, where `pad_to_bytes` means: append one a=xxx… line so the text is exactly that many bytes).",
   "parser_cases": [
     {
       "name": "plain object",
@@ -439,6 +439,65 @@
         "1.2"
       ],
       "expect": "1.2"
+    }
+  ],
+  "sdp_cases": [
+    {
+      "name": "CRLF-terminated offer",
+      "value": "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF\r\na=recvonly\r\n",
+      "expect": true
+    },
+    {
+      "name": "no final line break is still acceptable",
+      "value": "v=0\r\na=recvonly",
+      "expect": true
+    },
+    {
+      "name": "exactly the limit",
+      "value": "v=0\r\n",
+      "pad_to_bytes": 12288,
+      "expect": true
+    },
+    {
+      "name": "one byte over the limit",
+      "value": "v=0\r\n",
+      "pad_to_bytes": 12289,
+      "expect": false
+    },
+    {
+      "name": "bare LF line ending",
+      "value": "v=0\no=- 1 1 IN IP4 0.0.0.0\r\n",
+      "expect": false
+    },
+    {
+      "name": "bare CR",
+      "value": "v=0\ro=- 1 1 IN IP4 0.0.0.0\r\n",
+      "expect": false
+    },
+    {
+      "name": "NUL byte",
+      "value": "v=0\r\ns=\u0000\r\n",
+      "expect": false
+    },
+    {
+      "name": "tab",
+      "value": "v=0\r\ns=a\tb\r\n",
+      "expect": false
+    },
+    {
+      "name": "non-ASCII",
+      "value": "v=0\r\ns=B\u00fcro\r\n",
+      "expect": false
+    },
+    {
+      "name": "DEL",
+      "value": "v=0\r\ns=\u007f\r\n",
+      "expect": false
+    },
+    {
+      "name": "empty",
+      "value": "",
+      "expect": false
     }
   ]
 }

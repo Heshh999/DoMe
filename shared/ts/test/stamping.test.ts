@@ -50,7 +50,7 @@ async function rejection(p: Promise<unknown>): Promise<ProtocolError> {
 
 describe("command version stamping", () => {
   it("stamps each command with its action's since, never the library's newest version", () => {
-    expect(PROTOCOL_VERSION).toBe("1.3"); // 1.3 adds no action: nothing is stamped 1.3
+    expect(PROTOCOL_VERSION).toBe("1.4"); // 1.3 added no action; the screen.* actions are stamped 1.4
     expect(buildCommandPayload({ ...base, action: "app.list" }).protocol_version).toBe("1.0");
     expect(buildCommandPayload({ ...base, action: "youtube.set_paused", params: { paused: true }, target: TAB }).protocol_version).toBe("1.0");
     expect(buildCommandPayload({ ...base, action: "input.session_start" }).protocol_version).toBe("1.1");
@@ -58,7 +58,7 @@ describe("command version stamping", () => {
     expect(buildCommandPayload({ ...base, action: "youtube.search", params: { query: "lofi" }, target: { browser_instance_id: "abcdefgh" } }).protocol_version).toBe("1.2");
     // a 1.1 PC accepts every action it knows (the MINOR rule on the agent side), and refuses only the new ones
     for (const [name, spec] of registry.actions()) {
-      expect([name, protocolCompatible(spec.since, ["1.1"])]).toEqual([name, spec.since !== "1.2"]);
+      expect([name, protocolCompatible(spec.since, ["1.1"])]).toEqual([name, spec.since !== "1.2" && spec.since !== "1.4"]);
     }
   });
 
@@ -71,7 +71,8 @@ describe("command version stamping", () => {
     expect((await confirm(command.protocol_version)).protocol_version).toBe("1.0");
     expect((await confirm("1.2")).protocol_version).toBe("1.2");
     expect((await confirm("1.3")).protocol_version).toBe("1.3");
-    for (const bad of ["1.4", "2.0", "x", ""]) expect((await rejection(confirm(bad))).code).toBe("PROTOCOL_INCOMPATIBLE");
+    expect((await confirm("1.4")).protocol_version).toBe("1.4");
+    for (const bad of ["1.5", "2.0", "x", ""]) expect((await rejection(confirm(bad))).code).toBe("PROTOCOL_INCOMPATIBLE");
   });
 
   it("verifies stamps from since up to its own version and refuses anything below since", async () => {
@@ -83,9 +84,9 @@ describe("command version stamping", () => {
       const err = await rejection(verifyAndParseCommand(await sign({ ...maximize, protocol_version: stamp }), resolve));
       expect([err.code, err.detail]).toEqual(["PROTOCOL_INCOMPATIBLE", { peer: stamp, required: "1.2" }]);
     }
-    expect((await rejection(verifyAndParseCommand(await sign({ ...maximize, protocol_version: "1.4" }), resolve))).code).toBe("PROTOCOL_INCOMPATIBLE");
+    expect((await rejection(verifyAndParseCommand(await sign({ ...maximize, protocol_version: "1.5" }), resolve))).code).toBe("PROTOCOL_INCOMPATIBLE");
     const ping = buildCommandPayload({ ...base, action: "system.ping" });
-    for (const stamp of ["1.0", "1.1", "1.2", "1.3"]) {
+    for (const stamp of ["1.0", "1.1", "1.2", "1.3", "1.4"]) {
       expect((await verifyAndParseCommand(await sign({ ...ping, protocol_version: stamp }), resolve)).spec.name).toBe("system.ping");
     }
     const start = buildCommandPayload({ ...base, action: "input.session_start" });

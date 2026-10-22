@@ -264,7 +264,7 @@ changes). Treat all of this as the checklist for the first device pass, not as a
 
 | Item | Location | Created by |
 | --- | --- | --- |
-| Program folder | `%LOCALAPPDATA%\Programs\DoMe`: `DoMe.exe`, `dome-native-host.exe`, `_internal\` (Python and the libraries), `unins000.exe`/`.dat`, `dome-server.json` (the server address `DoMe.exe link` falls back to) | Setup |
+| Program folder | `%LOCALAPPDATA%\Programs\DoMe`: `DoMe.exe`, `dome-native-host.exe`, `_internal\` (Python and the libraries), `THIRD_PARTY_NOTICES.txt` and `licenses\` (the third-party licences, §4.13), `unins000.exe`/`.dat`, `dome-server.json` (the server address `DoMe.exe link` falls back to) | Setup |
 | Start menu entry and uninstall entry | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\DoMe.lnk`; `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{FD238776-147F-4CCF-B2CA-4AC5F30A07FF}_is1` (Settings → Apps) | Setup |
 | State directory | `%LOCALAPPDATA%\DoMe` (override: `DOME_AGENT_STATE_DIR` or `--state-dir`) | first command |
 | Local database | `%LOCALAPPDATA%\DoMe\state.sqlite3` (settings, locally approved phones, bounded command journal, confirmation challenges, approved apps, pending power action, pending revocations, local security events) | first command |
@@ -519,6 +519,49 @@ process. Setup and the uninstaller run it before they replace or remove files. E
 **integration-tested** on Linux (a real agent process stops cleanly); Windows: in the installer smoke
 test, **not yet verified**.
 
+### 4.13 Screen view (beta, not yet verified)
+
+Screen view (protocol 1.4, `docs/design/screen-view.md`) shows this PC's screen live on a phone, with tap
+to click, two-finger scroll and pinch to zoom. **Nothing of it has been verified on a device**: capture,
+encoding, the "Screen view on" bars, the hotkey and iPhone playback were built and unit-/integration-tested
+on Linux with a synthetic picture only. It is off unless the DoMe service has it switched on
+(`DOME_SCREEN_VIEW_ENABLED`, off by default), and it needs both a build that contains it and a phone you
+allow here, on this PC.
+
+**Is it in my build?** `BUILD-INFO.txt` next to the installer says `screen view: included (beta, not yet
+verified on a device)` or `screen view: not included in this build`. Every build so far says *not
+included*: Screen view needs DoMe's own video library (an LGPL build of FFmpeg, made by
+`.github/workflows/ffmpeg-lgpl.yml`, which has not run yet). The stock video library from the Python
+package index contains GPL code DoMe may not ship, so the build leaves Screen view out instead of using it;
+`pc-agent/packaging/licence_gate.py` checks every build for that, and a release build fails if it finds
+anything it does not know. Once the LGPL library is published and pinned in `pc-agent/pyproject.toml`
+for Windows, the same workflow builds Screen view in and also runs `DoMe.exe screen-worker --self-test` on
+the build machine (video encoders, exactly one decoder, a test picture, the keyframe hook). A build
+without Screen view still answers that command and says the video parts are missing.
+
+**Allowing a phone (on the PC only).** A phone can never give itself Screen view, and neither can the
+DoMe service or a pairing (`--yes` included):
+- tray → **Paired phones ▸ ‹phone› ▸ Allow Screen view…** opens DoMe's window, which explains what it
+  allows, warns "Only allow phones that are yours. DoMe will never call you or ask you to allow Screen
+  view.", and enables **Allow** after 5 seconds; or
+- `DoMe.exe grant <controller_id> --screen` opens the same window and waits for your answer there.
+  `--remove-screen` turns it off at once (and ends a live picture).
+
+**While a phone is watching**, a "Screen view on" bar is shown on every monitor (DoMe keeps it out of
+the picture the phone sees; no setting hides it), the tray shows it, and Windows shows a notification at
+the start and the end. Stop it with the bar, tray → **Stop Screen view**, **Ctrl+Alt+Shift+S**,
+`DoMe.exe stop-screen`, **Disable remote control**, by locking the PC or by quitting DoMe. After you stop
+it at the PC, phones are asked before they can start again (10 minutes by default). Tray → **Screen view
+history…** or `DoMe.exe screen-history` lists the last 20 sessions and refused starts (phone, time,
+duration, reason; never a picture). Nothing is recorded and the AI assistant never sees the screen. The
+lock screen, UAC prompts and windows protected by their app (some videos) are never shown.
+
+**Licences.** Setup now shows DoMe's licence terms (a draft, `pc-agent/packaging/installer/licence-terms.txt`)
+and installs `THIRD_PARTY_NOTICES.txt` and a `licenses` folder next to `DoMe.exe`: every library in DoMe,
+its licence text, and for the LGPL parts (the tray library pystray, and FFmpeg in builds with Screen view)
+how to replace them and how to get their source code. The terms and the notices are drafts for the
+founder and counsel (`docs/design/screen-view.md` §20 step 4).
+
 ## 5. Uninstall — the manual steps
 
 The uninstaller (Settings → Apps → DoMe) does all of this for an installed DoMe (see "The installer");
@@ -625,6 +668,8 @@ test `tests/test_processes.py::test_native_host_process_forwards_frames` (**unit
 | Touchpad/keyboard on a real desktop (`SendInput`, multi-monitor, UAC/elevation, lock) | Implemented, unit-/integration-tested with a fake adapter only | The protocol 1.1 rows of the checklist in §7; results go to `docs/INPUT_CONTROL.md` §10–§11 and `docs/ACCEPTANCE.md` |
 | Single-instance mutex and same-account session detection on Windows | Implemented, not run on Windows | Checklist rows *Second launch* and *Repair* |
 | `media_while_locked` switch | Setting exists, no UI | A tray or CLI toggle (small change) |
+| Screen view in the Windows build (§4.13) | Every build leaves it out: DoMe's LGPL FFmpeg + PyAV wheel (`ffmpeg-lgpl.yml`) has never been built. The licence gate on `dist/DoMe` and the worker's `--self-test` steps are in `windows-installer.yml` and `release.yml` (**unit-tested** on their text; a Linux PyInstaller build of the spec was checked by hand) and **not yet run** on Windows. The list of DLLs the gate knows was written without a Windows build: an unknown one is a warning in development builds and stops a release | Run `ffmpeg-lgpl.yml`, publish its wheel as a release asset, pin it in `pc-agent/pyproject.toml` under `[tool.uv.sources]` with `marker = "sys_platform == 'win32'"` and lock; then the first `windows-installer.yml` run with Screen view, then the device round (`docs/ACCEPTANCE.md` Scenario 26) |
+| Licence terms and third-party notices | Drafts (`pc-agent/packaging/installer/licence-terms.txt`, `pc-agent/packaging/THIRD_PARTY_NOTICES.txt`); the written source offer points to the Support page | Founder and counsel review (business name, liability, governing law, the LGPL obligations) |
 
 None of these affect the security model: an unsigned development build has the same authorisation
 path as a signed one; signing protects the download, not the protocol.

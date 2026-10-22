@@ -58,6 +58,13 @@ class Plan:
     coalescable_command_rate_limit: RateLimit
     # signed input_batch frames per controller (rules.input_sessions); identical for every plan
     input_rate_limit: RateLimit
+    # Screen view (rules.screen_metering; read by cloud-api only, never part of the assertion): the Free picture
+    # allowance per rolling window (None = unlimited), the window length, and the two relay-side rate limits
+    screen_view_seconds_per_window: int | None
+    screen_view_window_hours: int
+    screen_ice_rate_limit: RateLimit
+    screen_ice_account_per_hour: int
+    screen_start_rate_limit: RateLimit
 
     @property
     def is_default_plan(self) -> bool:
@@ -72,6 +79,11 @@ class Plan:
     def entitlement_plan_id(self) -> str:
         """The assertion's ``plan`` claim: ``pro`` for every paid plan (the agent knows only free and pro)."""
         return self.id if self.is_default_plan else _ASSERTION_PAID_PLAN_ID
+
+    @property
+    def screen_view_unlimited(self) -> bool:
+        """``screen_view_seconds_per_window`` is null: tickets carry ``unlimited: true`` (still in chunks)."""
+        return self.screen_view_seconds_per_window is None
 
     @property
     def has_ai_allowance(self) -> bool:
@@ -203,6 +215,13 @@ def catalog() -> PlanCatalog:
             manual_command_rate_limit=_rate(body["manual_command_rate_limit"]),
             coalescable_command_rate_limit=_rate(body["coalescable_command_rate_limit"]),
             input_rate_limit=_rate_per_second(body["input_rate_limit"]),
+            screen_view_seconds_per_window=(
+                None if body["screen_view_seconds_per_window"] is None else int(body["screen_view_seconds_per_window"])
+            ),
+            screen_view_window_hours=int(body["screen_view_window_hours"]),
+            screen_ice_rate_limit=_rate(body["screen_ice_rate_limit"]),
+            screen_ice_account_per_hour=int(body["screen_ice_rate_limit"]["account_per_hour"]),
+            screen_start_rate_limit=_rate(body["screen_start_rate_limit"]),
         )
     if _FREE_PLAN_ID not in plans:
         raise RuntimeError("plans.json must define the default plan")

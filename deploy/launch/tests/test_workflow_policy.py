@@ -164,13 +164,16 @@ def test_secrets_only_in_the_deploy_step_env(wf: dict[str, Any]) -> None:
         "DEPLOY_DATABASE_URL",
         "DOME_STRIPE_SECRET_KEY",
         "DOME_STRIPE_WEBHOOK_SECRET",
+        "DOME_TURN_API_TOKEN",
+        "DOME_TURN_ANALYTICS_TOKEN",
     }
     assert env["DEPLOY_DATABASE_URL"] == "${{ secrets.DATABASE_URL }}"
-    for name in dome_deploy.STRIPE_SECRET_NAMES:
+    for name in (*dome_deploy.STRIPE_SECRET_NAMES, *dome_deploy.TURN_SECRET_NAMES):
         assert env[name] == f"${{{{ secrets.{name} }}}}"
     # the program drops them (and the client secret) from every child process's environment
     assert {"DEPLOY_DATABASE_URL", "DOME_OIDC_CLIENT_SECRET"} <= dome_deploy.CHILD_ENV_DROP
     assert set(dome_deploy.STRIPE_SECRET_NAMES) <= dome_deploy.CHILD_ENV_DROP
+    assert set(dome_deploy.TURN_SECRET_NAMES) <= dome_deploy.CHILD_ENV_DROP
 
 
 def test_stripe_price_ids_are_variables_and_secrets_saved_as_variables_reach_the_program_as_names_only(
@@ -202,6 +205,34 @@ def test_stripe_price_ids_are_variables_and_secrets_saved_as_variables_reach_the
     assert "DOME_STRIPE_AUTOMATIC_TAX" not in text  # Stripe Tax stays off (prices are tax-inclusive)
 
 
+def test_screen_view_switch_and_turn_key_id_are_variables_and_the_tokens_secrets(wf: dict[str, Any]) -> None:
+    """The Screen view values (docs/design/screen-view.md section 20) travel like the Stripe ones."""
+    env = steps(wf["jobs"]["deploy"])[-1]["env"]
+    assert env["DOME_SCREEN_VIEW_ENABLED"] == "${{ vars.DOME_SCREEN_VIEW_ENABLED }}"
+    assert env["DOME_TURN_KEY_ID"] == "${{ vars.DOME_TURN_KEY_ID }}"
+    for name in dome_deploy.TURN_SECRET_NAMES:
+        assert env[name] == f"${{{{ secrets.{name} }}}}"
+    probe = "".join(
+        f"${{{{ vars.{n} != '' && '{n}{' ' if i == 0 else ''}' || '' }}}}"
+        for i, n in enumerate(dome_deploy.TURN_SECRET_NAMES)
+    )
+    assert env["TURN_SECRETS_AS_VARIABLES"] == probe
+    text = DEPLOY.read_text()
+    for name in dome_deploy.TURN_SECRET_NAMES:
+        assert f"vars.{name} }}}}" not in text and f"vars.{name}}}}}" not in text
+    for name in ("DOME_TURN_KEY_ID", "DOME_SCREEN_VIEW_ENABLED"):
+        assert f"secrets.{name}" not in text
+    assert "TURN" not in str(wf["jobs"]["status"]) and "SCREEN_VIEW" not in str(wf["jobs"]["status"])
+    # the tuning values stay at the app's defaults: never passed by the Deploy button
+    for name in (
+        "DOME_TURN_PROVIDER",
+        "DOME_SCREEN_TURN_",
+        "DOME_SCREEN_FREE_SECONDS_OVERRIDE",
+        "DOME_SCREEN_STUN_URLS",
+    ):
+        assert name not in text
+
+
 def test_gate_and_status_have_no_environment_and_no_secret_values(wf: dict[str, Any]) -> None:
     for name in ("gate", "status"):
         job = wf["jobs"][name]
@@ -220,6 +251,8 @@ def test_gate_and_status_have_no_environment_and_no_secret_values(wf: dict[str, 
         "DATABASE_URL",
         "DOME_STRIPE_SECRET_KEY",
         "DOME_STRIPE_WEBHOOK_SECRET",
+        "DOME_TURN_API_TOKEN",
+        "DOME_TURN_ANALYTICS_TOKEN",
     }
     deploy_env = steps(wf["jobs"]["deploy"])[-1]["env"]
     probed = {v.split("secrets.")[1].split(" ")[0] for v in deploy_env.values() if "secrets." in v}

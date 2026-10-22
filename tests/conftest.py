@@ -55,12 +55,18 @@ env = harness.env
 make_account = harness.make_account
 alice = harness.alice
 bob = harness.bob
+# Screen view (1.4): the operator switch on, the in-memory fake TURN provider, the relay's movable ledger clock, the
+# background sweeper paused (tests call sweep() themselves); everything restored afterwards
+screen = harness.screen
+fake_turn = harness.fake_turn
+screen_clock = harness.screen_clock
 
 Browser = harness.Browser
 ControllerSim = harness.ControllerSim
 AgentSim = harness.AgentSim
 Env = harness.Env
 check_rest = harness.check_rest
+recv_frame = harness.recv_frame
 recv_until = harness.recv_until
 sql = harness.sql
 SCHEMAS = harness.SCHEMAS

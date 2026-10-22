@@ -38,6 +38,7 @@ from dome_api.relay.router import (
     resolve_controller_record,
     route_command,
     route_input_batch,
+    route_screen_ice_request,
 )
 from dome_api.relay.ws_http import deny_upgrade
 from dome_api.security.origin import origin_allowed
@@ -97,6 +98,9 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
         conn = ControllerConn(ws, session_id, account_id, hello["kid"])
         # Protocol 1.1 frames (input_batch, input_ack, input_session) only flow to and from peers that announced 1.1.
         conn.supports_input = protocol_compatible("1.1", tuple(hello["protocol_versions"]))
+        # Protocol 1.4 frames (screen_ice_request, screen_ice_servers, screen_answer, screen_session) only to and from
+        # peers that announced 1.4 (rules.controller_socket_identity).
+        conn.supports_screen = protocol_compatible("1.4", tuple(hello["protocol_versions"]))
         proof = hello.get("proof")
         proof_error: ProtocolError | None = None
         async with svc.db() as db:
@@ -232,6 +236,8 @@ async def _loop(
             await _on_confirmation(svc, mgr, conn, frame)
         elif kind == "cancel":
             await _on_cancel(mgr, conn, frame)
+        elif kind == "screen_ice_request":
+            await route_screen_ice_request(svc, mgr, limiters, conn, frame)
 
 
 async def _close_throttled(mgr: ConnectionManager, conn: ControllerConn, *, reason: str, refused: int) -> None:

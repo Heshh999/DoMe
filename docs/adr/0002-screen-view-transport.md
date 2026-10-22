@@ -4,6 +4,9 @@ Status: proposed (2026-10-16), to be accepted when the Phase 0 gate in `docs/des
 has been run and its numbers recorded in §"Gate results" below. Reversible decisions are marked
 **[reversible]**. Design brief: `docs/design/screen-view.md`.
 
+**Status 2026-10-21: Phase 1 is being built as protocol 1.4** (billing took MINOR 1.3 on 2026-10-20); the
+contract MINOR this ADR calls "1.3" is 1.4 everywhere below. Contract: `shared/protocol`, `docs/PROTOCOL.md` §20.
+
 ## Context
 
 Screen view (roadmap #52) shows the PC's screen live on the phone with tap-to-click, two-finger scroll,
@@ -141,12 +144,12 @@ Variants of (a) that were considered and rejected for Phase 1:
   into the product; "end-to-end payload encryption from the relay" stays absent for commands, typing and PC
   state, and `docs/SECURITY.md` §1/§8 describe media confidentiality precisely and for media only. No
   product-wide "end-to-end encrypted" claim is made anywhere.
-- **A contract MINOR (1.3)** with two capabilities, two actions, signaling and lifecycle frames, three input
+- **A contract MINOR (1.4)** with two capabilities, two actions, signaling and lifecycle frames, three input
   events, PC key pinning in pairing, new limits, rules and errors (design brief §11). Cloud deploys before
-  agents; a 1.3 phone against a 1.2 PC gets `PROTOCOL_INCOMPATIBLE` ("Update DoMe on your PC") **from the
-  relay, which refuses `screen.*` commands and 1.3-stamped input batches before forwarding them**: the shipped
+  agents; a 1.4 phone against a 1.2 PC gets `PROTOCOL_INCOMPATIBLE` ("Update DoMe on your PC") **from the
+  relay, which refuses `screen.*` commands and 1.4-stamped input batches before forwarding them**: the shipped
   1.2 agent validates a batch's schema before its version stamp and would answer `MALFORMED_MESSAGE`, which
-  no new contract can change; the 1.3 shared libraries check the stamp first so later MINORs behave as
+  no new contract can change; the 1.4 shared libraries check the stamp first so later MINORs behave as
   `PROTOCOL.md` §18.2 promises. Existing pairings must re-pair once to pin the PC's key, which requires the
   pairing page to keep the code until approval (today it drops it right after the claim).
 - **Hosting cost stays inside the budget**: ≈ $0 added at 100 MAU, ≈ $1–3 at 1,000 MAU (input-batch egress

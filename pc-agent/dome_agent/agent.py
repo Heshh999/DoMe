@@ -16,6 +16,8 @@ Inbound frame handling (``relay_to_agent``):
 * ``input_batch`` → verified against the LOCAL grant exactly like a command (signature, identity,
   snapshot, remote_enabled, plan state, grant covers the event types) → :class:`InputSessionManager`
   (session ownership, seq, age budget, dispatch); acks/session frames go back through ``_send``
+* ``screen_allowance`` → :class:`ScreenSessionManager` (the next ticket, or ``final``); a forwarded
+  ``screen.session_start``'s ``relay.screen`` ticket is kept by command id for its handler (1.4)
 
 Local controls (tray / CLI through the control channel): enable / **disable remote control** (wins
 over everything remote), pairing, approved apps, local revocation, local grant changes (pointer /
@@ -24,6 +26,12 @@ keyboard → ``grant_update``), reconnect, status, diagnostics, ``show`` (single
 Every manual-input end trigger is wired here or in the manager: snapshot revocation / narrowing, local
 revocation, local grant narrowing, remote disable, lock / secure desktop (watchdog), lease expiry
 (watchdog), relay disconnect and 4001 supersession, agent stop (``agent_restart``).
+
+Screen view (1.4, design §7 "Emergency stops"): every one of those also ends a live Screen view session,
+and *Disable remote control* retires it ``remote_disabled`` (no tap maps, the worker is told to stop) BEFORE the
+input session is touched, releases held input while the worker exits, and returns once both have ended. ``screen`` /
+``screen_audio`` are widened only through the DoMe grant window (:meth:`Agent.request_screen_grant`;
+``rules.local_permission_ui``), except on the fake platform, for tests.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import secrets
 import threading
 import time
 from collections import deque
@@ -52,7 +61,7 @@ from .actions.context import AgentServices
 from .actions.power import PowerManager
 from .api import ApiClient
 from .approved_apps import ApprovedApps, f11_built_in
-from .authz import MISMATCH_CODES, Authorizer, Decision
+from .authz import MISMATCH_CODES, Authorizer, Decision, peek_command_id
 from .bridge.server import BridgeServer
 from .confirmations import ConfirmationError, ConfirmationManager, compute_target_state_digest
 from .control import ControlError, ControlServer
@@ -62,14 +71,17 @@ from .frames import grant_update_frame, revoke_controller_frame, state_frame
 from .identity import Identity
 from .input_session import InputSessionManager
 from .logsetup import get_logger
-from .pairing import INPUT_CAPABILITIES, PairingManager
+from .pairing import LOCAL_ONLY_CAPABILITIES, SCREEN_CAPABILITIES, PairingManager
 from .platform import PlatformSet, build_platform
 from .queue import Emitter, Executor
 from .relay_client import ConnectionState, RelayClient, StopReason, TokenManager
+from .screen.consent import PermissionUiState
+from .screen.session import ScreenSessionManager
+from .screen.supervisor import ProcessWorkerLauncher, WorkerLauncher
 from .settings import Settings, command_name
 from .state import ReadFailureLog, StateAggregator
 from .store import ApprovedAppRow, Store
-from .ui import AgentUI, NullUI, StatusView
+from .ui import AgentUI, NullUI, ScreenGrantDecision, ScreenGrantRequest, StatusView
 
 log = get_logger(__name__)
 
@@ -121,7 +133,14 @@ class _RecentReadFailures(ReadFailureLog):
 
 
 class Agent:
-    def __init__(self, settings: Settings, *, ui: AgentUI | None = None, platform: PlatformSet | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        ui: AgentUI | None = None,
+        platform: PlatformSet | None = None,
+        screen_launcher: WorkerLauncher | None = None,
+    ) -> None:
         self.settings = settings
         self.ui: AgentUI = ui or NullUI()
         settings.ensure_dirs()
@@ -138,6 +157,7 @@ class Agent:
         self.state._read_failures = self.read_failures  # same log lines, plus what status() reports
         self.power = PowerManager(self.store, self.platform, self.state)
         self.apps = ApprovedApps(self.store)
+        self.permission_ui = PermissionUiState()  # DoMe's own windows and bars (rules.local_permission_ui)
         self.input = InputSessionManager(
             platform=self.platform,
             send=self._send,
@@ -146,8 +166,28 @@ class Agent:
             session_locked=self.state.session_locked,
             remote_enabled=lambda: self.store.remote_enabled,
             on_state_change=self.state.request_update,
+            permission_ui=self.permission_ui,
+            screen_target=lambda controller_id, gen: self.screen.screen_target(controller_id, gen),
+            on_restricted=lambda restricted, reason: self.screen.notify_restricted(restricted, reason),
         )
         self.state.input = self.input
+        self.screen = ScreenSessionManager(
+            platform=self.platform,
+            store=self.store,
+            identity=lambda: self.identity,
+            send=self._send,
+            ui=self.ui,
+            launcher=screen_launcher or ProcessWorkerLauncher(),
+            permission_ui=self.permission_ui,
+            state_dir=settings.state_dir,
+            session_locked=self.state.session_locked,
+            remote_enabled=lambda: self.store.remote_enabled,
+            snapshot_received=lambda: self._snapshot_received,
+            on_state_change=self._on_screen_change,
+            on_turn_off=self._turn_off_screen_grant,
+            security_event=self._security_event,
+        )
+        self._grant_windows: dict[str, str] = {}  # grant window request id -> permission-UI token
         self.confirmations = ConfirmationManager(self.store, pc_name=lambda: self.identity.pc_name)
         self.entitlement = EntitlementManager(
             self.store, account_id=self.identity.account_id, pc_id=self.identity.pc_id
@@ -162,6 +202,7 @@ class Agent:
             identity=self.identity,
             apps=self.apps,
             input=self.input,
+            screen=self.screen,
         )
         self.authz = Authorizer(self.services, self.confirmations, self.entitlement)
         self.emitter = Emitter(self.store, self._send)
@@ -191,10 +232,13 @@ class Agent:
         self.store.purge_expired_challenges()
         if await self.input.recover_after_restart():
             self.status_notes.append("input holds released after restart")
+        if await self.screen.recover_after_restart():
+            self.status_notes.append("a Screen view session ended with the previous agent process")
         await self.bridge.start()
         self.state.start(self._emit_state)
         self.executor.start()
         self.input.start()
+        self.screen.start()
         await self.control.start()
         self._sweeper = asyncio.get_running_loop().create_task(
             self._sweep_confirmations(), name="dome-confirmation-sweeper"
@@ -222,6 +266,7 @@ class Agent:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        await self.screen.shutdown()  # ends a live Screen view (agent_restart): the worker exits, the bars close
         await self.input.shutdown()  # ends a live session (agent_restart) and releases its holds first
         await self.power.shutdown()
         await self.executor.stop()
@@ -248,6 +293,8 @@ class Agent:
         self.entitlement.bind(self.api, self.tokens.get)
         self.authz = Authorizer(self.services, self.confirmations, self.entitlement)
         self.pairing = PairingManager(self.store, self.identity, self.api, self.tokens, self._send, self.ui)
+        # The pairing approval window is a DoMe permission window (rules.local_permission_ui): no phone press while up.
+        self.permission_ui.register_probe("pairing_approval", self.pairing.approval_waiting)
         self.relay = RelayClient(relay_url, self.tokens, self, expected_pc_id=lambda: self.identity.pc_id)
         self.relink_required = False
         self.configuration_error = ""
@@ -288,6 +335,8 @@ class Agent:
                 log.warning("pairing_request before grants_snapshot; ignored")
         elif kind == "input_batch":
             await self._on_input_batch(frame)
+        elif kind == "screen_allowance":
+            await self.screen.handle_allowance(frame)
         elif kind == "revoked":
             await self._on_revoked(frame)
         elif kind == "error":
@@ -345,6 +394,7 @@ class Agent:
             self._security_event("snapshot_unknown_controller", {"controller_id": controller_id, "kid_prefix": kid[:8]})
         revoked_error = self.registry.make_error("CONTROLLER_REVOKED")
         for controller_id in result.revoked_controller_ids:
+            await self.screen.end_for_controller(controller_id, "controller_revoked")
             await self.input.end_for_controller(controller_id, "controller_revoked")
             canceled = await self.executor.cancel_for_controller(controller_id, revoked_error)
             canceled += await self._cancel_pending_confirmations(
@@ -352,6 +402,7 @@ class Agent:
             )
             log.info("controller revoked by snapshot", controller_id=controller_id, canceled_commands=len(canceled))
         await self._reauthorize_pending()
+        await self._reapply_screen_grant()
         await self._reapply_input_grant()
         first = not self._snapshot_received
         self._snapshot_received = True
@@ -361,6 +412,7 @@ class Agent:
         await self.state.emit_now()
         if first:
             await self.input.on_snapshot_applied()
+            await self.screen.on_snapshot_applied()  # tickets resume only after the snapshot was applied
             await self._resend_late_results()
             asyncio.get_running_loop().create_task(
                 self._refresh_entitlement_on_connect(), name="dome-entitlement-connect"
@@ -411,6 +463,24 @@ class Agent:
             await self.input.end_for_controller(session.controller_id, "grant_removed")
             return
         await self.input.apply_capabilities(
+            session.controller_id, grant.effective_capabilities(self.store.current_snapshot_id())
+        )
+
+    async def _reapply_screen_grant(self) -> None:
+        """The live Screen view follows the owner's effective capabilities (local ∩ snapshot): the grant gone →
+        ``controller_revoked``; the PC or the controller disabled by the plan → ``plan_disabled``; ``screen``
+        narrowed away → ``grant_removed`` (design §7 "Emergency stops")."""
+        session = self.screen.current
+        if session is None or session.state == "ended":
+            return
+        grant = self.store.get_grant(session.controller_id)
+        if grant is None or grant.revoked:
+            await self.screen.end_for_controller(session.controller_id, "controller_revoked")
+            return
+        if not self.store.snapshot_pc_enabled() or grant.snapshot_status != "active":
+            await self.screen.end_for_controller(session.controller_id, "plan_disabled")
+            return
+        await self.screen.apply_capabilities(
             session.controller_id, grant.effective_capabilities(self.store.current_snapshot_id())
         )
 
@@ -473,6 +543,13 @@ class Agent:
 
     # ----- commands -------------------------------------------------------------------------------------------------------
     async def _on_command(self, frame: dict[str, Any]) -> None:
+        relay_field = frame.get("relay")
+        if isinstance(relay_field, dict) and isinstance(relay_field.get("screen"), dict):
+            # The first allowance ticket and the STUN servers ride next to a forwarded screen.session_start
+            # (rules.screen_sessions (4)); the handler takes them by command id. Never journaled.
+            command_id = peek_command_id(frame["envelope"])
+            if command_id is not None:
+                self.screen.remember_ticket(command_id, relay_field["screen"])
         decision = await self.authz.authorize(frame["envelope"], snapshot_received=self._snapshot_received)
         await self._apply_decision(decision)
 
@@ -577,23 +654,38 @@ class Agent:
         return None
 
     async def update_grant_capabilities(
-        self, controller_id: str, *, add: Iterable[str] = (), remove: Iterable[str] = ()
+        self,
+        controller_id: str,
+        *,
+        add: Iterable[str] = (),
+        remove: Iterable[str] = (),
+        via_window: bool = False,
     ) -> Any:
-        """The PC owner changed a phone's pointer/keyboard permission locally (tray / CLI). The local
-        list is authoritative at once (effective = local ∩ snapshot); the relay is told with
-        ``grant_update`` (journaled until written; re-sent after the next snapshot when offline)."""
+        """The PC owner changed a phone's pointer/keyboard/screen permission locally (tray / CLI / the grant
+        window). The local list is authoritative at once (effective = local ∩ snapshot); the relay is told with
+        ``grant_update`` (journaled until written; re-sent after the next snapshot when offline).
+
+        ``screen`` / ``screen_audio`` are widened only ``via_window`` (the DoMe grant window answered) or on the
+        fake platform (tests); ``screen_audio`` needs ``screen`` (``rules.local_permission_ui``, ``rules.grant_update``).
+        Narrowing is immediate and ends a live Screen view (``grant_removed``)."""
         add_set, remove_set = set(add), set(remove)
-        unknown = (add_set | remove_set) - set(INPUT_CAPABILITIES)
+        unknown = (add_set | remove_set) - set(LOCAL_ONLY_CAPABILITIES)
         if unknown:
             raise ProtocolError(
-                "INVALID_PARAMETERS", f"only pointer/keyboard can be changed here, not {sorted(unknown)}"
+                "INVALID_PARAMETERS", f"only pointer/keyboard/screen can be changed here, not {sorted(unknown)}"
+            )
+        if add_set & set(SCREEN_CAPABILITIES) and not via_window and self.platform.name != "fake":
+            raise ProtocolError(
+                "INVALID_PARAMETERS", "Screen view can only be allowed in DoMe's own window on this PC."
             )
         grant = self.store.get_grant(controller_id)
         if grant is None or grant.revoked:
             return None
         caps = [c for c in grant.capabilities if c not in remove_set] + [
-            c for c in INPUT_CAPABILITIES if c in add_set and c not in grant.capabilities
+            c for c in LOCAL_ONLY_CAPABILITIES if c in add_set and c not in grant.capabilities
         ]
+        if "screen_audio" in caps and "screen" not in caps:
+            raise ProtocolError("INVALID_PARAMETERS", "PC sound (screen_audio) needs Screen view (screen) too.")
         try:
             row = self.store.update_grant_capabilities(controller_id, caps)
         except ValueError as exc:
@@ -604,7 +696,9 @@ class Agent:
             "grant_capabilities_changed_locally",
             {"controller_id": controller_id, "added": sorted(add_set), "removed": sorted(remove_set)},
         )
-        await self.input.apply_capabilities(controller_id, row.effective_capabilities(self.store.current_snapshot_id()))
+        effective = row.effective_capabilities(self.store.current_snapshot_id())
+        await self.screen.apply_capabilities(controller_id, effective)
+        await self.input.apply_capabilities(controller_id, effective)
         if not controller_id.startswith("pending-"):
             if await self._send(grant_update_frame(controller_id, row.kid, list(row.capabilities))):
                 self.store.clear_pending_grant_update(row.kid)
@@ -613,6 +707,76 @@ class Agent:
         self.state.request_update()
         self._update_ui()
         return row
+
+    async def request_screen_grant(self, controller_id: str) -> dict[str, Any] | None:
+        """Tray "Allow Screen view…" and ``grant --screen``: open the DoMe grant window for this phone. The window
+        answers through :meth:`_screen_grant_decided` (Allow after the 5 s hold, or Cancel). None: unknown phone."""
+        grant = self.store.get_grant(controller_id)
+        if grant is None or grant.revoked:
+            return None
+        settings = self.store.get_screen_grant_settings(controller_id)
+        request_id = secrets.token_urlsafe(8)
+        loop = asyncio.get_running_loop()
+
+        def respond(decision: ScreenGrantDecision | None) -> None:
+            loop.call_soon_threadsafe(
+                lambda: loop.create_task(
+                    self._screen_grant_decided(controller_id, request_id, decision), name="dome-screen-grant"
+                )
+            )
+
+        self._grant_windows[request_id] = self.permission_ui.open("grant_window")
+        request = ScreenGrantRequest(
+            request_id=request_id,
+            controller_id=controller_id,
+            display_name=grant.display_name,
+            screen="screen" in grant.capabilities,
+            screen_audio="screen_audio" in grant.capabilities,
+            ask_each_time=settings.ask_each_time,
+            cooldown_seconds=settings.cooldown_seconds,
+            respond=respond,
+        )
+        try:
+            self.ui.show_screen_grant(request)
+        except Exception as exc:  # noqa: BLE001 - a UI without windows cannot widen anything
+            log.warning("screen grant window could not be opened", error=exc.__class__.__name__)
+            respond(None)
+        return {"request_id": request_id, "controller_id": controller_id, "window_opened": True}
+
+    async def _screen_grant_decided(
+        self, controller_id: str, request_id: str, decision: ScreenGrantDecision | None
+    ) -> None:
+        token = self._grant_windows.get(request_id)
+        if token is not None:
+            self.permission_ui.close(token)  # the window is down: phone presses pass again
+        try:
+            if decision is None:
+                log.info("screen grant window closed without allowing", controller_id=controller_id)
+                return
+            self.store.set_screen_grant_settings(
+                controller_id, ask_each_time=decision.ask_each_time, cooldown_seconds=decision.cooldown_seconds
+            )
+            add = ["screen"] + (["screen_audio"] if decision.screen_audio else [])
+            remove = [] if decision.screen_audio else ["screen_audio"]
+            try:
+                await self.update_grant_capabilities(controller_id, add=add, remove=remove, via_window=True)
+            except ProtocolError as exc:
+                log.warning("screen grant from the window refused", code=exc.code)
+        finally:
+            # only now is the window "answered" for `grant --screen`, which waits for it (status screen_grant_windows)
+            self._grant_windows.pop(request_id, None)
+
+    async def _turn_off_screen_grant(self, controller_id: str) -> None:
+        """ "Turn off Screen view for this phone" (consent window, bar): screen and screen_audio go, through
+        ``grant_update``; a live session ends ``grant_removed``."""
+        try:
+            await self.update_grant_capabilities(controller_id, remove=list(SCREEN_CAPABILITIES), via_window=True)
+        except ProtocolError as exc:
+            log.warning("turning Screen view off for a phone failed", code=exc.code)
+
+    def _on_screen_change(self) -> None:
+        self.state.request_update()
+        self._update_ui()
 
     # ----- confirmations -------------------------------------------------------------------------------------------------
     async def _on_confirmation(self, frame: dict[str, Any]) -> None:
@@ -717,7 +881,12 @@ class Agent:
     async def set_remote_enabled(self, enabled: bool) -> None:
         self.store.set_remote_enabled(enabled)
         if not enabled:
+            # design §7: the Screen view session is retired at once (no tap maps any more, a waiting consent window
+            # closes, the worker is told to stop), held input is released while the worker exits, and the screen
+            # has ended (bars closed, `ended` sent) before this returns.
+            screen_ended = self.screen.end_soon("remote_disabled")
             await self.input.end("remote_disabled")  # emergency stop releases held input first
+            await screen_ended
             error = self.registry.make_error("PC_REMOTE_DISABLED")
             for command_id in list(self.executor.queued_ids):
                 await self.executor.cancel_queued(command_id, error)
@@ -735,6 +904,7 @@ class Agent:
         if row is None:
             return False
         error = self.registry.make_error("CONTROLLER_REVOKED")
+        await self.screen.end_for_controller(controller_id, "controller_revoked")
         await self.input.end_for_controller(controller_id, "controller_revoked")
         await self.executor.cancel_for_controller(controller_id, error)
         await self._cancel_pending_confirmations(controller_id=controller_id, state="canceled", error=error)
@@ -811,6 +981,8 @@ class Agent:
             "pending_revocations": [r.controller_id for r in self.store.pending_revocations()],
             "pending_grant_updates": [g.controller_id for g in self.store.pending_grant_updates()],
             "input": self.input.summary(),
+            "screen": self.screen.summary(),
+            "screen_grant_windows": sorted(self._grant_windows),  # open grant windows (request ids only)
             "store": self.store.summary(),
             "grants": grants,
             "entitlement": self.entitlement.summary(),
@@ -910,6 +1082,12 @@ class Agent:
             remove = args.get("remove") or []
             if not isinstance(add, list) or not isinstance(remove, list):
                 raise ControlError("INVALID_PARAMETERS", "add/remove must be lists of capabilities")
+            if set(map(str, add)) & set(SCREEN_CAPABILITIES) and self.platform.name != "fake":
+                # rules.local_permission_ui: `grant --screen` opens the DoMe window and the window decides
+                opened = await self.request_screen_grant(str(args["controller_id"]))
+                if opened is None:
+                    raise ControlError("UNKNOWN_CONTROLLER", "No active paired phone with that controller id.")
+                return opened
             row = await self.update_grant_capabilities(
                 str(args["controller_id"]), add=[str(c) for c in add], remove=[str(c) for c in remove]
             )
@@ -932,6 +1110,14 @@ class Agent:
         async def input_stop(_: dict[str, Any]) -> dict[str, Any]:
             released = await self.input.end("stopped")
             return {"released_holds": released}
+
+        async def screen_stop(_: dict[str, Any]) -> dict[str, Any]:
+            return {"stopped": await self.screen.stop_on_pc("cli")}
+
+        async def screen_history(args: dict[str, Any]) -> dict[str, Any]:
+            if args.get("clear") is True:
+                return {"cleared": self.screen.history.clear(), "history": []}
+            return {"history": self.screen.history.recent()}
 
         def fullscreen_f11_arg(args: dict[str, Any], *, required: bool) -> bool | None:
             value = args.get("fullscreen_f11")
@@ -1014,6 +1200,8 @@ class Agent:
             "grant": grant,
             "show": show,
             "input_stop": input_stop,
+            "screen_stop": screen_stop,
+            "screen_history": screen_history,
             "approve_app": approve_app,
             "remove_app": remove_app,
             "app_option": app_option,
@@ -1059,6 +1247,7 @@ class Agent:
             pc_name=self.identity.pc_name,
             extension_connected=self.bridge.connected,
             notes=list(self.status_notes),
+            screen_session=self.screen.status_view(),
         )
         try:
             self.ui.update_status(view)

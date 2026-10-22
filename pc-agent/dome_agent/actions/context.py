@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from ..identity import Identity
     from ..input_session import InputSessionManager
     from ..platform.protocol import PlatformSet
+    from ..screen.session import ScreenSessionManager
     from ..state import StateAggregator
     from ..store import Store
     from .power import PowerManager
@@ -33,6 +34,7 @@ class AgentServices:
     identity: Identity
     apps: ApprovedApps
     input: InputSessionManager
+    screen: ScreenSessionManager
 
 
 @dataclass(slots=True)

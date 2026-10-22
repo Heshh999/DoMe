@@ -649,6 +649,21 @@ dialog::backdrop {
   animation: dome-ring 1.8s var(--dome-ease) infinite;
 }
 
+/* Screen view: where a tap on the picture was sent (one short ring, then gone). */
+@keyframes dome-tap-ripple {
+  0% {
+    transform: translate(-50%, -50%) scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.5);
+    opacity: 0;
+  }
+}
+.dome-tap-ripple {
+  animation: dome-tap-ripple 420ms var(--dome-ease) forwards;
+}
+
 /* Scrollbars stay out of the way on horizontally scrolling rows. */
 .no-scrollbar {
   scrollbar-width: none;

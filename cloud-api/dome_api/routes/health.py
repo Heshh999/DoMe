@@ -1,5 +1,6 @@
-"""Liveness/readiness. Reports the database round-trip, relay occupancy, the build commit and whether the
-client address was resolved through the hosting proxy; no account data."""
+"""Liveness/readiness. Reports the database round-trip, relay occupancy, the build commit, whether the client address
+was resolved through the hosting proxy, and the Screen view switch and TURN figures (docs/design/screen-view.md §12:
+``turn``, ``turn_month_gb`` reconciled and provisional, ``turn_reconciled_at``); no account data, no secret."""
 
 from __future__ import annotations
 
@@ -67,4 +68,9 @@ async def healthz(request: Request, svc: Svc) -> Any:
             "max_connections": svc.settings.relay_max_connections,
         },
     }
+    if db_ok:
+        try:
+            body.update(await svc.screen.health())
+        except Exception:  # noqa: BLE001 - the TURN figures never take the health check down
+            body.update({"screen_view": "on" if svc.screen.config.enabled else "off", "turn": "error"})
     return JSONResponse(body, status_code=200 if db_ok else 503, headers={"Cache-Control": "no-store"})

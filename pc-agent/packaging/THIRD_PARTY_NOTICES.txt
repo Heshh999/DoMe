@@ -1,0 +1,90 @@
+DoMe for Windows - third-party notices
+======================================
+
+DoMe includes software made by other people. Each part stays under its own licence, and nothing in DoMe's
+own licence terms limits the rights those licences give you.
+
+This file has two parts:
+  Part 1  notes written by the DoMe team: what DoMe includes and under which licence;
+  Part 2  the licence texts of the Python runtime and of every Python package in this build, copied from
+          them when this build was made (Part 2 starts with a list of the packages and their versions).
+The licence texts named in Part 1 are in the "licenses" folder next to this file.
+
+DRAFT: written by the DoMe engineering team; not yet reviewed by counsel.
+
+
+PART 1
+======
+
+1. DoMe
+-------
+DoMe.exe, dome-native-host.exe and the dome_agent and dome_protocol code inside them are DoMe's own,
+closed-source software. [FOUNDER: the business's legal name and year for the copyright line.]
+
+2. The Python runtime
+---------------------
+DoMe runs on CPython 3.12 (Python Software Foundation License Version 2), which is in the _internal folder
+(python312.dll, python3.dll and the Python standard library), with the libraries the runtime itself uses:
+OpenSSL 3 (libcrypto-3.dll, libssl-3.dll; Apache License 2.0, licenses\Apache-2.0.txt), libffi (MIT),
+SQLite (public domain) and Tcl/Tk 8.6 (the Tcl/Tk licence), plus zlib, bzip2, XZ Utils, Expat and
+mpdecimal compiled into the runtime. Their notices are in Part 2 under "Python runtime", copied from the
+Python installation the build used. vcruntime140.dll, vcruntime140_1.dll and, where present, msvcp140*.dll
+are Microsoft Visual C++ runtime files, distributed under Microsoft's terms for distributable code.
+
+3. Screen view (beta): the FFmpeg libraries, GNU Lesser General Public License 2.1 or later
+-------------------------------------------------------------------------------------------
+This part applies only when the folder _internal\av.libs exists: builds without Screen view do not
+contain FFmpeg.
+
+- The files avcodec-*.dll, avdevice-*.dll, avfilter-*.dll, avformat-*.dll, avutil-*.dll,
+  swresample-*.dll and swscale-*.dll in _internal\av.libs are the FFmpeg libraries, licensed under the
+  GNU Lesser General Public License version 2.1 or (at your option) any later version. The full text is
+  in licenses\LGPL-2.1.txt.
+- DoMe built them itself from the FFmpeg source (https://github.com/FFmpeg/FFmpeg, tag n8.1.3, commit
+  1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7), configured without --enable-gpl, --enable-nonfree or
+  --enable-version3, with networking off and only the parts Screen view needs. The build script is
+  .github/workflows/ffmpeg-lgpl.yml in DoMe's source repository.
+- They are separate files that DoMe loads when Screen view starts. You may replace them with your own
+  build of the same FFmpeg version, modified or not.
+- You may modify DoMe for your own use and reverse engineer it to debug such modifications. DoMe's
+  licence terms do not forbid this.
+- Written offer: for at least three years after DoMe distributes this version, anyone who received it
+  may ask DoMe for the complete corresponding source code of the libraries in _internal\av.libs
+  (FFmpeg, libvpx, libopus and the GCC and mingw-w64 runtime libraries in section 4), including the
+  scripts used to configure and build them, for no more than the cost of physically providing it. Ask
+  through the Support page at https://domeremote.com/support.
+- DoMe contains no x264, x265, OpenH264, fdk-aac or other GPL-only or non-free codec: a check in DoMe's
+  build (pc-agent/packaging/licence_gate.py) refuses any build that would.
+- H.264 video: DoMe ships no H.264 encoder of its own. It asks Windows (Media Foundation) or the graphics
+  driver to encode, and the iPhone decodes with Apple's own decoder.
+- The PyAV package (the "av" package in Part 2, BSD-3-Clause) is the Python binding to these libraries.
+
+4. The other libraries in _internal\av.libs (Screen view builds only)
+---------------------------------------------------------------------
+- libvpx-*.dll: libvpx (VP8 video), BSD-3-Clause with Google's royalty-free patent grant.
+  licenses\libvpx-LICENSE.txt and licenses\libvpx-PATENTS.txt.
+- libopus-*.dll: Opus audio codec, BSD-3-Clause; Opus is covered by royalty-free patent licences listed
+  in the file. licenses\opus-COPYING.txt.
+- libgcc_s_seh-1.dll: the GCC runtime library, GPL version 3 or later with the GCC Runtime Library
+  Exception 3.1. licenses\GPL-3.0.txt and licenses\GCC-RUNTIME-LIBRARY-EXCEPTION-3.1.txt. Its source is
+  covered by the written offer in section 3.
+- libwinpthread-1.dll: mingw-w64 winpthreads, MIT and BSD-3-Clause. licenses\winpthreads-COPYING.txt.
+
+5. Python packages
+------------------
+Every Python package in this build is listed at the start of Part 2 with its version and licence, followed
+by the licence files the package itself provides. Notes:
+- Screen view builds also contain aiortc, aioice and pylibsrtp (BSD-3-Clause; pylibsrtp includes libsrtp,
+  BSD-3-Clause, and OpenSSL, Apache License 2.0), PyAV (BSD-3-Clause), pyOpenSSL and google-crc32c
+  (Apache License 2.0), cryptography (Apache License 2.0 or BSD-3-Clause), pyee and ifaddr (MIT) and
+  dnspython (ISC). aiortc's recording and playback helpers (aiortc.contrib) are left out of DoMe.
+- pystray (the tray icon) is licensed under the GNU Lesser General Public License version 3. Its source
+  files are in _internal\pystray as plain .py files that you may replace with your own version; the
+  licence texts are in Part 2 (COPYING is the GPL version 3, COPYING.LGPL the LGPL version 3). Source:
+  https://github.com/moses-palmer/pystray
+- certifi (the list of trusted certificate authorities) is licensed under the Mozilla Public License 2.0.
+  Its source is at https://github.com/certifi/python-certifi
+
+
+PART 2
+======

@@ -1,0 +1,23 @@
+DoMe for Windows - licence terms
+
+DRAFT for review by the DoMe founder and counsel.
+
+These terms cover the DoMe program for Windows. Your DoMe account, the phone app and DoMe's online
+service are covered by the Terms of service at https://domeremote.com/terms.
+
+1. You may install DoMe on Windows PCs that you own or are allowed to control, and use it with your own
+   DoMe account.
+
+2. DoMe includes software made by others, each under its own licence. THIRD_PARTY_NOTICES.txt and the
+   "licenses" folder in DoMe's folder (%LOCALAPPDATA%\Programs\DoMe) list them with their licence texts.
+   These terms do not limit the rights those licences give you.
+
+3. Some of those parts are licensed under the GNU Lesser General Public License: the pystray library and,
+   in versions that include Screen view, the FFmpeg libraries. You may replace those parts with your own
+   versions, and you may modify DoMe for your own use and reverse engineer it to debug such
+   modifications. Nothing in these terms forbids that. THIRD_PARTY_NOTICES.txt says how to get their
+   source code.
+
+4. DoMe is provided "as is", without warranties, as far as the law allows.
+
+[FOUNDER: the business's legal name, liability and governing law, matching the Terms of service.]

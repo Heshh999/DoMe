@@ -3,12 +3,20 @@
  * this page as its SHA-256 handle and as the HMAC key for the 6-digit verification code. The code
  * lives in component state only — never in the URL (the deep-link fragment is scrubbed on arrival),
  * storage or logs.
+ *
+ * PC key pinning (protocol 1.4, rules.pc_key_pinning, docs/design/screen-view.md §4.1): after the
+ * claim the code is kept in a `HeldPairingCode` through the `waiting` step, because it is the key of
+ * the MAC the PC sends over its own identity key. When the poll returns `approved` with `pc_key`,
+ * `verifyAndPin` checks the MAC and pins the key for Screen view; then the code is dropped. It is
+ * also dropped when the pairing fails, expires, is declined or cancelled, and when the page unmounts.
+ * A pairing without a valid MAC still pairs; Screen view then says "pair again" for that PC.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import { ProtocolError, type Capability, type rest } from "@dome/protocol";
 
+import { useScreenSwitch } from "../../app/hooks.ts";
 import { getRuntime } from "../../app/runtime.ts";
 import { Icon } from "../../components/icons.tsx";
 import { Button, Card, CheckRow, Field, IconWell, inputClass, Notice, PageHeader, Pill, Segmented, Spinner, Steps } from "../../components/ui.tsx";
@@ -18,10 +26,18 @@ import { expiresIn } from "../../lib/format.ts";
 import { capabilityLabel, INPUT_SCOPE_EXPLANATION, errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { errorSummary, log } from "../../lib/log.ts";
 import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation, takeScanAgainHint } from "../../lib/pairing.ts";
+import { HeldPairingCode, verifyAndPin, type PinOutcome } from "../../lib/pcKeyPins.ts";
 import { CameraError, detectQrSupport, startQrScanner, type QrScanner } from "../../lib/qr.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
-type Step = { kind: "enter"; mode: "scan" | "type" } | { kind: "details"; code: string } | { kind: "claiming"; code: string } | { kind: "waiting"; status: rest.PairingStatusResponse; verification: string } | { kind: "done"; status: rest.PairingStatusResponse } | { kind: "failed"; code: string; message: string };
+type Step =
+  | { kind: "enter"; mode: "scan" | "type" }
+  | { kind: "details"; code: string }
+  | { kind: "claiming"; code: string }
+  // `held` keeps the code until the PC key is pinned (or the pairing ends); `controllerKid` is public (the MAC covers it)
+  | { kind: "waiting"; status: rest.PairingStatusResponse; verification: string; held: HeldPairingCode; controllerKid: string }
+  | { kind: "done"; status: rest.PairingStatusResponse; pin: PinOutcome }
+  | { kind: "failed"; code: string; message: string };
 
 const POLL_MS = 2000;
 
@@ -54,6 +70,15 @@ export function PairPage() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<QrScanner | null>(null);
+  // the one code this page may still hold; dropped on every way out, including unmount
+  const heldRef = useRef<HeldPairingCode | null>(null);
+  const screenSwitch = useScreenSwitch();
+
+  const dropCode = useCallback(() => {
+    heldRef.current?.clear();
+    heldRef.current = null;
+  }, []);
+  useEffect(() => dropCode, [dropCode]);
 
   const acceptCode = useCallback((text: string) => {
     try {
@@ -108,8 +133,11 @@ export function PairPage() {
       const identity = await getControllerIdentity();
       const status = await api.pairingClaim({ code_hash: await pairingCodeHandle(code), public_jwk: identity.jwk, display_name: name.trim() || "This phone", requested_capabilities: [...caps] as unknown as rest.PairingClaimRequest["requested_capabilities"] });
       const verification = await pairingVerificationCode(code, status.pairing_id, status.pc_id, identity.kid);
-      // The code has done its job; it is not kept anywhere from here on.
-      setStep({ kind: "waiting", status, verification });
+      // The code has done its job for the claim. Since 1.4 it is held only until the PC's key is pinned (§4.1).
+      dropCode();
+      const held = new HeldPairingCode(code);
+      heldRef.current = held;
+      setStep({ kind: "waiting", status, verification, held, controllerKid: identity.kid });
       log.info("pairing.claimed", { pairing_id: status.pairing_id, pc_id: status.pc_id });
     } catch (e) {
       log.warn("pairing.claim_failed", errorSummary(e));
@@ -123,6 +151,7 @@ export function PairPage() {
   useEffect(() => {
     if (step.kind !== "waiting") return;
     const { pairing_id } = step.status;
+    const { held, controllerKid } = step;
     const ctrl = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
@@ -136,17 +165,23 @@ export function PairPage() {
         }
         if (status.state === "approved") {
           if (status.controller_id) await setStoredControllerId(status.controller_id).catch(() => undefined);
-          setStep({ kind: "done", status });
+          // the PC vouched for its identity key with the code (pc_key.mac): verify, pin, then drop the code
+          const pin = await verifyAndPin({ code: held.value, status, controllerKid });
+          held.clear();
+          if (heldRef.current === held) heldRef.current = null;
+          setStep({ kind: "done", status, pin });
           getRuntime().relay.reconnect();
           // the PC this phone just paired with is the one the user means to control next, even when
           // another PC was selected before (a second PC, or one linked earlier and still listed)
           void selectPc(status.pc_id).then(() => refreshDevices());
           return;
         }
+        held.clear();
         setStep({ kind: "failed", code: status.state === "declined" ? "PAIRING_DECLINED" : "PAIRING_CODE_INVALID", message: status.state === "declined" ? errorMessage({ code: "PAIRING_DECLINED" }) : "The pairing request expired before it was approved on the PC." });
       } catch (e) {
         if (ctrl.signal.aborted) return;
         if (e instanceof ApiError && e.status === 404) {
+          held.clear();
           setStep({ kind: "failed", code: "PAIRING_CODE_INVALID", message: errorMessage(e) });
           return;
         }
@@ -160,7 +195,10 @@ export function PairPage() {
     };
   }, [step, refreshDevices, selectPc]);
 
-  const reset = () => setStep({ kind: "enter", mode: detectQrSupport() === "unsupported" ? "type" : "scan" });
+  const reset = () => {
+    dropCode();
+    setStep({ kind: "enter", mode: detectQrSupport() === "unsupported" ? "type" : "scan" });
+  };
 
   return (
     <div className="space-y-4">
@@ -315,6 +353,7 @@ export function PairPage() {
           </div>
           <h2 className="mt-3 text-lg font-semibold">This phone can now control {step.status.pc_name}</h2>
           {step.status.granted_capabilities ? <p className="mt-1 text-sm text-text-muted">Allowed: {step.status.granted_capabilities.map(capabilityLabel).join(", ")}.</p> : null}
+          <PinNote pin={step.pin} screenViewOn={screenSwitch === "on"} />
           <p className="mt-2 text-sm text-text-muted">Try Play/Pause from the remote. If YouTube control is what you want, make sure the DoMe browser extension is installed in Chrome or Edge on the PC.</p>
           <Button className="mt-4" variant="primary" size="lg" full onClick={() => void navigate("/app")}>
             Go to Home
@@ -346,4 +385,27 @@ export function PairPage() {
       ) : null}
     </div>
   );
+}
+
+/**
+ * What pinning means for Screen view, said only where it matters: a MAC that did not verify is always shown (the
+ * relay served a PC key the PC did not vouch for); an older PC agent that sent no key is mentioned only while Screen
+ * view is switched on for this account. A successful pin needs no words beyond "Paired".
+ */
+function PinNote({ pin, screenViewOn }: { pin: PinOutcome; screenViewOn: boolean }) {
+  if (pin.pinned) return screenViewOn ? <p className="mt-2 text-xs text-text-faint" data-testid="pin-ok">This phone stored the PC’s identity key, so Screen view can check every picture really comes from this PC.</p> : null;
+  if (pin.reason === "mac_invalid" || pin.reason === "jwk_invalid") {
+    return (
+      <div className="mt-3" data-testid="pin-failed">
+        <Notice tone="warning" title="Couldn’t confirm this PC’s identity key">
+          <p>Pairing worked, but this phone will not show this PC’s screen: the key it received was not confirmed by your PC. Pair again; if this repeats, get help.</p>
+          <Link to="/support" className="font-semibold text-accent underline">
+            Get help
+          </Link>
+        </Notice>
+      </div>
+    );
+  }
+  if (screenViewOn && pin.reason === "no_pc_key") return <p className="mt-2 text-xs text-text-muted" data-testid="pin-missing">To use Screen view with this PC, update DoMe on the PC, then pair this phone again.</p>;
+  return null;
 }

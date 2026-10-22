@@ -37,6 +37,9 @@ const SAMPLE_PARAMS: Record<string, Record<string, JsonValue>> = {
   "app.launch": { app_id: "notepad" },
   "app.set_fullscreen": { enabled: true },
   "input.session_stop": { input_session_id: "S".repeat(22) },
+  // protocol 1.4 (Screen view): the offer travels inside the signed command; the stop names the agent-issued id
+  "screen.session_start": { offer_sdp: "v=0\r\no=- 1 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=fingerprint:sha-256 40:41:42:43:44:45:46:47:48:49:4A:4B:4C:4D:4E:4F:50:51:52:53:54:55:56:57:58:59:5A:5B:5C:5D:5E:5F\r\n" },
+  "screen.session_stop": { screen_session_id: "S".repeat(22) },
 };
 const SAMPLE_TARGETS: Record<string, Record<string, JsonValue>> = {
   youtube_target: { browser_instance_id: "abcdefgh", tab_id: 1, tab_token: "A".repeat(22) },
@@ -188,6 +191,17 @@ describe("protocol facade parity", () => {
       { type: "hello", component: "controller", kid: "A".repeat(43), component_version: "0.1", protocol_versions: ["1.0"], registry_version: "1.0" },
       { type: "command", pc_id: UUID, envelope: { v: 1, alg: "ES256", kid: "A".repeat(43), payload: "{}", sig: "B".repeat(86) } },
       { type: "cancel", pc_id: UUID, command_id: UUID },
+      // protocol 1.4 (Screen view): the four frames the phone sends or receives, plus shapes it must refuse
+      { type: "screen_ice_request", pc_id: UUID },
+      { type: "screen_ice_request" },
+      { type: "screen_ice_servers", pc_id: UUID, ice_servers: [{ urls: ["stun:stun.example.net:3478"] }], expires_at: null, allowance: { unlimited: false, remaining_seconds: 600, resets_at: null }, turn: "unavailable" },
+      { type: "screen_ice_servers", pc_id: UUID, ice_servers: [{ urls: ["http://not-ice"] }], expires_at: null, allowance: { unlimited: true, remaining_seconds: null, resets_at: null }, turn: "available" },
+      { type: "screen_answer", pc_id: UUID, envelope: { v: 1, alg: "ES256", kid: "A".repeat(43), payload: "{}", sig: "B".repeat(86) } },
+      { type: "screen_answer", pc_id: UUID, envelope: { v: 1, alg: "ES256", kid: "A".repeat(43), payload: "{}", sig: "B".repeat(86) }, ref_controller_id: UUID2 },
+      { type: "screen_session", pc_id: UUID, screen_session_id: "S".repeat(22), controller_id: UUID2, event: "ended", reason: "stopped_on_pc", live_seconds: 12, at: TS },
+      { type: "screen_session", pc_id: UUID, screen_session_id: "S".repeat(22), controller_id: UUID2, event: "started", reason: "started", path: "direct", live_seconds: 0, at: TS },
+      { type: "screen_session", pc_id: UUID, screen_session_id: "S".repeat(22), controller_id: UUID2, event: "ended", reason: "made_up", live_seconds: 0, at: TS },
+      { type: "screen_usage", pc_id: UUID, screen_session_id: "S".repeat(22), live_seconds: 1, relayed: false, relayed_bytes: 0 },
     ];
     for (const dir of ["relay_to_controller", "controller_to_relay"] as const) {
       for (const f of frames) {
@@ -227,6 +241,35 @@ describe("protocol facade parity", () => {
     }
   });
 
+  it("agrees on the PC-signed screen answer payload and both data-channel vocabularies (1.4)", () => {
+    const answer = { type: "screen_answer", protocol_version: "1.4", account_id: UUID2, pc_id: UUID, controller_id: UUID2, command_id: UUID, screen_session_id: "S".repeat(22), offer_digest: "A".repeat(43), answer_sdp: "v=0\r\n", issued_at: TS, expires_at: TS };
+    const answers: unknown[] = [answer, { ...answer, answer_sdp: "" }, { ...answer, answer_sdp: "v=0\nbare lf passes the pattern" }, { ...answer, answer_sdp: "ünïcode" }, { ...answer, extra: 1 }, { ...answer, type: "command" }, {}];
+    for (const a of answers) expect(codeOf(() => pwaRegistry.schemas.validateScreenAnswerPayload(a)), JSON.stringify(a).slice(0, 80)).toBe(codeOf(() => realRegistry.schemas.validateScreenAnswerPayload(a)));
+    const messages: unknown[] = [
+      { type: "hb" },
+      { type: "keyframe" },
+      { type: "bye" },
+      { type: "audio", on: true },
+      { type: "audio" },
+      { type: "geometry", gen: 1, surface_index: 0, width: 1920, height: 1080, rotation: 0, reserved: [] },
+      { type: "geometry", gen: 1, surface_index: 0, width: 1920, height: 1080, rotation: 45, reserved: [] },
+      { type: "state", state: "paused", reason: "secure_desktop" },
+      { type: "state", state: "sending", encoder: "vp8", data_saver: true },
+      { type: "state", state: "off" },
+      { type: "allowance", unlimited: false, remaining_seconds: 480, resets_at: TS },
+      { type: "restricted", restricted: true, reason: "elevated" },
+      { type: "roi", gen_seen: 1 },
+      { type: "input", events: [] },
+      {},
+    ];
+    for (const dir of ["pc_to_phone", "phone_to_pc"] as const) {
+      for (const m of messages) expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage(dir, m)), `${dir} ${JSON.stringify(m)}`).toBe(codeOf(() => realRegistry.schemas.validateScreenDcMessage(dir, m)));
+    }
+    // a message no side may ever accept: the vocabulary is closed in both directions
+    expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage("pc_to_phone", { type: "input", events: [] }))).toBe("MALFORMED_MESSAGE");
+    expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage("phone_to_pc", { type: "geometry", gen: 1, surface_index: 0, width: 1, height: 1, rotation: 0, reserved: [] }))).toBe("MALFORMED_MESSAGE");
+  });
+
   it("protocolCompatible matches", () => {
     for (const [peer, supported] of [["1.0", ["1.0"]], ["1.1", ["1.0"]], ["1.0", ["1.2"]], ["2.0", ["1.0"]], ["x", ["1.0"]]] as const) {
       expect(pwaRegistry.protocolCompatible(peer, supported)).toBe(realRegistry.protocolCompatible(peer, supported));
@@ -239,6 +282,8 @@ describe("protocol facade parity", () => {
       const payload = buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: name, params: SAMPLE_PARAMS[name] ?? {}, target: SAMPLE_TARGETS[spec.targetName ?? ""] ?? null });
       expect(payload.protocol_version, name).toBe(spec.since);
     }
+    expect(pwaRegistry.registry.get("screen.session_start").since).toBe("1.4");
+    expect(pwaRegistry.registry.get("screen.session_stop").since).toBe("1.4");
     expect(pwaRegistry.registry.get("app.set_fullscreen").since).toBe("1.2");
     expect(pwaRegistry.registry.get("input.session_start").since).toBe("1.1");
     expect(pwaRegistry.registry.get("app.list").since).toBe("1.0");

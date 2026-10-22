@@ -11,11 +11,14 @@ import { InputSessionClient, type InputTimers } from "../lib/input.ts";
 import { clearAccountState, deleteInstallationKey, getControllerIdentity, getOrCreateKeyPair, setStoredControllerId } from "../lib/controllerKey.ts";
 import { APP_VERSION } from "../lib/diagnostics.ts";
 import { errorSummary, log } from "../lib/log.ts";
+import { getPin } from "../lib/pcKeyPins.ts";
 import { RelayClient, relayUrl, type RelayClientOptions, type RelayStatus } from "../lib/relay.ts";
+import { defaultPeerFactory, ScreenSessionClient, type PeerFactory, type ScreenTimers } from "../lib/screen.ts";
 import { useAssistantStore } from "../store/assistant.ts";
 import { useDevicesStore } from "../store/devices.ts";
 import { useInputStore } from "../store/input.ts";
 import { useLiveStore } from "../store/live.ts";
+import { useScreenStore } from "../store/screen.ts";
 import { useSessionStore } from "../store/session.ts";
 
 export interface SendOptions {
@@ -36,6 +39,11 @@ export interface RuntimeOptions {
   scheduleFrame?: (fn: () => void) => unknown;
   /** Testing: clock for the input client (issued_at, keepalive cadence). */
   inputNow?: () => Date;
+  /** Testing: a fake RTCPeerConnection factory for the Screen view client (`null` = a browser without WebRTC). */
+  peerFactory?: PeerFactory | null;
+  /** Testing: timers for the Screen view client (heartbeat, connect timeout, stall watchdog). */
+  screenTimers?: ScreenTimers;
+  screenNow?: () => Date;
 }
 
 /** How often the live store's clock advances so the 75 s freshness rule is re-evaluated without a frame. */
@@ -46,6 +54,8 @@ export class Runtime {
   readonly commands: CommandService;
   /** Manual touchpad/keyboard stream (protocol 1.1). Pages use it only through `useInputSession`. */
   readonly input: InputSessionClient;
+  /** Screen view (protocol 1.4): signaling over the relay, media peer to peer. Pages use it only through `useScreenSession`. */
+  readonly screen: ScreenSessionClient;
   private started = false;
   private detach: Array<() => void> = [];
   private readonly clockIntervalMs: number;
@@ -79,7 +89,22 @@ export class Runtime {
       connected: () => this.relay.isOpen,
       identity: () => this.identity(),
       keyPair: () => getOrCreateKeyPair(),
-      onChange: (record) => useLiveStore.getState().upsertCommand(record),
+      onChange: (record) => {
+        useLiveStore.getState().upsertCommand(record);
+        // the Screen view client waits for its start command's ack and result through the same records
+        this.screen.handleCommandRecord(record);
+      },
+    });
+    this.screen = new ScreenSessionClient({
+      sendFrame: (frame) => this.relay.send(frame),
+      sendCommand: (input) => this.commands.send({ pcId: input.pcId, action: input.action, params: input.params, target: null, ...(input.lifetimeSeconds ? { lifetimeSeconds: input.lifetimeSeconds } : {}), source: input.source }),
+      identity: () => this.identity(),
+      connected: () => this.relay.isOpen,
+      getPin: (pcId) => getPin(pcId),
+      peerFactory: options.peerFactory === undefined ? defaultPeerFactory() : options.peerFactory,
+      onChange: (state) => useScreenStore.getState().setSession(state),
+      ...(options.screenTimers ? { timers: options.screenTimers } : {}),
+      ...(options.screenNow ? { now: options.screenNow } : {}),
     });
     this.input = new InputSessionClient({
       sendBatch: (frame) => this.relay.sendInputBatch(frame),
@@ -102,8 +127,11 @@ export class Runtime {
         this.commands.markConnectionLost();
         // The input stream is gone with the socket; the PC's lease releases anything still held.
         this.input.onConnectionLost();
+        // A Screen view start in flight fails; a live picture continues (media never passes through the relay).
+        this.screen.onConnectionLost();
       } else {
         this.commands.markConnectionRestored();
+        this.screen.onConnectionRestored();
       }
       if (status === "unauthenticated") useSessionStore.getState().clear();
     });
@@ -139,8 +167,10 @@ export class Runtime {
         void useDevicesStore.getState().refresh();
       } else {
         // Backgrounded: a held drag or key must not outlive the screen. Stop the input session now
-        // (the PC's 3 s lease would end it anyway, but not before releasing is wanted).
+        // (the PC's 3 s lease would end it anyway, but not before releasing is wanted). A Screen view
+        // sends `bye` and closes: no minutes count while away (§2.2 step 5), the PC ends within 8 s.
         void this.input.stop("hidden");
+        void this.screen.onHidden();
       }
     };
     // Switching the selected PC ends the session on the old one before anything can target the new one, and
@@ -148,6 +178,7 @@ export class Runtime {
     const unsubscribePc = useDevicesStore.subscribe((s, prev) => {
       if (s.selectedPcId === prev.selectedPcId) return;
       if (this.input.snapshot.pcId && this.input.snapshot.pcId !== s.selectedPcId) void this.input.stop("pc_switch");
+      if (this.screen.snapshot.pcId && this.screen.snapshot.pcId !== s.selectedPcId) void this.screen.stop("pc_switch");
       useLiveStore.getState().clearLastSearch();
       useAssistantStore.getState().clearConversation();
     });
@@ -205,6 +236,7 @@ export class Runtime {
   async signOut(options: { forgetInstallation?: boolean } = {}): Promise<void> {
     useSessionStore.getState().beginSignOut();
     await this.input.stop("sign_out");
+    await this.screen.stop("sign_out");
     this.relay.close();
     if (options.forgetInstallation) {
       try {
@@ -220,9 +252,11 @@ export class Runtime {
     }
     this.commands.reset();
     this.input.reset();
+    this.screen.reset();
     this.lastAccountId = null;
     useLiveStore.getState().reset();
     useDevicesStore.getState().reset();
+    useScreenStore.getState().reset();
     useAssistantStore.getState().resetAccount();
     configureApi({ csrfToken: null });
     try {
@@ -237,6 +271,7 @@ export class Runtime {
     this.detach = [];
     this.started = false;
     this.input.reset();
+    this.screen.reset();
     this.relay.close();
   }
 
@@ -260,11 +295,23 @@ export class Runtime {
       case "input_session":
         if (!this.input.handleFrame(frame)) log.info("relay.input_frame_for_unknown_session", { type: frame.type });
         return;
+      case "screen_ice_servers":
+      case "screen_answer":
+      case "screen_session":
+        // protocol 1.4: the relay sends these only to sockets that announced 1.4; the Screen view client owns them
+        if (!this.screen.handleFrame(frame)) log.info("relay.screen_frame_for_unknown_session", { type: frame.type });
+        return;
       case "error":
-        // INPUT_* / RATE_LIMITED errors name the PC (ref_pc_id) but concern the input stream, not the
-        // subscription: the input client consumes them. Everything else with ref_pc_id is a refused
-        // subscription (e.g. GRANT_MISSING).
-        if (this.input.handleFrame(frame)) return;
+        // While the Screen view client waits for `screen_ice_servers`, an error frame naming that PC is the relay's
+        // refusal of the request (SCREEN_VIEW_DISABLED, SCREEN_ALLOWANCE_EXHAUSTED, RATE_LIMITED, …).
+        if (this.screen.handleFrame(frame)) return;
+        // INPUT_* / RATE_LIMITED errors (and the 1.4 SCREEN_SESSION_REQUIRED / SCREEN_GEOMETRY_CHANGED batch
+        // rejections) name the PC (ref_pc_id) but concern the input stream, not the subscription: the input client
+        // consumes them. Everything else with ref_pc_id is a refused subscription (e.g. GRANT_MISSING).
+        if (this.input.handleFrame(frame)) {
+          this.screen.onInputRejected(frame.error.code);
+          return;
+        }
         if (frame.ref_pc_id) live.onSubscribeRefused(frame.ref_pc_id, frame.error.code);
         else log.warn("relay.error_frame", { code: frame.error.code });
         return;

@@ -24,7 +24,7 @@ from dome_protocol.keys import b64url_encode
 from dome_agent.identity import Identity, LinkRecord
 from dome_agent.store import Store
 
-ALL_CAPS = ("status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard")
+ALL_CAPS = ("status", "media", "volume", "apps", "lock", "power", "pointer", "keyboard", "screen", "screen_audio")
 
 
 def nonce() -> str:

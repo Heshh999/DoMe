@@ -113,3 +113,57 @@ Items the review surfaced that are deliberately deferred, with the reason and th
 26. **A second subscription made outside DoMe is left to the operator.** Only reachable by paying a page DoMe did not
     create (for example one made in the Stripe dashboard): it is logged as `billing.second_subscription` and gives no
     entitlement; refund or cancel it in Stripe.
+
+## Screen view (Phase 1 beta, protocol 1.4)
+
+27. **Never run against Cloudflare.** The TURN adapter (`screen/turn.py::CloudflareTurn`) follows the request and
+    response shapes the design's researchers read in the vendor documentation [research, verify]: `POST
+    .../turn/keys/{key_id}/credentials/generate-ice-servers {ttl, customIdentifier}` → `{"iceServers": {urls, username,
+    credential}}`, `POST .../credentials/{username}/revoke`, and the GraphQL `callsTurnUsageAdaptiveGroups` query with
+    `egressBytes` grouped by `customIdentifier`, `username` and `date`, read with the analytics token after discovering
+    the account tag from `GET /client/v4/accounts`. Whether the revoke endpoint ends a running allocation, what the
+    maximum TTL is, whether a payment method is required and how fresh the analytics figures are is **not yet
+    verified**; until it is, the provisional bound (every ticketed second counted as relayed at 0.5 GB/h plus the TTL of
+    every credential without a session) carries the caps and the guard on its own. Everything here is **unit- and
+    integration-tested with `FakeTurn`** and an httpx mock transport for the adapter; the first staging run with real
+    keys is the real test (`docs/design/screen-view.md` §21 question 3).
+28. **`GET /v1/plans` does not carry the switch** (`CONTRACT_ISSUES.md` #19); `/healthz` does.
+29. **A start lost with the agent socket between forward and result is bound by a fallback** (review fix 2026-10-22).
+    The pending start lives on the agent connection, and the window between the forward and the result includes the
+    consent prompt (≤ 30 s) and DTLS (≤ 20 s), not just a second: a PC socket drop or a relay restart (every Fly
+    deploy) in that window loses it. The relay now binds the PC's newest session-less reservation of the last
+    `PENDING_START_SECONDS` (the frame's controller's, when the frame names one) to the `started` frame or the first
+    `screen_usage`, so the tickets keep coming. A `screen_usage` for a session the relay never reserved gets no answer
+    at all (the agent ends at its ticket's deadline with the honest `allowance_unconfirmed`, never "Free time is used
+    up"); one for a session the relay already settled still gets `final`. The fallback binds by PC and recency, not by
+    command id (the agent's frames carry none): two forgotten starts of one PC within the same 105 s would be told
+    apart only by controller.
+30. **The sweeps are global and in memory per process.** The ledger sweeper, the TURN sweeper and the owner-presence
+    check run in the API process every `DOME_RELAY_SWEEP_INTERVAL_SECONDS` over every account (ADR-0001 D1); the
+    `screen_usage` budget and the ICE/start buckets are in-memory limiters (#2 above). Rows are in PostgreSQL and
+    settlement is idempotent, so a second process would only repeat work.
+31. **Resolved (2026-10-22): the pause discount is capped per window and only for pairs.** Only a `paused -> resumed`
+    secure-desktop pair the relay saw during a started session is discounted, at most
+    `screen_secure_desktop_pause_max_seconds` (120 s) per WINDOW across all its sessions (`screen_view_windows.
+    pause_discount_seconds`); a pause still open at the end is charged in full. A session spanning two windows can
+    still get up to 120 s in each window (5 hours apart).
+32. **Owner presence after a relay restart.** `controller_last_bound_at` is in memory; a fresh process treats every
+    owner as "last seen at start-up", so a phone that does not reconnect within the 60 s grace gets `controller_offline`
+    through the dead-man ticket. Phones reconnect with a short backoff, so this ends only truly absent owners.
+33. **The deploy checks on the TURN values are shape guesses.** `dome_deploy.read_screen_view` requires a key id of
+    8–128 `[A-Za-z0-9_-]` characters and tokens of at least 16 importable characters; the vendor's real formats were not
+    checked. A real value the check refuses is a one-line fix.
+34. **Nothing is device-verified.** The relay half is integration-tested against real PostgreSQL with simulated agents
+    and phones; capture, playback, NAT behaviour and the indicator belong to the agent and the phone and to the device
+    round (`docs/design/screen-view.md` §18).
+35. **The monthly guard's figure depends on reconciliation being fresh** (review fix 2026-10-22): while the latest pass
+    (`turn_reconcile_passes`) is under 3 h old the guard is the provider's figures plus the provisional bound only for
+    activity from an hour before that pass; otherwise (no analytics token, provider failures, a stalled process) it falls
+    back to the whole month's provisional bound, which counts every ticketed second as relayed and can put Free on
+    Data saver early (COST_MODEL §7B). `/healthz` `turn_month_gb` and `turn_month_basis` show which applies. The
+    session-less term (`turn_mint_days`) counts a credential's whole TTL until it is bound to a session or its
+    revocation is confirmed; credentials that simply expire unrevoked keep counting for the month.
+36. **An unconfirmed TURN revocation is retried, not guaranteed** (review fix 2026-10-22): a provider error leaves the
+    username in `turn_pending_revocations`, retried by the sweeper every 30 s until the provider confirms or the
+    credential expires (Free ≤ 3600 s, unlimited ≤ 14400 s). Until then the credential can still relay; the security
+    events say `turn_revoke_failed`, not `turn_credential_revoked`. Never run against the real provider (#27).

@@ -148,7 +148,7 @@ describe("assistant REST bodies", () => {
   });
 
   it("has the error codes and plan fields (protocol 1.3 reshaped the AI plan fields)", () => {
-    expect(PROTOCOL_VERSION).toBe("1.3");
+    expect(PROTOCOL_VERSION).toBe("1.4");
     for (const code of ["AI_NOT_AVAILABLE", "AI_CONSENT_REQUIRED", "AI_ALLOWANCE_EXHAUSTED", "AI_SPEND_LIMIT_REACHED", "AI_UNAVAILABLE", "AI_DECLINED", "AI_BUSY", "AI_TURN_DUPLICATE"]) {
       expect(ERRORS[code]?.user_message).toBeTruthy();
     }

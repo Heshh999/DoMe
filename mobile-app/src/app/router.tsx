@@ -14,6 +14,7 @@ import { PairPage } from "../pages/app/PairPage.tsx";
 import { PairRedirect } from "../pages/app/PairRedirect.tsx";
 import { RemotePage } from "../pages/app/RemotePage.tsx";
 import { RoutinesPage } from "../pages/app/RoutinesPage.tsx";
+import { ScreenPage } from "../pages/app/ScreenPage.tsx";
 import { SettingsPage } from "../pages/app/SettingsPage.tsx";
 import { TouchpadPage } from "../pages/app/TouchpadPage.tsx";
 import { DemoPage } from "../pages/public/DemoPage.tsx";
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: "remote", element: <RemotePage /> },
       { path: "touchpad", element: <TouchpadPage /> },
+      { path: "screen", element: <ScreenPage /> },
       { path: "health", element: <HealthPage /> },
       { path: "layouts", element: <LayoutsPage /> },
       { path: "command", element: <CommandPage /> },

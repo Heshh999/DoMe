@@ -369,3 +369,173 @@
     `PRODUCTION_EXTENSION_IDS` is empty. The uninstaller also removes the empty `NativeMessagingHosts`,
     `Chrome`, `Google` and `Edge` keys that `install-native-host` created (`RegDeleteKeyIfEmpty` never
     touches a key with any value or subkey).
+
+58. **Screen view runs in a separate send-only worker process that the agent supervises** (protocol 1.4,
+    `docs/design/screen-view.md` §5.1, §7, §15). `DoMe.exe screen-worker` (frozen) or
+    `python -m dome_agent.screen.worker` (from source) talks to the agent over an anonymous pipe pair
+    (length-prefixed JSON on stdin/stdout, `screen/worker/pipe.py`; never a listening socket), is put in a
+    Job object with kill-on-close on Windows, gets a liveness tick every 3 s and exits after 10 s without one,
+    and has its stderr read line by line through the agent's redacting log pipeline (`WorkerSupervisor`).
+    The worker imports none of `api`, `relay_client`, `agent`, `store` or `aiortc.contrib` (import-graph
+    test), and the agent imports no aiortc or PyAV: the media stack is the optional extra `screen`
+    (`pyproject.toml`), so the tray, Setup and a Linux `uv sync` without it keep working. The worker reads
+    its stdin through the raw `FileIO`: a `BufferedReader` held by the blocked daemon reader thread aborts
+    the interpreter at exit ("could not acquire lock ... at interpreter shutdown"), which turned every clean
+    `stop` into a crash exit (found by the real-process test).
+59. **Bars before the worker, fail closed** (design §7, `rules.screen_sessions` (2)). `IndicatorController.arm`
+    asks the UI for one topmost `Toplevel` per monitor and waits at most 3 s for the UI thread to confirm every
+    window exists; `NullUI` (headless) and a UI that cannot create a window answer `created: False`, and the
+    start is `SCREEN_CAPTURE_UNAVAILABLE{detail: indicator}` with no worker spawned. The bars' rectangles are
+    registered as reserved (taps there are `INPUT_TARGET_RESERVED`) and sent to the phone normalised to the
+    streamed monitor. A display change (polled: the Tk thread compares the virtual screen size every second,
+    the agent re-checks the bars every second) pauses capture (`state{paused, indicator}`) until bars exist on
+    every monitor again and ends the session `capture_failed` after 10 s. The bars close only once the worker
+    has exited (end order).
+60. **The start path owns the clean-up until it has processed the worker's answer** (`ScreenSession.start_complete`).
+    Worker events and exits before that point only feed the answer future (or `start_error`); the start path
+    then aborts once (`_abort_start`: worker, then bars, nothing emitted or recorded). Without this a worker
+    that refused to start had already exited when the start path ran, so the bars were closed twice and an
+    `ended{capture_failed}` frame plus a history row described a session that never started. An emergency
+    stop that lands while the worker is answering is answered with that stop's own code (`PC_REMOTE_DISABLED`,
+    `PC_SESSION_LOCKED`, `CONTROLLER_REVOKED`, `GRANT_MISSING`, `PC_PLAN_DISABLED`).
+61. **The worker's answer offers only the codec it encodes (plus RTX)** (`ScreenPeer._preferred_codecs`).
+    aiortc negotiates each m-line's codecs inside `setRemoteDescription` from the transceiver's preferences at
+    that moment, so the send-only video transceiver is created with the track and given its preferences BEFORE
+    the offer is applied (aiortc then associates the offer's video section with it by kind). Without this, an
+    offer that lists VP8 first (aiortc's default order, and possibly Safari's) made aiortc packetize the
+    worker's pre-encoded H.264 access units under the VP8 payload type and the phone decoded nothing; the
+    loopback test found it.
+62. **PLI → IDR through `RTCRtpSender._send_keyframe`** (design §5.3), aiortc pinned `==1.15.0`.
+    `pli_hook_available()` checks that the hook point exists and that `_handle_rtcp_packet` still dispatches
+    PLI to it (source inspection), `--self-test` reports it, and a unit test fails the day the pinned library
+    changes. The peer replaces the method on the sender instance; for VP8 the original is called too (aiortc's
+    own encoder reads the flag). Missing hook → periodic IDR every 2 s and `pli_hook: missing` in the answer
+    event.
+63. **SPS and PPS precede every IDR, prepended by the worker** (`H264Encoder.encode` → `ensure_parameter_sets`,
+    extradata converted from avcC to Annex B when needed; the context runs with `global_header` so the parameter
+    sets land in extradata). aiortc's pre-encoded path only splits and packetizes; a decoder that missed them
+    after a bitrate step or a PLI would show nothing.
+64. **The 1 fps floor re-encodes the held raw frame; a packet is never re-sent** (`ScreenTrack`, design §5.2):
+    feeding a P-frame to the decoder twice corrupts the picture. The test asserts two consecutive still-frame
+    packets are distinct encoder outputs.
+65. **Free-text redaction masks IPv4/IPv6(:port) addresses AND SDP attribute lines** (`logsetup.mask_addresses`,
+    `crashguard.redact`). Design §4.4 asked for the address masking; a library line quoting
+    `a=fingerprint:` / `a=ice-pwd:` / `a=candidate:` / `c=IN` would still have carried SDP, so those attributes
+    are masked from their name to the end of the line. Loopback addresses are masked too, which lets the sentinel
+    tests assert `127.0.0.1:<port>` never appears. The older 40+ character token rule already masks key ids.
+66. **Consent policy is one object, `ConsentGate`** (design §6.3): ask mode per grant (`screen_grant_settings`),
+    the post-Stop cooldown PER PC persisted in the SQLite settings (a Stop at the desk survives an agent
+    restart) for the longest length among the PC's screen grants, at most one consent window per minute per
+    PC, an escalating no-window interval of 1, 2, 5, then 10 minutes after a Deny or a timeout (reset by an
+    Allow or by the cooldown ending), and "Block this phone for 1 hour" per controller in memory. "Turn off
+    Screen view for this phone" sends the `grant_update` and counts as a refusal (recorded `denied`).
+67. **`screen_audio` can be granted (the grant window's "Also allow PC sound") but Phase 1 never streams sound**:
+    the audio section is answered `inactive` and `screen_session_result.audio` is `false` whatever the phone
+    asked. Keeping the grant option means Phase 2 needs no second permission.
+68. **`screen` and `screen_audio` are stripped from pairing approvals even when named** (`PairingManager.approve`,
+    CLI `_choose_capabilities`, the approval window greys them with "add later from Paired phones"):
+    `rules.local_permission_ui`; the grant window with the 5 s hold is the only way, and `grant --screen` opens
+    that window and waits instead of widening by itself (the fake platform may widen without a window, for
+    tests only).
+69. **The first allowance ticket rides on the forwarded command and is kept by command id before authorization**
+    (`Agent._on_command` → `ScreenSessionManager.remember_ticket`, at most 32 tickets for 120 s). The id is read
+    with `peek_command_id` UNVERIFIED and used for nothing but that lookup; the handler takes the ticket only
+    after the authorizer verified the command, and validates it (`valid_ticket`). A start without a usable
+    ticket is `ACTION_UNAVAILABLE` ("The DoMe service attached no Screen view allowance to this start").
+70. **The development H.264 encoder (`libx264` from the PyPI PyAV wheel) is used only on the fake source, with
+    `--dev-h264`, or with `DOME_SCREEN_DEV_H264=1`**; on Windows the candidates are `h264_mf` hardware →
+    `h264_mf` software → VP8 through aiortc's libvpx, and `packaging/licence_gate.py` refuses x264 in a build.
+71. **A Screen view start answers inside its own command timeout and leaves nothing behind when abandoned**
+    (`ScreenSessionManager.start_session`). `screen.session_start` has `timeout_ms` 45 000, and a consent wait (30 s)
+    plus the bars (up to 3 s) plus the worker's answer (up to 15 s) could overrun it; the executor would then cancel the
+    handler with a generic "did not complete". The start therefore runs against a budget of the command's timeout less
+    3 s, and the wait for the worker's answer is cut to what is left (`SCREEN_CAPTURE_UNAVAILABLE{driver}` when it runs
+    out). If the handler is cancelled anyway (the executor's timeout, a revocation), the start aborts in the end order
+    (worker, then bars) and an open consent window is taken down; before this fix a cancelled start left the bars up,
+    the worker running and the PC "owned" by a session nothing would ever end.
+72. **The monitors are enumerated afresh on every indicator check** (design §7, "re-enumerate on `WM_DISPLAYCHANGE`").
+    Comparing the set the bars were made for with a fresh enumeration catches what a bar-window check cannot: a monitor
+    plugged in has no bar at all. A changed set pauses capture (`indicator`), the bars are recreated for the new set,
+    and if the viewed monitor changed size, rotation or place the worker gets `rebuild` (a new source at the new
+    level-3.1 size inside the running track, the encoder reopened with an IDR, a new `gen` on the pipe and the data
+    channel); if only the bars' band over it changed, `reserved` (a new `gen` too). Until the worker's new generation
+    arrives `geometry_pending` refuses taps, and a generation not announced within the 10 s grace ends the session
+    `capture_failed` (nothing current to tap on). The viewed monitor gone ends the session `capture_failed` at once; Phase 1
+    does not switch to another monitor by itself. The primary is recognised as the primary, another monitor by its
+    top-left corner.
+73. **The pairing approval is a DoMe permission window for `rules.local_permission_ui`** through a probe
+    (`PermissionUiState.register_probe("pairing_approval", PairingManager.approval_waiting)`): its life belongs to the
+    pairing manager (approve, decline, expiry, a new code), so the input dispatcher asks it each time instead of holding
+    a token that an expiry could leak. A probe that raises counts as an open window (fail closed). The grant and consent
+    windows keep their tokens; the grant window counts as answered (for `grant --screen`, which waits for exactly that
+    window) only once its decision has been applied.
+74. **The strict offer check runs before consent** (design §4.2 step 5 lists consent first). An offer that would be
+    refused anyway must not put a window in front of the person at the PC or count towards the one-window-per-minute
+    rule; the checks before it (remote control, lock, secure desktop, the relay's ticket) and after it (ownership,
+    consent, monitors, bars, worker) keep the design's order, and nothing is spawned before all of them passed.
+75. **An end the worker asks for runs on a task of its own** (review round 2026-10-22; `ScreenSessionManager._end_soon`).
+    `bye`, `disconnected`, a late worker `error` and the worker's exit arrive on the supervisor's pipe-reader /
+    exit-watcher task, and the end's `supervisor.stop()` waits for exactly those tasks: ending inline made the two wait
+    on each other (no `ended` frame, bars up, no history row, `_end_lock` held, every later start refused). The end order
+    is split: `_retire` (synchronous: the id retires, late events and taps are dropped, the session stops being current)
+    and the rest on a tracked task (strong references; `shutdown` and the next start wait for it, so a scheduled end can
+    never close a newer session's bars). `_Subprocess.close()` no longer waits for or cancels the exit watcher when
+    called from a reader, and `watch_exit` waits for the readers with `asyncio.wait` (never cancelling them). Tested with
+    the real `ProcessWorkerLauncher` and a scripted worker process (`tests/scripted_screen_worker.py`) for `bye`, `error`
+    and `disconnected`; the test fails (times out) against the previous code.
+76. **Pause causes are a set** (design §7; `ScreenSession.pauses`). The worker is paused when the first cause appears
+    and resumed only when none is left; each cause is timed on its own (the 120 s secure-desktop limit, the 10 s
+    indicator grace) and gets its own `paused` / `resumed` frame (CONTRACT_ISSUES #25). A UAC prompt answered while a bar
+    is still missing no longer resumes capture without a bar, and a UAC prompt during a missing bar now starts its timer.
+77. **"Stop and turn off" and the tray's "Turn off Screen view" while that phone watches start the PC-wide cooldown**
+    (design §6.3; `ScreenSessionManager.turn_off_on_pc`): the cooldown length is read before the grant narrows (the
+    stopped phone's own setting counts), the `screen_stopped_on_pc` security event carries `turned_off: true`, then the
+    grant narrows and the session ends `grant_removed`. Turning Screen view off for a phone that is not watching only
+    narrows its grant.
+78. **A frozen UI thread pauses capture and stops the worker's ticks** (design §7). The Tk thread's bar check (every
+    second) is the heartbeat: `present()` answers False once it is older than 3 s (capture pauses `indicator`, then
+    `capture_failed` after the grace), and `WorkerSupervisor` withholds the tick while `ui_alive()` is False, so the
+    worker stops capture and exits by its own 10 s tick timeout as well. The ticks follow the UI thread's liveness, not
+    the bars' presence, so a monitor change that is rebuilding its bars does not shorten the indicator grace.
+79. **The Tk thread is per-monitor DPI aware (v2) and a bar is confirmed only on its monitor** (`TkThread._run`,
+    `measure_bar_window`, `bar_placement_problem`). Monitor rectangles are physical pixels; a DPI-unaware Tk thread
+    placed bars in virtualised logical coordinates, off their monitor on scaled displays, while `winfo_exists()` still
+    confirmed them. Each bar's real rectangle (`GetWindowRect` / `MonitorFromWindow`) must lie on its monitor at its top
+    edge, else the start is refused (`created: False`, "bar not on its monitor") and a live bar that moves off its
+    monitor counts as missing. The measured rectangle is what taps are refused on (the fixed 56 px band only off
+    Windows). Unit-tested with a fake tkinter and a placement seam; **not yet verified on a device**.
+80. **Disable remote control during the consent window refuses the start** (design §7 "refuses new starts"). The start
+    re-checks remote control, the lock and the secure desktop after the consent window and the monitor enumeration;
+    *Disable remote control* also withdraws a waiting window (`ConsentBroker.withdraw_all`: the window closes, the start
+    is refused `PC_REMOTE_DISABLED`, and nothing counts as a refusal for the back-off).
+81. **Emergency stop: held input is released while the worker exits** (`ScreenSessionManager.end_soon`,
+    `Agent.set_remote_enabled`). The Screen view session is retired synchronously (no tap maps, the worker is told to
+    stop, a consent window is withdrawn), then `input.end("remote_disabled")` runs, then the rest of the screen's end
+    order is awaited; `set_remote_enabled` returns only once both have ended. A held button is no longer kept down for
+    the worker's stop grace (up to 2 s + 2 s + 3 s).
+82. **The capture source opens only after DTLS** (rules.screen_sessions, design §5.1; `worker.main._build_source`). The
+    shipping kinds (`ddagrab`, `wgc`) used to be opened by `_build_source` before the answer existed; now it only
+    constructs, the Desktop Duplication → Windows.Graphics.Capture fallback lives in `DdaWithFallback.open()`, and the
+    only `open()` is the track's, after `capture_allowed` (a rebuild's source is handed over unopened the same way). A
+    source that cannot open after DTLS is reported as the worker's `error` and the session ends `capture_failed`: the
+    start can no longer say `SCREEN_CAPTURE_UNAVAILABLE{busy|unsupported_display}` before consent and bars (accepted:
+    no frame for an unauthenticated peer comes first).
+83. **Desktop Duplication: EAGAIN is a still desktop, the rebuild count resets on every frame, a failed reopen backs
+    off** (`DdagrabSource.read`). PyAV raises `av.error.BlockingIOError` for `AVERROR(EAGAIN)`; it now means "nothing
+    new" (None after one frame interval), never access-lost. Three access-lost errors in a row without a frame give up;
+    a reopen that fails (the secure desktop is still up) answers None and retries after 0.25 → 2 s, giving up after 10
+    failed reopens while capture runs, so the agent's secure-desktop pause decides the end. Unit-tested with a scripted
+    decode iterator; whether lavfi answers EAGAIN or blocks is on the device checklist (the fallback is PyAV's `Graph`).
+84. **Requested IDRs are rate-limited to two per second** (design §5.3; `ScreenTrack.force_keyframe`). PLI/FIR, the
+    phone's `keyframe` message and the pipe op wait for a 500 ms slot and coalesce; join, resume, a new geometry and an
+    encoder reopen are never delayed. For VP8 the track calls aiortc's original `_send_keyframe` when the slot comes.
+85. **The WGC fallback asks for the primary by name and checks the first frame's size** (`WgcSource`): windows-capture
+    numbers monitors in raw `EnumDisplayMonitors` order, DoMe's index puts the primary first, so `monitor_index=None`
+    (the package's primary) is used, any other monitor is refused (Phase 2 maps by device name or rectangle), and a
+    first frame whose size differs from the monitor the taps map onto ends the session `capture_failed`.
+86. **A build without the media stack says so** (`screen.media_stack_available`, CONTRACT_ISSUES #24): checked with
+    `importlib.util.find_spec` (the agent never imports aiortc / PyAV), the start is refused before any window or bar,
+    the tray shows "Screen view: not in this version of DoMe" (disabled) and `status().screen.included` is False.
+87. **An IPv4 address ending a sentence is masked** (`logsetup._IPV4_RE`, copied in `crashguard`): the trailing
+    lookahead is `(?!\w|\.\d)`, so "could not reach 192.168.1.5." is masked while "1.2.3.4.5" is not, and the leading
+    one allows an underscore ("ip_10.0.0.1").

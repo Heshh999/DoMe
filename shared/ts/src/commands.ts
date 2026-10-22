@@ -13,7 +13,7 @@ import { LIMITS, PROTOCOL_VERSION, registry, schemas, type ActionSpec } from "./
 import { signPayload, verifyEnvelope, type Envelope } from "./signing.ts";
 import { dumpsCompact, type JsonValue } from "./strictJson.ts";
 import { checkCommandWindow, formatRfc3339 } from "./time.ts";
-import { INPUT_BATCH_PROTOCOL_VERSION, parseVersion, protocolCompatible, versionBelow } from "./versions.ts";
+import { INPUT_BATCH_PROTOCOL_VERSION, inputBatchProtocolVersion, parseVersion, protocolCompatible, versionBelow } from "./versions.ts";
 
 export interface KeyRecord {
   controllerId: string;
@@ -189,9 +189,15 @@ export type InputEvent =
   | { type: "pointer_move"; dx: number; dy: number }
   | { type: "pointer_button"; button: "left" | "right" | "middle"; action: "down" | "up" | "click" | "double_click" }
   | { type: "pointer_scroll"; dx: number; dy: number }
+  /** Since 1.4 (Screen view): absolute position normalised to 0..65535 over the streamed surface at geometry generation `gen`. */
+  | { type: "pointer_move_to"; x: number; y: number; gen: number }
+  /** Since 1.4 (Screen view): wheel motion in Windows wheel units, 120 = one notch, |dx|,|dy| <= input_wheel_max. */
+  | { type: "pointer_wheel"; dx: number; dy: number }
   | { type: "text"; text: string }
-  | { type: "key"; key: "enter" | "tab" | "escape" | "backspace" | "delete" | "space" | "arrow_up" | "arrow_down" | "arrow_left" | "arrow_right" | "home" | "end" | "page_up" | "page_down" }
+  | { type: "key"; key: "enter" | "tab" | "escape" | "backspace" | "delete" | "space" | "arrow_up" | "arrow_down" | "arrow_left" | "arrow_right" | "home" | "end" | "page_up" | "page_down" | "f11" }
   | { type: "shortcut"; name: "ctrl_a" | "ctrl_c" | "ctrl_v" | "ctrl_z" | "ctrl_l" };
+
+const POINTER_EVENT_TYPES = new Set(["pointer_move", "pointer_button", "pointer_scroll", "pointer_move_to", "pointer_wheel"]);
 
 export interface InputBatchPayload {
   type: "input_batch";
@@ -216,23 +222,24 @@ export interface BuildInputBatchInput {
   now?: Date;
 }
 
-/** The capabilities a grant must hold to send these events (pointer_* → pointer; text/key/shortcut → keyboard). */
+/** The capabilities a grant must hold to send these events (pointer_* → pointer, pointer_move_to and pointer_wheel included; text/key/shortcut → keyboard). */
 export function inputEventCapabilities(events: readonly InputEvent[]): Set<"pointer" | "keyboard"> {
   const needed = new Set<"pointer" | "keyboard">();
-  for (const ev of events) needed.add(ev.type === "pointer_move" || ev.type === "pointer_button" || ev.type === "pointer_scroll" ? "pointer" : "keyboard");
+  for (const ev of events) needed.add(POINTER_EVENT_TYPES.has(ev.type) ? "pointer" : "keyboard");
   return needed;
 }
 
 /**
  * One batch of the manual-input stream (rules.input_sessions). The phone builds and signs it with the
  * controller key; the relay and the PC verify it. Lifetime = input_batch_lifetime_seconds (5 s); an empty
- * events array renews the session lease. Stamped "1.1", the version that introduced the stream, so older PCs accept it.
+ * events array renews the session lease. Stamped with the lowest version that defines every event in it ("1.1" for the
+ * touchpad events, "1.4" once a Screen view event is present), so older PCs keep accepting plain batches.
  */
 export function buildInputBatchPayload(input: BuildInputBatchInput): InputBatchPayload {
   const now = input.now ?? new Date();
   return {
     type: "input_batch",
-    protocol_version: INPUT_BATCH_PROTOCOL_VERSION,
+    protocol_version: inputBatchProtocolVersion(input.events),
     account_id: input.accountId,
     controller_id: input.controllerId,
     target_pc_id: input.targetPcId,
@@ -280,6 +287,24 @@ async function verifyWithRecord(raw: unknown, resolveKey: KeyResolver): Promise<
   return { envelope, payload, key: record };
 }
 
+/**
+ * The version checks that run BEFORE schema validation (rules.command_version_stamping, 1.4 check order). A payload from a
+ * newer MINOR may carry fields or events this library does not know; validating its schema first would turn that into
+ * MALFORMED_MESSAGE. So the stamp is read first: an unsupported version is PROTOCOL_INCOMPATIBLE {peer, supported}, a stamp
+ * below `since` is PROTOCOL_INCOMPATIBLE {peer, required}. A stamp that is not a MAJOR.MINOR string falls through to the
+ * schema (MALFORMED_MESSAGE).
+ */
+function checkStamp(payload: Record<string, JsonValue>, since: string | null): void {
+  const stamp = payload.protocol_version;
+  if (parseVersion(stamp) === null || typeof stamp !== "string") return;
+  if (!protocolCompatible(stamp, [PROTOCOL_VERSION])) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version", false, { peer: stamp, supported: [PROTOCOL_VERSION] });
+  }
+  if (since !== null && versionBelow(stamp, since)) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", `stamped protocol version is below ${since}, which introduced it`, false, { peer: stamp, required: since });
+  }
+}
+
 function bind(payload: Record<string, JsonValue>, key: KeyRecord): void {
   if (payload.controller_id !== key.controllerId) throw new ProtocolError("CONTROLLER_MISMATCH", "payload controller_id does not belong to the signing key");
   if ("account_id" in payload && payload.account_id !== key.accountId) throw new ProtocolError("ACCOUNT_MISMATCH", "payload account_id does not belong to the signing key");
@@ -287,11 +312,11 @@ function bind(payload: Record<string, JsonValue>, key: KeyRecord): void {
 
 export async function verifyAndParseCommand(raw: unknown, resolveKey: KeyResolver, now?: Date): Promise<VerifiedCommand> {
   const { envelope, payload, key } = await verifyWithRecord(raw, resolveKey);
+  // Version first (compatibility and the action's `since`, when the action is one we know), schema second.
+  const action = payload.action;
+  checkStamp(payload, typeof action === "string" && registry.has(action) ? registry.get(action).since : null);
   schemas.validateCommandPayload(payload);
   const cmd = payload as unknown as CommandPayload;
-  if (!protocolCompatible(cmd.protocol_version, [PROTOCOL_VERSION])) {
-    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version", false, { peer: cmd.protocol_version, supported: [PROTOCOL_VERSION] });
-  }
   bind(payload, key);
   checkCommandWindow(cmd.issued_at, cmd.expires_at, {
     ...(now ? { now } : {}),
@@ -309,9 +334,9 @@ export async function verifyAndParseCommand(raw: unknown, resolveKey: KeyResolve
 
 export async function verifyAndParseConfirmation(raw: unknown, resolveKey: KeyResolver, now?: Date): Promise<VerifiedConfirmation> {
   const { envelope, payload, key } = await verifyWithRecord(raw, resolveKey);
+  checkStamp(payload, null);
   schemas.validateConfirmationPayload(payload);
   const conf = payload as unknown as ConfirmationPayload;
-  if (!protocolCompatible(conf.protocol_version, [PROTOCOL_VERSION])) throw new ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version");
   bind(payload, key);
   checkCommandWindow(conf.issued_at, conf.expires_at, {
     ...(now ? { now } : {}),
@@ -319,4 +344,37 @@ export async function verifyAndParseConfirmation(raw: unknown, resolveKey: KeyRe
     maxSkewSeconds: LIMITS.max_clock_skew_seconds,
   });
   return { envelope, payload: conf, key, approved: conf.decision === "approve" };
+}
+
+export interface VerifiedInputBatch {
+  envelope: Envelope;
+  payload: InputBatchPayload;
+  key: KeyRecord;
+  /** The lowest version that defines every event in the batch (what the stamp had to be at least). */
+  requiredProtocolVersion: string;
+  requiredCapabilities: Set<"pointer" | "keyboard">;
+}
+
+/**
+ * The input-batch half of what `verify_and_parse_input_batch` does in Python, in the same order: signature over the exact
+ * bytes, protocol compatibility and the 1.1 floor BEFORE the schema (a batch from a newer MINOR with unknown events is
+ * PROTOCOL_INCOMPATIBLE, not MALFORMED_MESSAGE), schema, the per-event floor (a 1.4 event stamped 1.1 is
+ * PROTOCOL_INCOMPATIBLE with required 1.4), binding and the 5 s window. Session ownership, sequence and age are the caller's.
+ */
+export async function verifyAndParseInputBatch(raw: unknown, resolveKey: KeyResolver, now?: Date): Promise<VerifiedInputBatch> {
+  const { envelope, payload, key } = await verifyWithRecord(raw, resolveKey);
+  checkStamp(payload, INPUT_BATCH_PROTOCOL_VERSION);
+  schemas.validateInputBatchPayload(payload);
+  const batch = payload as unknown as InputBatchPayload;
+  const required = inputBatchProtocolVersion(batch.events);
+  if (versionBelow(batch.protocol_version, required)) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", `stamped protocol version is below ${required}, which introduced it`, false, { peer: batch.protocol_version, required });
+  }
+  bind(payload, key);
+  checkCommandWindow(batch.issued_at, batch.expires_at, {
+    ...(now ? { now } : {}),
+    maxLifetimeSeconds: LIMITS.input_batch_lifetime_seconds + LIMITS.max_clock_skew_seconds,
+    maxSkewSeconds: LIMITS.max_clock_skew_seconds,
+  });
+  return { envelope, payload: batch, key, requiredProtocolVersion: required, requiredCapabilities: inputEventCapabilities(batch.events) };
 }

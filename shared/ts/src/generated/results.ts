@@ -855,3 +855,90 @@ export interface YoutubeSearchResult {
         YoutubeSearchItem
       ];
 }
+/**
+ * One monitor the PC can stream, in physical pixels. No names.
+ *
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "screen_surface".
+ */
+export interface ScreenSurface {
+  index: number;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+/**
+ * Result of screen.session_start (since 1.4). The agent issued the id; the phone also needs the PC-signed screen_answer frame, which arrives separately (never in a result). Carries ids, geometry, flags and the allowance only: no SDP, no title, no address.
+ *
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "screen_session_result".
+ */
+export interface ScreenSessionResult {
+  screen_session_id: string;
+  /**
+   * @minItems 1
+   * @maxItems 8
+   */
+  surfaces:
+    | [ScreenSurface]
+    | [ScreenSurface, ScreenSurface]
+    | [ScreenSurface, ScreenSurface, ScreenSurface]
+    | [ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface]
+    | [ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface]
+    | [ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface]
+    | [ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface, ScreenSurface]
+    | [
+        ScreenSurface,
+        ScreenSurface,
+        ScreenSurface,
+        ScreenSurface,
+        ScreenSurface,
+        ScreenSurface,
+        ScreenSurface,
+        ScreenSurface
+      ];
+  /**
+   * The surface being streamed.
+   */
+  surface_index: number;
+  /**
+   * The geometry generation the stream starts with; pointer_move_to carries the gen the phone saw.
+   */
+  gen: number;
+  /**
+   * PC sound is on for this session (needs screen_audio; Phase 2).
+   */
+  audio: boolean;
+  /**
+   * screen_lease_seconds: no heartbeat for this long ends the session viewer_gone.
+   */
+  lease_seconds: number;
+  allowance: ScreenAllowanceState;
+  /**
+   * Whether someone at the PC had to allow this start (ask mode or the post-Stop cooldown) and did. A refusal is a failed result (SCREEN_CONSENT_DECLINED / SCREEN_CONSENT_TIMEOUT), never a consent value.
+   */
+  consent: "not_required" | "granted";
+  /**
+   * The video encoder in use; vp8 is the basic picture mode.
+   */
+  encoder?: "h264" | "vp8";
+}
+/**
+ * The Free allowance as the relay knows it (rules.screen_metering): unlimited: true on plans with screen_view_seconds_per_window null (then both other fields are null). Display only on the phone; the ledger is authoritative.
+ */
+export interface ScreenAllowanceState {
+  unlimited: boolean;
+  remaining_seconds: number | null;
+  resets_at: Timestamp | null;
+}
+/**
+ * This interface was referenced by `DoMePerActionResultShapes`'s JSON-Schema
+ * via the `definition` "screen_session_stop_result".
+ */
+export interface ScreenSessionStopResult {
+  /**
+   * False when the id was unknown or the session had already ended (idempotent).
+   */
+  stopped: boolean;
+  live_seconds: number;
+}

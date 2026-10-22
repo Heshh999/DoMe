@@ -16,6 +16,10 @@ Tables (see docs/design/pc-agent.md → "Local state"):
 * ``pending_grant_updates`` local capability changes (pointer/keyboard) the relay has not received yet,
                      keyed by kid (``grant_update`` is re-sent after every ``grants_snapshot`` until written)
 * ``security_events`` bounded local security log for diagnostics
+* ``screen_history``  Screen view (1.4): the last 20 sessions and refused starts, metadata only (phone, times,
+                     reason, seconds; never content, SDP or addresses); clearable from the status window
+* ``screen_grant_settings`` per paired phone: ask-each-time and the post-Stop cooldown length the owner chose in
+                     the DoMe grant window (local only, never sent to the server; rules.local_permission_ui)
 
 All methods are synchronous and protected by one re-entrant lock; every call is an indexed point
 operation (sub-millisecond), so they are invoked inline from the event loop (see DECISIONS.md).
@@ -54,6 +58,10 @@ SETTING_PC_NAME = "pc_name"
 SETTING_PC_ENABLED = "snapshot_pc_enabled"
 SETTING_LAST_SNAPSHOT_ID = "last_snapshot_id"
 SETTING_ENTITLEMENT = "entitlement_last_verified"
+SETTING_SCREEN_COOLDOWN_UNTIL = "screen_stop_cooldown_until"  # RFC 3339; someone at the PC pressed Stop (design §6.3)
+SETTING_SCREEN_COOLDOWN_BY = "screen_stop_cooldown_by"  # the controller whose session was stopped
+SCREEN_HISTORY_MAX_ROWS = 20
+SCREEN_COOLDOWN_DEFAULT_SECONDS = 600  # = version.json limits.screen_pc_stop_cooldown_default_seconds
 PROVISIONAL_PREFIX = "pending-"  # controller_id placeholder until the first grants_snapshot names the real one
 
 _SCHEMA = """
@@ -129,6 +137,21 @@ CREATE TABLE IF NOT EXISTS security_events (
     at     TEXT NOT NULL,
     kind   TEXT NOT NULL,
     detail TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS screen_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    controller_id TEXT NOT NULL,
+    display_name  TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    started_at    TEXT NOT NULL,
+    ended_at      TEXT,
+    live_seconds  INTEGER NOT NULL DEFAULT 0,
+    reason        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS screen_grant_settings (
+    controller_id    TEXT PRIMARY KEY,
+    ask_each_time    INTEGER NOT NULL DEFAULT 0,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 600
 );
 """
 # (table, column, definition) added after the table first shipped; a database from an older agent gets them
@@ -219,6 +242,42 @@ class PendingRevocationRow:
     kid: str
     reason: str
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenHistoryRow:
+    """One Screen view history entry (design §2.3): a session (``kind = "session"``) or a refused start
+    (``kind = "refused"``, reason denied | timeout | backoff | blocked). Metadata only."""
+
+    id: int
+    controller_id: str
+    display_name: str
+    kind: str
+    started_at: str
+    ended_at: str | None
+    live_seconds: int
+    reason: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "controller_id": self.controller_id,
+            "display_name": self.display_name,
+            "kind": self.kind,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "live_seconds": self.live_seconds,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenGrantSettingsRow:
+    """The owner's Screen view choices for one phone, made in the DoMe grant window (design §2.1 / §6.3):
+    ``ask_each_time`` and the post-Stop cooldown length (600, 60 or 0 = off). Local only."""
+
+    controller_id: str
+    ask_each_time: bool
+    cooldown_seconds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -736,6 +795,95 @@ class Store:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM security_events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [{"id": r["id"], "at": r["at"], "kind": r["kind"], "detail": json.loads(r["detail"])} for r in rows]
+
+    # ----- Screen view (1.4) ---------------------------------------------------------------------
+    def add_screen_history(
+        self,
+        *,
+        controller_id: str,
+        display_name: str,
+        kind: str,
+        started_at: str,
+        ended_at: str | None,
+        live_seconds: int,
+        reason: str,
+    ) -> None:
+        """Append one row and keep the newest ``SCREEN_HISTORY_MAX_ROWS``. ``reason`` is a contract end reason or
+        a consent refusal cause; nothing here may carry content, SDP or an address."""
+        with self._tx():
+            self._conn.execute(
+                "INSERT INTO screen_history(controller_id, display_name, kind, started_at, ended_at, live_seconds, reason) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (controller_id, display_name[:64], kind, started_at, ended_at, max(0, int(live_seconds)), reason),
+            )
+            self._conn.execute(
+                "DELETE FROM screen_history WHERE id NOT IN (SELECT id FROM screen_history ORDER BY id DESC LIMIT ?)",
+                (SCREEN_HISTORY_MAX_ROWS,),
+            )
+
+    def list_screen_history(self, limit: int = SCREEN_HISTORY_MAX_ROWS) -> list[ScreenHistoryRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM screen_history ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [
+            ScreenHistoryRow(
+                id=r["id"],
+                controller_id=r["controller_id"],
+                display_name=r["display_name"],
+                kind=r["kind"],
+                started_at=r["started_at"],
+                ended_at=r["ended_at"],
+                live_seconds=int(r["live_seconds"]),
+                reason=r["reason"],
+            )
+            for r in rows
+        ]
+
+    def clear_screen_history(self) -> int:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM screen_history")
+        return cur.rowcount
+
+    def get_screen_grant_settings(
+        self, controller_id: str, *, default_cooldown: int = SCREEN_COOLDOWN_DEFAULT_SECONDS
+    ) -> ScreenGrantSettingsRow:
+        """The row, or the secure defaults (ask off, the default cooldown) when the owner never changed them."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM screen_grant_settings WHERE controller_id = ?", (controller_id,)
+            ).fetchone()
+        if row is None:
+            return ScreenGrantSettingsRow(controller_id, False, default_cooldown)
+        return ScreenGrantSettingsRow(controller_id, bool(row["ask_each_time"]), int(row["cooldown_seconds"]))
+
+    def set_screen_grant_settings(self, controller_id: str, *, ask_each_time: bool, cooldown_seconds: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO screen_grant_settings(controller_id, ask_each_time, cooldown_seconds) VALUES (?,?,?) "
+                "ON CONFLICT(controller_id) DO UPDATE SET ask_each_time = excluded.ask_each_time, "
+                "cooldown_seconds = excluded.cooldown_seconds",
+                (controller_id, 1 if ask_each_time else 0, max(0, int(cooldown_seconds))),
+            )
+
+    def list_screen_grant_settings(self) -> list[ScreenGrantSettingsRow]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM screen_grant_settings ORDER BY controller_id").fetchall()
+        return [
+            ScreenGrantSettingsRow(r["controller_id"], bool(r["ask_each_time"]), int(r["cooldown_seconds"]))
+            for r in rows
+        ]
+
+    def set_screen_cooldown(self, until: str | None, by: str | None) -> None:
+        """Someone at the PC pressed Stop: every phone is asked until ``until`` (design §6.3). None clears it."""
+        if until is None:
+            self.delete_setting(SETTING_SCREEN_COOLDOWN_UNTIL)
+            self.delete_setting(SETTING_SCREEN_COOLDOWN_BY)
+            return
+        self.set_setting(SETTING_SCREEN_COOLDOWN_UNTIL, until)
+        self.set_setting(SETTING_SCREEN_COOLDOWN_BY, by or "")
+
+    def get_screen_cooldown(self) -> tuple[str | None, str | None]:
+        until = self.get_setting(SETTING_SCREEN_COOLDOWN_UNTIL)
+        return (until, self.get_setting(SETTING_SCREEN_COOLDOWN_BY) or None) if until else (None, None)
 
     # ----- start-up recovery -------------------------------------------------------------------
     def recover_after_restart(self) -> dict[str, list[str]]:

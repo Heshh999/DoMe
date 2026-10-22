@@ -17,8 +17,15 @@
     remove-app ID           remove an approval
     revoke CONTROLLER_ID    revoke a paired phone locally
     grant CONTROLLER_ID [--pointer] [--keyboard] [--remove-pointer] [--remove-keyboard]
-                            allow/withdraw manual touchpad (pointer) / keyboard input for a paired phone
+                        [--screen] [--screen-audio] [--remove-screen] [--remove-screen-audio]
+                            allow/withdraw manual touchpad (pointer) / keyboard input for a paired phone;
+                            --screen / --screen-audio open DoMe's grant window on this PC and wait for the
+                            decision there (Screen view is never granted by a bare flag, protocol 1.4)
     stop-input              end the live manual-input session on this PC and release what it holds
+    stop-screen             end the live Screen view session on this PC (starts the post-Stop cooldown)
+    screen-history [--clear]
+                            the last 20 Screen view sessions and refused starts (metadata only)
+    screen-worker ...       INTERNAL: the Screen view media worker the running agent starts (never by hand)
     install-native-host     register the Chrome/Edge native-messaging manifest (per user); without an
                             extension id it keeps the one already registered on this PC
     uninstall-native-host
@@ -292,10 +299,16 @@ def _choose_capabilities(
     offered one by one so the PC owner decides explicitly (spec §10A-D). ``--yes`` answers only the
     general approval: pointer/keyboard are granted without a prompt ONLY when named explicitly
     (``--pointer`` / ``--keyboard``), never implied by ``--yes``."""
-    from .pairing import INPUT_CAPABILITIES
+    from .pairing import INPUT_CAPABILITIES, SCREEN_CAPABILITIES, SCREEN_NOT_AT_PAIRING
 
     requested = list(pending["requested_capabilities"])
-    granted = [c for c in requested if c not in INPUT_CAPABILITIES]
+    granted = [c for c in requested if c not in INPUT_CAPABILITIES and c not in SCREEN_CAPABILITIES]
+    for cap in SCREEN_CAPABILITIES:
+        if cap in requested:  # never at pairing, whatever the flags (rules.local_permission_ui, design §2.1 step 3)
+            label = "Screen view" if cap == "screen" else "PC sound"
+            print(
+                f"  {label}: not granted at pairing ({SCREEN_NOT_AT_PAIRING}: `{command_name()} grant <id> --screen`)"
+            )
     labels = {"pointer": "touchpad / mouse (pointer)", "keyboard": "keyboard (typing, keys, shortcuts)"}
     for cap in INPUT_CAPABILITIES:
         if cap not in requested:
@@ -485,6 +498,12 @@ def cmd_status(args: argparse.Namespace) -> int:
                 f"  manual input: {session['state']} for {session['controller_id']} (pointer={session['pointer']}, "
                 f"keyboard={session['keyboard']}, held={session['held_buttons'] + session['held_keys']})"
             )
+        screen = (status.get("screen") or {}).get("session")
+        if screen:
+            print(
+                f"  Screen view: {screen['state']} for {screen['controller_id']} (path={screen.get('path')}, "
+                f"encoder={screen.get('encoder')}, paused={screen.get('paused_reason')}, {screen.get('live_seconds')} s)"
+            )
     print(f"  remote control: {'ENABLED' if status['store'].get('remote_enabled') else 'disabled'}")
     print(f"  paired phones: {len([g for g in status.get('grants', []) if not g.get('revoked_at')])}")
     for g in status.get("grants", []):
@@ -658,18 +677,70 @@ def cmd_revoke(args: argparse.Namespace) -> int:
 def cmd_grant(args: argparse.Namespace) -> int:
     settings = _settings(args)
     from .control import ControlError
-    from .pairing import INPUT_SCOPE_EXPLANATION
+    from .pairing import INPUT_SCOPE_EXPLANATION, SCREEN_CAPABILITIES, SCREEN_SCOPE_EXPLANATION
 
-    add = [c for c, flag in (("pointer", args.pointer), ("keyboard", args.keyboard)) if flag]
-    remove = [c for c, flag in (("pointer", args.remove_pointer), ("keyboard", args.remove_keyboard)) if flag]
+    add = [
+        c
+        for c, flag in (
+            ("pointer", args.pointer),
+            ("keyboard", args.keyboard),
+            ("screen", args.screen or args.screen_audio),
+            ("screen_audio", args.screen_audio),
+        )
+        if flag
+    ]
+    remove = [
+        c
+        for c, flag in (
+            ("pointer", args.remove_pointer),
+            ("keyboard", args.remove_keyboard),
+            ("screen", args.remove_screen),
+            ("screen_audio", args.remove_screen_audio or args.remove_screen),
+        )
+        if flag
+    ]
     if not add and not remove:
-        print("error: nothing to change (use --pointer/--keyboard/--remove-pointer/--remove-keyboard)", file=sys.stderr)
+        print(
+            "error: nothing to change (use --pointer/--keyboard/--screen/--screen-audio or a --remove-… flag)",
+            file=sys.stderr,
+        )
         return 2
     if set(add) & set(remove):
         print("error: a capability cannot be added and removed at once", file=sys.stderr)
         return 2
-    if add:
+    if any(c in ("pointer", "keyboard") for c in add):
         print(f"About touchpad/keyboard access: {INPUT_SCOPE_EXPLANATION}\n")
+    screen_add = [c for c in add if c in SCREEN_CAPABILITIES]
+    if screen_add:
+        # rules.local_permission_ui: the window on the PC decides; this command only opens it and waits.
+        print(f"About Screen view: {SCREEN_SCOPE_EXPLANATION}\n")
+        try:
+            result = _control(settings).call("grant", controller_id=args.controller_id, add=add, remove=remove)
+        except ControlError as exc:
+            if exc.code == "AGENT_NOT_RUNNING":
+                print(
+                    "error: DoMe is not running. Screen view can only be allowed in DoMe's own window on this PC: "
+                    f"start DoMe (`{command_name()} run`) and try again.",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"error: {exc.message}", file=sys.stderr)
+            return 1
+        if result.get("window_opened"):
+            print(
+                "A DoMe window opened on this PC. Allow Screen view there (the Allow button unlocks after 5 seconds)."
+            )
+            _flush_stdout()
+            if _wait_for_screen_grant(
+                settings, args.controller_id, set(screen_add), float(args.timeout), str(result.get("request_id", ""))
+            ):
+                print(f"Screen view is allowed for {args.controller_id}.")
+                return 0
+            print("Screen view was not allowed in the window (cancelled, closed or no answer). Nothing changed.")
+            return 1
+        caps = result["capabilities"]  # the fake platform (tests) widens without a window
+        print(f"Permissions for {args.controller_id}: {', '.join(caps)}")
+        return 0
     try:
         result = _control(settings).call("grant", controller_id=args.controller_id, add=add, remove=remove)
         caps = result["capabilities"]
@@ -717,6 +788,85 @@ def cmd_stop_input(args: argparse.Namespace) -> int:
         return 1
     print(f"Manual input stopped; released {result['released_holds']} held button(s)/key(s).")
     return 0
+
+
+def cmd_stop_screen(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    from .control import ControlError
+
+    try:
+        result = _control(settings).call("screen_stop")
+    except ControlError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 1
+    if result.get("stopped"):
+        print("Screen view stopped on this PC. Phones are asked before the next start for a while (the cooldown).")
+    else:
+        print("No Screen view session is running on this PC.")
+    return 0
+
+
+def cmd_screen_history(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    from .control import ControlError
+
+    try:
+        result = _control(settings).call("screen_history", clear=bool(args.clear))
+        rows = list(result.get("history", []))
+    except ControlError as exc:
+        if exc.code != "AGENT_NOT_RUNNING":
+            print(f"error: {exc.message}", file=sys.stderr)
+            return 1
+        from .store import Store
+
+        store = Store(settings.db_path)
+        try:
+            if args.clear:
+                store.clear_screen_history()
+            rows = [r.as_dict() for r in store.list_screen_history()]
+        finally:
+            store.close()
+    if args.clear:
+        print("Screen view history cleared.")
+        return 0
+    if args.json:
+        _print(rows)
+        return 0
+    if not rows:
+        print("No Screen view sessions recorded on this PC.")
+        return 0
+    for row in rows:
+        when = str(row.get("started_at", "")).replace("T", " ")[:16]
+        if row.get("kind") == "refused":
+            print(f"{when}  {row.get('display_name')}: start refused ({row.get('reason')})")
+        else:
+            print(f"{when}  {row.get('display_name')}: {row.get('live_seconds')} s, ended: {row.get('reason')}")
+    return 0
+
+
+def _wait_for_screen_grant(
+    settings: Settings, controller_id: str, wanted: set[str], timeout: float, request_id: str = ""
+) -> bool:
+    """After the grant window opened: wait until the person at the PC has ANSWERED that window (it is no longer in
+    the agent's open grant windows), then report whether the grant holds ``wanted``. A phone that already had Screen
+    view must not read as "allowed" while the window is still waiting for an answer."""
+    from .control import ControlError
+
+    deadline = time.monotonic() + timeout
+    ctl = _control(settings)
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        try:
+            status = ctl.call("status")
+        except ControlError:
+            return False
+        if request_id and request_id in status.get("screen_grant_windows", []):
+            continue  # not answered yet
+        return any(
+            g.get("controller_id") == controller_id and wanted <= set(g.get("capabilities", []))
+            for g in status.get("grants", [])
+        )
+    return False
 
 
 def cmd_repair(args: argparse.Namespace) -> int:
@@ -986,17 +1136,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("controller_id")
     p.set_defaults(fn=cmd_revoke)
 
-    p = sub.add_parser("grant", help="allow or withdraw manual touchpad/keyboard input for a paired phone")
+    p = sub.add_parser(
+        "grant", help="allow or withdraw manual touchpad/keyboard input or Screen view for a paired phone"
+    )
     p.add_argument("controller_id")
     p.add_argument("--pointer", action="store_true", help="allow touchpad / mouse input")
     p.add_argument("--keyboard", action="store_true", help="allow keyboard input")
+    p.add_argument("--screen", action="store_true", help="allow Screen view: opens DoMe's grant window on this PC")
+    p.add_argument("--screen-audio", action="store_true", help="allow Screen view with PC sound (opens the window)")
     p.add_argument("--remove-pointer", action="store_true")
     p.add_argument("--remove-keyboard", action="store_true")
+    p.add_argument("--remove-screen", action="store_true", help="turn Screen view (and PC sound) off for the phone")
+    p.add_argument("--remove-screen-audio", action="store_true")
+    p.add_argument("--timeout", type=float, default=90.0, help="seconds to wait for the grant window (default 90)")
     p.set_defaults(fn=cmd_grant)
 
     sub.add_parser("stop-input", help="end the live manual-input session and release held input").set_defaults(
         fn=cmd_stop_input
     )
+    sub.add_parser("stop-screen", help="end the live Screen view session on this PC").set_defaults(fn=cmd_stop_screen)
+    p = sub.add_parser("screen-history", help="the last Screen view sessions and refused starts on this PC")
+    p.add_argument("--clear", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_screen_history)
 
     p = sub.add_parser("repair", help="re-register the native host and clean stale endpoints (keeps pairing)")
     p.add_argument("--host-path", help="path to dome-native-host(.exe)")
@@ -1036,8 +1198,17 @@ def _tolerant_stdio() -> None:
                 reconfigure(errors="replace")
 
 
+SCREEN_WORKER_COMMAND = "screen-worker"
+
+
 def main(argv: list[str] | None = None) -> int:
     _tolerant_stdio()
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:1] == [SCREEN_WORKER_COMMAND]:
+        # The agent's own child process (design §5.1): its arguments are the worker's, not this parser's.
+        from .screen.worker.main import run_worker_process
+
+        return run_worker_process(raw[1:])
     args = build_parser().parse_args(argv)
     fn: Callable[[argparse.Namespace], int] = args.fn
     try:

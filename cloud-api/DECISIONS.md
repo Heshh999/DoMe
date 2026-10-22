@@ -374,3 +374,120 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     live (canceled is final at Stripe), and a second live subscription made outside DoMe's pages is logged
     (`billing.second_subscription`) and ignored: the row DoMe follows stays authoritative and the operator refunds or
     cancels the other in the dashboard.
+
+## Screen view (Phase 1 beta, protocol 1.4; WP1.2, 2026-10-21)
+
+79. **The Screen view ledger has its own tables, shaped like `usage_windows`.** `screen_view_windows` (seconds per rolling
+    5-hour window), `screen_reservations` (one per start, the relay-measured segment) and `screen_accounts` (the
+    per-account lock row and the monthly mint counter) rather than new columns on the AI `usage_windows` table: the AI
+    windows count requests and micro-dollars per `kind`, Screen view counts seconds with reservations that outlive a
+    ticket, and sharing the table would have put two allowances with different roll-over rules behind one row lock.
+    The lock discipline is the same (account row first, created on first use), so one account's starts and renewals are
+    serialised and `tests/test_screen_metering.py` shows ten concurrent starts never exceed the window.
+80. **Charged on the relay's clock from the forward.** `segment_started_at` is the moment the relay forwarded
+    `screen.session_start` (`DOME_SCREEN_CHARGE_FROM=forwarded`, the default; `started` moves it to the first `started`
+    frame the relay saw). The charge is the wall seconds to the `ended` frame, rounded up to 10 s and capped at what was
+    reserved; `live_seconds` is never read by the ledger. The service's clock is replaceable (`ScreenConfig.clock`), so
+    the tests move time instead of sleeping.
+81. **Any failed start without a `started` frame is forgiven under the zero-charge rule, three times per window.** The
+    design names `connection_failed` only; a start the PC refused at once (consent declined, offer invalid, capture
+    unavailable) looks the same to the relay (no `started`, a failed result within `screen_connect_timeout_seconds`) and
+    charging a customer 10 s for being refused at the desk is wrong. The three-per-window bound and the 20 s limit stay,
+    so a patched agent gains at most 60 s per window this way; the fourth quick failure is charged its measured seconds.
+82. **A window that rolls over under a live session is settled at its end.** The old window keeps the seconds measured
+    until `window_end` (capped at what it reserved), the new window opens at the renewal and the session continues
+    there with a fresh segment. The seconds between `window_end` and the renewal (at most one chunk) are not charged;
+    the alternative, opening the new window at `window_end` retroactively, would open windows nobody asked for.
+83. **One TURN credential per controller is the table's primary key.** `turn_credentials.controller_id` is the key:
+    minting first revokes the previous row at the provider (reason `replaced`), then upserts. The revocation reasons
+    are the §13 paths verbatim (`no_start`, `start_refused`, `session_ended`, `swept`, `controller_revoked`,
+    `grant_narrowed`, `logout`, `plan_change`, `cap_reached`) plus `replaced`, each a `turn_credential_revoked` event.
+    A provider that refuses the revoke call is logged and the row is still marked revoked: the TTL bounds it, and the
+    hourly reconciliation reads the provider's own figures anyway. The credential value is handed to the phone once and
+    never stored; only the provider's `username` is kept, for revocation and reconciliation.
+84. **The provisional bound is computed from the ledger, never from `relayed_bytes`.** Every ticketed second of every
+    reservation (`outstanding + charged`) since the period start, plus the full TTL of every credential that never got a
+    session, at the relayed cap (0.5 GB/h); the caps and the guard use the larger of that and the reconciled figure
+    (`turn_usage_days`, decimal GB). The Free daily cap and the monthly hard cap therefore bite within the hour even
+    with no analytics token at all; Pro sessions are not bound by them (there are none yet).
+85. **The analytics token is optional; the key id and the API token are both or neither.** Minting needs the two;
+    reconciliation needs the third and, when it is absent, `/healthz` says `turn_reconciled_at: null` and the provisional
+    bound carries the guard alone. The GraphQL `accountTag` is discovered once from the analytics token's own account
+    list rather than asked of the founder (the design's §20 names three values, not four).
+86. **The operator switch gates starts and ICE requests only.** `DOME_SCREEN_VIEW_ENABLED=false` refuses
+    `screen_ice_request` and `screen.session_start` with `SCREEN_VIEW_DISABLED`; a running session is never cut by the
+    switch (a deploy restarts the process anyway, and the ledger rows survive that). `screen.session_stop` always passes.
+87. **The ledger row, not the in-memory map, is the authority after a relay restart.** `screen_usage` for a session this
+    process has not seen looks the reservation up by its id, re-learns the owner from it and continues ticketing; the
+    refund of the last chunk therefore still applies after a restart (the design accepted losing it). Pending starts
+    (forward seen, no result yet) are in memory and are swept and charged their one chunk when their ticket runs out.
+88. **A `screen_usage` for a session the ledger never reserved is answered `final` without a reason**
+    (`CONTRACT_ISSUES.md` #20): the PC ends it within one chunk and the relay never grants minutes it did not reserve.
+89. **The switch is reported by `/healthz`, not `/v1/plans`** (`CONTRACT_ISSUES.md` #19: the contract's `plans_response`
+    is closed). `/healthz` also carries `turn` (`ok` / `unconfigured` / `error`), `turn_month_gb` (the reconciled figure
+    when the provider's numbers are in, else the provisional bound), `turn_month_gb_provisional` and
+    `turn_reconciled_at`, cached for a minute, no secret and no account data.
+90. **The socket-close paths end owned sessions.** `revoke_controller_sockets` (controller or grant revocation, agent
+    `revoke_controller`) and `close_session_sockets` (logout, `DELETE /v1/account/sessions/{id}`) call
+    `ScreenService.controller_gone`, which sends `screen_allowance{final, controller_offline}` to the PC at once, pins
+    `final_reason` on the reservation (so a PC that missed the frame gets the same answer on its next ticket) and
+    revokes the TURN credential. A logout counts as "gone" only when the controller has no bound socket left; the 60 s
+    absence rule runs in the sweep and on every `screen_usage`, with the process start as the reference for owners this
+    process never saw (#32 in KNOWN_ISSUES).
+91. **Approved pairing rows stay readable for at least five minutes** (`routes/pairing.py::PAIRING_APPROVED_READABLE_SECONDS`
+    and `test_pairing_stores_pc_key_mac_and_returns_it_only_once_approved`): nothing deletes approved rows and
+    `GET /v1/pairing/{id}` answers 404 only for `open` ones, so the phone's poll can fetch `pc_key` even after the code's
+    own lifetime ended. `pc_key_mac` is stored verbatim; the server never holds the code and verifies nothing.
+92. **`SCREEN_*` agent error frames travel like `INPUT_*` ones, to 1.4 sockets.** `_on_agent_error` routes both prefixes
+    after the same account and owner checks; `send_screen_frame_to_controller` delivers to sockets that announced 1.4,
+    `send_input_frame_to_controller` to 1.1. `screen_session` frames are broadcast to subscribers that announced 1.4
+    (`broadcast_to_subscribers(screen_frame=True)`); older sockets never see them.
+93. **The stamp gate uses the agent's announced versions.** `route_input_batch` refuses a batch whose
+    `protocol_version` is not compatible with `AgentConn.protocol_versions` (from `hello`) with
+    `PROTOCOL_INCOMPATIBLE{peer: "agent", required: <the batch's own requirement>}` before forwarding, next to the
+    existing `supports_input` check; `screen.*` commands to an agent without 1.4 get the same code as a relay result.
+94. **The Deploy button passes `DOME_SCREEN_VIEW_ENABLED` explicitly either way** (`true` or `false`, from the GitHub
+    Environment variable; absent means off), the TURN key id with `-e` and the two TURN tokens on stdin, all or none of
+    the key pair; a token left in Fly when GitHub no longer has it is removed with the deploy, so the app never starts
+    half configured. After the deploy, `/healthz` must report the configured switch and relay-server state, as
+    `/v1/plans` must report the billing mode; `status` reports both without secrets.
+95. **Free-text redaction masks network addresses** (`logging.redact_addresses`): IPv4 with real octets and an optional
+    port, IPv6 in full or compressed form, bracketed with a port, loopback included; and the structured redaction gains
+    `offer_sdp`, `answer_sdp`, `sdp`, `candidate(s)`, `ice_servers`, `credential`, `username` (rules.screen_content).
+    Windows build strings (10.0.19045.3086) and clock times (10:00:03) are left alone by construction.
+96. **Revocations that belong to one start revoke only that start's credential** (review round 2026-10-22;
+    `TurnService.revoke_for_start`). `turn_credentials` holds one row per controller and every mint replaces it, so a
+    start's failure, a lost forward or its swept session-less reservation revoked "the controller's credential" — after
+    a re-mint, the live next session's. Now: the row bound to that start's command, or one still outstanding with no
+    command that was minted before that start was forwarded. Controller-wide paths (logout, revocation, grant
+    narrowing, a relay-side refusal before forwarding, plan change) keep `revoke_controller`.
+97. **A revocation the provider did not confirm is not recorded as one** (`turn_pending_revocations`,
+    `TurnService.retry_revocations`). The row goes `revoke_pending`, the username waits in its own table (the next
+    mint's upsert cannot erase it), the event is `turn_revoke_failed{reason, error}`, and the sweeper retries every 30
+    s until the provider confirms (`turn_credential_revoked{reason, retried: true}`) or the credential expires.
+98. **Reconciliation reads whole UTC days** (yesterday and today, from midnight). The analytics API filters by minute
+    and groups by date, so the previous 26-hour window replaced a finished day's total with its last hours on every
+    pass. Each successful pass is recorded in `turn_reconcile_passes` (persisted freshness).
+99. **The monthly guard uses the provider's figures while they are fresh** (`TurnService.month_summary`): reconciled
+    bytes for the month plus the provisional bound only for activity from an hour before the latest pass, while that
+    pass is under 3 h old; otherwise the larger of the month's reconciled figure and its whole provisional bound. The
+    provisional session-less term reads the append-only `turn_mint_days` counters (TTL minted, minus TTL bound to a
+    session or released by a confirmed revocation) instead of the per-controller row. `/healthz` `turn_month_gb` is
+    the guard's own figure, `turn_month_basis` says which basis carried it. Free Data saver and the hard cap therefore
+    follow real relaying once reconciliation runs (COST_MODEL "High" row), and still bite within the hour without it.
+100. **The pause discount is pairs-only and capped per window** (CONTRACT_ISSUES #23): `mark_paused` before `started`
+    is ignored, an open pause at the end is charged, and `screen_view_windows.pause_discount_seconds` caps the window.
+101. **Every locking read in the ledger flushes and re-reads** (`metering._locked`: `FOR UPDATE` with
+    `populate_existing`). The sessions do not autoflush and the callers load reservations unlocked first, so the
+    locked select returned the identity-mapped object as first seen and a sweep racing a late `ended` settled one
+    reservation twice; the flush keeps a second settle in the same transaction (two reservations of one window in one
+    sweep pass) from discarding the first's unflushed window changes.
+102. **A plan change under a live session closes the segment** (`metering._switch_plan`): Free ↔ unlimited at a
+    renewal settles the current segment like a window rollover (a Free segment against its window, an unlimited one
+    against none) and continues under the new plan.
+103. **A start refused at the PC is forgiven on its own counter** (`metering.CONSENT_REFUSED`,
+    `screen_view_windows.consent_forgiven`): no `started` frame and at most the consent timeout + 5 s, three times per
+    window; quick Denies no longer use up the connection failures' forgiveness, and the two cannot be stacked. On
+    successful starts the consent wait still counts (charged from the forward); the phone's Free copy says so.
+104. **IPv4 masking allows a sentence-final period** (`logging._IPV4_RE`): "could not reach 192.168.1.5." is masked,
+    "1.2.3.4.5" is not.

@@ -307,3 +307,9 @@ def _peek_command_id(envelope: Any) -> str | None:
     except ProtocolError:
         return None
     return None
+
+
+def peek_command_id(envelope: Any) -> str | None:
+    """Public name of :func:`_peek_command_id` for the agent (the forwarded ``relay.screen`` ticket is kept by
+    command id before authorization; the id is UNVERIFIED and used for nothing but that lookup)."""
+    return _peek_command_id(envelope)

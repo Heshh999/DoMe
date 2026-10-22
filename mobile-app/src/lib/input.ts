@@ -13,6 +13,15 @@
  *
  * No event content is logged: only counts, codes and phases (`log.ts` additionally drops any field
  * named text/composer).
+ *
+ * Protocol 1.4 (Screen view, docs/design/screen-view.md §8): the same stream carries `pointer_move_to` (an absolute
+ * position normalised over the streamed surface at geometry generation `gen`), `pointer_wheel` (Windows wheel
+ * units, 120 = one notch) and `key: f11`. A batch that holds one of them is stamped 1.4 by the shared
+ * `buildInputBatchPayload` (rules.command_version_stamping); plain touchpad batches stay 1.1 so older PCs keep
+ * accepting them. Consecutive `pointer_move_to` events are coalesced to the LAST one (never summed, never merged with
+ * relative `pointer_move`). The PC refuses `pointer_move_to` without a live screen session of this controller
+ * (SCREEN_SESSION_REQUIRED) or with a stale `gen` (SCREEN_GEOMETRY_CHANGED): those rejections drop the batch and keep
+ * the session, exactly like the INPUT_* rejections, and arrive as `error` frames naming the input session.
  */
 import { buildInputBatchPayload, LIMITS, ProtocolError, signInputBatch, type InputEvent, type relayFrames } from "@dome/protocol";
 
@@ -136,10 +145,14 @@ function defaultCancelFrame(h: unknown): void {
 const MOTION_MAX = LIMITS.input_motion_max;
 
 export function needsPointer(ev: InputEvent): boolean {
-  return ev.type === "pointer_move" || ev.type === "pointer_button" || ev.type === "pointer_scroll";
+  return ev.type === "pointer_move" || ev.type === "pointer_button" || ev.type === "pointer_scroll" || ev.type === "pointer_move_to" || ev.type === "pointer_wheel";
 }
 
-/** Sum adjacent pointer_move events (bounded); never merge anything else. Pure, used by flush(). */
+/**
+ * Sum adjacent pointer_move events (bounded) and keep only the last of adjacent pointer_move_to events (last position
+ * wins, rules.input_sessions (2a)); never merge anything else, never a relative move with an absolute one. Pure, used
+ * by flush().
+ */
 export function coalesceMotion(events: readonly InputEvent[]): InputEvent[] {
   const out: InputEvent[] = [];
   for (const ev of events) {
@@ -150,10 +163,17 @@ export function coalesceMotion(events: readonly InputEvent[]): InputEvent[] {
       out[out.length - 1] = { type: "pointer_move", dx, dy };
       continue;
     }
+    if (ev.type === "pointer_move_to" && prev && prev.type === "pointer_move_to") {
+      out[out.length - 1] = ev;
+      continue;
+    }
     out.push(ev);
   }
   return out;
 }
+
+/** The Screen view batch rejections (1.4) that travel like INPUT_* rejections: the batch is dropped, the session continues. */
+const SCREEN_INPUT_REJECTIONS: ReadonlySet<string> = new Set(["SCREEN_SESSION_REQUIRED", "SCREEN_GEOMETRY_CHANGED"]);
 
 export class InputSessionClient {
   private readonly deps: InputClientDeps;
@@ -295,7 +315,7 @@ export class InputSessionClient {
     if (this.state.phase !== "live") return false;
     if (needsPointer(event) ? !this.state.pointer : !this.state.keyboard) return false;
     const last = this.pending[this.pending.length - 1];
-    if (event.type === "pointer_move" && last && last.type === "pointer_move") {
+    if ((event.type === "pointer_move" && last && last.type === "pointer_move") || (event.type === "pointer_move_to" && last && last.type === "pointer_move_to")) {
       this.pending[this.pending.length - 1] = coalesceMotion([last, event])[0]!;
     } else {
       this.pending.push(event);
@@ -428,7 +448,7 @@ export class InputSessionClient {
   private onError(frame: relayFrames.ErrorFrame): boolean {
     const code = frame.error.code;
     if (!frame.ref_pc_id || frame.ref_pc_id !== this.state.pcId) return false;
-    const inputCode = code.startsWith("INPUT_") || code === "RATE_LIMITED";
+    const inputCode = code.startsWith("INPUT_") || code === "RATE_LIMITED" || (SCREEN_INPUT_REJECTIONS.has(code) && !!frame.ref_input_session_id);
     // The PC names the session whose batch it refused (rules.input_sessions); a rejection for a session this phone
     // has already left (an old session, a takeover by this phone) must not end or annotate the current one.
     if (inputCode && frame.ref_input_session_id && frame.ref_input_session_id !== this.state.sessionId) {
@@ -453,7 +473,8 @@ export class InputSessionClient {
       this.resolveWaiters("dropped");
       this.set({ problem: { code } });
     } else {
-      // INPUT_SEQUENCE_INVALID / INPUT_STALE / INPUT_RESTRICTED / INPUT_INJECTION_FAILED / INPUT_TARGET_CHANGED / RATE_LIMITED:
+      // INPUT_SEQUENCE_INVALID / INPUT_STALE / INPUT_RESTRICTED / INPUT_INJECTION_FAILED / INPUT_TARGET_CHANGED / RATE_LIMITED,
+      // and since 1.4 INPUT_PAUSED_ON_PC / INPUT_TARGET_RESERVED / SCREEN_SESSION_REQUIRED / SCREEN_GEOMETRY_CHANGED:
       // the batch was dropped, the session continues; the UI shows the notice.
       this.resolveWaiters("dropped");
       this.set({ problem: { code } });

@@ -24,6 +24,7 @@ from ..platform.protocol import (
     MediaControl,
     MediaSession,
     MediaStatus,
+    Monitor,
     PlatformSet,
     VolumeState,
     WindowState,
@@ -84,6 +85,10 @@ class FakeState:
     input_delay_seconds: float = 0.0  # blocking delay per injection call (backpressure tests)
     held_buttons: set[str] = field(default_factory=set)  # readable held set
     held_keys: set[str] = field(default_factory=set)
+    # ----- Screen view (FakeScreen / FakeInput.move_to) -----
+    monitors: list[Monitor] = field(default_factory=lambda: [Monitor(0, 0, 0, 1920, 1080, True)])  # settable topology
+    screen_fail: str | None = None  # error code raised by monitors() (None = enumerate normally)
+    cursor: tuple[int, int] = (0, 0)  # where move_to last placed the cursor (physical virtual-desktop pixels)
 
     def record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
@@ -479,6 +484,18 @@ class FakeInput:
 
     def move(self, dx: int, dy: int) -> None:
         self._inject("move", int(dx), int(dy))
+        self.st.cursor = (self.st.cursor[0] + int(dx), self.st.cursor[1] + int(dy))
+
+    def move_to(self, x: int, y: int) -> None:
+        """Records the MAPPED pixels the agent computed (design §8.2: "FakeInput records the mapped pixels")."""
+        self._inject("move_to", int(x), int(y))
+        self.st.cursor = (int(x), int(y))
+
+    def wheel(self, dx: int, dy: int) -> None:
+        self._inject("wheel", int(dx), int(dy))
+
+    def cursor_position(self) -> tuple[int, int] | None:
+        return self.st.cursor
 
     def button(self, button: str, action: str) -> None:
         self._inject("button", button, action)
@@ -534,6 +551,20 @@ class FakeInput:
         return self.st.secure_desktop or self.st.locked
 
 
+class FakeScreen:
+    """Settable monitor topology for Screen view tests (``FakeState.monitors``); ``screen_fail`` makes the
+    enumeration fail with that code, like a display Windows cannot describe."""
+
+    def __init__(self, st: FakeState) -> None:
+        self.st = st
+
+    def monitors(self) -> list[Monitor]:
+        self.st.record("monitors")
+        if self.st.screen_fail:
+            raise ProtocolError(self.st.screen_fail, "fake platform cannot list the monitors")
+        return list(self.st.monitors)
+
+
 class FakeNativeHost:
     def __init__(self, st: FakeState) -> None:
         self.st = st
@@ -560,5 +591,6 @@ def build_fake_platform(state: FakeState | None = None) -> PlatformSet:
         native_host=FakeNativeHost(st),
         input=FakeInput(st),
         notes=["FAKE platform adapters active (DOME_AGENT_PLATFORM=fake): no real PC action happens"],
+        screen=FakeScreen(st),
     )
     return ps

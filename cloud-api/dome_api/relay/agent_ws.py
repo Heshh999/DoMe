@@ -80,7 +80,10 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
             )
             await conn.close(CLOSE_PROTOCOL_ERROR)
             return
-        conn.supports_input = protocol_compatible("1.1", tuple(hello["protocol_versions"]))
+        conn.protocol_versions = tuple(str(v) for v in hello["protocol_versions"])
+        conn.supports_input = protocol_compatible("1.1", conn.protocol_versions)
+        # 1.4: screen.* commands and 1.4-stamped input batches are refused by the relay for agents without it
+        conn.supports_screen = protocol_compatible("1.4", conn.protocol_versions)
         await conn.send(frames.hello_ack(conn.connection_id, pc_id=pc_id))
         await mgr.register_agent(conn)
         mgr.release_slot()  # the registered socket is counted from here on
@@ -195,6 +198,12 @@ async def _loop(ws: WebSocket, svc: Services, mgr: ConnectionManager, conn: Agen
             await _on_grant_update(mgr, conn, frame)
         elif kind == "error":
             await _on_agent_error(mgr, conn, frame)
+        elif kind == "screen_answer":
+            await _on_screen_answer(svc, mgr, conn, frame)
+        elif kind == "screen_session":
+            await _on_screen_session(svc, mgr, conn, frame)
+        elif kind == "screen_usage":
+            await _on_screen_usage(svc, mgr, conn, frame)
         await mgr.touch_pc_last_seen(conn.pc_id, conn.last_seen)
 
 
@@ -278,6 +287,9 @@ async def _on_result(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, A
                     .where(Command.id == cid)
                     .values(state=state, error_code=error_code, finished_at=now, duration_ms=int(frame["duration_ms"]))
                 )
+        if inf.action == "screen.session_start" and mgr.screen is not None:
+            # the ledger and the TURN credential follow the start's outcome (design §10, §13)
+            await mgr.screen.on_start_result(conn, inf, frame)
         await mgr.send_to_controller(inf.controller_id, inf.controller_conn_id, frame, validate=False)
         return
     # Late result (rules.late_results): correct an outcome_unknown exactly once; drop anything else.
@@ -356,6 +368,10 @@ async def _on_pairing_decision(svc: Services, mgr: ConnectionManager, conn: Agen
                     outcome = "kid_mismatch"
                 else:
                     granted = sorted(set(frame["granted_capabilities"]) & set(ps.requested_capabilities or []))
+                    # rules.pc_key_pinning: the MAC over the PC's identity key, keyed by the code only the two devices
+                    # hold; stored verbatim and returned with the PC's public key once approved (never before)
+                    mac = frame.get("pc_key_mac")
+                    ps.pc_key_mac = mac if isinstance(mac, str) else None
                     ctrl = await db.scalar(
                         select(Controller)
                         .where(Controller.account_id == ps.account_id, Controller.kid == ps.controller_kid)
@@ -517,13 +533,16 @@ MAX_ERROR_ROUTES = 64
 
 async def _on_agent_error(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
     """An agent ``error`` frame. Manual-input rejections (INPUT_* with ``ref_controller_id``) go to that controller's
-    1.1 sockets with ``ref_pc_id`` added and ``ref_controller_id`` stripped (rules.input_sessions); the controller must
-    belong to this PC's account and, when the session is known, be its owner. Everything else is logged only."""
+    1.1 sockets, and since 1.4 the Screen view rejections of input batches (SCREEN_SESSION_REQUIRED,
+    SCREEN_GEOMETRY_CHANGED, SCREEN_* in general) to its 1.4 sockets, with ``ref_pc_id`` added and ``ref_controller_id``
+    stripped (rules.input_sessions (2a)); the controller must belong to this PC's account and, when the session is
+    known, be its owner. Everything else is logged only."""
     error = frame["error"]
     code = str(error.get("code", ""))
     ref_controller = frame.get("ref_controller_id")
     session_id = frame.get("ref_input_session_id")
-    if not code.startswith("INPUT_") or ref_controller is None:
+    screen_code = code.startswith("SCREEN_")
+    if not (code.startswith("INPUT_") or screen_code) or ref_controller is None:
         log.warning("agent.error_frame", pc_id=str(conn.pc_id), code=code)
         return
     controller_id = uuid.UUID(ref_controller)
@@ -545,7 +564,10 @@ async def _on_agent_error(mgr: ConnectionManager, conn: AgentConn, frame: dict[s
     out: dict[str, Any] = {"type": "error", "error": error, "ref_pc_id": str(conn.pc_id)}
     if session_id is not None:
         out["ref_input_session_id"] = session_id
-    await mgr.send_input_frame_to_controller(controller_id, out)
+    if screen_code:
+        await mgr.send_screen_frame_to_controller(controller_id, out)
+    else:
+        await mgr.send_input_frame_to_controller(controller_id, out)
 
 
 async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
@@ -555,13 +577,16 @@ async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[
     controller_id = uuid.UUID(frame["controller_id"])
     capabilities = sorted(set(frame["capabilities"]))
     refused: str | None = None
+    removed: list[str] = []
     async with mgr.db() as db:
         async with db.begin():
-            refused = await _apply_grant_update(db, conn, controller_id, frame["kid"], capabilities)
+            refused, removed = await _apply_grant_update(db, conn, controller_id, frame["kid"], capabilities)
     if refused is not None:
         log.info("grant_update.ignored", pc_id=str(conn.pc_id), reason=refused)
         await mgr.agent_rejection_event(conn, {"frame": "grant_update", "reason": refused})
         return
+    if removed and mgr.screen is not None:
+        await mgr.screen.grant_narrowed(controller_id, conn.pc_id, removed)
     await mgr.push_grants_snapshot(conn.pc_id)
     # subscribers re-read the PC: pc_status is the frame every phone already handles as "refresh this PC"
     await mgr.broadcast_pc_status(conn.pc_id)
@@ -569,11 +594,12 @@ async def _on_grant_update(mgr: ConnectionManager, conn: AgentConn, frame: dict[
 
 async def _apply_grant_update(
     db: AsyncSession, conn: AgentConn, controller_id: uuid.UUID, kid: str, capabilities: list[str]
-) -> str | None:
-    """Replace the live grant's capabilities inside the caller's transaction; returns the refusal reason or None."""
+) -> tuple[str | None, list[str]]:
+    """Replace the live grant's capabilities inside the caller's transaction; returns the refusal reason or None, and
+    the capabilities the change removed (a removed ``screen`` revokes the phone's TURN credential)."""
     ctrl = await db.get(Controller, controller_id)
     if ctrl is None or ctrl.account_id != conn.account_id or ctrl.kid != kid or ctrl.revoked_at:
-        return "controller_not_in_account"
+        return "controller_not_in_account", []
     grant = await db.scalar(
         select(Grant)
         .where(
@@ -585,7 +611,7 @@ async def _apply_grant_update(
         .with_for_update()
     )
     if grant is None:
-        return "no_live_grant"
+        return "no_live_grant", []
     before = sorted(set(grant.capabilities))
     grant.capabilities = capabilities
     events.record(
@@ -602,4 +628,28 @@ async def _apply_grant_update(
             "removed": sorted(set(before) - set(capabilities)),
         },
     )
-    return None
+    return None, sorted(set(before) - set(capabilities))
+
+
+# ----- protocol 1.4: Screen view (rules.screen_signaling, rules.screen_sessions, rules.screen_metering) ---------------
+
+
+async def _on_screen_answer(svc: Services, mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    """The PC-signed answer: to the issuing controller's 1.4 sockets only, verbatim; never to subscribers or a log."""
+    await svc.screen.on_screen_answer(conn, frame)
+
+
+async def _on_screen_session(svc: Services, mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    if frame["pc_id"] != str(conn.pc_id):
+        await conn.send(frames.error_frame("TARGET_PC_MISMATCH", "screen_session names another PC"))
+        return
+    await svc.screen.on_screen_session(conn, frame)
+
+
+async def _on_screen_usage(svc: Services, mgr: ConnectionManager, conn: AgentConn, frame: dict[str, Any]) -> None:
+    """The dead-man ticket request: at most two per minute per session; the figures in the frame charge nothing."""
+    if frame["pc_id"] != str(conn.pc_id):
+        await conn.send(frames.error_frame("TARGET_PC_MISMATCH", "screen_usage names another PC"))
+        return
+    budget_ok = svc.limiters.screen_usage.allow(f"{conn.pc_id}:{frame['screen_session_id']}")
+    await svc.screen.on_screen_usage(conn, frame, budget_ok=budget_ok)
