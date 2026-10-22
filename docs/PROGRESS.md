@@ -2,6 +2,23 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-22 — First run of `ffmpeg-lgpl.yml`: FFmpeg built LGPL-clean; PyAV failed on a new Cython, now pinned
+
+- Run 39829130949 (commit c33ed0d, `windows-latest`): MSYS2, the pinned FFmpeg n8.1.3 checkout, **configure with
+  the §5.5 component list, the configure-summary licence check, and the FFmpeg build all passed** (about 4 minutes
+  in total). The next step, compiling PyAV 17.1.0 against it, stopped in "getting requirements to build wheel"
+  with no output in the job log.
+- Cause, reproduced here on PyAV's Windows code path: PyAV's build requirement is open-ended
+  (`cython>=3.1.0,<4`), so pip's isolated build took Cython **3.3.0**, which refuses `av/container/pyio.py`
+  ("'seek_func' redeclared"). Cython **3.2.9** compiles every module.
+- Fix: the workflow pins `CYTHON_VERSION` 3.2.9 and `SETUPTOOLS_VERSION` 84.2.1 and builds PyAV with
+  `--no-build-isolation` against them. A new `if: failure()` step prints the end of every saved log into the job
+  output, because the log artifact cannot be downloaded from the engineering environment.
+- The same day's Windows installer run for c33ed0d (39829088178) **passed** (unsigned development build, no media
+  stack).
+- Evidence: the fix is checked by actionlint and by running PyAV's get-requirements step locally with both Cython
+  versions; the re-run on `windows-latest` is the real test.
+
 ## 2026-10-21 — Screen view Phase 1 beta built (protocol 1.4), reviewed and fixed; switched off, not yet on a device
 
 Nothing of this is released or deployed. Once deployed it stays off until `DOME_SCREEN_VIEW_ENABLED` is `true` in
