@@ -454,5 +454,14 @@ def test_the_workflow_configures_what_the_gate_expects() -> None:
     # the gate, the notices and the smoke test all run from the workflow; it holds no secret and writes nothing
     for command in ("configure-summary", "collect --wheel-env", "notices", "check", "smoke --expect-version"):
         assert f"licence_gate.py {command}" in workflow
-    assert "secrets." not in workflow and "contents: write" not in workflow
+    # No stored secret anywhere. The build job (`wheel`) only reads; the one job that may write is `publish`: it
+    # runs only when the founder ticks "publish", after the build, on its own runner, with the run's own token.
+    assert "secrets." not in workflow
+    build, publish = workflow.split("\n  publish:\n", 1)
+    assert "contents: write" not in build and "contents: read" in build
+    assert workflow.count("contents: write") == 1
+    assert "needs: wheel" in publish and "if: ${{ inputs.publish }}" in publish
+    assert "GH_TOKEN: ${{ github.token }}" in publish
+    assert "--prerelease --latest=false" in publish  # never the "latest" release the website and the PC read
+    assert "sha256sum --check SHA256SUMS" in publish and "GitHub renamed the wheel" in publish
     assert "Spike output: not shipped, not device-tested." in workflow

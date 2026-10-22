@@ -2,6 +2,27 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-22 — The LGPL video library builds and passes its licence gate on Windows; a publish job pins it
+
+- `ffmpeg-lgpl.yml` run 39836531568 (commit f5d37ac, `windows-latest`, ~6 minutes) **passed**. Wheel
+  `av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl` (artifact `dome-av-wheel-lgpl`, expires 2026-11-21).
+- **Licence gate: passed, 0 violations** over the 10 DLLs (no GPL, version3, x264, x265, OpenH264 or non-free
+  component by name, import or export).
+- **Smoke test on the runner:** PASS for the `+lgpl` version, the licence strings of all seven FFmpeg libraries,
+  decoders = {wrapped_avframe} only, encoders h264_mf + libvpx + libopus, the graph filters including `ddagrab`,
+  lavfi testsrc → one NV12 frame, one VP8 frame encoded, `import aiortc`. REPORTED, not required (expected on a
+  runner with no GPU and no interactive desktop): `h264_mf hw_encoding=1` → "Function not implemented", and
+  `ddagrab` → unknown error. Those two are exactly what the founder's PC must answer (design §18).
+- New: a `publish` input on `ffmpeg-lgpl.yml`. With it ticked, a second job (ubuntu, `contents: write` for that
+  job only, the run's own token, no stored secret) checks the wheel against SHA256SUMS, creates a **pre-release**
+  that is never "latest" (so the website's download and the PC's update check never see it), uploads the wheel,
+  SHA256SUMS, the licence report, the notices draft and the configure log, then verifies GitHub kept the wheel's
+  name and that the downloaded bytes match. `test_licence_gate.py` now pins those rules instead of "the workflow
+  writes nothing".
+- Next: run it with `publish`, pin the release URL in `pc-agent/pyproject.toml` (`[tool.uv.sources] av`, Windows
+  marker) and lock it, so `windows-installer.yml` builds a test installer **with** Screen view for the device round.
+- Evidence: CI-run on `windows-latest` (not a device); actionlint and pc-agent licence-gate tests (38) pass.
+
 ## 2026-10-22 — First run of `ffmpeg-lgpl.yml`: FFmpeg built LGPL-clean; PyAV failed on a new Cython, now pinned
 
 - Run 39829130949 (commit c33ed0d, `windows-latest`): MSYS2, the pinned FFmpeg n8.1.3 checkout, **configure with

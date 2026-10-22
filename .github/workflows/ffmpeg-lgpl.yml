@@ -33,15 +33,24 @@
 #
 # No secrets are used, and the token is read-only. Actions are pinned to the commit of a release tag
 # (re-checked with `git ls-remote --tags` on 2026-10-20); the comment carries the tag. Build tools that
-# pip fetches for PyAV's isolated build (setuptools, Cython) resolve at run time; the pip log records them.
+# PyAV is built without build isolation against pinned Cython and setuptools (CYTHON_VERSION, SETUPTOOLS_VERSION).
 #
-# To run it: GitHub › Actions › 'FFmpeg LGPL wheel (Screen view spike)' › Run workflow › main. It takes
-# about an hour. The wheel and the logs appear under Artifacts at the bottom of the run page.
+# To run it: GitHub › Actions › 'FFmpeg LGPL wheel (Screen view spike)' › Run workflow. It takes about ten
+# minutes. The wheel and the logs appear under Artifacts at the bottom of the run page. With "publish" ticked, a
+# second job also attaches the wheel, SHA256SUMS, the licence report, the notices draft and the configure log to
+# a GitHub pre-release (never "latest", so the website's download and the PC's update check never see it). That
+# release asset is what pc-agent/pyproject.toml pins for Windows ([tool.uv.sources] av, licence_gate.py
+# shipping-av), with its SHA-256 locked in uv.lock; Screen view is built into the installer only then.
 
 name: FFmpeg LGPL wheel (Screen view spike)
 
 on:
-  workflow_dispatch: # by hand only (Actions tab › "FFmpeg LGPL wheel" › Run workflow); no inputs
+  workflow_dispatch: # by hand only (Actions tab › "FFmpeg LGPL wheel" › Run workflow)
+    inputs:
+      publish:
+        description: "Also attach the wheel to a GitHub pre-release (needed once per wheel for Screen view builds)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -317,3 +326,71 @@ jobs:
           path: logs/
           if-no-files-found: warn
           retention-days: 30
+
+  publish:
+    name: Publish the wheel as a GitHub pre-release
+    needs: wheel
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # this job only: create the pre-release and upload its assets
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Name the release (new for every run, so an asset is never replaced under an existing pin)
+        run: echo "TAG=av-lgpl-${PYAV_VERSION}-ffmpeg-${FFMPEG_TAG}-r${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Get the wheel
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dome-av-wheel-lgpl
+          path: out/wheel
+
+      - name: Get the logs (licence report, notices draft, configure log)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-lgpl-logs
+          path: out/logs
+
+      - name: Check the wheel against SHA256SUMS before publishing
+        working-directory: out/wheel
+        run: |
+          set -euo pipefail
+          wheels=(av-*-win_amd64.whl)
+          [ "${#wheels[@]}" -eq 1 ] || { echo "::error::expected one wheel, found ${#wheels[@]}"; exit 1; }
+          case "${wheels[0]}" in *+lgpl*) ;; *) echo "::error::${wheels[0]} is not a +lgpl build"; exit 1 ;; esac
+          sha256sum --check SHA256SUMS
+
+      - name: Create the pre-release and upload the assets
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "PyAV $PYAV_LOCAL_VERSION (LGPL FFmpeg $FFMPEG_TAG) for Screen view" \
+            --notes "Built by ffmpeg-lgpl.yml run $GITHUB_RUN_ID from commit $GITHUB_SHA. LGPL-2.1+ FFmpeg $FFMPEG_TAG (commit $FFMPEG_COMMIT), no GPL, version3 or non-free component; licence gate passed in that run. A build input for DoMe's Windows installer, not a DoMe release." \
+            out/wheel/*.whl out/wheel/SHA256SUMS \
+            out/logs/licence-report.json out/logs/THIRD_PARTY_NOTICES.draft.txt out/logs/ffmpeg-configure.log
+
+      - name: Verify what GitHub published (asset name unchanged, bytes identical)
+        run: |
+          set -euo pipefail
+          local_name="$(basename out/wheel/*.whl)"
+          names="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          grep -Fxq "$local_name" <<<"$names" || { echo "::error::GitHub renamed the wheel: published names are: $names"; exit 1; }
+          mkdir -p check
+          gh release download "$TAG" --pattern "$local_name" --dir check
+          want="$(cut -d' ' -f1 out/wheel/SHA256SUMS)"
+          got="$(sha256sum "check/$local_name" | cut -d' ' -f1)"
+          [ "$want" = "$got" ] || { echo "::error::downloaded wheel has SHA-256 $got, expected $want"; exit 1; }
+          url="https://github.com/$GH_REPO/releases/download/$TAG/$local_name"
+          {
+            echo "## Published for Screen view builds"
+            echo ""
+            echo "- Release: \`$TAG\` (pre-release, never \"latest\")"
+            echo "- Wheel URL: \`$url\`"
+            echo "- SHA-256: \`$got\`"
+            echo ""
+            echo "Next: pin this URL in pc-agent/pyproject.toml ([tool.uv.sources] av, marker sys_platform == 'win32') and run uv lock."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "published $url sha256=$got"
