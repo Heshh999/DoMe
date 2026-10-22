@@ -2,6 +2,24 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-22 — The LGPL wheel is published and pinned: Windows builds now include Screen view
+
+- `ffmpeg-lgpl.yml` run 39840865306 (publish ticked) rebuilt the wheel, passed the licence gate and smoke test
+  again, and published the pre-release **`av-lgpl-17.1.0-ffmpeg-n8.1.3-r3`** (prerelease, not "latest", by
+  `github-actions[bot]`): the wheel, SHA256SUMS, `licence-report.json`, `THIRD_PARTY_NOTICES.draft.txt`,
+  `ffmpeg-configure.log`. GitHub kept the wheel's name, `+` included. The wheel was downloaded here and its
+  SHA-256 checked independently: `90cbe9106cb0c21f6e43636e56db8a00185d76ca317a2b0e09bb67e7d36cf39d`, the same as
+  SHA256SUMS and GitHub's asset digest.
+- `pc-agent/pyproject.toml` pins it as `[tool.uv.sources] av = { url = …, marker = "sys_platform == 'win32'" }`;
+  `uv lock` in `pc-agent/` and `tests/` locks the URL with that SHA-256 (Linux and macOS keep PyPI's av 17.1.0 for
+  development). `licence_gate.py shipping-av` now answers `screen=present`. `uv lock --check` clean in both.
+- The release is not marked immutable (the repository's "immutable releases" setting is off); the lock's
+  SHA-256 is what protects the build, so a replaced asset would fail `uv sync --locked`, not slip through.
+- Next: the `windows-installer.yml` run for this commit builds the first installer **with** Screen view and runs
+  the licence gate on `dist/` and `DoMe.exe screen-worker --self-test`; when green, the founder's device round
+  (design §18).
+- Evidence: CI-run (`windows-latest`) for the wheel; the pin is checked by the gate and the lock; nothing on a device.
+
 ## 2026-10-22 — The LGPL video library builds and passes its licence gate on Windows; a publish job pins it
 
 - `ffmpeg-lgpl.yml` run 39836531568 (commit f5d37ac, `windows-latest`, ~6 minutes) **passed**. Wheel

@@ -529,14 +529,17 @@ on Linux with a synthetic picture only. It is off unless the DoMe service has it
 allow here, on this PC.
 
 **Is it in my build?** `BUILD-INFO.txt` next to the installer says `screen view: included (beta, not yet
-verified on a device)` or `screen view: not included in this build`. Every build so far says *not
-included*: Screen view needs DoMe's own video library (an LGPL build of FFmpeg, made by
-`.github/workflows/ffmpeg-lgpl.yml`, which has not run yet). The stock video library from the Python
-package index contains GPL code DoMe may not ship, so the build leaves Screen view out instead of using it;
-`pc-agent/packaging/licence_gate.py` checks every build for that, and a release build fails if it finds
-anything it does not know. Once the LGPL library is published and pinned in `pc-agent/pyproject.toml`
-for Windows, the same workflow builds Screen view in and also runs `DoMe.exe screen-worker --self-test` on
-the build machine (video encoders, exactly one decoder, a test picture, the keyframe hook). A build
+verified on a device)` or `screen view: not included in this build`. Screen view needs DoMe's own video
+library: an LGPL build of FFmpeg made by `.github/workflows/ffmpeg-lgpl.yml`, because the stock video library
+from the Python package index contains GPL code DoMe may not ship. That library was built and passed its
+licence gate (0 violations) on 2026-10-22 (run 39840865306), was published as the GitHub pre-release
+`av-lgpl-17.1.0-ffmpeg-n8.1.3-r3` (never "latest"), and is pinned for Windows in `pc-agent/pyproject.toml`
+with its SHA-256 in `uv.lock`. Development builds of `windows-installer.yml` from commit after that pin say
+*included*; earlier ones say *not included*. `pc-agent/packaging/licence_gate.py` checks every build, and a
+release build fails if it finds anything it does not know. With Screen view in, the workflow also runs
+`DoMe.exe screen-worker --self-test` on the build machine (video encoders, exactly one decoder, a test
+picture, the keyframe hook). GitHub's build machines have no graphics card and no desktop, so they cannot
+show whether this PC's screen capture or hardware video encoder works; only the device round can. A build
 without Screen view still answers that command and says the video parts are missing.
 
 **Allowing a phone (on the PC only).** A phone can never give itself Screen view, and neither can the

@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = "==3.12.*"
+resolution-markers = [
+    "sys_platform != 'win32'",
+    "sys_platform == 'win32'",
+]
 
 [[package]]
 name = "aioice"
@@ -21,7 +25,8 @@ version = "1.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aioice" },
-    { name = "av" },
+    { name = "av", version = "17.1.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+    { name = "av", version = "17.1.0+lgpl.ffmpeg8.1.3", source = { url = "https://github.com/Heshh999/DoMe/releases/download/av-lgpl-17.1.0-ffmpeg-n8.1.3-r3/av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl" }, marker = "sys_platform == 'win32'" },
     { name = "cryptography" },
     { name = "google-crc32c" },
     { name = "pyee" },
@@ -122,6 +127,9 @@ wheels = [
 name = "av"
 version = "17.1.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "sys_platform != 'win32'",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/5e/e3/477fa20578c284abeda08d91b63ee9abaebc93445d8feeb989d3d444bae1/av-17.1.0.tar.gz", hash = "sha256:7f1e71ff621b66253333926f948e00faae11d855b2442133c65128bca64cdeb3", size = 4288546, upload-time = "2026-06-07T05:52:55.999Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/87/8036b5c781bc3639ea04ef42d4e26da253bd4bd4311d8705b6a1c8824047/av-17.1.0-cp311-abi3-macosx_11_0_x86_64.whl", hash = "sha256:ad7b4aa011093324b7118245f50ac6db244cfe9900d4072508a5245a2b0d3f41", size = 22460847, upload-time = "2026-06-07T05:52:04.261Z" },
@@ -132,8 +140,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/14/ac/ceb84b7553db21f1143d817245c560d9267168e1e58b1a8eeae2b62c4d04/av-17.1.0-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:bbab058bd965309f39962e53caac8126987c68c0be094fc4f9427e5615b0218f", size = 34283709, upload-time = "2026-06-07T05:52:17.389Z" },
     { url = "https://files.pythonhosted.org/packages/59/f9/4115fd84148c9a1cf365096694be6ac882fd3cd3cdb7a2f35e71fecf1631/av-17.1.0-cp311-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:9514cfda85180554c430695282faf4be3ffdf95775d8519733821244eecb58e0", size = 25397573, upload-time = "2026-06-07T05:52:20.012Z" },
     { url = "https://files.pythonhosted.org/packages/e2/ac/92e52d5ed0e0b84d9d93e52b4338c2713d8a44082b8696e6516fdae7c4e4/av-17.1.0-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e1c90f85cd7431ede95b11e8e711571a896ebea433f298849c2c0f1594c8d86e", size = 36451495, upload-time = "2026-06-07T05:52:22.581Z" },
-    { url = "https://files.pythonhosted.org/packages/6b/f2/53a7cd34adb6a971d7e6d99663e74db286966c9db8afdca17472fdf0f98e/av-17.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:5df5c1172ef1cf65a1529d612f7da7798ce2cf82c1ff7212466b538a6cc7214c", size = 28036393, upload-time = "2026-06-07T05:52:25.657Z" },
-    { url = "https://files.pythonhosted.org/packages/66/47/cd9ae0edf2206351c1251bb94b5ec58728e42c5f6ee16c03c412f3a1bb3e/av-17.1.0-cp311-abi3-win_arm64.whl", hash = "sha256:ee98534242a74da847af78624779ac5a3177dc7c69f956a4da9e6f0fdb37d7f6", size = 21174601, upload-time = "2026-06-07T05:52:28.077Z" },
+]
+
+[[package]]
+name = "av"
+version = "17.1.0+lgpl.ffmpeg8.1.3"
+source = { url = "https://github.com/Heshh999/DoMe/releases/download/av-lgpl-17.1.0-ffmpeg-n8.1.3-r3/av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl" }
+resolution-markers = [
+    "sys_platform == 'win32'",
+]
+wheels = [
+    { url = "https://github.com/Heshh999/DoMe/releases/download/av-lgpl-17.1.0-ffmpeg-n8.1.3-r3/av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl", hash = "sha256:90cbe9106cb0c21f6e43636e56db8a00185d76ca317a2b0e09bb67e7d36cf39d" },
 ]
 
 [[package]]
@@ -328,13 +345,15 @@ dependencies = [
 [package.optional-dependencies]
 screen = [
     { name = "aiortc" },
-    { name = "av" },
+    { name = "av", version = "17.1.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
+    { name = "av", version = "17.1.0+lgpl.ffmpeg8.1.3", source = { url = "https://github.com/Heshh999/DoMe/releases/download/av-lgpl-17.1.0-ffmpeg-n8.1.3-r3/av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl" }, marker = "sys_platform == 'win32'" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiortc", marker = "extra == 'screen'", specifier = "==1.15.0" },
-    { name = "av", marker = "extra == 'screen'", specifier = ">=14,<18" },
+    { name = "av", marker = "sys_platform == 'win32' and extra == 'screen'", url = "https://github.com/Heshh999/DoMe/releases/download/av-lgpl-17.1.0-ffmpeg-n8.1.3-r3/av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl" },
+    { name = "av", marker = "sys_platform != 'win32' and extra == 'screen'", specifier = ">=14,<18" },
     { name = "comtypes", marker = "sys_platform == 'win32'", specifier = ">=1.4.5" },
     { name = "dome-agent", extras = ["screen"], marker = "extra == 'dev'" },
     { name = "dome-protocol", editable = "../shared/python" },
