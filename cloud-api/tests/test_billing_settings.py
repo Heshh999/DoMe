@@ -63,7 +63,7 @@ def test_blank_values_mean_billing_off(clean_env: pytest.MonkeyPatch) -> None:
     s = make()
     assert (s.billing_enabled, s.billing_mode, s.effective_billing_provider) == (False, "off", "")
     assert s.price_map() == {"": ("pro", "monthly")} or all(not k for k in s.price_map())
-    assert s.billing_webhook_tolerance_seconds == 300 and s.billing_checkout_pending_hours == 24
+    assert s.billing_webhook_tolerance_seconds == 300 and s.billing_checkout_pending_hours == 23
     assert s.rate_billing_requests_per_hour == 10 and s.stripe_automatic_tax is False
 
 
@@ -142,11 +142,13 @@ def test_renamed_price_variables(clean_env: pytest.MonkeyPatch, capfd: pytest.Ca
 
 
 def test_checkout_pending_hours_stay_within_the_page_lifetime_stripe_allows(clean_env: pytest.MonkeyPatch) -> None:
-    """The setting is the hosted page's expires_at as well as the reconciler's wait: Stripe accepts at most 24 hours,
-    and a shorter wait than the page's lifetime would drop a row whose page can still be paid."""
+    """The setting is the hosted page's expires_at as well as the reconciler's wait: Stripe accepts 30 minutes to 24
+    hours after it creates the page, and 1 to 23 keeps the value sent half an hour inside both ends even when the
+    server's clock runs ahead of Stripe's (24, the old default, lands past Stripe's limit as soon as the server's clock
+    is ahead by more than the request takes)."""
     assert make(billing_checkout_pending_hours=1).billing_checkout_pending_hours == 1
-    assert make(billing_checkout_pending_hours=24).billing_checkout_pending_hours == 24
-    for hours in (0, 25, 72):
+    assert make(billing_checkout_pending_hours=23).billing_checkout_pending_hours == 23
+    for hours in (0, 24, 25, 72):
         refused("billing_checkout_pending_hours", billing_checkout_pending_hours=hours)
 
 

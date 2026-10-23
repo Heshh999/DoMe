@@ -8,7 +8,7 @@
 import { ERRORS, type rest } from "@dome/protocol";
 
 import { planById, usd, WARN_AT_PERCENT, WINDOW_HOURS } from "../content/plans.ts";
-import { errorMessage } from "./labels.ts";
+import { errorMessage, isBillingSetupReason } from "./labels.ts";
 
 export type AssistantAllowance = rest.AssistantAllowance;
 export type AllowanceBucket = rest.AllowanceBucket;
@@ -243,10 +243,54 @@ export function billingStateCopy(status: Pick<BillingStatusResponse, "plan" | "e
 
 // ---- errors ------------------------------------------------------------------------------------------
 
-/** What to show for a failed billing request: the contract's message for its code, never the server's free text. */
+/** The five reasons a `BILLING_PROVIDER_ERROR` names in `detail.reason` (cloud-api billing/provider.py; CONTRACT_ISSUES 19). */
+const PROVIDER_ERROR_REASONS = ["auth", "bad_request", "not_found", "timeout", "provider_error"] as const;
+export type ProviderErrorReason = (typeof PROVIDER_ERROR_REASONS)[number];
+
+/** The reason of a `BILLING_PROVIDER_ERROR`, when it is one of the five; null for any other error or reason. */
+export function providerErrorReason(e: unknown): ProviderErrorReason | null {
+  if (!e || typeof e !== "object" || (e as { code?: unknown }).code !== "BILLING_PROVIDER_ERROR") return null;
+  const reason = (e as { detail?: { reason?: unknown } | null }).detail?.reason;
+  return PROVIDER_ERROR_REASONS.find((r) => r === reason) ?? null;
+}
+
+/**
+ * What to show for a failed billing request: the contract's message for its code, never the server's free text. A
+ * `BILLING_PROVIDER_ERROR` whose reason says DoMe's own payment setup is wrong (auth, bad_request, not_found) says so
+ * instead of "didn't answer… try again in a moment", which trying again would not fix (decision 78).
+ */
 export function billingErrorText(e: unknown): string {
   const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "INTERNAL";
+  const reason = providerErrorReason(e);
+  if (isBillingSetupReason(reason)) return errorMessage({ code }, { reason });
   return ERRORS[code]?.user_message ?? errorMessage({ code });
+}
+
+// cloud-api's adapter maps Stripe's 404 to not_found and every other refused request to bad_request, so a price (or
+// customer) Stripe does not know is bad_request (400 resource_missing); not_found is an id DoMe stored earlier
+// (a payment page or subscription) that Stripe no longer knows, such as one made under a Stripe key since replaced
+const STRIPE_DID: Record<ProviderErrorReason, string> = {
+  auth: "Stripe refused DoMe's secret key",
+  bad_request: "Stripe refused the request, for example a price or customer it does not know",
+  not_found: "Stripe does not know a payment page or subscription DoMe saved earlier",
+  timeout: "DoMe could not reach Stripe in time",
+  provider_error: "Stripe answered with an error",
+};
+// where to look next: the Deploy summary checks the key and the prices; it cannot see what DoMe saved earlier
+const STRIPE_NEXT: Partial<Record<ProviderErrorReason, string>> = {
+  auth: " Run Deploy again: its summary checks the Stripe setup.",
+  bad_request: " Run Deploy again: its summary checks the Stripe setup.",
+  not_found: " This can follow a change of the Stripe key.",
+};
+
+/**
+ * One line for whoever runs this DoMe service, under a failed payment while Stripe is in test mode only: what Stripe
+ * did and the reason code ("Test mode: Stripe refused the request (bad_request). …"), and for a setup fault where to
+ * look. Null in live mode or with billing off (customers see only the plain text) and for any other error.
+ */
+export function providerTestModeLine(reason: ProviderErrorReason | null, mode: rest.BillingMode | null | undefined): string | null {
+  if (mode !== "test" || !reason) return null;
+  return `Test mode: ${STRIPE_DID[reason]} (${reason}).${STRIPE_NEXT[reason] ?? ""}`;
 }
 
 /** "Add 100 AI requests for $2.99", from the server's figures (the contract's defaults until it answers). */

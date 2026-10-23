@@ -653,3 +653,21 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     `sending` (sent only when no cause is left) clears it.
 77. **`ACTION_UNAVAILABLE{reason: screen_view_not_included}` has its own row** ("not_included", no retry):
     the PC's build lacks the media stack; the generic "That control is not available" stays for the rest.
+
+78. **A payment provider error says whose problem it is.** (Staging, 2026-10-23: "Continue to payment" said
+    "Our payment provider didn't answer" while Stripe was refusing DoMe's own setup.) `BILLING_PROVIDER_ERROR`
+    carries `detail.reason` (cloud-api billing/provider.py; CONTRACT_ISSUES 19). Only `timeout` and
+    `provider_error` mean Stripe did not answer; `auth`, `bad_request` and `not_found` mean Stripe refused
+    DoMe's key or the request (a price or customer it does not know is `bad_request`, Stripe's 400), or does
+    not know a payment page or subscription DoMe saved earlier (`not_found`, Stripe's 404), which trying
+    again in a moment cannot fix. For those three the phone says "Payments aren't working on DoMe's side
+    right now. Nothing was charged. Try again later."
+    (`errorMessage` and `recoverySteps` with `ctx.reason`, `billingErrorText`): the one exception to decision
+    64's "the contract's `user_message` for the code". `timeout`, `provider_error`, a missing reason and any
+    reason the phone does not know keep the contract's text. While `GET /v1/account/billing` says
+    `billing_mode: "test"`, the error notice adds one line for whoever runs the service with what Stripe did
+    and the reason code (`providerTestModeLine`: "Test mode: Stripe refused the request, for example a price
+    or customer it does not know (bad_request). Run Deploy again: its summary checks the Stripe setup."; the
+    Deploy pointer only for `auth` and `bad_request`, as the Deploy check cannot see ids DoMe saved earlier).
+    In live mode and with billing off it never appears, so a customer never sees a reason code; only the five
+    known reasons are ever shown, never text from the server.

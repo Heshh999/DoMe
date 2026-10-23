@@ -101,6 +101,26 @@ describe("recovery steps and help categories", () => {
     expect(errorMessage({ code: "ALREADY_SUBSCRIBED" })).toBe("You already have a subscription. Manage it from Billing.");
   });
 
+  it("BILLING_PROVIDER_ERROR: a payment setup DoMe has wrong is never 'didn't answer, try again in a moment'", () => {
+    const didNotAnswer = ["Our payment provider didn't answer. Nothing was charged.", "Try again in a moment."];
+    const notWorking = ["Payments aren't working on DoMe's side right now. Nothing was charged.", "Try again later."];
+    // timeout and provider_error really are "didn't answer"; an unknown or missing reason keeps that text too
+    for (const reason of ["timeout", "provider_error", "something_new", null, undefined]) {
+      expect(recoverySteps("BILLING_PROVIDER_ERROR", { reason })).toEqual(didNotAnswer);
+      expect(errorMessage({ code: "BILLING_PROVIDER_ERROR" }, { reason })).toBe("Our payment provider didn't answer. Nothing was charged. Try again in a moment.");
+    }
+    expect(recoverySteps("BILLING_PROVIDER_ERROR")).toEqual(didNotAnswer);
+    // auth, bad_request and not_found: Stripe refused DoMe's own setup, so trying again now cannot help
+    for (const reason of ["auth", "bad_request", "not_found"]) {
+      expect(recoverySteps("BILLING_PROVIDER_ERROR", { reason })).toEqual(notWorking);
+      expect(errorMessage({ code: "BILLING_PROVIDER_ERROR" }, { reason })).toBe("Payments aren't working on DoMe's side right now. Nothing was charged. Try again later.");
+      expect(recoverySteps("BILLING_PROVIDER_ERROR", { reason }).join(" ")).not.toMatch(/didn't answer|in a moment|Stripe|bad_request|not_found|auth/);
+    }
+    // the reason belongs to BILLING_PROVIDER_ERROR only
+    expect(recoverySteps("BILLING_NOT_AVAILABLE", { reason: "auth" })).toEqual(recoverySteps("BILLING_NOT_AVAILABLE"));
+    expect(errorMessage({ code: "RATE_LIMITED" }, { reason: "bad_request" })).toBe(errorMessage({ code: "RATE_LIMITED" }));
+  });
+
   it("window errors go to Apps help, search and extension errors to media help", () => {
     expect(supportCategoryFor("WINDOW_STATE_UNCHANGED")).toBe("apps");
     expect(supportCategoryFor("FULLSCREEN_UNSUPPORTED")).toBe("apps");

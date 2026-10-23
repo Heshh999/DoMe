@@ -4,9 +4,12 @@ Status (2026-10-20): **built in cloud-api and tested against an in-memory stand-
 against Stripe itself.** Checkout, the Customer Portal, AI top-ups, the webhook, the subscription state
 machine, grace, the downgrade selection, the reconciler and the account-deletion cancellation function exist
 in `cloud-api/dome_api/billing/` and are integration-tested on Linux with real PostgreSQL and the fake provider
-(`cloud-api/dome_api/billing/fake_provider.py`). The Stripe adapter is unit-tested without the network. Nothing
-has been sandbox-provider-tested: the founder's first Stripe test-mode run on staging is the next step
-(`docs/LAUNCH_SETUP.md` "Stripe (payments)"). Production has no Stripe values, so billing there is **off**:
+(`cloud-api/dome_api/billing/fake_provider.py`). The Stripe adapter is unit-tested without the network, and since
+2026-10-23 every request it sends (with the billing service's own arguments) and every response field it reads is
+checked against stripe-mock v0.206.0, Stripe's official mock API, in CI (§12). stripe-mock checks parameter names,
+types, enums and the API version, not an account's objects or rules, so nothing has been sandbox-provider-tested yet:
+the founder's first Stripe test-mode run on staging is still the proof (`docs/LAUNCH_SETUP.md` "Stripe (payments)").
+Production has no Stripe values, so billing there is **off**:
 nothing can be bought and everyone stays on Free. On staging and production the values come from the GitHub
 Environment through the Deploy button, which checks them before touching Fly (all seven or none, key and price-id
 shapes, no live key on staging), stores the two secrets in Fly, passes the five price ids, removes Stripe secrets
@@ -16,7 +19,11 @@ run against Fly).
 
 Evidence tags used below: `unit-tested`, `integration-tested (fake provider)` (Linux, real PostgreSQL, real
 OIDC through `tools/dev-idp`, simulated agents/phones, `FakeStripe` signing its deliveries exactly the way
-Stripe does), `sandbox-provider-tested` (none yet), `not implemented`, `not yet verified`.
+Stripe does), `stripe-mock-validated` (requests and response fields checked by stripe-mock v0.206.0, Stripe's
+official mock API, started in CI with `-strict-version-check`: parameter names, types, enums and the API version the
+pinned SDK sends; it knows no account, so a price's existence and type, the account name Checkout needs, the
+`expires_at` window and the Portal configuration are not checked), `sandbox-provider-tested` (none yet),
+`not implemented`, `not yet verified`.
 
 ## 1. What exists now
 
@@ -33,7 +40,7 @@ Stripe does), `sandbox-provider-tested` (none yet), `not implemented`, `not yet 
 | Grace and downgrade selection | 7-day grace after a failed payment; `GET/PUT /v1/account/plan-selection` within 14 days of a downgrade | integration-tested (fake provider) |
 | Reconciler | Hourly pass in the API process; `dome-api --billing-reconcile` runs one pass by hand | integration-tested (fake provider) |
 | Account deletion | `BillingService.cancel_for_account_deletion()` with a `pending_deletions` retry | integration-tested (fake provider); the `DELETE /v1/account` route is **not implemented** |
-| Stripe adapter | `billing/stripe_provider.py` on the official `stripe` SDK 16.x (`*_async` methods, SDK retries off, 10 s timeout) | unit-tested against the SDK's own signature helper and object models (`test_billing_stripe_adapter.py`); **sandbox-provider-tested: not yet** |
+| Stripe adapter | `billing/stripe_provider.py` on the official `stripe` SDK 16.x (`*_async` methods, SDK retries off, 10 s timeout) | unit-tested against the SDK's own signature helper, object models and Stripe-shaped error answers (`test_billing_stripe_adapter.py`); stripe-mock-validated: every request with the service's own arguments, and the fields read back (`test_stripe_provider_mock.py`, CI); **sandbox-provider-tested: not yet** |
 | Disputes, refunds, trials | Recorded as `ignored` with a `billing.needs_operator` warning (disputes, refunds); no trial is configured | **not implemented** |
 | PWA | Billing page states, pricing page "Available now" when `billing_enabled` (mobile-app, built separately) | unit-tested (component tests in `mobile-app`) |
 
@@ -185,8 +192,30 @@ each answers 503 `BILLING_NOT_AVAILABLE`.
   and applied at once and the call answers 409 `ALREADY_SUBSCRIBED`, or `CHECKOUT_PROCESSING` while Stripe has not
   created the subscription yet (`test_a_paid_page_whose_webhook_is_late_is_never_sold_twice`). An account with a
   live subscription gets 409 `ALREADY_SUBSCRIBED` (detail `{portal_available}`). A Stripe failure is 502
-  `BILLING_PROVIDER_ERROR` and nothing shows as pending. Pages expire after `DOME_BILLING_CHECKOUT_PENDING_HOURS`
-  (default and maximum 24, Stripe's limit), the same value the reconciler waits before asking about a page.
+  `BILLING_PROVIDER_ERROR` (the phone gets `{reason}` only) and nothing shows as pending; the server logs one
+  `billing.provider_error` line with the operation, the reason, Stripe's HTTP status and request id, and Stripe's own
+  short machine strings `stripe_error` (its error code, such as `resource_missing`) and `stripe_param` (the parameter
+  it names, such as `line_items[0][price]`), never Stripe's message, which can quote customer data
+  (`test_a_provider_refusal_logs_stripes_code_and_parameter_and_answers_the_reason_only`). For example
+  `stripe_error=resource_missing stripe_param=line_items[0][price]` is a price id that Stripe does not know under that
+  secret key (a price from another account or sandbox).
+- **A customer id from a replaced key.** The customer id is stored before the page is made, so an attempt under one
+  Stripe account leaves an id that another account, sandbox or mode does not know. When Stripe refuses it
+  (`resource_missing` on `customer`), Checkout forgets that id on the account's rows, creates the customer under the
+  current key and makes the page once more with a new idempotency key and expiry, under the account lock
+  (`billing.customer_unknown`; `test_a_customer_id_from_a_replaced_secret_key_is_replaced_too`). Before 2026-10-23
+  every later attempt sent the old id and failed after the key was corrected. The Portal and top-ups are not retried:
+  both need a live subscription, which the new key cannot see either.
+- **Page expiry.** Pages expire after `DOME_BILLING_CHECKOUT_PENDING_HOURS` (1 to 23, default 23), the same value the
+  reconciler waits before asking about a page. Stripe accepts an `expires_at` from 30 minutes to 24 hours after it
+  creates the page, by its own clock; DoMe sends the configured hours in whole seconds (the stored
+  `checkout_expires_at` is exactly the value sent), so the value is at least 30 minutes inside both ends even when the
+  server's clock is off from Stripe's. Until 2026-10-23 the default was 24 hours, which is past Stripe's limit as soon
+  as the server's clock runs ahead of Stripe's by more than the request takes. A replay (above) sends the stored
+  expiry again only while it is still 15 minutes inside Stripe's window; otherwise the page creation starts over with
+  a new idempotency key and a new expiry (`test_a_stored_expiry_stripe_would_refuse_is_not_replayed`,
+  `test_a_server_clock_off_from_stripes_still_gets_a_page`). The fake provider refuses an `expires_at` outside the
+  window as Stripe does.
 - **Pro Plus only while the assistant is on.** Pro Plus differs from Pro only in AI requests, so, as with top-ups,
   `checkout(plan=pro_plus)` is refused with 403 `PLAN_NOT_AVAILABLE` (detail `{plan, reason: "ai_off"}`) while
   `DOME_AI_ENABLED` is off; Pro is still sold. `billing_status_response.checkout_plans` lists what can be bought
@@ -243,8 +272,12 @@ Evidence: integration-tested (fake provider), `test_billing_checkout.py`, `test_
    API process (ADR-0001); a second process would run its own pass, which is safe because every step is
    idempotent.
 
-Logs carry event types, codes, account ids, plan names and counts; never an email, a body, a signature or a
-Stripe object id (`test_webhook_logs_carry_no_email_or_body` also searches every table).
+Logs carry event types, codes, account ids, plan names and counts, and on a failed Stripe call Stripe's error code
+and parameter name (`billing.provider_error`, §5); never an email, a body, a signature, a Stripe message or a Stripe
+object id (`test_webhook_logs_carry_no_email_or_body` also searches every table). The stripe SDK logs Stripe's
+message and every request URL at INFO and the request and response bodies at DEBUG through its own logger, and httpx
+logs every URL at INFO; both loggers are held at WARNING whatever `DOME_LOG_LEVEL` says (`logging.SDK_LOGGERS`,
+`test_the_stripe_sdks_own_log_never_carries_its_message_or_the_email`).
 
 Evidence: integration-tested (fake provider), `test_billing_webhook.py`.
 
@@ -351,7 +384,10 @@ the 30-day hard delete. Until it exists, deletion is a support request.
 | Top-ups: who may buy, credit once, balance cap, spending order, kept on Free | `test_billing_topup.py` | integration-tested (fake provider) |
 | AI windows and the shared fixture | `test_assistant_metering.py`, shared/python and shared/ts contract tests | integration-tested / unit-tested |
 | Start-up refusals (partial set, live key outside production, renamed variables, fake outside dev/test) | `test_billing_settings.py` | unit-tested |
-| Stripe adapter: SDK-made signatures, tampered or stale bodies, id and period normalisation, Checkout parameters, errors without the key | `test_billing_stripe_adapter.py` | unit-tested |
+| Stripe adapter: SDK-made signatures, tampered or stale bodies, id and period normalisation, Checkout parameters, errors with Stripe's code and parameter but never its message or the key | `test_billing_stripe_adapter.py` | unit-tested |
+| Every request the adapter sends, with the billing service's own arguments (recorded through a whole customer life: two Checkout pages, payment, webhooks, Portal, top-up, account deletion), plus the Checkout, status and Portal routes with the adapter in place of the fake; the fields read back (session and customer ids, status words, the expiry echoed, the period on the subscription item, an invoice's subscription under `parent.subscription_details`); webhooks carrying stripe-mock's own objects; a deliberately wrong parameter is refused | `test_stripe_provider_mock.py` against stripe-mock v0.206.0 (`-strict-version-check`), run in CI (`.github/workflows/ci.yml`, job "Python"); skipped without `DOME_TEST_STRIPE_MOCK_URL` | stripe-mock-validated; nothing refused (2026-10-23) |
+| Page expiry inside Stripe's window with the server's clock 20 minutes ahead or behind; a stored expiry Stripe would refuse is never replayed | `test_billing_checkout.py` (fake provider, which enforces Stripe's window) | integration-tested (fake provider) |
+| A customer id Stripe does not know (stored under a key since replaced) is replaced once on Checkout; the Stripe SDK's and httpx's own loggers never carry Stripe's message, a body or the email | `test_billing_checkout.py` (fake provider, which refuses an unknown customer as Stripe does), `test_billing_stripe_adapter.py` | integration-tested (fake provider) / unit-tested |
 | Migration 0004 down and up | `test_billing_migration.py`, `alembic check` | integration-tested |
 | The same lifecycle against Stripe test mode (card 4242…, test clocks for renewal and failed payment, Stripe CLI or dashboard redeliveries) | founder on staging, `docs/LAUNCH_SETUP.md` "Stripe (payments)" | **not yet verified** |
 | Live charge | founder-enabled live keys, separate checklist | not applicable yet |

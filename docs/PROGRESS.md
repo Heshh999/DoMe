@@ -2,6 +2,69 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-23 — The first test purchase on staging failed; Deploy now checks the Stripe setup with Stripe itself
+
+- **What happened.** On staging (852cdc2), Billing > DoMe Pro > Continue to payment answered "Our payment provider didn't
+  answer. Nothing was charged." That is cloud-api's 502 `BILLING_PROVIDER_ERROR` for any Stripe refusal. The reason went
+  only to the Fly log, which is not readable from here, and api.stripe.com is blocked from this container, so the
+  cause is not confirmed. Most likely: `DOME_STRIPE_SECRET_KEY` was copied from the main account's Test mode while the
+  five prices were made in the "domeremote sandbox". Every sandbox has its own keys and object ids, so customers.create
+  succeeds and checkout.sessions.create refuses the price (400 resource_missing on `line_items[0][price]`, mapped to
+  `bad_request`). The guide's key step did not say to copy the key from inside the sandbox.
+- **Deploy checks Stripe** (`deploy/launch/dome_deploy.py`, `check_stripe_setup`, before any flyctl call, so a stop
+  changes nothing). It makes read-only GETs to `/v1/account`, `/v1/prices/{id}?expand[]=product` ×5,
+  `/v1/webhook_endpoints` and `/v1/billing_portal/configurations?is_default=true`, sending Stripe-Version
+  2026-09-30.endive (the version stripe 16.0.0 sends). A new summary row, **Stripe account**, names the account the key
+  belongs to.
+  - It stops on:
+    - a refused key;
+    - an account with no name (Checkout refuses those);
+    - a live account not yet activated;
+    - prices from another account or sandbox, which also skips the webhook and portal advice that would point at the
+      wrong account;
+    - archived prices or products, the wrong mode, a currency other than USD;
+    - the wrong type or interval: monthly/yearly recurring licensed, one-time top-up;
+    - tiered prices;
+    - amounts that differ from `plans.json` ("Stripe would charge $X but DoMe shows $Y");
+    - no webhook endpoint at this environment's address, a disabled endpoint, or missing required events (`*` counts as
+      all);
+    - no saved default customer portal.
+  - Warnings, and the deploy goes on, for:
+    - restricted-key 403s;
+    - missing refund and dispute events;
+    - portal details;
+    - Stripe not answering.
+  - Error texts are scrubbed of anything key-shaped. Only endpoints on DoMe's own hosts are listed, since other URLs
+    can carry tokens.
+  - 387 tests, including a fake Stripe and 89 new tests. A mutation pass killed every mutant.
+  - `LAUNCH_SETUP.md` §11A has a "One sandbox for everything" note at the key step and the new row; §14 gains 21 message
+    rows.
+- **cloud-api**:
+  - `tests/test_stripe_provider_mock.py` replays every provider call the billing service makes, with its real
+    arguments, against **stripe-mock v0.206.0** (Stripe's official mock, `-strict-version-check`). stripe-mock refused
+    none of them, which rules out a request-shape bug. `ci.yml` builds stripe-mock with `go install` (pinned, Go
+    checksum database) and runs these tests on every push.
+  - Checkout's `expires_at` was now + 24 h, Stripe's exact maximum, which a server clock slightly ahead would break. It
+    is now 1–23 h, default 23, whole seconds; a stored expiry is replayed only while it is safely inside the window.
+  - `billing.provider_error` now logs `stripe_error` and `stripe_param` (Stripe's code and parameter, never its
+    message).
+  - The stripe SDK's and httpx's own loggers are pinned at WARNING: they logged Stripe error messages and URLs at INFO,
+    and request bodies with the customer's email at DEBUG.
+  - A stored customer id that the current key does not know (400 resource_missing, param customer, for example after
+    the key is switched to the sandbox) is forgotten and the customer is created again on the next Checkout, so the
+    founder's own account is not stuck after the fix. DECISIONS 108, KNOWN_ISSUES 20.
+  - 578 passed and 7 skipped without stripe-mock; 584 passed and 1 skipped with it.
+- **Phone.** A Stripe refusal of DoMe's own setup (`auth`, `bad_request`, `not_found`) now reads "Payments aren't working
+  on DoMe's side right now. Nothing was charged. Try again later." `timeout` and `provider_error` keep "didn't answer".
+  In Test mode only, one more line names the reason and points to the Deploy summary. mobile-app: 1436 passed.
+- Built by three agents, reviewed by three adversarial reviewers (10 findings: 5 major, all fixed), then fixed and
+  verified, and every suite was re-run by the lead.
+- **Not run against real Stripe**: the next staging Deploy is the first real test of the check, its messages and
+  click paths. The CI stripe-mock step has not run on GitHub yet.
+- Next (founder): copy the secret key from inside "domeremote sandbox", paste it over `DOME_STRIPE_SECRET_KEY` in
+  staging, and run Deploy for staging. The summary's **Stripe account** row and any stop name the problem. Then try the
+  test purchase again.
+
 ## 2026-10-23 — Staging deployed with Stripe in test mode and Screen view on
 
 - Deploy #8 (run 40026044503, staging, commit 852cdc2), started and approved by the founder: **success** in

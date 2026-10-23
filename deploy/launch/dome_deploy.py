@@ -38,6 +38,12 @@ none, checked before any flyctl call. With all seven, the two secrets are staged
 ids are passed with ``flyctl deploy -e`` on every deploy; with none, billing is off and any DOME_STRIPE_* secret an
 earlier deploy left in Fly is removed with ``flyctl secrets unset --stage`` (the app refuses to start with only some
 of the seven). A live key is refused on staging; production accepts test keys, and the summary says which mode runs.
+With billing on, the deploy then asks Stripe itself, still before any flyctl call (GET only, the key in a header): which
+account the key belongs to, whether it has a name (Checkout refuses an account without one) and, for a live key, may
+take payments; whether each price exists for that key with the type, interval, currency and amount DoMe shows
+(shared/protocol/plans.json); whether a webhook endpoint for this environment listens to the events DoMe needs; and
+whether the customer portal has been saved. A mismatch stops the run with the founder's fix; Stripe not answering
+never stops a deploy (the summary says the check did not run).
 
 Each deploy writes a temporary per-environment copy of deploy/fly.toml with that environment's machine-sleep settings
 (staging sleeps when idle, production never does) and deletes it afterwards.
@@ -73,7 +79,7 @@ from dataclasses import dataclass, field
 from http.client import HTTPMessage
 from pathlib import Path
 from typing import IO, Any, TextIO
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
@@ -150,6 +156,24 @@ BILLING_MODE_TEXT = {
     "off": "Stripe: off — nothing can be bought, everyone stays on Free",
     "test": "Stripe: TEST MODE — no real charges",
     "live": "Stripe: LIVE — real charges",
+}
+# With billing on, the deploy asks Stripe itself (GET only) whether the seven values fit together, before any flyctl
+# call. The API version is the one cloud-api's stripe SDK pins (stripe/_api_version.py), so this check reads the shapes
+# the app gets; every path, parameter and field used was checked against Stripe's OpenAPI spec of that version
+# (github.com/stripe/openapi, spec3.json) and the requests were run against stripe-mock v0.206.0.
+STRIPE_API = "https://api.stripe.com"
+STRIPE_API_VERSION = "2026-09-30.endive"
+STRIPE_SDK_VERSION = "16.0.0"  # cloud-api/uv.lock; tests/test_deploy_stripe_check.py fails when it changes
+STRIPE_TIMEOUT = 10.0
+PLANS_FILE = REPO_ROOT / "shared" / "protocol" / "plans.json"
+# What each price must be at Stripe: its recurring interval ("" = one-time), and where plans.json keeps the amount DoMe
+# shows for it (under pricing_defaults).
+STRIPE_PRICE_TERMS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "DOME_STRIPE_PRICE_PRO_MONTHLY": ("month", ("plans", "pro", "monthly_cents")),
+    "DOME_STRIPE_PRICE_PRO_ANNUAL": ("year", ("plans", "pro", "annual_cents")),
+    "DOME_STRIPE_PRICE_PRO_PLUS_MONTHLY": ("month", ("plans", "pro_plus", "monthly_cents")),
+    "DOME_STRIPE_PRICE_PRO_PLUS_ANNUAL": ("year", ("plans", "pro_plus", "annual_cents")),
+    "DOME_STRIPE_PRICE_TOPUP": ("", ("topup", "price_cents")),
 }
 # Screen view, Phase 1 beta (docs/design/screen-view.md §12, §13, §20; cloud-api settings.py _v_screen). The relay
 # server (Cloudflare Realtime TURN) for the PHONE needs two values, both or neither: the Environment VARIABLE
@@ -229,6 +253,9 @@ _FLY_TOKENS = re.compile(r"\b(FlyV1\s+\S+|f[mo][12]_[A-Za-z0-9_+/=-]{8,})")
 _PRIVATE_KEY_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)
 _STRIPE_SECRETS = re.compile(r"\b((?:sk|rk)_(?:test|live)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9+/=]{8,})")
 _STRIPE_PRICE_ID = re.compile(r"^price_[A-Za-z0-9_]{4,}$")  # cloud-api settings.py _PRICE_ID
+# Keys and signing secrets in Stripe's own error texts (Stripe shows a key part-masked; stripe-mock echoes the header)
+_STRIPE_KEYISH = re.compile(r"(?i)\bbearer\s+\S+|\b(?:sk|rk|pk)_(?:test|live)_[^\s'\"]*|\bwhsec_[^\s'\"]*")
+_STRIPE_ACCOUNT_ID = re.compile(r"^acct_[A-Za-z0-9]{1,64}$")
 # cloud-api settings.py turn_key_id pattern, with a floor so a cut-off paste is caught here, before Fly
 _TURN_KEY_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _SECRET_ASSIGNMENT = re.compile(r"\b([A-Z][A-Z0-9_]*(?:URL|SECRET|PASSWORD|TOKEN|KEY|B64))=\S+")
@@ -1072,7 +1099,13 @@ def read_billing(env: Mapping[str, str], cfg: EnvConfig, book: SecretBook) -> Bi
     return check
 
 
-def billing_step_text(billing: Billing) -> str:
+def billing_step_text(billing: Billing, *, stored: bool = True) -> str:
+    """The summary row "Billing (Stripe)"; ``stored`` False for a run that stopped before changing anything on Fly."""
+    if billing.on and not stored:
+        return (
+            f"**{BILLING_MODE_TEXT[billing.mode]}** (read from this GitHub Environment; nothing was stored in Fly, as "
+            "this run stopped before changing anything)"
+        )
     if billing.on:
         return (
             f"**{BILLING_MODE_TEXT[billing.mode]}** (the secret key and the webhook signing secret stored in Fly, the "
@@ -1935,6 +1968,580 @@ PRODUCTION_NOT_READY = [
 
 
 # ======================================================================================================
+# Stripe itself: the account, the five prices, the webhook endpoint and the customer portal (deploy with billing on,
+# before any flyctl call; GET only)
+# ======================================================================================================
+
+
+class StripeDown(Exception):  # noqa: N818
+    """Stripe gave no usable answer: no connection, a timeout, 429, 5xx, a redirect, or a body that is not a JSON
+    object. A deploy never stops for this; it goes on without the check and the summary says so."""
+
+
+class _KeyRefused(Exception):  # noqa: N818
+    """Stripe answered 401: it does not accept the secret key."""
+
+
+@dataclass
+class StripeCheck:
+    """What Stripe itself says about one environment's Stripe values. ``problems`` stop the deploy (with
+    ``next_steps``); ``warnings`` become notes; ``row`` is the summary row "Stripe account"."""
+
+    row: str = ""
+    problems: list[str] = field(default_factory=list)
+    next_steps: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def step(self, text: str) -> None:
+        if text not in self.next_steps:
+            self.next_steps.append(text)
+
+
+def stripe_get(key: str, path: str, query: Sequence[tuple[str, str]] = ()) -> HttpResult:
+    """GET from Stripe's REST API. The key travels only in the Authorization header, never in the URL, and redirects
+    are not followed, so it never reaches another host. Raises HttpFailure like http_get."""
+    url = STRIPE_API + path + ("?" + urlencode(query) if query else "")
+    headers = {"Authorization": f"Bearer {key}", "Stripe-Version": STRIPE_API_VERSION, "User-Agent": "dome-deploy"}
+    return http_get(url, timeout=STRIPE_TIMEOUT, headers=headers, follow_redirects=False)
+
+
+def stripe_text(book: SecretBook, text: str) -> str:
+    """Stripe's own words, fit for the log and the summary: one line, every known secret and anything shaped like a
+    Stripe key, signing secret or Authorization header hidden, no table pipes, at most 300 characters."""
+    text = _STRIPE_KEYISH.sub("[key hidden]", book.redact(" ".join(text.split())))
+    return text.replace("|", "/")[:300]
+
+
+def stripe_read(
+    key: str, book: SecretBook, path: str, query: Sequence[tuple[str, str]] = ()
+) -> tuple[int, dict[str, Any], str]:
+    """(HTTP status, the JSON object, Stripe's error message through stripe_text). Raises StripeDown when there is no
+    usable answer."""
+    try:
+        result = stripe_get(key, path, query)
+    except HttpFailure as exc:
+        raise StripeDown(f"no answer: {exc.kind}") from None
+    status = result.status
+    if status < 200 or 300 <= status < 400 or status == 429 or status >= 500:
+        raise StripeDown(f"HTTP {status}")
+    body = result.json()
+    if not isinstance(body, dict):
+        raise StripeDown(f"HTTP {status} with an answer that is not Stripe's")
+    error = body.get("error")
+    raw = error.get("message") if isinstance(error, dict) and status != 200 else None
+    return status, body, stripe_text(book, raw) if isinstance(raw, str) else ""
+
+
+def display_prices() -> tuple[dict[str, int], str]:
+    """(variable -> the amount DoMe shows for that price, in cents; the currency, lower-case) from plans.json's
+    pricing_defaults, the source of the pricing page, the Billing page and GET /v1/plans."""
+    try:
+        pricing = json.loads(PLANS_FILE.read_text(encoding="utf-8"))["pricing_defaults"]
+        amounts: dict[str, int] = {}
+        for name, (_, where) in STRIPE_PRICE_TERMS.items():
+            value: Any = pricing
+            for part in where:
+                value = value[part]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(name)
+            amounts[name] = value
+        currency = pricing["currency"]
+        if not isinstance(currency, str) or not re.fullmatch(r"[A-Za-z]{3}", currency):
+            raise ValueError("currency")
+    except (OSError, ValueError, KeyError, TypeError):
+        raise Stop(
+            "engineer",
+            "shared/protocol/plans.json does not hold DoMe's prices (pricing_defaults) in a shape the Deploy button "
+            "can compare with Stripe. Nothing was created or changed.",
+        ) from None
+    return amounts, currency.lower()
+
+
+def _plain(book: SecretBook, value: object, limit: int = 80) -> str:
+    """A name Stripe returned, safe inside a summary table: one line, redacted, no Markdown that could break it."""
+    return re.sub(r"[|*`<>\[\]]", "", book.redact(" ".join(str(value).split())))[:limit]
+
+
+def _period(count: object, interval: object) -> str:
+    if not isinstance(interval, str) or not isinstance(count, int):
+        return "an unknown period"
+    return interval if count == 1 else f"{count} {interval}s"
+
+
+def _money(cents: int) -> str:
+    return f"${cents / 100:,.2f}"
+
+
+def price_problems(
+    name: str, price: Mapping[str, Any], *, live: bool, cents: int, currency: str
+) -> list[tuple[str, str]]:
+    """What is wrong with one Stripe price for the variable ``name``, as (clause, fix) pairs; fix is "unarchive",
+    "new_price", "amount" or "same_account". Empty when the price is what DoMe shows and sells."""
+    interval = STRIPE_PRICE_TERMS[name][0]
+    out: list[tuple[str, str]] = []
+    if price.get("active") is not True:
+        out.append(("is archived in Stripe", "unarchive"))
+    product = price.get("product")
+    if isinstance(product, dict):  # expanded (expand[]=product); a product or a deleted_product
+        if product.get("deleted") is True:
+            out.append(("its product was deleted in Stripe", "new_price"))
+        elif product.get("active") is not True:
+            out.append(("its product is archived in Stripe", "unarchive"))
+    if price.get("livemode") is not live:
+        theirs = "Live" if price.get("livemode") is True else "Test"
+        mine = "Live" if live else "Test"
+        out.append((f"is a {theirs} mode price, but the key is a {mine} mode key", "same_account"))
+    found_currency = str(price.get("currency") or "").lower()
+    if found_currency != currency:
+        out.append((f"is priced in {found_currency.upper() or 'no currency'}, not {currency.upper()}", "new_price"))
+    kind = price.get("type")
+    recurring = price.get("recurring")
+    recurring = recurring if isinstance(recurring, dict) else {}
+    if not interval:
+        if kind != "one_time":
+            out.append(("is a recurring (subscription) price; the AI top-up must be a **one-time** price", "new_price"))
+    elif kind != "recurring":
+        out.append((f"is a one-time price; it must be **recurring**, billed every {interval}", "new_price"))
+    else:
+        every, count = recurring.get("interval"), recurring.get("interval_count")
+        if every != interval or count != 1:
+            out.append((f"bills every {_period(count, every)}; it must bill every {interval}", "new_price"))
+        if recurring.get("usage_type") != "licensed":
+            out.append(("is usage-based (metered); it must be one flat amount per period", "new_price"))
+    amount = price.get("unit_amount")
+    if price.get("billing_scheme") != "per_unit":
+        out.append(("uses tiered pricing; it must be one flat amount", "new_price"))
+    elif not isinstance(amount, int) or isinstance(amount, bool):
+        out.append(("has no fixed amount (the customer chooses it); it must be one flat amount", "new_price"))
+    elif found_currency == currency and amount != cents:
+        out.append((f"Stripe would charge {_money(amount)} but DoMe shows {_money(cents)}", "amount"))
+    return out
+
+
+class StripeChecker:
+    """Reads Stripe with one environment's secret key (GET only) and compares what it finds with what DoMe needs:
+    the account (named; for a live key, allowed to take payments), the five prices (plans.json), the webhook endpoint
+    for this environment (the nine events DoMe acts on) and the customer portal (saved). Messages name GitHub
+    variables and Stripe click paths, never a secret value."""
+
+    def __init__(
+        self,
+        env: Mapping[str, str],
+        cfg: EnvConfig,
+        billing: Billing,
+        book: SecretBook,
+        amounts: Mapping[str, int],
+        currency: str,
+    ) -> None:
+        self.env = env
+        self.cfg = cfg
+        self.billing = billing
+        self.book = book
+        self.amounts = amounts
+        self.currency = currency
+        self.live = billing.mode == "live"
+        self.mode = "Live mode" if self.live else "Test mode"
+        self.page = environments_page(env)
+        self.app = app_name_for(cfg, env)  # already checked by read_inputs
+        self.label = ""  # "**name** (`acct_...`)" once the account was read
+        self.matched: list[str] = []  # what was checked and matches
+        self.unchecked: list[str] = []  # what the (restricted) key may not read
+        self.answered = False  # Stripe answered a read at least once (HTTP 200)
+        self.foreign = False  # the key's account knows none of the five prices: it is not the account DoMe set up
+        self.check = StripeCheck()
+
+    def read(self, what: str, path: str, query: Sequence[tuple[str, str]] = ()) -> tuple[int, dict[str, Any], str]:
+        """Status 403 (a restricted key without read access to ``what``) is noted for a warning, not a stop. Raises
+        _KeyRefused on 401 and StripeDown when Stripe gives no usable answer."""
+        status, body, message = stripe_read(self.billing.secret_key, self.book, path, query)
+        self.answered = self.answered or status == 200
+        if status == 401:
+            raise _KeyRefused(message)
+        if status == 403 and what not in self.unchecked:
+            self.unchecked.append(what)
+        return status, body, message
+
+    def dome_host(self, hostname: str) -> bool:
+        """An address of DoMe's own: this environment's DNS zone (domeremote.com and its subdomains) or its Fly app."""
+        hostname = hostname.lower().rstrip(".")
+        zone = self.cfg.dns_zone.lower()
+        return hostname in (zone, f"{self.app}.fly.dev") or hostname.endswith("." + zone)
+
+    @property
+    def scope(self) -> str:
+        """Where something was looked for, for a sentence: "in **name** (`acct_...`), Test mode"."""
+        return f"in {self.label}, {self.mode}" if self.label else f"in {self.mode}"
+
+    def same_account_step(self) -> str:
+        prefix = "sk_live_" if self.live else "sk_test_"
+        return (
+            "In the Stripe dashboard, check the account name at the top left"
+            + (f" (this key belongs to {self.label})" if self.label else "")
+            + f". Switch to the account or sandbox that holds DoMe's prices ({self.mode}), and copy "
+            f"from inside it both the secret key (**Developers** > **API keys**, `{prefix}...`) and the five price "
+            "ids (**Product catalog** > the product > the price, `price_...`). Paste the key over the Environment "
+            "**secret** `DOME_STRIPE_SECRET_KEY` and the ids over the Environment **variables** "
+            f"`DOME_STRIPE_PRICE_...` at {self.page} > **{self.cfg.name}**. The webhook endpoint and the customer "
+            "portal settings must be in that same account or sandbox, and `DOME_STRIPE_WEBHOOK_SECRET` must be the "
+            "**Signing secret** of its endpoint: copy it again from there if unsure, as the Deploy button cannot "
+            "check it (docs/LAUNCH_SETUP.md section 11A)."
+        )
+
+    def run(self) -> StripeCheck:
+        down = ""
+        try:
+            self.account()
+            self.prices()
+            if not self.foreign:  # another account's webhook endpoint and portal would only add wrong fixes
+                self.webhook()
+                self.portal()
+        except _KeyRefused as exc:
+            self.check.problems.append(
+                "Stripe refused the secret key in `DOME_STRIPE_SECRET_KEY` (HTTP 401): it was rolled or deleted in "
+                "Stripe, or not copied whole. With it, no customer can pay"
+                + (f" (Stripe says: {exc})." if str(exc) else ".")
+            )
+            self.check.step(
+                f"In the Stripe dashboard ({self.mode}), check the account name at the top left: it must be the "
+                "account or sandbox that holds DoMe's prices, webhook endpoint and customer portal. There, open "
+                "**Developers** > **API keys**, click **Reveal** next to **Secret key** (or create a new secret key), "
+                f"copy it with the copy button and paste it over `DOME_STRIPE_SECRET_KEY` at {self.page} > "
+                f"**{self.cfg.name}** > **Environment secrets** (docs/LAUNCH_SETUP.md section 11A, step 3)."
+            )
+            self.check.row = "**key refused by Stripe** (HTTP 401)"
+            return self.check
+        except StripeDown as exc:
+            down = str(exc)
+        if self.unchecked:
+            what = ", ".join(self.unchecked)
+            self.check.warnings.append(
+                f"Stripe would not let this key read {what} (HTTP 403: a restricted key without that permission), so "
+                f"the Deploy button could not check {'it' if len(self.unchecked) == 1 else 'them'}. Check by hand "
+                "(docs/LAUNCH_SETUP.md section 11A), or give the key read access in Stripe > **Developers** > **API "
+                "keys** > the restricted key > **Edit**."
+            )
+        if down:
+            self.check.warnings.append(
+                f"The Stripe check could not run{' to the end' if self.answered else ''} (Stripe's API: {down}). The "
+                "deploy went on without it: Stripe being unreachable never stops a deploy. Run Deploy again later to "
+                "have the account, prices, webhook endpoint and customer portal checked."
+            )
+        lead = f"{self.label}, {self.mode}: " if self.label else f"{self.mode}: "
+        if self.check.problems:
+            self.check.row = lead + "**does not match** what DoMe needs (see the problem above)"
+        elif down:
+            self.check.row = lead + f"**not checked**: Stripe's API did not answer ({down}); the deploy went on"
+        else:
+            parts = self.matched or ["nothing"]
+            joined = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+            self.check.row = lead + joined + (" match" if self.matched else " could be checked")
+            if self.unchecked:
+                self.check.row += f"; not checked: {', '.join(self.unchecked)} (the key may not read them)"
+        if self.check.warnings and not self.check.problems:
+            count = len(self.check.warnings)
+            self.check.row += f"; {count} warning{'s' if count > 1 else ''} in the Notes"
+        return self.check
+
+    # ----- the account ----------------------------------------------------------------------------
+    def account(self) -> None:
+        status, account, message = self.read("the account", "/v1/account")
+        if status == 403:
+            return
+        if status != 200:
+            raise StripeDown(f"HTTP {status}" + (f": {message}" if message else ""))
+        settings = account.get("settings")
+        dashboard = settings.get("dashboard") if isinstance(settings, dict) else None
+        profile = account.get("business_profile")
+        names = [
+            dashboard.get("display_name") if isinstance(dashboard, dict) else None,
+            profile.get("name") if isinstance(profile, dict) else None,
+        ]
+        raw = next((n for n in names if isinstance(n, str) and n.strip()), "")
+        name = (_plain(self.book, raw) or "?") if raw else ""
+        account_id = str(account.get("id") or "")
+        shown_id = f" (`{account_id}`)" if _STRIPE_ACCOUNT_ID.match(account_id) else ""
+        self.label = f"**{name}**{shown_id}" if name else f"an account without a name{shown_id}"
+        if not name:
+            self.check.problems.append(
+                f"The Stripe account this key belongs to{shown_id} has neither an account name nor a business name. "
+                "Stripe's payment page (Checkout) refuses to open for such an account (\"you must set an account or "
+                'business name"), so no customer could pay.'
+            )
+            self.check.step(
+                f"In Stripe ({self.mode}), open **Settings** > **Business** and fill in the **Public business name** "
+                "(under **Public details**; for example DoMe), or the account name under **Account details**, and "
+                "click **Save**."
+            )
+        if self.live and account.get("charges_enabled") is not True:
+            self.check.problems.append(
+                f"Stripe has not activated payments for {self.label} yet, so a Live mode key cannot take a card "
+                "(Stripe reports `charges_enabled` false)."
+            )
+            self.check.step(
+                "In the Stripe dashboard (Live mode), finish the activation Stripe asks for (the **Activate payments** "
+                "banner: business details, bank account, identity); Stripe emails when payments are on. Until then, "
+                "keep production in Test mode (docs/LAUNCH_SETUP.md section 11A, step 8)."
+            )
+
+    # ----- the five prices ------------------------------------------------------------------------
+    def prices(self) -> None:
+        unknown: list[tuple[str, str]] = []
+        wrong: list[str] = []
+        fixes: set[str] = set()
+        good = 0
+        for name, price_id in self.billing.prices:
+            path = "/v1/prices/" + quote(price_id, safe="")
+            status, price, message = self.read("the prices", path, [("expand[]", "product")])
+            if status == 403:
+                continue
+            if status == 404:
+                unknown.append((name, message))
+                continue
+            if status != 200:
+                self.check.warnings.append(
+                    f"Stripe would not show the price in `{name}` (HTTP {status}"
+                    + (f": {message}" if message else "")
+                    + "), so the Deploy button could not check it."
+                )
+                continue
+            if price.get("object") != "price":
+                raise StripeDown("an answer for a price that is not a price")
+            found = price_problems(name, price, live=self.live, cents=self.amounts[name], currency=self.currency)
+            if found:
+                wrong.append(f"`{name}` ({STRIPE_PRICES[name]}): " + "; ".join(c for c, _ in found) + ".")
+                fixes |= {fix for _, fix in found}
+            else:
+                good += 1
+        if unknown:
+            names = [n for n, _ in unknown]
+            every = len(names) == len(STRIPE_PRICES)
+            text = (
+                f"Stripe does not know {'any of the five price ids' if every else 'the price id in ' + _names(names)} "
+                f"{self.scope}, where `DOME_STRIPE_SECRET_KEY` belongs. The key and the prices come from different "
+                "Stripe accounts or sandboxes (every sandbox has its own keys and its own prices): for example, the "
+                "key was copied from the main account's Test mode while the prices were made in the sandbox "
+                '"domeremote sandbox"' + ("." if every else ", or a price was deleted.")
+            )
+            if any("similar object exists in" in m for _, m in unknown):
+                text += " Stripe adds that a price with that id exists in the other mode: Test and Live never mix."
+            if every:
+                self.foreign = True
+                text += (
+                    " The webhook endpoint and the customer portal were not checked here: they are checked once the "
+                    "key comes from the account or sandbox that holds the prices."
+                )
+            self.check.problems.append(text)
+            fixes.add("same_account")
+        self.check.problems += wrong
+        if "same_account" in fixes:
+            self.check.step(self.same_account_step())
+        if "unarchive" in fixes:
+            self.check.step(
+                f"In Stripe ({self.mode}) > **Product catalog**, open the archived product or price named above and "
+                "choose **Unarchive** (archived products are listed under the **Archived** filter), or make a new "
+                "price as below."
+            )
+        if fixes & {"new_price", "unarchive"}:
+            self.check.step(
+                "Stripe prices cannot be changed once made. In Stripe "
+                f"({self.mode}) > **Product catalog** > the product, add a new price exactly as docs/LAUNCH_SETUP.md "
+                "section 11A step 2 lists it (US dollars, tax-inclusive; recurring monthly or yearly for DoMe Pro and "
+                "DoMe Pro Plus, one-time for the AI top-up), copy its id (`price_...`) and paste it over the variable "
+                f"named above at {self.page} > **{self.cfg.name}** > **Environment variables**. If the customer portal "
+                "offers the old price for switching plans, swap it there too (**Settings** > **Billing** > **Customer "
+                "portal**)."
+            )
+        if "amount" in fixes:
+            self.check.step(
+                "For an amount that differs: Stripe prices cannot be changed once made, so either add a new price with "
+                f"the amount DoMe shows (in Stripe ({self.mode}) > **Product catalog** > the product; copy the new "
+                f"`price_...` id into the variable named above at {self.page} > **{self.cfg.name}** > **Environment "
+                "variables**), or, if Stripe's amount is the one you want, ask an engineer to change DoMe's display "
+                "price (shared/protocol/plans.json) so the app and the website show what Stripe charges."
+            )
+        if good and good == len(self.billing.prices):
+            self.matched.append(f"{good} prices")
+
+    # ----- the webhook endpoint -------------------------------------------------------------------
+    def webhook(self) -> None:
+        url = self.cfg.webhook_url
+        status, listing, message = self.read("the webhook endpoints", "/v1/webhook_endpoints", [("limit", "100")])
+        if status == 403:
+            return
+        data = listing.get("data")
+        if status != 200 or not isinstance(data, list):
+            raise StripeDown(f"HTTP {status}" + (f": {message}" if message else ""))
+        endpoints = [e for e in data if isinstance(e, dict)]
+        same = [e for e in endpoints if e.get("url") == url]
+        add_steps = (
+            f"In Stripe ({self.mode}) > **Developers** > **Webhooks** > **Add destination**, add the endpoint "
+            f"`{url}` with the events of docs/LAUNCH_SETUP.md section 11A step 4, then copy its **Signing secret** "
+            f"(`whsec_...`) over the Environment secret `DOME_STRIPE_WEBHOOK_SECRET` at {self.page} > "
+            f"**{self.cfg.name}**."
+        )
+        if not same:
+            # Only DoMe's own addresses are shown (scheme, host, port and path; never a user, password or query): the
+            # summary is public, and another service's webhook address can carry its secret in the path or the host
+            # (a capability URL), so the account's other endpoints are only counted.
+            shown: list[str] = []
+            others = 0
+            for e in endpoints:
+                try:
+                    parts = urlsplit(str(e.get("url") or ""))
+                    hostname = parts.hostname or ""
+                    host = hostname + (f":{parts.port}" if parts.port else "")
+                except ValueError:
+                    others += 1
+                    continue
+                if self.dome_host(hostname) and len(shown) < 5:
+                    shown.append(f"`{_plain(self.book, f'{parts.scheme}://{host}{parts.path}', 120)}`")
+                else:
+                    others += 1
+            there = (
+                [f"Endpoints for DoMe there now: {', '.join(shown)} (the address must match exactly)."] if shown else []
+            )
+            if others:
+                there.append(
+                    f"{others} other endpoint{'s' if others > 1 else ''} there send{'' if others > 1 else 's'} to "
+                    "other addresses (not shown)."
+                )
+            self.check.problems.append(
+                f"Stripe has no webhook endpoint for `{url}` {self.scope}, so Stripe would never tell DoMe that "
+                'someone paid (the Billing page would stay on "Pending activation").' + "".join(" " + t for t in there)
+            )
+            self.check.step(add_steps)
+            return
+
+        def missing(endpoint: Mapping[str, Any], events: Sequence[str]) -> list[str]:
+            enabled = endpoint.get("enabled_events")
+            enabled = enabled if isinstance(enabled, list) else []
+            return [] if "*" in enabled else [e for e in events if e not in enabled]
+
+        best = min(same, key=lambda e: (e.get("status") != "enabled", len(missing(e, STRIPE_WEBHOOK_EVENTS))))
+        problems = 0
+        if best.get("status") != "enabled":
+            problems += 1
+            self.check.problems.append(
+                f"The webhook endpoint `{url}` is **disabled** in Stripe ({self.mode}), so Stripe sends DoMe nothing "
+                "(Stripe also switches an endpoint off by itself after days of failed deliveries)."
+            )
+            self.check.step(
+                f"In Stripe ({self.mode}) > **Developers** > **Webhooks**, open the endpoint `{url}` and enable it "
+                "again (its menu > **Enable**). If Stripe had switched it off, check that the site answers first."
+            )
+        lacking = missing(best, STRIPE_WEBHOOK_EVENTS)
+        if lacking:
+            problems += 1
+            self.check.problems.append(
+                f"The webhook endpoint `{url}` does not listen to {_names(lacking)}, so DoMe would not hear about "
+                "those payment events (a paid plan could stay inactive, or stay active after it ended)."
+            )
+            self.check.step(
+                f"In Stripe ({self.mode}) > **Developers** > **Webhooks**, open the endpoint `{url}`, edit it and tick "
+                "the events named above (docs/LAUNCH_SETUP.md section 11A step 4). The signing secret stays the same."
+            )
+        recorded = missing(best, STRIPE_OPERATOR_EVENTS)
+        if recorded:
+            self.check.warnings.append(
+                f"The webhook endpoint `{url}` does not listen to {_names(recorded)}. Payments work without them, but "
+                "DoMe records refunds and disputes only for these events, so an engineer would not hear about them. "
+                f"Add them in Stripe ({self.mode}) > **Developers** > **Webhooks** > the endpoint (edit it)."
+            )
+        if len(same) > 1:
+            self.check.warnings.append(
+                f"{len(same)} webhook endpoints in Stripe ({self.mode}) send to `{url}`. Each has its own signing "
+                "secret and only one can match `DOME_STRIPE_WEBHOOK_SECRET`, so the other's deliveries fail: delete "
+                "the extra one in **Developers** > **Webhooks**."
+            )
+        if not problems:
+            self.matched.append("webhook endpoint")
+
+    # ----- the customer portal --------------------------------------------------------------------
+    def portal(self) -> None:
+        status, listing, message = self.read(
+            "the customer portal settings", "/v1/billing_portal/configurations", [("is_default", "true")]
+        )
+        if status == 403:
+            return
+        data = listing.get("data")
+        if status != 200 or not isinstance(data, list):
+            raise StripeDown(f"HTTP {status}" + (f": {message}" if message else ""))
+        default = next((c for c in data if isinstance(c, dict) and c.get("is_default") is True), None)
+        if default is None or default.get("active") is not True:
+            self.check.problems.append(
+                f"The customer portal is not set up {self.scope} (its settings were never saved, or are switched "
+                "off). DoMe's **Manage subscription** button opens Stripe's customer portal, which fails without saved "
+                "settings, so customers could not cancel or change their card."
+            )
+            self.check.step(
+                f"In Stripe ({self.mode}) > **Settings** > **Billing** > **Customer portal**, set it up as "
+                "docs/LAUNCH_SETUP.md section 11A step 5 says and click **Save** once."
+            )
+            return
+        features = default.get("features")
+        features = features if isinstance(features, dict) else {}
+
+        def feature(name: str) -> dict[str, Any]:
+            value = features.get(name)
+            return value if isinstance(value, dict) else {}
+
+        where = f"Stripe ({self.mode}) > **Settings** > **Billing** > **Customer portal**"
+        cancel = feature("subscription_cancel")
+        if cancel.get("enabled") is not True:
+            self.check.warnings.append(
+                f"The customer portal does not let customers cancel. Turn on cancelling, at the end of the billing "
+                f"period, in {where} and save."
+            )
+        elif cancel.get("mode") != "at_period_end":
+            self.check.warnings.append(
+                "The customer portal cancels subscriptions **immediately**; DoMe's setup is at the end of the billing "
+                f"period (the customer keeps what they paid for). Change it in {where} and save."
+            )
+        if feature("payment_method_update").get("enabled") is not True:
+            self.check.warnings.append(
+                f"The customer portal does not let customers update their card. Turn it on in {where} and save."
+            )
+        update = feature("subscription_update")
+        offered: set[str] = set()
+        products = update.get("products")
+        for item in products if isinstance(products, list) else []:
+            prices = item.get("prices") if isinstance(item, dict) else None
+            offered |= {p for p in (prices if isinstance(prices, list) else []) if isinstance(p, str)}
+        allowed = update.get("default_allowed_updates")
+        subscription_prices = [(n, p) for n, p in self.billing.prices if STRIPE_PRICE_TERMS[n][0]]
+        if update.get("enabled") is not True or not isinstance(allowed, list) or "price" not in allowed:
+            self.check.warnings.append(
+                "The customer portal does not let customers switch between DoMe Pro and DoMe Pro Plus (monthly or "
+                f"yearly). Turn on switching plans with the four subscription prices in {where} and save."
+            )
+        elif not_offered := [n for n, p in subscription_prices if p not in offered]:
+            self.check.warnings.append(
+                f"Switching plans in the customer portal does not offer the price in {_names(not_offered)}. Add it "
+                f"(the product and that price) in {where} and save."
+            )
+        self.matched.append("customer portal")
+
+
+def check_stripe_setup(
+    env: Mapping[str, str], cfg: EnvConfig, billing: Billing, book: SecretBook, summary: Summary
+) -> None:
+    """With billing on, before any flyctl call: what Stripe itself says about the seven values. Writes the summary row
+    "Stripe account" and any warnings as notes; raises Stop("you") when payments could not work."""
+    amounts, currency = display_prices()
+    check = StripeChecker(env, cfg, billing, book, amounts, currency).run()
+    summary.step("Stripe account", check.row)
+    summary.notes += [f"Stripe check: {w}" for w in check.warnings]
+    if check.problems:
+        raise Stop(
+            "you",
+            "Stripe's own answers show that payments would not work with this environment's Stripe values (customers "
+            "would see \"Payments aren't working on DoMe's side right now\" or never get their plan). Nothing was "
+            "created or changed." + "".join(f"\n\n- {p}" for p in check.problems),
+            next_steps=[*check.next_steps, "Run Deploy again."],
+        )
+
+
+# ======================================================================================================
 # deploy
 # ======================================================================================================
 
@@ -1999,12 +2606,14 @@ class Deployer:
 
     # ----- flow -----------------------------------------------------------------------------------
     def run(self) -> int:
+        billing: Billing | None = None
         try:
             check_ref(self.env)
             cfg = read_environment_choice(self.env, self.envs)
             self.summary.title = f"{cfg.title} deploy"
             check_distinct_apps(self.env, self.envs)  # before anything reads or changes an app
             inputs = read_inputs(self.env, cfg, self.book, self.summary)
+            billing = inputs.billing
             self.summary.step("Inputs", "all present")
             self.summary.step("Billing (Stripe)", billing_step_text(inputs.billing))
             self.summary.step("Screen view", screen_view_step_text(inputs.screen))
@@ -2014,6 +2623,9 @@ class Deployer:
             self.summary.problem = stop.message
             self.summary.next_steps = stop.next_steps + self.summary.next_steps
             said = stop.message + " ".join(stop.next_steps)
+            if not self.mutated and billing is not None:  # the row said "stored in Fly", which this run never did
+                row = ("Billing (Stripe)", billing_step_text(billing, stored=False))
+                self.summary.steps = [row if name == row[0] else (name, r) for name, r in self.summary.steps]
             if not self.mutated and "Nothing was created" not in said:
                 self.summary.notes.append("Nothing was created or changed on Fly.io by this run.")
             elif self.mutated:
@@ -2035,6 +2647,10 @@ class Deployer:
         self.log(f"Checking the sign-in provider {inp.issuer}")
         authorization_endpoint = check_discovery(inp.issuer)
         self.summary.step("Sign-in provider (OIDC discovery)", f"{inp.issuer} answers")
+
+        if inp.billing.on:
+            self.log("Asking Stripe about the account, the five prices, the webhook endpoint and the customer portal")
+            check_stripe_setup(self.env, cfg, inp.billing, self.book, self.summary)
 
         if cfg.requires_staging_commit:
             self.log("Checking that staging already runs this commit")

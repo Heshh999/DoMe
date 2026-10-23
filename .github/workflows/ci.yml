@@ -6,7 +6,8 @@
 #
 # STATUS: running on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green). No
 # secrets are used or needed: the suites run against a PostgreSQL service container and the
-# in-repository development identity provider (tools/dev-idp). The Windows installer has its own
+# in-repository development identity provider (tools/dev-idp), and cloud-api's Stripe adapter against
+# stripe-mock (Stripe's official mock API, any test-mode key). The Windows installer has its own
 # workflow, windows-installer.yml, which runs the same Windows test list before it builds anything.
 # The Deploy workflow (deploy.yml) is tested here without secrets: job "deploy-tooling" runs the deploy
 # program's tests against a fake flyctl and lints every workflow file with actionlint.
@@ -106,8 +107,31 @@ jobs:
         run: |
           uv run alembic -c alembic.ini upgrade head
           uv run alembic -c alembic.ini check
-      - name: cloud-api - pytest (real PostgreSQL, real OIDC login, uvicorn in-process)
+      # stripe-mock v0.206.0 is Stripe's official mock API: it checks every request the Stripe adapter sends
+      # (parameter names, types, enums) against Stripe's OpenAPI spec for the API version the pinned SDK speaks,
+      # which -strict-version-check enforces (tests/test_stripe_provider_mock.py). Built from source like
+      # actionlint below; Go's checksum database verifies the module. It takes any test-mode key: no secret here.
+      # Both listeners are named: with -http-addr alone it would also open HTTPS on :12112 on every interface.
+      - name: cloud-api - start stripe-mock v0.206.0 (Stripe's official mock API)
+        timeout-minutes: 5
+        run: |
+          go install github.com/stripe/stripe-mock@v0.206.0
+          nohup "$(go env GOPATH)/bin/stripe-mock" -http-addr 127.0.0.1:12111 -https-addr 127.0.0.1:12112 \
+            -strict-version-check > "$RUNNER_TEMP/stripe-mock.log" 2>&1 &
+          # a request without a key is answered 401: any answer means it is listening
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:12111/v1/customers; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "stripe-mock did not answer within 30 seconds:"
+          cat "$RUNNER_TEMP/stripe-mock.log"
+          exit 1
+      - name: cloud-api - pytest (real PostgreSQL, real OIDC login, uvicorn in-process, stripe-mock)
         working-directory: cloud-api
+        env:
+          DOME_TEST_STRIPE_MOCK_URL: http://127.0.0.1:12111
         run: uv run pytest -q -p no:cacheprovider
 
       # ---- pc-agent: Linux with the explicitly isolated fake platform; Windows adapters are NOT verified here ----

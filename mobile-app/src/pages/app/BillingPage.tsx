@@ -16,7 +16,7 @@ import { loadAssistantStatus } from "../../app/voice.ts";
 import { Button, Card, CheckRow, IconWell, KeyValue, Notice, PageHeader, Pill, Segmented, Spinner, Steps } from "../../components/ui.tsx";
 import { AI_OFF_STATUS, aiSummary, COMING_AT_PAID_LAUNCH, planById, usd, type PlanContent } from "../../content/plans.ts";
 import { api, ApiError } from "../../lib/api.ts";
-import { allowanceSummary, billingErrorText, billingStateCopy, browserNavigation, bucketLevel, isCheckoutUrl, longDate, refreshText, topupLabel, type AllowanceBucket, type AssistantAllowance, type BillingStatusResponse, type BucketLevel } from "../../lib/billing.ts";
+import { allowanceSummary, billingErrorText, billingStateCopy, browserNavigation, bucketLevel, isCheckoutUrl, longDate, providerErrorReason, providerTestModeLine, refreshText, topupLabel, type AllowanceBucket, type AssistantAllowance, type BillingStatusResponse, type BucketLevel, type ProviderErrorReason } from "../../lib/billing.ts";
 import { relativeTime } from "../../lib/format.ts";
 import { recoverySteps } from "../../lib/labels.ts";
 import { useAssistantStore } from "../../store/assistant.ts";
@@ -213,7 +213,8 @@ export function BillingPage() {
   const [returned, setReturned] = useState<Returned | null>(() => readReturn(params));
   const [interval, setInterval_] = useState<rest.BillingInterval>("monthly");
   const [busy, setBusy] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  // a failed purchase or portal request: the customer's text, and the payment provider's reason for the test-mode line
+  const [actionError, setActionError] = useState<{ text: string; reason: ProviderErrorReason | null } | null>(null);
   const now = new Date();
 
   const load = useCallback(
@@ -292,7 +293,10 @@ export function BillingPage() {
   const content = planById(plan);
   const copy = billingStateCopy(status ?? { plan: session.plan, entitlement_state: session.entitlement_state ?? (session.plan === "free" ? "free" : "active"), subscription: null });
   const enabled = !!status?.billing_enabled;
-  const testMode = enabled && status?.billing_mode === "test";
+  const mode: rest.BillingMode = enabled && status ? status.billing_mode : "off";
+  const testMode = mode === "test";
+  // test mode only: the payment provider's reason for whoever runs this DoMe service (never in live mode)
+  const testLine = actionError ? providerTestModeLine(actionError.reason, mode) : null;
   const sub = status?.subscription ?? null;
   const pro = planById("pro");
   const proPlus = planById("pro_plus");
@@ -307,6 +311,11 @@ export function BillingPage() {
     browserNavigation.assign(url);
   };
 
+  const failed = (e: unknown) => {
+    setActionError({ text: billingErrorText(e), reason: providerErrorReason(e) });
+    setBusy(null);
+  };
+
   const startCheckout = async (paid: rest.PaidPlanId) => {
     setActionError(null);
     setBusy(`checkout:${paid}`);
@@ -314,8 +323,7 @@ export function BillingPage() {
       const r = await api.billingCheckout({ plan: paid, interval });
       leave(r.checkout_url);
     } catch (e) {
-      setActionError(billingErrorText(e));
-      setBusy(null);
+      failed(e);
       if (e instanceof ApiError && (e.code === "ALREADY_SUBSCRIBED" || e.code === "CHECKOUT_PROCESSING" || e.code === "PLAN_NOT_AVAILABLE")) void load();
     }
   };
@@ -327,8 +335,7 @@ export function BillingPage() {
       const r = await api.billingPortal();
       leave(r.portal_url);
     } catch (e) {
-      setActionError(billingErrorText(e));
-      setBusy(null);
+      failed(e);
     }
   };
 
@@ -339,8 +346,7 @@ export function BillingPage() {
       const r = await api.billingTopup();
       leave(r.checkout_url);
     } catch (e) {
-      setActionError(billingErrorText(e));
-      setBusy(null);
+      failed(e);
     }
   };
 
@@ -432,7 +438,12 @@ export function BillingPage() {
       </Card>
       {actionError ? (
         <Notice tone="danger">
-          <p>{actionError}</p>
+          <p>{actionError.text}</p>
+          {testLine ? (
+            <p className="text-xs" data-testid="provider-test-line">
+              {testLine}
+            </p>
+          ) : null}
         </Notice>
       ) : null}
       <Card>

@@ -98,3 +98,10 @@ modified; each item records the workaround used here.
 
 18. **`screen_session{paused|resumed}` arrive per pause cause** (pc-agent CONTRACT_ISSUES #25): the phone
     tracks the causes as a set; `rules.screen_sessions` does not say whether pauses nest.
+
+19. **`BILLING_PROVIDER_ERROR` with `detail.reason`** (cloud-api billing/provider.py `ProviderErrorReason`:
+    `auth`, `bad_request`, `not_found`, `timeout`, `provider_error`): `errors.json` gives the code one message
+    ("didn't answer… Try again in a moment"), which is wrong for the three reasons that mean DoMe's own payment
+    setup is wrong. The phone reads the reason (an additive detail `errors.json` does not list) for its own
+    copy (decision 78); an unknown or missing reason keeps the contract's message. Proposed: name the detail
+    and its five values at the next contract round.

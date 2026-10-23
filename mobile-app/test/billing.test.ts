@@ -9,7 +9,7 @@ import { ERRORS, type rest } from "@dome/protocol";
 import fixture from "../../shared/protocol/fixtures/ai-window-cases.json";
 import { WARN_AT_PERCENT } from "../src/content/plans.ts";
 import { ApiError } from "../src/lib/api.ts";
-import { allowanceSummary, allowanceWarns, billingErrorText, billingStateCopy, bucketLevel, isCheckoutUrl, limitExplanation, longDate, nextRefresh, refreshText, requestsLeft, topupLabel, warningText } from "../src/lib/billing.ts";
+import { allowanceSummary, allowanceWarns, billingErrorText, billingStateCopy, bucketLevel, isCheckoutUrl, limitExplanation, longDate, nextRefresh, providerErrorReason, providerTestModeLine, refreshText, requestsLeft, topupLabel, warningText } from "../src/lib/billing.ts";
 
 const NY = "America/New_York";
 const lowerFirstWord = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
@@ -196,6 +196,36 @@ describe("billing errors and checkout URLs", () => {
     expect(billingErrorText(new ApiError(0, "NETWORK", "offline", true))).toBe("You appear to be offline.");
     expect(billingErrorText(new Error("boom"))).toBe(ERRORS.INTERNAL!.user_message);
     expect(billingErrorText(null)).toBe(ERRORS.INTERNAL!.user_message);
+  });
+
+  it("BILLING_PROVIDER_ERROR follows its reason: 'didn't answer' for timeout, provider_error and unknown reasons, 'not working on DoMe's side' for a setup Stripe refused", () => {
+    const provider = (reason?: unknown) => new ApiError(502, "BILLING_PROVIDER_ERROR", "server text", true, reason === undefined ? undefined : { reason });
+    const didNotAnswer = ERRORS.BILLING_PROVIDER_ERROR!.user_message;
+    expect(didNotAnswer).toBe("Our payment provider didn't answer. Nothing was charged. Try again in a moment.");
+    for (const reason of ["timeout", "provider_error", "something_new", 7, null, undefined]) expect(billingErrorText(provider(reason))).toBe(didNotAnswer);
+    for (const reason of ["auth", "bad_request", "not_found"]) expect(billingErrorText(provider(reason))).toBe("Payments aren't working on DoMe's side right now. Nothing was charged. Try again later.");
+    // only the five known reasons are read, and only from BILLING_PROVIDER_ERROR
+    expect(["auth", "bad_request", "not_found", "timeout", "provider_error"].map((r) => providerErrorReason(provider(r)))).toEqual(["auth", "bad_request", "not_found", "timeout", "provider_error"]);
+    expect(providerErrorReason(provider("something_new"))).toBeNull();
+    expect(providerErrorReason(provider())).toBeNull();
+    expect(providerErrorReason(new ApiError(503, "BILLING_NOT_AVAILABLE", "x", false, { reason: "auth" }))).toBeNull();
+    expect(billingErrorText(new ApiError(503, "BILLING_NOT_AVAILABLE", "x", false, { reason: "auth" }))).toBe(ERRORS.BILLING_NOT_AVAILABLE!.user_message);
+    expect(providerErrorReason(null)).toBeNull();
+    expect(providerErrorReason(new Error("boom"))).toBeNull();
+  });
+
+  it("the test-mode line names what Stripe did and the reason code, only in test mode", () => {
+    expect(providerTestModeLine("bad_request", "test")).toBe("Test mode: Stripe refused the request, for example a price or customer it does not know (bad_request). Run Deploy again: its summary checks the Stripe setup.");
+    expect(providerTestModeLine("auth", "test")).toBe("Test mode: Stripe refused DoMe's secret key (auth). Run Deploy again: its summary checks the Stripe setup.");
+    expect(providerTestModeLine("not_found", "test")).toBe("Test mode: Stripe does not know a payment page or subscription DoMe saved earlier (not_found). This can follow a change of the Stripe key.");
+    expect(providerTestModeLine("timeout", "test")).toBe("Test mode: DoMe could not reach Stripe in time (timeout).");
+    expect(providerTestModeLine("provider_error", "test")).toBe("Test mode: Stripe answered with an error (provider_error).");
+    for (const reason of ["auth", "bad_request", "not_found", "timeout", "provider_error"] as const) {
+      expect(providerTestModeLine(reason, "live")).toBeNull();
+      expect(providerTestModeLine(reason, "off")).toBeNull();
+      expect(providerTestModeLine(reason, undefined)).toBeNull();
+    }
+    expect(providerTestModeLine(null, "test")).toBeNull();
   });
 
   it("navigates only to an https URL the server gave, and labels the top-up from the server's figures", () => {

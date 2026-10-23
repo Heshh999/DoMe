@@ -363,11 +363,15 @@ def configure_logging(level: str = "INFO", *, json_output: bool = True) -> None:
 
 
 # The Anthropic SDK logs request options at DEBUG/INFO (ANTHROPIC_LOG=debug); its HTTP stack logs URLs and headers.
-SDK_LOGGERS = ("anthropic", "httpx2", "httpcore", "httpcore2")
+# The stripe SDK logs every request URL and Stripe's error message (which can quote customer data) at INFO and the
+# request and response bodies (the customer's email) at DEBUG, all through logger.info/debug only; its HTTP client,
+# httpx, logs every URL (with Stripe object ids) at INFO (docs/BILLING.md §6).
+SDK_LOGGERS = ("anthropic", "httpx2", "httpcore", "httpcore2", "stripe", "httpx")
 
 
 def pin_sdk_loggers() -> None:
-    """Keep the AI SDK's own logging at WARNING whatever DOME_LOG_LEVEL says (docs/design/assistant.md §3.10)."""
+    """Keep the AI and Stripe SDKs' own logging at WARNING whatever DOME_LOG_LEVEL says (docs/design/assistant.md
+    §3.10, docs/BILLING.md §6)."""
     for name in SDK_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
 

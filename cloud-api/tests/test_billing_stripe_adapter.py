@@ -1,21 +1,27 @@
 """The Stripe adapter without the network (docs/BILLING.md §12): webhook verification through the SDK's own
 ``construct_event`` with headers made by the SDK's signature helper and by the fake provider (so the fake signs
 exactly as Stripe does), the id and period normalisation from SDK objects, the Checkout parameters sent, and errors
-that carry a reason only. Not exercised against Stripe test mode from here."""
+that carry a reason, Stripe's error code and parameter name, never a message or the key (Stripe-shaped error answers
+fed through the SDK by a canned HTTP client). The requests themselves are checked against stripe-mock in
+``test_stripe_provider_mock.py``; not exercised against Stripe test mode from here."""
 
 from __future__ import annotations
 
 import json
+import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 import stripe
+from stripe import StripeClient
 
 from dome_api.billing.fake_provider import sign, verify
 from dome_api.billing.provider import ProviderError
 from dome_api.billing.stripe_provider import (
+    TIMEOUT_SECONDS,
     StripeProvider,
     _translate,
     checkout_from_stripe,
@@ -23,6 +29,7 @@ from dome_api.billing.stripe_provider import (
     invoice_subscription_id,
     subscription_from_stripe,
 )
+from dome_api.logging import SDK_LOGGERS, pin_sdk_loggers
 from dome_api.settings import Settings
 
 SECRET = "whsec_" + "adaptertest" * 3
@@ -226,8 +233,6 @@ async def test_checkout_parameters_sent_to_stripe(monkeypatch: pytest.MonkeyPatc
         )
 
     monkeypatch.setattr(provider._client.v1.checkout.sessions, "create_async", create_async)
-    from datetime import UTC, datetime
-
     out = await provider.create_checkout(
         customer_id="cus_1",
         price_id="price_adapter_pm",
@@ -278,3 +283,142 @@ async def test_expire_checkout_tolerates_a_page_that_is_already_closed(monkeypat
     with pytest.raises(ProviderError) as ei:
         await provider.expire_checkout("cs_open")
     assert ei.value.reason == "provider_error"
+
+
+class CannedStripe(stripe.HTTPClient):
+    """Answers every request with one Stripe-shaped response, so the SDK builds its error exactly as it does for an
+    answer from api.stripe.com (the same parsing, the same error classes), without the network."""
+
+    name = "canned"
+
+    def __init__(self, status: int, error: dict[str, Any]) -> None:
+        super().__init__()
+        self.status, self.body = status, json.dumps({"error": error}).encode()
+
+    async def request_async(self, method: str, url: str, headers: Any, post_data: Any = None) -> Any:
+        return self.body, self.status, {"request-id": "req_canned1"}
+
+    async def close_async(self) -> None:
+        return None
+
+    async def sleep_async(self, secs: float) -> None:
+        return None
+
+
+EMAIL = "buyer.adapter@example.test"
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "expected"),
+    [
+        (
+            400,
+            {
+                "type": "invalid_request_error",
+                "code": "resource_missing",
+                "param": "line_items[0][price]",
+                "message": f"No such price: 'price_adapter_pm' (customer {EMAIL})",
+            },
+            ("bad_request", "resource_missing", "line_items[0][price]"),
+        ),
+        (
+            400,
+            {"type": "invalid_request_error", "message": "In order to use Checkout, you must set an account name."},
+            ("bad_request", None, None),
+        ),
+        (
+            401,
+            {"type": "invalid_request_error", "code": "api_key_expired", "message": f"Expired API Key provided: {KEY}"},
+            ("auth", "api_key_expired", None),
+        ),
+        (
+            400,
+            {
+                "type": "idempotency_error",
+                "message": "Keys for idempotent requests can only be used with the same parameters",
+            },
+            ("provider_error", None, None),
+        ),
+        (
+            404,
+            {"type": "invalid_request_error", "code": "resource_missing", "param": "id", "message": "No such session"},
+            ("not_found", "resource_missing", "id"),
+        ),
+        (
+            400,  # anything but a short machine string in code or param is dropped, never logged
+            {"type": "invalid_request_error", "code": "bad code", "param": f"customer {EMAIL}", "message": "x"},
+            ("bad_request", None, None),
+        ),
+    ],
+)
+async def test_errors_carry_stripes_code_and_param_never_its_message(
+    status: int, error: dict[str, Any], expected: tuple[str, str | None, str | None]
+) -> None:
+    """Stripe's error code and the parameter it names reach the ``billing.provider_error`` log line, so a wrong price
+    id, a key from another account or a refused page are told apart; the message never does, as it can quote customer
+    data. The SDK copies code and param onto InvalidRequestError only; for the other classes the adapter reads them
+    from the parsed error body."""
+    client = StripeClient(KEY, max_network_retries=0, http_client=CannedStripe(status, error))
+    provider = StripeProvider(settings(), client=client)
+    with pytest.raises(ProviderError) as ei:
+        await provider.create_checkout(
+            customer_id="cus_1",
+            price_id="price_adapter_pm",
+            mode="subscription",
+            success_url="https://domeremote.com/app/billing?checkout=return",
+            cancel_url="https://domeremote.com/app/billing?checkout=cancel",
+            idempotency_key="checkout:acct:2",
+            metadata={"dome_account_id": "acct"},
+            automatic_tax=False,
+            expires_at=datetime.fromtimestamp(1_800_000_000, UTC),
+        )
+    err = ei.value
+    assert (err.reason, err.code, err.param) == expected
+    assert (err.status, err.request_id, str(err)) == (status, "req_canned1", expected[0])
+    carried = repr(err) + str(vars(err))
+    assert error["message"] not in carried and EMAIL not in carried and KEY not in carried
+
+
+async def test_the_stripe_sdks_own_log_never_carries_its_message_or_the_email(
+    capfd: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The stripe SDK logs Stripe's error message at INFO and the request body (the customer's email) at DEBUG through
+    its own logger, which would reach the app's log at any DOME_LOG_LEVEL that low. pin_sdk_loggers holds it (and
+    httpx, which logs every Stripe URL) at WARNING, so neither appears even with the root logger at DEBUG. Without the
+    pin the same calls do log both, so this test would see them."""
+    names = ("stripe", "httpx")
+    levels = {name: logging.getLogger(name).level for name in names}
+    caplog.set_level(logging.DEBUG)
+    error = {"type": "invalid_request_error", "code": "resource_missing", "message": f"No such customer ({EMAIL})"}
+
+    async def refused() -> str:
+        client = StripeClient(KEY, max_network_retries=0, http_client=CannedStripe(400, error))
+        with pytest.raises(ProviderError):
+            await StripeProvider(settings(), client=client).ensure_customer("acct", EMAIL)
+        captured = capfd.readouterr()
+        text = captured.out + captured.err + caplog.text
+        caplog.clear()
+        return text
+
+    try:
+        for name in names:
+            logging.getLogger(name).setLevel(logging.NOTSET)
+        unpinned = await refused()
+        assert "Stripe v1 API error received" in unpinned and "buyer.adapter%40example.test" in unpinned
+        pin_sdk_loggers()
+        assert all(name in SDK_LOGGERS and logging.getLogger(name).level == logging.WARNING for name in names)
+        pinned = await refused()
+        for text in (EMAIL, "buyer.adapter%40example.test", error["message"], KEY, "Stripe v1 API error received"):
+            assert text not in pinned
+    finally:
+        for name, level in levels.items():
+            logging.getLogger(name).setLevel(level)
+
+
+async def test_aclose_closes_the_adapters_own_http_client() -> None:
+    provider = StripeProvider(settings())
+    http = provider._http
+    assert isinstance(http, stripe.HTTPXClient) and TIMEOUT_SECONDS == 10.0
+    await provider.aclose()
+    await provider.aclose()  # twice is harmless (the lifespan and a test may both close it)
+    assert provider._http is None and http._client_async.is_closed

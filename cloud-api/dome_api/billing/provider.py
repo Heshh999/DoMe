@@ -3,7 +3,8 @@
 A provider creates customers, hosted Checkout and Portal pages, fetches the current subscription or Checkout Session
 and verifies webhook signatures. It never sees a database, a session or a plan decision: the service attributes
 objects to accounts and ``billing/state.py`` decides the plan from what the provider says *now*. Errors carry a
-reason, a status and the provider's request id only: never a key, a body or a customer's email.
+reason, a status, the provider's request id and its error code and parameter name only: never a key, a body, a
+message or a customer's email.
 """
 
 from __future__ import annotations
@@ -20,15 +21,25 @@ PaymentStatus = Literal["paid", "unpaid", "no_payment_required"]
 
 
 class ProviderError(Exception):
-    """A provider call that did not produce its object. The text is the reason only."""
+    """A provider call that did not produce its object. The text is the reason only. ``code`` and ``param`` are the
+    provider's own short machine strings for the log line (Stripe's error code such as ``resource_missing`` and the
+    parameter it names such as ``line_items[0][price]``); its message never travels: it can quote customer data."""
 
     def __init__(
-        self, reason: ProviderErrorReason, *, status: int | None = None, request_id: str | None = None
+        self,
+        reason: ProviderErrorReason,
+        *,
+        status: int | None = None,
+        request_id: str | None = None,
+        code: str | None = None,
+        param: str | None = None,
     ) -> None:
         super().__init__(reason)
         self.reason: ProviderErrorReason = reason
         self.status = status
         self.request_id = request_id
+        self.code = code
+        self.param = param
 
 
 @dataclass(frozen=True, slots=True)

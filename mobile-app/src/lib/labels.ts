@@ -263,7 +263,19 @@ export interface ErrorContext {
   /** Who reported the terminal state: an agent-reported OUTCOME_UNKNOWN means the PC answered, unsure of the result. */
   origin?: "agent" | "relay" | undefined;
   target?: Record<string, unknown> | null | undefined;
+  /** The server's `detail.reason`, where one code means different things per reason (`BILLING_PROVIDER_ERROR`). */
+  reason?: string | null | undefined;
 }
+
+/**
+ * `BILLING_PROVIDER_ERROR` reasons that mean DoMe's own payment setup is wrong (cloud-api billing/provider.py: Stripe
+ * refused the key, or the request, such as a price it does not know, or does not know a payment page or subscription
+ * DoMe saved earlier), so trying again in a moment cannot help; `timeout` and `provider_error` really are "didn't
+ * answer" (decision 78).
+ */
+const BILLING_SETUP_REASONS: ReadonlySet<string> = new Set(["auth", "bad_request", "not_found"]);
+export const isBillingSetupReason = (reason: string | null | undefined): boolean => !!reason && BILLING_SETUP_REASONS.has(reason);
+const PAYMENTS_NOT_WORKING = "Payments aren't working on DoMe's side right now. Nothing was charged.";
 
 const isSearch = (ctx?: ErrorContext) => ctx?.action === "youtube.search" || ctx?.action === "youtube.open_result";
 /** A window action on an app (not one window picked from its list) that found no window: the app runs without one. */
@@ -294,6 +306,7 @@ export function errorMessage(error: { code: string; message?: string } | null | 
   if (error.code === "UNSUPPORTED_CONTEXT" && ctx?.action === "youtube.open_result") return "That tab on the PC is not showing the search results any more.";
   if (error.code === "ACTIVATION_REQUIRED" && ctx?.action === "youtube.set_paused") return "The browser on the PC blocked starting the video without a click there.";
   if (error.code === "PROTOCOL_INCOMPATIBLE" && isScreenAction(ctx)) return "Update DoMe on your PC to use Screen view.";
+  if (error.code === "BILLING_PROVIDER_ERROR" && isBillingSetupReason(ctx?.reason)) return `${PAYMENTS_NOT_WORKING} Try again later.`;
   const known = ERRORS[error.code];
   if (known) return known.user_message;
   if (error.code === "NETWORK") return error.message ?? "You appear to be offline.";
@@ -380,7 +393,7 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
     case "BILLING_NOT_AVAILABLE":
       return ["Payments aren't available on this DoMe service yet. Nothing was charged.", "Everything you use today stays free."];
     case "BILLING_PROVIDER_ERROR":
-      return ["Our payment provider didn't answer. Nothing was charged.", "Try again in a moment."];
+      return isBillingSetupReason(ctx?.reason) ? [PAYMENTS_NOT_WORKING, "Try again later."] : ["Our payment provider didn't answer. Nothing was charged.", "Try again in a moment."];
     case "PC_PLAN_DISABLED":
     case "CONTROLLER_PLAN_DISABLED":
     case "DEVICE_LIMIT_REACHED":

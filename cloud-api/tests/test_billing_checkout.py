@@ -7,14 +7,21 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from joserfc import jwt
 from joserfc.jwk import KeySet
 
 from dome_api.assistant.service import AssistantService
-from dome_api.billing.service import BillingService
+from dome_api.billing.provider import ProviderError
+from dome_api.billing.service import (
+    CHECKOUT_CREATING_SECONDS,
+    BillingService,
+    checkout_expiry,
+    checkout_expiry_replayable,
+)
 from dome_api.util import utcnow
 from tests.conftest import SCHEMAS, AgentSim, Browser, Env, deliver, deliver_all, fake_stripe, sql
 
@@ -342,10 +349,180 @@ async def test_the_page_expires_after_the_configured_pending_hours(
     env: Env, billing: BillingService, alice: Browser
 ) -> None:
     billing.config = dataclasses.replace(billing.config, checkout_pending_hours=2)
-    before = utcnow()
+    before = utcnow().replace(microsecond=0)
     out = await start_checkout(alice)
     page = fake_stripe(billing).checkouts[out["session_id"]]
     assert before + timedelta(hours=2) <= page.expires_at <= utcnow() + timedelta(hours=2)
+    # whole seconds, as the request carries it: the row stores exactly the expiry the provider was sent
+    stored = sql(
+        env.database_url, "SELECT checkout_expires_at FROM subscriptions WHERE account_id = %s", (alice.account_id,)
+    )
+    assert page.expires_at.microsecond == 0 and stored[0][0] == page.expires_at
+
+
+def test_the_expiry_sent_is_always_inside_stripes_window() -> None:
+    """Stripe accepts expires_at from 30 minutes to 24 hours after it creates the session. Whatever hours a config
+    holds, the value sent is 1 to 23 hours ahead in whole seconds (half an hour inside both ends), and a replay within
+    the creation window may send it again; a stored value outside the margin (the older build's 24 hours) may not."""
+    now = datetime(2026, 10, 23, 12, 0, 0, 987_654, tzinfo=UTC)
+    for hours, lifetime in ((0, 1), (1, 1), (2, 2), (23, 23), (24, 23), (48, 23)):
+        sent = checkout_expiry(now, hours)
+        assert sent == now.replace(microsecond=0) + timedelta(hours=lifetime), hours
+        for later in (timedelta(0), timedelta(seconds=CHECKOUT_CREATING_SECONDS)):
+            assert checkout_expiry_replayable(sent, now + later), (hours, later)
+    assert not checkout_expiry_replayable(now + timedelta(hours=24), now)
+    assert not checkout_expiry_replayable(now + timedelta(minutes=40), now)
+    assert checkout_expiry_replayable(now + timedelta(minutes=45), now)
+    assert checkout_expiry_replayable(now + timedelta(hours=23, minutes=45), now)
+
+
+@pytest.mark.parametrize("drift", [timedelta(minutes=20), timedelta(minutes=-20)])
+async def test_a_server_clock_off_from_stripes_still_gets_a_page(
+    env: Env, billing: BillingService, alice: Browser, drift: timedelta
+) -> None:
+    """The fake refuses an expires_at outside 30 minutes to 24 hours by its own clock, as Stripe does. With the server
+    20 minutes ahead (with the default page lifetime) or 20 minutes behind (with the shortest, 1 hour), the page is
+    still created. Before, the 24-hour default was past Stripe's limit as soon as the server's clock ran ahead."""
+    billing.config = dataclasses.replace(billing.config, clock=lambda: utcnow() + drift)
+    if drift < timedelta(0):
+        billing.config = dataclasses.replace(billing.config, checkout_pending_hours=1)
+    out = await start_checkout(alice)
+    page = fake_stripe(billing).checkouts[out["session_id"]]
+    assert timedelta(minutes=30) <= page.expires_at - utcnow() <= timedelta(hours=24)
+    with pytest.raises(ProviderError) as ei:  # what the old 24 hours amounted to, 20 minutes ahead
+        await fake_stripe(billing).create_checkout(
+            customer_id=page.customer_id,
+            price_id=page.price_id,
+            mode="subscription",
+            success_url="https://x.test/ok",
+            cancel_url="https://x.test/cancel",
+            idempotency_key="checkout:old-default",
+            metadata={},
+            automatic_tax=False,
+            expires_at=utcnow() + timedelta(minutes=20) + timedelta(hours=24),
+        )
+    assert (ei.value.reason, ei.value.status, ei.value.param) == ("bad_request", 400, "expires_at")
+
+
+@pytest.mark.parametrize("stored", ["24 hours 5 minutes", "10 minutes"])
+async def test_a_stored_expiry_stripe_would_refuse_is_not_replayed(
+    env: Env, billing: BillingService, alice: Browser, stored: str
+) -> None:
+    """A retry within the creation window replays the stored key and expiry, unless that expiry is no longer one
+    Stripe accepts (a clock that moved, or a row from a build that sent 24 hours): sending it again would only be
+    refused again, so the page creation starts over with a new key and an expiry inside the window."""
+    fake = fake_stripe(billing)
+    fake.fail_next.append("create_checkout")
+    await alice.request("POST", "/v1/billing/checkout", {"plan": "pro", "interval": "monthly"}, expect=502)
+    key_before = subscription_row(env, alice.account_id)["checkout_idempotency_key"]
+    sql(
+        env.database_url,
+        f"UPDATE subscriptions SET checkout_expires_at = now() + interval '{stored}', updated_at = now() "
+        "WHERE account_id = %s",
+        (alice.account_id,),
+    )
+    out = await start_checkout(alice)
+    row = subscription_row(env, alice.account_id)
+    assert row["provider_checkout_session_id"] == out["session_id"] and row["checkout_idempotency_key"] != key_before
+    page = fake.checkouts[out["session_id"]]
+    assert timedelta(hours=22) < page.expires_at - utcnow() <= timedelta(hours=23)
+
+
+async def test_a_customer_id_from_a_replaced_secret_key_is_replaced_too(
+    env: Env, billing: BillingService, alice: Browser, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Staging, 2026-10-23: a first attempt under one Stripe account stored the customer id, then Checkout refused
+    (prices from another sandbox). After the founder pastes the key of the sandbox that holds the prices, that
+    customer id is unknown there (Stripe: 400 resource_missing, param customer; the fake answers the same). The
+    checkout forgets it on every row, creates the customer under the current key and makes the page; before, every
+    later attempt sent the old id again and failed, while the Deploy button's Stripe check reported a match."""
+    fake = fake_stripe(billing)
+    fake.fail_next.append("create_checkout")
+    await alice.request("POST", "/v1/billing/checkout", {"plan": "pro", "interval": "monthly"}, expect=502)
+    old = subscription_row(env, alice.account_id)["provider_customer_id"]
+    assert old in fake.customers
+    fake.customers.clear()  # the new key's account knows none of the old account's customers
+    # creating the customer under the new key fails once: the old id stays forgotten, the next attempt goes through
+    fake.fail_next.append("ensure_customer")
+    r = await alice.request("POST", "/v1/billing/checkout", {"plan": "pro", "interval": "monthly"}, expect=502)
+    assert r.json()["error"]["detail"] == {"reason": "provider_error"}
+    assert subscription_row(env, alice.account_id)["provider_customer_id"] is None
+    capfd.readouterr()
+    out = await start_checkout(alice)
+    row = subscription_row(env, alice.account_id)
+    new = row["provider_customer_id"]
+    assert new and new != old and new in fake.customers
+    assert row["state"] == "checkout_pending" and row["provider_checkout_session_id"] == out["session_id"]
+    assert fake.checkouts[out["session_id"]].customer_id == new
+    assert sql(env.database_url, "SELECT count(*) FROM subscriptions WHERE provider_customer_id = %s", (old,)) == [(0,)]
+    logged = capfd.readouterr()
+    assert "billing.provider_error" not in logged.out + logged.err
+
+
+async def test_a_customer_id_stripe_does_not_know_is_replaced_once_within_one_request(
+    env: Env,
+    billing: BillingService,
+    alice: Browser,
+    capfd: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same in one request: the stored id is refused, the customer is created under the current key, and the page
+    is made with a new idempotency key (the request differs). Tried once only."""
+    fake = fake_stripe(billing)
+    fake.fail_next.append("create_checkout")
+    await alice.request("POST", "/v1/billing/checkout", {"plan": "pro", "interval": "monthly"}, expect=502)
+    before = subscription_row(env, alice.account_id)
+    fake.customers.clear()
+    capfd.readouterr()
+    out = await start_checkout(alice)
+    row = subscription_row(env, alice.account_id)
+    assert row["provider_customer_id"] not in (None, before["provider_customer_id"])
+    assert row["checkout_idempotency_key"] != before["checkout_idempotency_key"]
+    assert fake.calls[-3:] == ["create_checkout", "ensure_customer", "create_checkout"]
+    page = fake.checkouts[out["session_id"]]
+    assert timedelta(hours=22) < page.expires_at - utcnow() <= timedelta(hours=23)
+    logged = capfd.readouterr()
+    assert "billing.customer_unknown" in logged.out + logged.err
+    # a customer refused again is not retried a second time in the same request
+    calls = len(fake.calls)
+
+    async def refused(**kwargs: Any) -> Any:
+        fake.calls.append("create_checkout")
+        raise ProviderError("bad_request", status=400, code="resource_missing", param="customer")
+
+    sql(env.database_url, "UPDATE subscriptions SET state = 'canceled' WHERE account_id = %s", (alice.account_id,))
+    monkeypatch.setattr(fake, "create_checkout", refused)
+    r = await alice.request("POST", "/v1/billing/checkout", {"plan": "pro", "interval": "monthly"}, expect=502)
+    assert r.json()["error"]["detail"] == {"reason": "bad_request"}
+    assert fake.calls[calls:] == ["create_checkout", "ensure_customer", "create_checkout"]
+
+
+async def test_a_provider_refusal_logs_stripes_code_and_parameter_and_answers_the_reason_only(
+    env: Env,
+    billing: BillingService,
+    alice: Browser,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """``billing.provider_error`` carries Stripe's error code and the parameter it names (the short machine strings
+    that tell a wrong price id from a missing account name; never Stripe's message, which can quote customer data). The
+    phone still gets ``{"reason"}`` only."""
+
+    async def refused(**kwargs: Any) -> Any:
+        raise ProviderError(
+            "bad_request", status=400, request_id="req_diag1", code="resource_missing", param="line_items[0][price]"
+        )
+
+    monkeypatch.setattr(fake_stripe(billing), "create_checkout", refused)
+    capfd.readouterr()
+    r = await alice.request("POST", "/v1/billing/checkout", {"plan": "pro", "interval": "monthly"}, expect=502)
+    err = r.json()["error"]
+    assert err["code"] == "BILLING_PROVIDER_ERROR" and err["detail"] == {"reason": "bad_request"}
+    out = capfd.readouterr()
+    [line] = [x for x in (out.out + out.err).splitlines() if "billing.provider_error" in x]
+    assert "create_checkout" in line and "req_diag1" in line
+    assert "resource_missing" in line and "line_items[0][price]" in line
+    assert "[redacted]" not in line  # the fields are not named "code" / "*_code", which the redactor blanks
 
 
 async def test_pro_plus_is_not_sold_while_the_assistant_is_off(

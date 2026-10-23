@@ -491,3 +491,29 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     successful starts the consent wait still counts (charged from the forward); the phone's Free copy says so.
 104. **IPv4 masking allows a sentence-final period** (`logging._IPV4_RE`): "could not reach 192.168.1.5." is masked,
     "1.2.3.4.5" is not.
+
+## Billing against stripe-mock (2026-10-23)
+
+105. **The Stripe adapter's requests are checked against stripe-mock v0.206.0 in CI**, Stripe's official mock API at
+    the API version the pinned SDK sends (`-strict-version-check`). The arguments are the service's own: a test records
+    every provider call through a whole customer life with the fake provider and replays each against the adapter.
+    The seam is `StripeProvider(settings, client=...)`, used by tests only; there is deliberately no setting that
+    changes where the secret key is sent.
+106. **A Checkout page lives 1 to 23 hours (default 23), sent in whole seconds.** Stripe accepts `expires_at` 30 minutes
+    to 24 hours after it creates the page, by its own clock; the old default of exactly 24 hours was past that limit as
+    soon as the server's clock ran ahead of Stripe's. The stored `checkout_expires_at` is the value sent, and a replay
+    re-sends it only while it is still 15 minutes inside the window, otherwise it starts over with a new key. The fake
+    provider enforces the window, so the integration tests catch a regression.
+107. **`billing.provider_error` carries Stripe's error code and parameter name** (`stripe_error`, `stripe_param`; the
+    names avoid the redactor's `code` / `*_code`), read from the parsed error body because the SDK copies them onto
+    `InvalidRequestError` only. Anything that is not a short machine string is dropped; Stripe's message is never kept,
+    since it can quote customer data. The phone still gets `{reason}` only. The stripe SDK's own logger (Stripe's
+    message at INFO, request and response bodies with the customer's email at DEBUG) and httpx's (every URL, with Stripe
+    object ids) are held at WARNING with the AI SDK's (`logging.SDK_LOGGERS`), whatever `DOME_LOG_LEVEL` says.
+108. **A customer id Stripe does not know is replaced once, on Checkout.** The id is stored before the page is made,
+    so an attempt under one Stripe account (Deploy #8: the key of one account, the prices of a sandbox) left an id that
+    the account of a corrected key does not have; every later attempt sent it again and failed. When
+    `create_checkout` is refused with `resource_missing` on `customer`, the service forgets that id on the account's
+    rows, creates the customer under the current key and makes the page once more with a new idempotency key and
+    expiry (`billing.customer_unknown`), under the account lock so a double tap still gets one page. Portal and top-up
+    are not retried: both need a live subscription, which a replaced key cannot see either.

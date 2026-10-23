@@ -4,7 +4,10 @@
 It keeps customers, Checkout Sessions, subscriptions and invoices, signs its deliveries exactly the way Stripe does
 (``t=<unix>,v1=<hex HMAC-SHA256(secret, f"{t}.{raw}")>``, tolerance checked), and its test helpers mutate the state
 **and return the signed delivery** ``(raw, header)`` for the test to post to ``/v1/billing/webhook`` in any order or
-any number of times. ``fail_next`` names methods that raise ``ProviderError("provider_error")`` once.
+any number of times. ``fail_next`` names methods that raise ``ProviderError("provider_error")`` once. Like Stripe, it
+refuses a Checkout ``expires_at`` outside 30 minutes to 24 hours from its own clock (``bad_request``, param
+``expires_at``), and a customer id it does not know (``bad_request``, ``resource_missing``, param ``customer``: what
+Stripe answers for a customer of another account, sandbox or mode).
 """
 
 from __future__ import annotations
@@ -180,10 +183,13 @@ class FakeStripe:
     ) -> CheckoutSession:
         self._maybe_fail("create_checkout")
         if customer_id not in self.customers:
-            raise ProviderError("not_found", status=404)
+            raise ProviderError("bad_request", status=400, code="resource_missing", param="customer")
         for existing in self.checkouts.values():
             if existing.idempotency_key == idempotency_key:  # Stripe replays the first response for the same key
                 return self._checkout(existing)
+        # Stripe's rule, by its own clock: expires_at 30 minutes to 24 hours after the session is created
+        if not timedelta(minutes=30) <= expires_at - self.clock() <= timedelta(hours=24):
+            raise ProviderError("bad_request", status=400, param="expires_at")
         c = _Checkout(
             id=self._id("cs_test"),
             customer_id=customer_id,
@@ -216,7 +222,7 @@ class FakeStripe:
     async def create_portal(self, customer_id: str, return_url: str) -> str:
         self._maybe_fail("create_portal")
         if customer_id not in self.customers:
-            raise ProviderError("not_found", status=404)
+            raise ProviderError("bad_request", status=400, code="resource_missing", param="customer")
         url = f"https://billing.fake.test/p/session/{self._id('bps')}"
         self.portal_sessions.append((customer_id, url))
         return url

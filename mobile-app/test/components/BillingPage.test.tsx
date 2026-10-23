@@ -305,6 +305,57 @@ describe("BillingPage", () => {
     expect(await screen.findByRole("button", { name: "Manage subscription" })).toBeInTheDocument();
   });
 
+  it("a payment provider error follows its reason, and only test mode adds the operator's line with the reason code", async () => {
+    const providerError = (reason: string) => () => jsonResponse(502, { error: { code: "BILLING_PROVIDER_ERROR", message: "server text", retryable: true, detail: { reason } } });
+    const DID_NOT_ANSWER = "Our payment provider didn't answer. Nothing was charged. Try again in a moment.";
+    const NOT_WORKING = "Payments aren't working on DoMe's side right now. Nothing was charged. Try again later.";
+    const user = userEvent.setup();
+    for (const [mode, reason, text, line] of [
+      ["test", "bad_request", NOT_WORKING, "Test mode: Stripe refused the request, for example a price or customer it does not know (bad_request). Run Deploy again: its summary checks the Stripe setup."],
+      ["test", "auth", NOT_WORKING, "Test mode: Stripe refused DoMe's secret key (auth). Run Deploy again: its summary checks the Stripe setup."],
+      ["test", "not_found", NOT_WORKING, "Test mode: Stripe does not know a payment page or subscription DoMe saved earlier (not_found). This can follow a change of the Stripe key."],
+      ["test", "timeout", DID_NOT_ANSWER, "Test mode: DoMe could not reach Stripe in time (timeout)."],
+      ["test", "provider_error", DID_NOT_ANSWER, "Test mode: Stripe answered with an error (provider_error)."],
+      ["test", "something_new", DID_NOT_ANSWER, null],
+      ["live", "bad_request", NOT_WORKING, null],
+      ["live", "auth", NOT_WORKING, null],
+      ["live", "not_found", NOT_WORKING, null],
+      ["live", "timeout", DID_NOT_ANSWER, null],
+      ["live", "provider_error", DID_NOT_ANSWER, null],
+    ] as const) {
+      billing = { ...FREE_ON, billing_mode: mode };
+      respond["POST /v1/billing/checkout"] = providerError(reason);
+      const r = renderBilling();
+      const pro = (await within(r.container).findByRole("article", { name: "DoMe Pro" })) as HTMLElement;
+      await user.click(within(pro).getByRole("button", { name: "Continue to payment" }));
+      const notice = (await within(r.container).findByText(text)).closest('[role="alert"]') as HTMLElement;
+      if (line) expect(within(notice).getByTestId("provider-test-line")).toHaveTextContent(line);
+      else {
+        expect(within(r.container).queryByTestId("provider-test-line")).toBeNull();
+        // live mode never shows Stripe's name or a reason code to a customer
+        expect(notice.textContent).not.toMatch(/Stripe|Deploy|bad_request|not_found|auth|timeout|provider_error/);
+      }
+      expect(assign).not.toHaveBeenCalled();
+      r.unmount();
+    }
+  });
+
+  it("the portal's and the top-up's provider errors follow the reason too", async () => {
+    session = { ...SESSION, plan: "pro", entitlement_state: "active", limits: PRO_LIMITS };
+    billing = PRO_ON;
+    assistant = { ...AI_ON, allowance: WINDOWS };
+    respond["POST /v1/billing/portal"] = () => jsonResponse(502, { error: { code: "BILLING_PROVIDER_ERROR", message: "server text", retryable: true, detail: { reason: "auth" } } });
+    respond["POST /v1/billing/topup"] = () => jsonResponse(502, { error: { code: "BILLING_PROVIDER_ERROR", message: "server text", retryable: true, detail: { reason: "not_found" } } });
+    const user = userEvent.setup();
+    renderBilling();
+    await user.click(await screen.findByRole("button", { name: "Manage subscription" }));
+    expect(await screen.findByText("Payments aren't working on DoMe's side right now. Nothing was charged. Try again later.")).toBeInTheDocument();
+    expect(screen.getByTestId("provider-test-line")).toHaveTextContent("(auth)");
+    await user.click(screen.getByRole("button", { name: "Add 100 AI requests for $2.99" }));
+    await waitFor(() => expect(screen.getByTestId("provider-test-line")).toHaveTextContent("(not_found)"));
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("return URL shows pending and polls the session, never unlocking by itself", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     billing = { ...FREE_ON, entitlement_state: "pending", checkout_available: false, subscription: { ...SUB, state: "checkout_pending", current_period_end: null, checkout_expires_at: "2026-10-21T12:00:00.000Z" } };

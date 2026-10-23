@@ -132,8 +132,9 @@ class Settings(BaseSettings):
     billing_webhook_tolerance_seconds: int = Field(default=300, ge=60, le=900)
     billing_reconcile_interval_seconds: float = Field(default=3600.0, gt=0)
     # how long a hosted Checkout page stays payable (its expires_at) and how long the reconciler waits before it asks
-    # the provider about a page still pending; Stripe accepts 30 minutes to 24 hours
-    billing_checkout_pending_hours: int = Field(default=24, ge=1, le=24)
+    # the provider about a page still pending. Stripe accepts 30 minutes to 24 hours after it creates the page; 1 to 23
+    # keeps the value sent at least 30 minutes inside both ends, whatever small clock difference (billing/service.py)
+    billing_checkout_pending_hours: int = Field(default=23, ge=1, le=23)
     # checkout, portal and top-up page creations per account per hour
     rate_billing_requests_per_hour: int = Field(default=10, ge=1)
     stripe_automatic_tax: bool = False

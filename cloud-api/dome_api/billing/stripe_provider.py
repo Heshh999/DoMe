@@ -3,18 +3,21 @@
 Every call goes through the SDK's ``*_async`` methods with the SDK's own retries off (DoMe decides what to retry: the
 reconciler re-fetches, a page creation is simply reported to the customer) and a 10-second timeout. Only ids, states
 and timestamps leave this module; the key never appears in an error, a log line or an exception text (``ProviderError``
-carries the reason, HTTP status and Stripe request id only). The customer's email goes to Stripe once, for receipts,
-in ``ensure_customer``, and is never logged.
+carries the reason, HTTP status, Stripe request id, and Stripe's error code and parameter name; never its message).
+The customer's email goes to Stripe once, for receipts, in ``ensure_customer``, and is never logged.
 
-Not yet exercised against Stripe test mode (docs/BILLING.md §12): the request shapes and the id normalisation (an
-invoice's subscription lives under ``parent.subscription_details.subscription`` in the pinned API version, the
-period under the subscription item) follow the pinned SDK's models and must be confirmed by the founder's first
-test-mode run.
+Every request below, and the response fields read from it (an invoice's subscription under
+``parent.subscription_details.subscription``, the period under the subscription item), is checked against
+stripe-mock v0.206.0, Stripe's official mock API for the API version the pinned SDK sends
+(``tests/test_stripe_provider_mock.py``, run in CI). stripe-mock validates parameter names, types and enums only: it
+knows no account, so a price's existence and type, the account name Checkout requires and the ``expires_at`` window
+are still proven only by the founder's first test-mode run (docs/BILLING.md §12).
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -49,10 +52,28 @@ def _reason(exc: Exception) -> ProviderErrorReason:
     return "provider_error"
 
 
+# Stripe's error code and parameter name are short machine strings (``resource_missing``, ``line_items[0][price]``);
+# anything else found in those fields is dropped rather than logged
+_MACHINE_STRING = re.compile(r"[A-Za-z0-9_.\[\]-]{1,120}")
+
+
+def _machine(value: Any) -> str | None:
+    return value if isinstance(value, str) and _MACHINE_STRING.fullmatch(value) else None
+
+
 def _translate(exc: Exception) -> ProviderError:
     status = getattr(exc, "http_status", None)
     request_id = getattr(exc, "request_id", None)
-    return ProviderError(_reason(exc), status=int(status) if status else None, request_id=request_id)
+    # the SDK copies code and param onto some error classes only (not AuthenticationError, PermissionError or
+    # IdempotencyError); the error object parsed from the response body carries both for every class
+    body = getattr(exc, "error", None)
+    return ProviderError(
+        _reason(exc),
+        status=int(status) if status else None,
+        request_id=request_id,
+        code=_machine(getattr(body, "code", None) or getattr(exc, "code", None)),
+        param=_machine(getattr(body, "param", None) or getattr(exc, "param", None)),
+    )
 
 
 def _ts(value: Any) -> datetime | None:
@@ -162,13 +183,18 @@ def event_from_stripe(event: Any, raw: bytes) -> WebhookEvent:
 class StripeProvider:
     name: Literal["stripe", "fake"] = "stripe"
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, client: StripeClient | None = None) -> None:
+        """``client`` is for tests only (``tests/test_stripe_provider_mock.py`` hands in one aimed at stripe-mock):
+        no setting can change where the secret key is sent."""
         self._webhook_secret = settings.stripe_webhook_secret.get_secret_value()
         self._tolerance = settings.billing_webhook_tolerance_seconds
-        http_client = stripe.HTTPXClient(timeout=TIMEOUT_SECONDS)
-        self._client = StripeClient(
-            settings.stripe_secret_key.get_secret_value(), max_network_retries=0, http_client=http_client
-        )
+        self._http: stripe.HTTPXClient | None = None
+        if client is None:
+            self._http = stripe.HTTPXClient(timeout=TIMEOUT_SECONDS)
+            client = StripeClient(
+                settings.stripe_secret_key.get_secret_value(), max_network_retries=0, http_client=self._http
+            )
+        self._client = client
 
     async def ensure_customer(self, account_id: str, email: str) -> CustomerRef:
         try:
@@ -264,4 +290,6 @@ class StripeProvider:
         return event_from_stripe(event, raw)
 
     async def aclose(self) -> None:
-        return None
+        if self._http is not None:
+            await self._http.close_async()  # type: ignore[no-untyped-call]
+            self._http = None

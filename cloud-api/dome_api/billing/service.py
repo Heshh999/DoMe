@@ -67,6 +67,16 @@ STALE_RECEIVED_MINUTES = 10
 RECONCILE_FETCH_LIMIT = 200
 # a checkout row whose page is still being created (no session id yet) for this long belongs to a request in flight
 CHECKOUT_CREATING_SECONDS = 30
+# Stripe accepts a Checkout Session's expires_at from 30 minutes to 24 hours after it creates the session, by its own
+# clock. A new page lives checkout_pending_hours, bounded to 1 to 23 hours and cut to whole seconds (what the request
+# carries), so the value sent stays at least 30 minutes inside both ends: a server clock that much ahead of or behind
+# Stripe's still lands inside the window. A stored expiry is sent again (a replay) only while it is still
+# CHECKOUT_REPLAY_MARGIN inside the window; otherwise the page creation starts over with a new key and a new expiry.
+STRIPE_CHECKOUT_MIN_LIFETIME = timedelta(minutes=30)
+STRIPE_CHECKOUT_MAX_LIFETIME = timedelta(hours=24)
+CHECKOUT_LIFETIME_MIN = timedelta(hours=1)
+CHECKOUT_LIFETIME_MAX = timedelta(hours=23)
+CHECKOUT_REPLAY_MARGIN = timedelta(minutes=15)
 # states in which a top-up may be bought (the balance stays spendable only while the plan allows it)
 TOPUP_STATES = frozenset({"trialing", "active", "cancel_scheduled", "past_due"})
 WebhookStatus = Literal["processed", "ignored", "failed", "duplicate"]
@@ -107,6 +117,30 @@ class BillingConfig:
 
     def url(self, path: str) -> str:
         return self.public_origin + path
+
+
+def checkout_expiry(now: datetime, pending_hours: int) -> datetime:
+    """The expires_at of a new hosted page: the value sent to the provider and stored with the row, equal to the second,
+    so a replay of the same request sends exactly the same parameters."""
+    lifetime = min(max(timedelta(hours=pending_hours), CHECKOUT_LIFETIME_MIN), CHECKOUT_LIFETIME_MAX)
+    return (now + lifetime).replace(microsecond=0)
+
+
+def checkout_expiry_replayable(expires_at: datetime, now: datetime) -> bool:
+    """Whether a stored expiry may be sent again now: still CHECKOUT_REPLAY_MARGIN inside Stripe's window."""
+    remaining = expires_at - now
+    return (
+        STRIPE_CHECKOUT_MIN_LIFETIME + CHECKOUT_REPLAY_MARGIN
+        <= remaining
+        <= STRIPE_CHECKOUT_MAX_LIFETIME - CHECKOUT_REPLAY_MARGIN
+    )
+
+
+def unknown_customer(exc: ProviderError) -> bool:
+    """The provider does not know the customer id DoMe sent (Stripe: 400 ``resource_missing``, param ``customer``):
+    it was created under another Stripe account or sandbox, or in the other mode, before the secret key was replaced,
+    or it was deleted in Stripe's dashboard."""
+    return exc.code == "resource_missing" and exc.param == "customer"
 
 
 def build_provider(settings: Settings) -> BillingProvider | None:
@@ -168,12 +202,16 @@ class BillingService:
 
     @staticmethod
     def _provider_failed(exc: ProviderError, operation: str) -> ApiError:
+        # stripe_error / stripe_param: Stripe's error code and the parameter it names (resource_missing,
+        # line_items[0][price]), never its message; not named "code" / "*_code", which the log redactor blanks
         log.warning(
             "billing.provider_error",
             operation=operation,
             reason=exc.reason,
             status=exc.status,
             request_id=exc.request_id,
+            stripe_error=exc.code,
+            stripe_param=exc.param,
         )
         return ApiError(502, "BILLING_PROVIDER_ERROR", detail={"reason": exc.reason})
 
@@ -300,6 +338,62 @@ class BillingService:
             return str(existing)
         return (await provider.ensure_customer(str(account.id), account.email)).id
 
+    async def _subscription_page(
+        self, provider: BillingProvider, account: Account, row: Subscription, price_id: str
+    ) -> CheckoutSession:
+        """The hosted page for the customer, idempotency key and expiry stored on the checkout_pending ``row``."""
+        assert row.provider_customer_id and row.checkout_idempotency_key and row.checkout_expires_at is not None
+        return await provider.create_checkout(
+            customer_id=row.provider_customer_id,
+            price_id=price_id,
+            mode="subscription",
+            success_url=self.config.url("/app/billing?checkout=return&session_id={CHECKOUT_SESSION_ID}"),
+            cancel_url=self.config.url("/app/billing?checkout=cancel"),
+            idempotency_key=row.checkout_idempotency_key,
+            metadata={"dome_account_id": str(account.id), "dome_kind": "subscription", "dome_price": price_id},
+            automatic_tax=self.config.automatic_tax,
+            expires_at=row.checkout_expires_at,
+        )
+
+    async def _renew_customer(
+        self, db: AsyncSession, provider: BillingProvider, account: Account, row: Subscription, stale: str
+    ) -> bool:
+        """The provider refused the stored customer id ``stale`` (``unknown_customer``): forget it on every row of the
+        account, create the customer under the current key and store a new idempotency key and expiry on ``row`` (the
+        request differs now). Under the account lock, like the first attempt; when a request that got there first
+        already did this, ``row`` keeps its stored request, which is replayed. False when the row moved on meanwhile
+        (a page exists, or no page is being created any more): the caller answers with the first refusal."""
+        account_id, email = account.id, account.email
+        await db.scalar(select(Account).where(Account.id == account_id).with_for_update())
+        await db.refresh(row, with_for_update=True)  # as another request may have left it
+        if (
+            row.state != "checkout_pending"
+            or row.provider_checkout_session_id
+            or not row.checkout_idempotency_key
+            or row.checkout_expires_at is None
+        ):
+            await db.commit()
+            return False
+        if row.provider_customer_id == stale:
+            await db.execute(
+                update(Subscription)
+                .where(Subscription.account_id == account_id, Subscription.provider_customer_id == stale)
+                .values(provider_customer_id=None)
+            )
+            log.warning("billing.customer_unknown", account_id=str(account_id), operation="create_checkout")
+            try:
+                customer = await provider.ensure_customer(str(account_id), email)
+            except ProviderError as exc:
+                await db.commit()  # the refused id stays forgotten: the next attempt creates the customer
+                raise self._provider_failed(exc, "ensure_customer") from None
+            now = self.config.clock()
+            row.provider_customer_id = customer.id
+            row.checkout_idempotency_key = f"checkout:{account_id}:{uuid.uuid4()}"
+            row.checkout_expires_at = checkout_expiry(now, self.config.checkout_pending_hours)
+            row.updated_at = now
+        await db.commit()
+        return True
+
     @staticmethod
     def _checkout_body(kind: str, session: CheckoutSession) -> dict[str, Any]:
         """rest.schema.json#/$defs/billing_checkout_response"""
@@ -375,7 +469,10 @@ class BillingService:
         ):
             if row.price_id != price_id:
                 raise ApiError(409, "CHECKOUT_PROCESSING")
-            replay = (row.checkout_idempotency_key, row.checkout_expires_at)
+            # the identical request again, unless its stored expiry is no longer one Stripe accepts (a clock that moved,
+            # or a row from a build that sent 24 hours): then it starts over below with a new key and a new expiry
+            if checkout_expiry_replayable(row.checkout_expires_at, now):
+                replay = (row.checkout_idempotency_key, row.checkout_expires_at)
         self._take_budget(account.id)
         try:
             customer_id = await self._customer(db, provider, account, row)
@@ -393,7 +490,7 @@ class BillingService:
         if replay is None:
             replay = (
                 f"checkout:{account.id}:{uuid.uuid4()}",
-                now + timedelta(hours=self.config.checkout_pending_hours),
+                checkout_expiry(now, self.config.checkout_pending_hours),
             )
             row.updated_at = now
         row.checkout_idempotency_key, expires_at = replay
@@ -402,19 +499,18 @@ class BillingService:
         # within CHECKOUT_CREATING_SECONDS sends the identical request and gets the same page back
         await db.commit()
         try:
-            session = await provider.create_checkout(
-                customer_id=customer_id,
-                price_id=price_id,
-                mode="subscription",
-                success_url=self.config.url("/app/billing?checkout=return&session_id={CHECKOUT_SESSION_ID}"),
-                cancel_url=self.config.url("/app/billing?checkout=cancel"),
-                idempotency_key=row.checkout_idempotency_key,
-                metadata={"dome_account_id": str(account.id), "dome_kind": "subscription", "dome_price": price_id},
-                automatic_tax=self.config.automatic_tax,
-                expires_at=expires_at,
-            )
+            session = await self._subscription_page(provider, account, row, price_id)
         except ProviderError as exc:
-            raise self._provider_failed(exc, "create_checkout") from None
+            if not unknown_customer(exc):
+                raise self._provider_failed(exc, "create_checkout") from None
+            # the stored customer id belongs to the Stripe account the secret key came from before (a key from another
+            # account or sandbox, or the other mode): without this, every later attempt sent it again and failed
+            if not await self._renew_customer(db, provider, account, row, customer_id):
+                raise self._provider_failed(exc, "create_checkout") from None
+            try:
+                session = await self._subscription_page(provider, account, row, price_id)
+            except ProviderError as again:
+                raise self._provider_failed(again, "create_checkout") from None
         row.provider_checkout_session_id = session.id
         row.checkout_expires_at = session.expires_at
         row.updated_at = now
@@ -470,7 +566,7 @@ class BillingService:
                     "dome_requests": str(topup["requests"]),
                 },
                 automatic_tax=self.config.automatic_tax,
-                expires_at=now + timedelta(hours=self.config.checkout_pending_hours),
+                expires_at=checkout_expiry(now, self.config.checkout_pending_hours),
             )
         except ProviderError as exc:
             raise self._provider_failed(exc, "create_checkout") from None

@@ -92,11 +92,19 @@ Items the review surfaced that are deliberately deferred, with the reason and th
 
 ## Billing (Phase C)
 
-20. **Never run against Stripe.** Everything is integration-tested with `FakeStripe`, which signs exactly as Stripe
-    does (`tests/test_billing_stripe_adapter.py` cross-checks it with the SDK's own helper). The real request shapes
-    (Checkout parameters, the invoice's subscription under `parent.subscription_details`, the period on the
-    subscription item) follow the pinned `stripe` 16.0 SDK's models and must be confirmed by the founder's first
-    test-mode run on staging (`docs/LAUNCH_SETUP.md` 11A).
+20. **Never run against Stripe itself.** Everything is integration-tested with `FakeStripe`, which signs exactly as
+    Stripe does (`tests/test_billing_stripe_adapter.py` cross-checks it with the SDK's own helper). Since 2026-10-23
+    the request shapes (every call the service makes, with its own arguments) and the response fields read back (the
+    invoice's subscription under `parent.subscription_details`, the period on the subscription item) are checked
+    against stripe-mock v0.206.0, Stripe's official mock API, in CI (`tests/test_stripe_provider_mock.py`); nothing
+    was refused. stripe-mock knows no account, so what only a real account can refuse is still unproven until the
+    founder's first test-mode run on staging (`docs/LAUNCH_SETUP.md` 11A): a price id from another account or sandbox
+    than the secret key, a one-time price where a recurring one is needed (or the reverse), a missing account or
+    business name (Checkout refuses to open) and a Customer Portal never saved. A refusal is logged as
+    `billing.provider_error` with Stripe's `stripe_error` code and `stripe_param`, which tell these apart. A customer
+    id stored under a secret key that has since been replaced (another account, sandbox or mode) is replaced on the
+    next Checkout (`billing.customer_unknown`, DECISIONS 108); the Portal and top-ups still send the stored id, which
+    only matters for a live subscription made under the old key.
 21. **Disputes and refunds are not handled.** `charge.dispute.*` and `charge.refunded` are recorded as `ignored` with a
     `billing.needs_operator` warning; access is not paused and nothing is canceled automatically. Trials are not
     configured.

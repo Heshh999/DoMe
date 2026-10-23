@@ -1,6 +1,6 @@
-"""Fixtures: a temporary PATH with fake ``flyctl``/``docker`` (tests/fake_flyctl.py), a fake web and DNS,
-and a fake clock, so dome_deploy.py runs end to end without Fly.io, GitHub or the network. ``openssl`` is
-the real one."""
+"""Fixtures: a temporary PATH with fake ``flyctl``/``docker`` (tests/fake_flyctl.py), a fake web and DNS, a fake
+Stripe API (tests/fake_stripe.py) and a fake clock, so dome_deploy.py runs end to end without Fly.io, GitHub, Stripe or
+the network. ``openssl`` is the real one."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import pytest
+from fake_stripe import FakeStripe
 
 import dome_deploy
 from dome_deploy import HttpFailure, HttpResult
@@ -89,9 +90,11 @@ SECURE_HEADERS = {
 
 class FakeWeb:
     """URL -> HttpResult, HttpFailure or a callable returning one. Unknown URLs fail like DNS would.
-    ``websockets``: host -> the HTTP status a WebSocket upgrade gets (or an HttpFailure)."""
+    ``websockets``: host -> the HTTP status a WebSocket upgrade gets (or an HttpFailure). ``stripe`` answers every
+    request to Stripe's API (with its headers) when set."""
 
     def __init__(self) -> None:
+        self.stripe: FakeStripe | None = None
         self.routes: dict[str, Any] = {}
         self.requests: list[str] = []
         self.no_redirect_requests: list[str] = []
@@ -106,6 +109,8 @@ class FakeWeb:
         self.headers_seen[url] = dict(headers or {})
         if not follow_redirects:
             self.no_redirect_requests.append(url)
+        if self.stripe is not None and url.startswith(dome_deploy.STRIPE_API + "/"):
+            return self.stripe(url, dict(headers or {}))
         route = self.routes.get(url)
         if callable(route) and not isinstance(route, HttpResult | HttpFailure):
             route = route()
@@ -272,6 +277,7 @@ class World:
     web: FakeWeb
     dns: dict[str, list[str]]
     clock: Clock
+    stripe: FakeStripe
 
     # ----- fake Fly state ------------------------------------------------------------------------
     def state(self) -> dict[str, Any]:
@@ -440,6 +446,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     web = FakeWeb()
     for name in ("staging", "production"):
         web.github_environment(name)
+    web.stripe = FakeStripe(STRIPE_PRICES)
     dns: dict[str, list[str]] = {}
 
     def fake_resolve(hostname: str) -> list[str]:
@@ -453,7 +460,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     monkeypatch.setattr(dome_deploy, "resolve", fake_resolve)
     monkeypatch.setattr(dome_deploy, "sleep", clock.sleep)
     monkeypatch.setattr(dome_deploy, "monotonic", clock.monotonic)
-    yield World(tmp_path, state_path, log_path, env, web, dns, clock)
+    yield World(tmp_path, state_path, log_path, env, web, dns, clock, web.stripe)
 
 
 def decode_key(b64: str) -> bytes:

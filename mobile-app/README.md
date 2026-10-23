@@ -192,7 +192,9 @@ States of the page, each component-tested (`test/components/BillingPage.test.tsx
   each → `POST /v1/billing/checkout {plan, interval}` → the browser leaves for the server's `checkout_url`
   (https only; `browserNavigation.assign`, replaceable in tests). Errors show the contract's message for the
   code (`BILLING_NOT_AVAILABLE`, `ALREADY_SUBSCRIBED` re-reads the status, `RATE_LIMITED`,
-  `BILLING_PROVIDER_ERROR`) and never claim a purchase.
+  `BILLING_PROVIDER_ERROR`) and never claim a purchase. `BILLING_PROVIDER_ERROR` follows its `detail.reason`:
+  `auth`, `bad_request` and `not_found` say payments aren't working on DoMe's side (try again later) instead of
+  "didn't answer", and in test mode one more line names Stripe's reason code (decision 78).
 - **Returned from Stripe** (`?checkout=return|cancel`, `?topup=return|cancel`, informational only; dropped
   from the URL at once): "Pending activation" / "Top-up pending" while the page polls the session and the
   billing status (or the allowance) every 3 s for at most 2 minutes, stops when the server says

@@ -167,7 +167,9 @@ The file must be on the default branch or GitHub shows no button. Three jobs:
 1. Branch, inputs (each missing value is named with the exact GitHub page and tab), issuer normalization
    (`x.us.auth0.com`, `https://x.us.auth0.com` and `https://x.us.auth0.com/` are all accepted), and the
    Stripe values ([Billing](#billing-stripe-through-the-deploy-button)).
-2. OIDC discovery from the runner: the issuer answers, names itself, and accepts `client_secret_post`.
+2. OIDC discovery from the runner: the issuer answers, names itself, and accepts `client_secret_post`. With
+   billing on, then the Stripe check: what Stripe itself says about the seven values
+   ([Stripe's own answers](#stripes-own-answers-deploy-only-before-any-flyctl-call)).
 3. Production only: the staging check of the `gate` job again.
 4. `flyctl apps list`, `secrets list` (names and digests only), and for production `mpg list`. A
    generated secret counts as missing only when `secrets list` succeeded and parsed; any other answer
@@ -257,6 +259,39 @@ founder-readable stops that name variables, never values:
 - a Stripe secret saved as a **variable** instead of a secret: deploy.yml hands over only its NAME
   (`STRIPE_SECRETS_AS_VARIABLES`, `vars.X != ''`), and the run stops with the roll steps;
 - the gate refuses repository-level copies of the two secrets, like the other deploy secrets.
+
+#### Stripe's own answers (deploy only, before any flyctl call)
+
+The shapes above cannot see a key and prices from two different Stripe accounts or sandboxes, the mix-up that makes
+Checkout fail with "No such price" (on Deploy #8 the phone said "Our payment provider didn't answer"; since 2026-10-23
+it says "Payments aren't working on DoMe's side right now" for a refused setup). So with billing on,
+right after OIDC discovery and before the first `flyctl` call, `check_stripe_setup` reads Stripe's REST API from the
+runner with the secret key (stdlib `urllib`, GET only, `Authorization: Bearer` header, never in a URL, redirects not
+followed, 10 s per request, `Stripe-Version: 2026-09-30.endive`, the version cloud-api's stripe 16.0.0 pins, so it reads
+the shapes the app gets; a test fails when `cloud-api/uv.lock` moves to another stripe release):
+
+| Read | Stops the run ("needs you", nothing changed) when | Warning (a "Stripe check:" note) when |
+| --- | --- | --- |
+| `GET /v1/account` | neither `settings.dashboard.display_name` nor `business_profile.name` is set (Checkout refuses such an account); a live key and `charges_enabled` false | |
+| `GET /v1/prices/{id}?expand[]=product`, for each of the five | 404 (the key's account does not know it; Stripe's "a similar object exists in test mode" hint is passed on); price or product archived, product deleted; `livemode` not the key's mode; currency not the one of `shared/protocol/plans.json` (USD); the four subscription prices not `recurring` with `interval` month (`*_MONTHLY`) or year (`*_ANNUAL`), `interval_count` 1, `usage_type` licensed; the top-up not `one_time`; `billing_scheme` not `per_unit` or no `unit_amount`; `unit_amount` not `pricing_defaults` ("Stripe would charge $X.XX but DoMe shows $Y.YY") | an unexpected 4xx for one price |
+| `GET /v1/webhook_endpoints?limit=100` | no endpoint whose `url` is exactly `<origin>/v1/billing/webhook` (endpoints on DoMe's own hosts, the DNS zone and the Fly app, are listed with scheme, host and path only; any other endpoint is only counted, since another service's webhook address can carry its secret and the summary is public); the best match `status` not `enabled`; one of the nine acted-on events missing (`*` counts as all) | one of the four `charge.` events missing; two endpoints for the same address |
+| `GET /v1/billing_portal/configurations?is_default=true` | no default configuration, or it is not `active` (Manage subscription would fail) | cancelling off, or not `at_period_end`; payment method update off; plan switching off, without `price` in `default_allowed_updates`, or not offering all four subscription prices |
+
+Any read answered 401 stops at once ("Stripe refused the secret key"); 403 (a restricted `rk_` key without that read
+permission) is a warning naming what was not checked. When the key's account knows none of the five prices, it is
+not the account DoMe was set up in, so its webhook endpoint and portal are not read: the stop names one fix (the key
+and the prices from the same sandbox) instead of asking for an endpoint whose signing secret would belong to the wrong
+account. The signing secret itself cannot be checked (Stripe's API returns it only when the endpoint is created). A
+stop rewrites the **Billing (Stripe)** row to say nothing was stored in Fly. No answer, a timeout, 429, 5xx, a redirect or a body that is not
+Stripe's JSON ends the check with a warning, and the deploy goes on: Stripe being down never fails a deploy (problems
+already found still stop it). All problems are collected and listed in one stop, with one founder step per kind of fix.
+The summary row **Stripe account** says which account the key belongs to, for example "**domeremote sandbox**
+(`acct_...`), Test mode: 5 prices, webhook endpoint and customer portal match". Stripe's own error texts pass through
+the redaction book and a second filter that hides anything shaped like an `sk_`/`rk_`/`pk_` key, a `whsec_` secret or an
+`Authorization: Bearer` value (Stripe quotes keys part-masked; stripe-mock quotes the whole header). Paths, parameters
+and fields were checked against Stripe's OpenAPI spec of that version, and the eight requests against stripe-mock
+v0.206.0 (all accepted); `tests/test_deploy_stripe_check.py` runs every outcome against `tests/fake_stripe.py`. Never
+run against Stripe itself yet.
 
 **Removal semantics.** The GitHub Environment is the only source of the Stripe values, as it is for
 `DOME_OIDC_CLIENT_SECRET`, and the app refuses to start with only some of the seven. So a deploy removes every
@@ -560,7 +595,7 @@ Six jobs, no secrets, SHA-pinned actions (tag in the trailing comment). Green on
 | Image | built by CI's `container` job on every push since 2026-10-11; run in the test-kit rehearsal (Linux) | built, not run on Fly.io |
 | `entrypoint.sh` | `sh -n`; all four paths exercised locally (staging without key → exit 2; development → generated 0600 PEM; `_B64` → identical PEM and `DATABASE_URL` translated; existing key untouched); shellcheck 0.11.0 clean; a Neon-style `DATABASE_URL` keeps `?sslmode=require&channel_binding=require` (`cloud-api/tests/test_database_url.py`, 2026-10-14) | unit-tested (shell, locally) |
 | `fly.toml` | parses; `launch/tests/test_fly_config.py` (no secrets or placeholders, ports, release command, region, trusted ranges); flags and merge rules checked in the flyctl v0.4.110 source | not yet verified on Fly.io |
-| Deploy workflow + `dome_deploy.py` | `launch/tests/` (258 tests: order of operations, re-runs, stops before changes, the Stripe values (all or none, shapes, live key refused on staging, removal, `/v1/plans` check, status, agreement with cloud-api's names, events and webhook path), database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Neon, Auth0, Cloudflare or GitHub's environments API** |
+| Deploy workflow + `dome_deploy.py` | `launch/tests/` (387 tests: order of operations, re-runs, stops before changes, the Stripe values (all or none, shapes, live key refused on staging, removal, `/v1/plans` check, status, agreement with cloud-api's names, events and webhook path), the Stripe check against a fake Stripe API (every stop and warning, `*` events, 401/403, Stripe unreachable, no flyctl call on a stop, the key never in the log or summary even when Stripe quotes it; its eight requests also accepted by stripe-mock v0.206.0), database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Neon, Auth0, Cloudflare, Stripe or GitHub's environments API** |
 | `docker-compose.dev.yml` | `docker compose config --quiet` (Compose v5.6.0) | not brought up |
 | `ci.yml` | green on GitHub Actions since 2026-10-11 | CI-tested |
 

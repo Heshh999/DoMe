@@ -16,6 +16,7 @@ rejection as a relay-origin result, in-flight deadline sweeper, outcome_unknown 
 late-result correction, revoke_controller, pairing_request delivery), command lifecycle rows, plans,
 health, security headers/CSP, static PWA serving, structlog JSON with redaction. Plans and Stripe billing
 (Phase C, protocol 1.3, migration 0004) are implemented and **integration-tested with an in-memory fake Stripe**;
+every request the Stripe adapter sends is checked against stripe-mock v0.206.0 (Stripe's official mock API) in CI;
 not yet run against Stripe test mode. See "Billing (Phase C)" below.
 
 Protocol 1.1 (spec §10A, §11A): the signed manual-input stream (`input_batch` routing, `input_ack` /
@@ -132,9 +133,19 @@ checkout/portal/top-up/webhook answer 503 `BILLING_NOT_AVAILABLE`, `GET /v1/acco
 still work, and everyone stays on Free. A partial set refuses start-up naming the missing variables.
 
 Logs: one line per operation (`billing.checkout`, `billing.webhook`, `billing.transition`, `billing.reconcile`, …)
-with codes, account ids, plan names and counts; never an email, a body, a signature or a Stripe key. Evidence:
-**integration-tested (fake provider)** in `tests/test_billing_*.py`; the Stripe adapter is **unit-tested** against the
-SDK's signature helper and object models; **not sandbox-provider-tested**.
+with codes, account ids, plan names and counts; never an email, a body, a signature or a Stripe key. A failed Stripe
+call logs `billing.provider_error` with the operation, reason, HTTP status, Stripe request id, `stripe_error` (Stripe's
+error code, e.g. `resource_missing`) and `stripe_param` (the parameter it names, e.g. `line_items[0][price]`); never
+Stripe's message (the stripe SDK's and httpx's own loggers are held at WARNING, `logging.SDK_LOGGERS`). A customer id
+Stripe no longer knows (stored under a secret key since replaced) is replaced once on Checkout
+(`billing.customer_unknown`, DECISIONS 108). Evidence: **integration-tested (fake provider)** in `tests/test_billing_*.py`; the Stripe adapter is
+**unit-tested** against the SDK's signature helper, object models and Stripe-shaped error answers, and
+**stripe-mock-validated**: `tests/test_stripe_provider_mock.py` replays every provider call the billing service makes
+(recorded through a whole customer life) against the adapter pointed at stripe-mock v0.206.0, runs the Checkout,
+status and Portal routes with the adapter in place of the fake, and checks the response fields the adapter reads
+(CI starts stripe-mock with `-strict-version-check`; locally the test is skipped unless `DOME_TEST_STRIPE_MOCK_URL`
+is set, see the module docstring). stripe-mock knows no account, so a price's existence and type, the account name
+Checkout needs, the `expires_at` window and the Portal configuration are **not sandbox-provider-tested** yet.
 
 ## Screen view (protocol 1.4)
 
@@ -387,7 +398,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_STRIPE_AUTOMATIC_TAX` | `false` | Stripe Tax on Checkout pages. Keep off: the founder's prices are tax-inclusive. |
 | `DOME_BILLING_WEBHOOK_TOLERANCE_SECONDS` | `300` | 60–900; signature timestamp tolerance. |
 | `DOME_BILLING_RECONCILE_INTERVAL_SECONDS` | `3600` | Reconciler period. |
-| `DOME_BILLING_CHECKOUT_PENDING_HOURS` | `24` | 1–24 (Stripe's limit); how long a hosted Checkout page stays payable, and how long the reconciler waits before it asks Stripe about a page still pending. |
+| `DOME_BILLING_CHECKOUT_PENDING_HOURS` | `23` | 1–23; how long a hosted Checkout page stays payable, and how long the reconciler waits before it asks Stripe about a page still pending. Stripe accepts 30 minutes to 24 hours after it creates the page, by its own clock; 1–23 keeps the `expires_at` sent at least 30 minutes inside both ends (`docs/BILLING.md` §5). 24, the old default, now refuses start-up. |
 | `DOME_RATE_BILLING_REQUESTS_PER_HOUR` | `10` | Checkout/Portal/top-up page creations per account per hour. |
 | `DOME_AI_ENABLED` | `false` | Master switch of the AI assistant. When true, start-up requires a provider, a key for `anthropic` and no `ANTHROPIC_*` variable in the environment, a ceiling above 0, a deadline ≥ timeout + 5, and for every plan with an effective allowance a cost cap of at least one reservation. |
 | `DOME_AI_PROVIDER` | `` | `anthropic` or `fake` (scripted test provider; refused in staging and production). |
@@ -462,11 +473,21 @@ library, agents and controllers are simulated with real ES256 keys from `dome_pr
 # once: PostgreSQL on /tmp:54329 (make db-start from the root) and cd tools/dev-idp && uv sync
 cd cloud-api
 uv run pytest -q -p no:cacheprovider   # creates dome_test_<random>, runs alembic upgrade head, drops it afterwards
+# with stripe-mock running as in CI (tests/test_stripe_provider_mock.py says how), its 6 tests run too
+DOME_TEST_STRIPE_MOCK_URL=http://127.0.0.1:12111 uv run pytest -q -p no:cacheprovider
 uv run ruff check . && uv run ruff format --check .
 uv run mypy dome_api tests
 ```
 
-Current counts (2026-10-21, Screen view Phase 1 relay half, protocol 1.4): **532 passed, 1 skipped**; mypy strict
+Current counts (2026-10-23, billing against stripe-mock): **578 passed, 7 skipped** without stripe-mock and **584
+passed, 1 skipped** with `DOME_TEST_STRIPE_MOCK_URL` set (as in CI); mypy strict clean on 105 files; ruff and ruff
+format clean. New: `tests/test_stripe_provider_mock.py` (6, skipped without stripe-mock), 8 in
+`tests/test_billing_stripe_adapter.py` (Stripe-shaped error answers through the SDK, the HTTP client closed, the
+stripe SDK's own logger held at WARNING) and 8 in `tests/test_billing_checkout.py` (page expiry inside Stripe's window
+with the clock 20 minutes off, no replay of an expiry Stripe would refuse, the provider-error log fields, a customer id
+from a replaced key replaced once); `test_billing_settings.py` expects 1–23 hours, default 23.
+Before that:
+(2026-10-21, Screen view Phase 1 relay half, protocol 1.4): **532 passed, 1 skipped**; mypy strict
 clean on 104 files; ruff and ruff format clean. New:
 `tests/test_screen_routing.py` (23, the relay paths end to end with 1.4 simulators and `FakeTurn`),
 `tests/test_screen_metering.py` (14, the ledger from several database sessions), `tests/test_screen_turn.py`
