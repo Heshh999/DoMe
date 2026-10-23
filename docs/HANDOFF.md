@@ -395,8 +395,8 @@ founder-driven; then:
    each environment is deployed before a PC that uses it gets this build.
    **Next (founder), in this order:**
    1. Done 2026-10-22: the LGPL wheel and the first Windows build with Screen view (above).
-   2. Staging: fix the seven Stripe values (or delete all seven), add the variable
-      `DOME_SCREEN_VIEW_ENABLED` = `true`, run Deploy for staging. Then the device round on your own PC and
+   2. Staging: done 2026-10-23 (Deploy #8, run 40026044503, commit 852cdc2: Stripe test mode, Screen view ON,
+      no relay server). Then the device round on your own PC and
       iPhone against staging (`docs/LAUNCH_SETUP.md` §11B "Testing it on your own PC": unlink, install with
       `/ApiUrl=https://staging.domeremote.com`, link, pair, allow) with `docs/design/screen-view.md` §18
       checklist items 1–11 and 13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, GPU,

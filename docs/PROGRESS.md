@@ -2,6 +2,27 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-23 — Staging deployed with Stripe in test mode and Screen view on
+
+- Deploy #8 (run 40026044503, staging, commit 852cdc2), started and approved by the founder: **success** in
+  2 m 11 s. Summary: inputs all present; **"Stripe: TEST MODE — no real charges"** (secret key and webhook
+  signing secret staged into Fly, the five price ids passed); **"Screen view: ON (beta)"**, relay server none (no
+  `DOME_TURN_` values: direct connections only); OIDC discovery answers; migrations ran first (0004 billing, 0005
+  Screen view, on Neon); `/healthz` status ok, database ok, commit 852cdc2; `/v1/plans` reports test as
+  configured; `/healthz` reports screen view on and no relay server, as configured; WebSocket upgrade reaches the
+  app; certificate Ready. This is the first run of the Stripe and Screen view deploy wiring against Fly.io (until
+  now tested only against the fake flyctl).
+- Founder's Stripe sandbox setup before it: the staging webhook endpoint with the 13 events, the Customer Portal
+  (payment methods, cancel at period end, switch between the four subscription prices, no pausing, no promotion
+  codes; legacy portal, not the "next generation" preview), the seven values as staging Environment secrets and
+  variables, and `DOME_SCREEN_VIEW_ENABLED=true` as a staging variable. Terms and Privacy links in Stripe's public
+  details are left for live mode.
+- Production still runs 35a203f with billing and Screen view off.
+- Next (founder): the test purchase on staging (`LAUNCH_SETUP.md` §11A step 7; Pro or Pro Plus also lifts Free's
+  10-minute Screen view window), then the PC and iPhone device round against staging (§11B "Testing it on your own
+  PC").
+- Evidence: deployed to staging; sign-in, Checkout, the webhook and Screen view not yet exercised there.
+
 ## 2026-10-22 — First Windows build with Screen view: green on GitHub's Windows machine
 
 - `windows-installer.yml` run 39843030059 (commit fa8de22, `windows-latest`) and `ci.yml` run 39843030099
