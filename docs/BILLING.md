@@ -61,7 +61,10 @@ From `plans.json` (design assumptions, editable without code changes):
 Prices are in US dollars. The Stripe prices the founder created are **tax-inclusive** (founder decision,
 2026-10-20): any sales tax is part of the amount, never added on top, and Stripe Tax is off
 (`DOME_STRIPE_AUTOMATIC_TAX=false`). The amounts charged are those of the Stripe price objects; the founder keeps
-them equal to `pricing_defaults`.
+them equal to `pricing_defaults`. DoMe is the seller: every Checkout page also turns off Stripe's **Managed Payments**
+(Stripe as merchant of record, which new accounts have on by default and which refuses Stripe Tax off), so the
+account's default does not matter (cloud-api/DECISIONS.md 109). Switching to Managed Payments would be a founder
+decision: Stripe would then handle sales tax and VAT itself, for an extra fee.
 
 Policy values also in `plans.json`: `downgrade_policy.selection_window_days = 14`, `default_selection =
 most_recently_seen`, `billing_grace.past_due_grace_days = 7`, `billing_grace.agent_offline_assertion_grace_hours =

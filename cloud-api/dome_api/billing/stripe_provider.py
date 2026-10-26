@@ -229,6 +229,10 @@ class StripeProvider:
             "metadata": dict(metadata),
             "allow_promotion_codes": False,
             "automatic_tax": {"enabled": automatic_tax},
+            # DoMe is the seller, with tax-inclusive prices (docs/BILLING.md §2). New Stripe accounts have Managed
+            # Payments (Stripe as merchant of record) on by default, which refuses automatic_tax off with a 400
+            # (staging, 2026-10-26); turned off here for every page, whatever the account default (DECISIONS 109)
+            "managed_payments": {"enabled": False},
             "expires_at": int(expires_at.timestamp()),
         }
         if mode == "subscription":

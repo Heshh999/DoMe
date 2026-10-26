@@ -2,6 +2,26 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-26 — Cause of the staging checkout failure found: Stripe's Managed Payments; every Checkout now turns it off
+
+- Deploy #10 (run 40352386032, ec9862e) **succeeded**: staging runs the Stripe check, the migration time limits and
+  the new phone copy. The test purchase still failed, and the phone's Test-mode line showed `bad_request`.
+- The founder read the request in Stripe's log (POST /v1/checkout/sessions, 400, req_1NPMkzm4bU92JK, API version
+  2026-09-30.endive, PythonBindings/16.0.0). Stripe answered: "Managed Payments handles taxes for you.
+  automatic_tax[enabled] must be true when Managed Payments is enabled ... Managed Payments is enabled by default on
+  your account, but you can disable it for this request by passing in managed_payments[enabled]=false." The request
+  body was exactly what DoMe sends (`automatic_tax[enabled]=false`, `allow_promotion_codes=false`, the Pro monthly
+  price, `expires_at` 23 h ahead). So none of the earlier suspects was the cause: not the key, not the prices, not the
+  request shape, not the 24-hour edge. stripe-mock could not see it, because it is a per-account setting.
+- Fix: `StripeProvider.create_checkout` sends `managed_payments[enabled]=false` on every page (subscriptions and
+  top-ups). This keeps the founder's 2026-10-20 model whatever the account default: DoMe is the seller, prices are
+  tax-inclusive and Stripe Tax is off. The parameter is in the pinned API version and the SDK, and stripe-mock
+  (`-strict-version-check`) accepts it. cloud-api DECISIONS 109; BILLING §2. DECISIONS 108 was corrected: it had
+  blamed a key/price account mix-up, which Deploy #9 disproved. cloud-api: 587 passed, 1 skipped (with stripe-mock).
+- Founder decision noted for later: selling through Managed Payments (Stripe as merchant of record, handling sales
+  tax and VAT itself, for an extra fee) would change this parameter, `automatic_tax` and the docs together.
+- Next (founder): Deploy staging again, then the test purchase with card 4242.
+
 ## 2026-10-26 — Deploy #9: the Stripe check passed against real Stripe; the migration step hung; migrations now time out
 
 - Deploy #9 (run 40341198561, staging, commit c79dbf3) was the first run of the Stripe check against real Stripe. Summary

@@ -249,6 +249,8 @@ async def test_checkout_parameters_sent_to_stripe(monkeypatch: pytest.MonkeyPatc
     assert params["mode"] == "subscription" and params["line_items"] == [{"price": "price_adapter_pm", "quantity": 1}]
     assert params["customer"] == "cus_1" and params["client_reference_id"] == "acct"
     assert params["allow_promotion_codes"] is False and params["automatic_tax"] == {"enabled": False}
+    # Managed Payments on by default refuses automatic_tax off (staging, 2026-10-26): every page turns it off
+    assert params["managed_payments"] == {"enabled": False}
     assert params["subscription_data"] == {"metadata": {"dome_account_id": "acct"}}
     assert params["expires_at"] == 1_800_000_000
     assert sent["options"] == {"idempotency_key": "checkout:acct:1"}

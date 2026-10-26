@@ -511,9 +511,21 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     message at INFO, request and response bodies with the customer's email at DEBUG) and httpx's (every URL, with Stripe
     object ids) are held at WARNING with the AI SDK's (`logging.SDK_LOGGERS`), whatever `DOME_LOG_LEVEL` says.
 108. **A customer id Stripe does not know is replaced once, on Checkout.** The id is stored before the page is made,
-    so an attempt under one Stripe account (Deploy #8: the key of one account, the prices of a sandbox) left an id that
-    the account of a corrected key does not have; every later attempt sent it again and failed. When
+    so an attempt under one Stripe account left an id that the account of a replaced key does not have (a key switched
+    between the main account and a sandbox, or from Test to Live); every later attempt would send it again and fail.
+    (Written while the staging failure of 2026-10-23 was suspected to be such a mix-up; Deploy #9 showed it was not,
+    see 109.) When
     `create_checkout` is refused with `resource_missing` on `customer`, the service forgets that id on the account's
     rows, creates the customer under the current key and makes the page once more with a new idempotency key and
     expiry (`billing.customer_unknown`), under the account lock so a double tap still gets one page. Portal and top-up
     are not retried: both need a live subscription, which a replaced key cannot see either.
+109. **Every Checkout page turns Stripe's Managed Payments off (`managed_payments[enabled]=false`).** Managed Payments
+    makes Stripe the merchant of record and computes the tax itself; new Stripe accounts and sandboxes have it on by
+    default, and then Stripe refuses a Checkout Session with `automatic_tax[enabled]=false` (400 invalid_request_error,
+    "Managed Payments handles taxes for you"): the staging test purchase of 2026-10-26, read from the founder's Stripe
+    request log. DoMe's model is the founder's decision of 2026-10-20: DoMe is the seller, prices are tax-inclusive and
+    Stripe Tax is off, so every page says so explicitly, whatever the account default. The parameter exists in the
+    pinned API version (2026-09-30.endive) and stripe-mock accepts it. Selling through Managed Payments instead (Stripe
+    handles sales tax and VAT registration and filing, for an extra fee, with its own rules on which Checkout
+    parameters are allowed) is a business decision for the founder; it would change this parameter, `automatic_tax` and
+    the docs together (docs/BILLING.md §2).
