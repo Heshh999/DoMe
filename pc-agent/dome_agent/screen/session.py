@@ -738,7 +738,15 @@ class ScreenSessionManager:
             if not session.start_complete:
                 session.start_error = load_registry().make_error(code, **detail)  # the start path answers and aborts
                 return
-            log.warning("screen worker reported an error", code=code)
+            # detail and message say why (e.g. Desktop Duplication's and Windows.Graphics.Capture's own reasons, which
+            # the worker sanitised): the diagnostics bundle carries this line
+            message = ev.get("message")
+            log.warning(
+                "screen worker reported an error",
+                code=code,
+                detail=ev.get("detail") if isinstance(ev.get("detail"), str) else None,
+                message=" ".join(message.split())[:200] if isinstance(message, str) else None,
+            )
             self._end_soon(session, "connection_failed" if code == "SCREEN_CONNECTION_FAILED" else "capture_failed")
         elif kind == "connected":
             session.connected = True

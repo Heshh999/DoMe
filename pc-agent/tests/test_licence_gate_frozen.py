@@ -32,6 +32,29 @@ LGPL_WHEEL = (
     "av-17.1.0%2Blgpl.ffmpeg8.1.3-cp312-cp312-win_amd64.whl"
 )
 SHA = "sha256:" + "ab" * 32
+# windows-capture 2.0.1's native module (Screen view, the Windows.Graphics.Capture fallback): its import table as
+# pefile reads it from windows_capture-2.0.1-cp39-abi3-win_amd64.whl (abi3: python3.dll; Rust: VCRUNTIME140.dll)
+WGC_PYD = "_internal/windows_capture/windows_capture.pyd"
+WGC_IMPORTS = [
+    "python3.dll",
+    "kernel32.dll",
+    "user32.dll",
+    "d3d11.dll",
+    "dwmapi.dll",
+    "coremessaging.dll",
+    "api-ms-win-core-synch-l1-2-0.dll",
+    "api-ms-win-core-winrt-l1-1-0.dll",
+    "combase.dll",
+    "ole32.dll",
+    "oleaut32.dll",
+    "bcryptprimitives.dll",
+    "KERNEL32.dll",
+    "ntdll.dll",
+    "VCRUNTIME140.dll",
+    "api-ms-win-crt-string-l1-1-0.dll",
+    "api-ms-win-crt-runtime-l1-1-0.dll",
+    "api-ms-win-crt-heap-l1-1-0.dll",
+]
 
 
 def pe(
@@ -74,6 +97,7 @@ def frozen_report(*, screen: bool) -> dict[str, Any]:
     binaries = [pe("DoMe.exe"), pe("dome-native-host.exe"), pe("_internal/psutil/_psutil_windows.pyd")]
     if screen:
         binaries += [pe("_internal/av/codec/codec.cp312-win_amd64.pyd"), pe("_internal/pylibsrtp/_binding.pyd")]
+        binaries.append(pe(WGC_PYD, imports=WGC_IMPORTS, exports=["PyInit_windows_capture"]))
     return {
         "schema": 1,
         "source": "folder",
@@ -133,6 +157,25 @@ def test_ffmpeg_outside_av_libs_fails() -> None:
     report["dlls"].append(pe("_internal/avcodec-62.dll"))
     fail, _warn = gate.evaluate_frozen(report, screen="present")
     assert rules(fail) == {"F1"} and "outside _internal/av.libs" in fail[0].detail
+
+
+def test_opencvs_own_ffmpeg_fails_without_strict() -> None:
+    """windows-capture's Python wrapper needs OpenCV, whose wheel carries a whole FFmpeg build
+    (cv2/opencv_videoio_ffmpeg*.dll): pyproject.toml excludes OpenCV; should it come back, F1 refuses the build
+    whatever --strict says (an unknown DLL alone would only warn)."""
+    report = frozen_report(screen=True)
+    report["dlls"].append(pe("_internal/cv2/opencv_videoio_ffmpeg4120_64.dll"))
+    fail, warn = gate.evaluate_frozen(report, screen="present")
+    assert rules(fail) == {"F1"} and warn == []
+
+
+def test_windows_captures_native_module_passes_strict() -> None:
+    """The .pyd is not a DLL (no F2 entry needed); R1/R3/R4/R9 apply and pass on its real import table."""
+    report = frozen_report(screen=True)
+    assert WGC_PYD in [b["path"] for b in report["binaries"]]
+    assert gate.evaluate_frozen(report, screen="present", strict=True) == ([], [])
+    for dll in ("python3.dll", "VCRUNTIME140.dll"):  # the two it needs from the folder are already covered (F2)
+        assert gate._frozen_dll_covered(dll) is not None  # noqa: SLF001
 
 
 def test_an_unknown_runtime_dll_warns_and_fails_only_when_strict() -> None:
@@ -336,6 +379,10 @@ def self_test_report(**overrides: Any) -> dict[str, Any]:
         "decoders": {"ok": True, "value": {"count": 1, "exactly_wrapped_avframe": True, "sample": ["wrapped_avframe"]}},
         "lavfi_testsrc_frame": {"ok": True, "value": {"width": 64, "height": 64, "format": "yuv420p"}},
         "pli_hook": {"ok": True, "value": True},
+        "wgc_native": {
+            "ok": True,
+            "value": {"classes": ["NativeCaptureControl", "NativeMappedFrame", "NativeWindowsCapture"]},
+        },
     }
     checks.update(overrides)
     return {"ok": all(c.get("ok") for c in checks.values()), "checks": checks}
@@ -394,6 +441,27 @@ def test_self_test_refuses_a_wrong_aiortc_no_vp8_and_a_failed_check() -> None:
         "lavfi testsrc -> one decoded frame",
         "the worker's own verdict (exit code 0)",
     }
+
+
+WGC_ROW = "Windows.Graphics.Capture fallback (windows-capture's native module loads)"
+
+
+@pytest.mark.parametrize(
+    "wgc_native",
+    [
+        None,  # the build left it out: the field result 2026-10-26 ("support is not installed")
+        {"ok": False, "error": "ImportError: windows-capture's native module is not installed"},
+        {"ok": True, "value": {"classes": ["NativeMappedFrame"]}},
+    ],
+)
+def test_self_test_needs_the_windows_graphics_capture_fallback(wgc_native: dict[str, Any] | None) -> None:
+    report = self_test_report()
+    if wgc_native is None:
+        del report["checks"]["wgc_native"]
+    else:
+        report["checks"]["wgc_native"] = wgc_native
+    rows = gate.evaluate_screen_self_test(report, 0, expect="present", crash_log=False)
+    assert WGC_ROW in failed(rows)
 
 
 def test_self_test_without_screen_view() -> None:

@@ -25,8 +25,12 @@
 #   * aiortc.rtcrtpsender also goes in as its .py source: the worker's PLI hook check reads that method's
 #     source with inspect.getsource (dome_agent/screen/worker/rtc.py), which finds nothing in a frozen PYZ;
 #   * pystray (LGPL-3.0) goes in as plain .py files under _internal\pystray, so a user can replace it, as
-#     THIRD_PARTY_NOTICES.txt says.
-# build_installer.py checks all three in the built folder.
+#     THIRD_PARTY_NOTICES.txt says;
+#   * the Windows.Graphics.Capture fallback takes windows-capture's native module ALONE, as a binary at
+#     _internal\windows_capture\windows_capture.pyd, where capture_wgc.load_native finds it: the package's Python
+#     wrapper imports cv2 and numpy, which pyproject.toml excludes (OpenCV's wheel carries its own FFmpeg), so the
+#     wrapper is never analysed and cv2/numpy are excluded outright.
+# build_installer.py checks all four in the built folder; the worker's --self-test loads the native module.
 #
 # Build (Windows, from pc-agent):
 #   uv sync --locked --extra build [--extra screen]
@@ -34,6 +38,7 @@
 # or packaging\installer\build_installer.py, which also writes the notices, checks the folder and compiles the
 # installer.
 import importlib.util
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
@@ -72,6 +77,14 @@ if SCREEN_VIEW:
     # google-crc32c (an aiortc dependency) loads its DLL from google_crc32c\extra-dll on Windows.
     agent_binaries += collect_dynamic_libs("google_crc32c")
     agent_collection_mode["aiortc.rtcrtpsender"] = "pyz+py"
+    # windows-capture (Windows only, MIT): its native module alone (find_spec locates the package without importing
+    # its wrapper). A Windows build with Screen view and without it would fail every Desktop Duplication fallback.
+    wgc_package = importlib.util.find_spec("windows_capture")
+    wgc_folders = list(wgc_package.submodule_search_locations or []) if wgc_package is not None else []
+    wgc_native = [path for folder in wgc_folders for path in sorted(Path(folder).glob("windows_capture*.pyd"))]
+    if sys.platform == "win32" and not wgc_native:
+        raise SystemExit("dome-agent.spec: windows-capture's native module is missing (uv sync --locked --extra screen)")
+    agent_binaries += [(str(path), "windows_capture") for path in wgc_native]
 
 agent = Analysis(
     [str(ROOT / "packaging" / "agent_entry.py")],
@@ -81,7 +94,7 @@ agent = Analysis(
     hiddenimports=agent_hidden,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["dome_agent.testing", "aiortc.contrib"],
+    excludes=["dome_agent.testing", "aiortc.contrib", "cv2", "numpy"],
     noarchive=False,
     module_collection_mode=agent_collection_mode,
 )

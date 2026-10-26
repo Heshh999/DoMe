@@ -78,6 +78,18 @@ by the licence files the package itself provides. Notes:
   BSD-3-Clause, and OpenSSL, Apache License 2.0), PyAV (BSD-3-Clause), pyOpenSSL and google-crc32c
   (Apache License 2.0), cryptography (Apache License 2.0 or BSD-3-Clause), pyee and ifaddr (MIT) and
   dnspython (ISC). aiortc's recording and playback helpers (aiortc.contrib) are left out of DoMe.
+- Screen view builds also contain the native module of windows-capture 2.0.1 (MIT License, Copyright (c)
+  2023 NiiightmareXD; its licence text is in Part 2), _internal\windows_capture\windows_capture.pyd, used
+  when Windows' Desktop Duplication cannot capture the screen. Only this module is included: the package's
+  Python part and the OpenCV and NumPy packages it names are not. The module is written in Rust and has
+  compiled into it the Rust standard library and these Rust crates, each available under the MIT License
+  or the Apache License 2.0 at the user's choice (DoMe uses them under the Apache License 2.0,
+  licenses\Apache-2.0.txt): windows, windows-core, windows-collections, windows-future, windows-link,
+  windows-numerics, windows-result, windows-strings and windows-threading (Microsoft), pyo3 and pyo3-ffi
+  (the PyO3 project), parking_lot, parking_lot_core and lock_api, rayon and rayon-core, crossbeam-deque,
+  crossbeam-epoch and crossbeam-utils, thiserror, smallvec, scopeguard, either, once_cell, cfg-if, libc and
+  portable-atomic. The crate versions are those of windows-capture 2.0.1's own software bill of materials
+  (windows-capture-python.cyclonedx.json, published in its wheel).
 - pystray (the tray icon) is licensed under the GNU Lesser General Public License version 3. Its source
   files are in _internal\pystray as plain .py files that you may replace with your own version; the
   licence texts are in Part 2 (COPYING is the GPL version 3, COPYING.LGPL the LGPL version 3). Source:

@@ -546,6 +546,18 @@ picture, the keyframe hook). GitHub's build machines have no graphics card and n
 show whether this PC's screen capture or hardware video encoder works; only the device round can. A build
 without Screen view still answers that command and says the video parts are missing.
 
+**How the PC captures its screen.** DoMe first uses Windows' Desktop Duplication (FFmpeg's `ddagrab`). It only
+sees the monitors of the default graphics adapter, so it can fail on laptops with two graphics chips or on a monitor
+plugged into the other chip. DoMe then falls back to Windows.Graphics.Capture, through the native part of the
+`windows-capture` package (MIT; only that part is in DoMe, without the OpenCV and NumPy packages it would otherwise
+pull in). While the fallback runs, Windows draws its own yellow border around the monitor. On the first device run
+(2026-10-26, `DoMe-Setup-0.1.0+fa8de22`) every start ended "capture failed": Desktop Duplication failed and that build
+had no fallback ("Windows.Graphics.Capture support is not installed"). Later builds include the fallback, and the
+worker's self-test on the build machine checks that it loads. The DoMe log (and so the diagnostics bundle) now also
+says why Desktop Duplication failed, in FFmpeg's own words with any file path removed (for example "Selected output
+not supported"), and which capture finally ran (`source=dda` or `source=wgc`) at what size. **Not yet verified on a
+device.**
+
 **Allowing a phone (on the PC only).** A phone can never give itself Screen view, and neither can the
 DoMe service or a pairing (`--yes` included):
 - tray → **Paired phones ▸ ‹phone› ▸ Allow Screen view…** opens DoMe's window, which explains what it

@@ -30,6 +30,10 @@ dependencies = [
 screen = [
     "aiortc==1.15.0",
     "av>=14,<18",
+    # The Windows.Graphics.Capture fallback (dome_agent/screen/worker/capture_wgc.py, MIT). Pinned exactly: DoMe
+    # loads only the package's native module and calls its NativeWindowsCapture / NativeMappedFrame API, read from
+    # the 2.0.1 source; its Python wrapper needs OpenCV and NumPy, which [tool.uv] exclude-dependencies removes.
+    "windows-capture==2.0.1; sys_platform == 'win32'",
 ]
 dev = [
     "dome-agent[screen]",
@@ -49,6 +53,13 @@ build = [
 [project.scripts]
 dome-agent = "dome_agent.cli:main"
 dome-native-host = "dome_agent.bridge.host:main"
+
+[tool.uv]
+# windows-capture's Python wrapper (windows_capture/__init__.py) imports cv2 and numpy for its own helpers; DoMe
+# never imports it (capture_wgc.load_native loads the Rust extension by file), so neither is installed or frozen.
+# opencv-python would also bring a second FFmpeg (cv2/opencv_videoio_ffmpeg*.dll) outside av.libs, which the
+# licence gate refuses (licence_gate.py F1).
+exclude-dependencies = ["opencv-python", "numpy"]
 
 [tool.uv.sources]
 dome-protocol = { path = "../shared/python", editable = true }

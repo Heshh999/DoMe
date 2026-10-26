@@ -7,8 +7,9 @@ through ``crashguard``. Exits on pipe EOF, on ``stop``, and when the agent's liv
 repaint; the Job object covers an agent that died). The aiortc / aioice loggers are pinned to WARNING here too.
 
 ``--self-test`` (run by the Windows installer workflow on the frozen build) reports the imports, aiortc's version,
-the encoders available, how many decoders this build has, a decoded ``lavfi`` ``testsrc`` frame and whether the
-PLI hook point exists; ``--list-encoders`` lists the encoders. Both print JSON lines and never a frame.
+the encoders available, how many decoders this build has, a decoded ``lavfi`` ``testsrc`` frame, whether the
+PLI hook point exists and, on Windows, whether the Windows.Graphics.Capture fallback's native module loads (no capture
+is started); ``--list-encoders`` lists the encoders. Both print JSON lines and never a frame.
 """
 
 from __future__ import annotations
@@ -388,18 +389,25 @@ def _build_source(kind: str, spec: dict[str, Any], width: int, height: int, fps:
         index = int(spec.get("surface_index", 0))
         primary = bool(spec.get("primary", index == 0))
         expected = (int(spec.get("width", width)), int(spec.get("height", height)))
+        origin = (int(spec.get("left", 0)), int(spec.get("top", 0)))
 
         def wgc() -> Any:
             from .capture_wgc import WgcSource
 
-            return WgcSource(index, width, height, fps, primary=primary, expected_size=expected)
+            return WgcSource(index, width, height, fps, primary=primary, expected_size=expected, origin=origin)
 
         if kind == "wgc":
             return wgc()
         from .capture_dda import DdagrabSource, DdaWithFallback
 
-        def fell_back(detail: str) -> None:
-            log.warning("Desktop Duplication unavailable; trying Windows.Graphics.Capture", detail=detail)
+        def fell_back(exc: ProtocolError) -> None:
+            # the message carries FFmpeg's own reason, sanitised (capture_dda.ffmpeg_error_text): the diagnostics
+            # bundle then says why, not only the contract's detail word
+            log.warning(
+                "Desktop Duplication unavailable; trying Windows.Graphics.Capture",
+                detail=_detail(exc) or "driver",
+                reason=exc.message,
+            )
 
         return DdaWithFallback(DdagrabSource(index, width, height, fps), wgc, on_fallback=fell_back)
     raise ProtocolError(
@@ -457,11 +465,19 @@ def self_test(*, dev_h264: bool) -> dict[str, Any]:
 
         return pli_hook_available()
 
+    def wgc_native() -> dict[str, Any]:
+        from .capture_wgc import load_native
+
+        native = load_native()  # loads the module only: no capture session, no frame
+        return {"classes": sorted(name for name in dir(native) if name.startswith("Native"))}
+
     check("imports", imports)
     check("encoders", lambda: list_encoders(dev_h264=dev_h264))
     check("decoders", decoders)
     check("lavfi_testsrc_frame", lavfi_frame)
     check("pli_hook", hook)
+    if sys.platform == "win32":  # windows-capture is a Windows-only dependency
+        check("wgc_native", wgc_native)
     return report
 
 

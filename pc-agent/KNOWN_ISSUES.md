@@ -95,11 +95,16 @@
     frames) and the development `libx264`; every failure on a real PC must come back as
     `SCREEN_CAPTURE_UNAVAILABLE{driver|busy|unsupported_display|remote_session}` or
     `SCREEN_ENCODER_UNAVAILABLE` and is reported, never pretended.
-21. **The WGC fallback needs the `windows-capture` package, which is not a dependency yet**: `WgcSource` answers
-    `SCREEN_CAPTURE_UNAVAILABLE{detail: unsupported_display}` until the device round shows that Desktop
-    Duplication really fails on a hybrid-GPU laptop and the package is added (and its DLL covered by the licence
-    gate). When it is added it streams only the primary monitor (`monitor_index=None`) and refuses a first frame whose
-    size differs from the monitor taps map onto (DECISIONS #85); **not yet verified on a device**.
+21. **The WGC fallback is not yet verified on a device.** The first device run (2026-10-26, `DoMe-Setup-0.1.0+fa8de22`)
+    ended every start `capture_failed`: Desktop Duplication failed for a reason the log did not keep, and the fallback
+    answered at once "Windows.Graphics.Capture support is not installed" (`windows-capture` was no dependency). Since
+    then windows-capture 2.0.1's native module is a Windows dependency of the `screen` extra and is bundled
+    (DECISIONS #88, #89), the monitor is asked for by its raw position (DECISIONS #85), and the worker's self-test on the
+    frozen build must load the module. What only a PC can show: that Windows.Graphics.Capture starts in DoMe's worker
+    (a desktop process without a window), the first frame's size on scaled, rotated and HDR monitors, colours
+    (libswscale's BT.601 conversion of the BGRA frame), the CPU cost of a full-resolution copy per changed frame at the
+    desktop's refresh rate, and Windows' yellow border. Why Desktop Duplication failed on the founder's PC is still
+    unknown: the next diagnostics bundle names FFmpeg's reason (DECISIONS #90).
 22. **Bar placement on scaled and multi-monitor PCs is written against the documentation only** (DECISIONS #79): the
     Tk thread is made per-monitor DPI aware (v2) so bar geometry is physical pixels, each bar's real rectangle is read
     with `GetWindowRect` / `MonitorFromWindow` and must lie on its monitor (else the start is refused and a live
@@ -132,10 +137,12 @@
     `reason: media` rather than a more specific reason.
 29. **The agent's monitor numbering is not checked against `ddagrab`'s `output_idx`.** The agent numbers monitors
     primary first, then by position (`platform/windows/screen.py`), and passes that number to `ddagrab` as
-    `output_idx`, which counts the outputs of the graphics adapter as DXGI lists them. On a one-adapter PC the primary
-    is normally output 0, and Phase 1 phones only ask for the primary, but on a multi-monitor or hybrid-GPU PC the two
-    numberings may differ: **not yet verified on a device**. Phase 2 ("Next screen") must map by the monitor's
-    rectangle (`IDXGIOutput::GetDesc`) before it offers other monitors.
+    `output_idx`, which counts the outputs of the DEFAULT graphics adapter only, as DXGI lists them (`ddagrab` has no
+    adapter option: DECISIONS #90). On a one-adapter PC the primary is normally output 0, and Phase 1 phones only ask
+    for the primary, but on a multi-monitor or hybrid-GPU PC the two numberings may differ, or the monitor may not be
+    on the default adapter at all ("Failed to enumerate DXGI output N", then the WGC fallback, which finds monitors by
+    rectangle): **not yet verified on a device**. Phase 2 ("Next screen") must map by the monitor's rectangle
+    (`IDXGIOutput::GetDesc`) before it offers other monitors.
 30. **The Screen view tkinter windows (grant window, consent window, bars) have no automated test that opens a real
     window.** (The bar controller's placement check and heartbeat are unit-tested against a fake tkinter since
     2026-10-22.)
@@ -146,8 +153,9 @@
     phone's certificate is verified, so `ddagrab` / WGC open in the track, after `connected`. A PC whose duplication is
     busy (another capture app) or unsupported therefore answers the start, shows the bars, connects and then ends
     `capture_failed` ("Your PC's screen sharing stopped unexpectedly"), instead of refusing the start with
-    `SCREEN_CAPTURE_UNAVAILABLE{busy|unsupported_display}`. The worker's `error` still names the detail in the agent's
-    log. A pre-flight that checks the duplication without capturing a frame is a candidate for the device round.
+    `SCREEN_CAPTURE_UNAVAILABLE{busy|unsupported_display}`. The worker's `error` still names the detail and the
+    capture's own reason in the agent's log (DECISIONS #90). A pre-flight that checks the duplication without
+    capturing a frame is a candidate for the device round.
 32. **Desktop Duplication's still-desktop behaviour is not verified on a device** (DECISIONS #83): `DdagrabSource`
     treats `av.error.BlockingIOError` (EAGAIN) as "nothing new" and returns None, but if PyAV's lavfi read blocks
     instead, the 1 fps floor cannot fire while the desktop is still and the phone's stall detector would re-session.

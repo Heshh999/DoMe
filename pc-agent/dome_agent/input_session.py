@@ -16,7 +16,9 @@ the live one owned by the sending controller, ``seq`` is strictly increasing, th
 against a per-session estimate of the phone's clock offset (:class:`AgeEstimator`: windowed minimum of
 receipt-minus-issued_at, seeded by the ``input.session_start`` command), so a phone clock a few seconds
 behind or ahead of the PC neither kills the touchpad nor hides a relay stall; the relay's
-``received_at`` stamp bounds the relay → agent leg the same way. Rejections drop the batch and are
+``received_at`` stamp bounds the relay → agent leg the same way. An ``INPUT_STALE`` drop's log line names
+the late leg and both ages in ms (:class:`BatchAge`), so a diagnostics bundle shows where latency built up.
+Rejections drop the batch and are
 reported as (rate-limited) ``error`` frames plus ``dropped_events`` in the next ack; they never end the
 session. NOTE: the current relay does not forward agent ``error`` frames (they carry no session or
 controller reference, CONTRACT_ISSUES.md #11), so in the integrated system the phone sees only the
@@ -180,6 +182,39 @@ class InputSession:
             "pointer": self.pointer,
             "keyboard": self.keyboard,
             "lease_expires_at": self.lease_expires_text(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BatchAge:
+    """How late a batch is, per leg (seconds of extra delay over the fastest recent message on that leg, each
+    judged against its own sender's clock): ``phone`` from the phone's ``issued_at`` (the whole way, phone → relay →
+    agent) and ``relay`` from the relay's ``received_at`` (relay → agent only; None when the relay did not stamp it).
+    The batch's age is the larger of the two."""
+
+    phone: float
+    relay: float | None = None
+
+    @property
+    def seconds(self) -> float:
+        return max(self.phone, self.relay or 0.0)
+
+    def stale_fields(self, budget_ms: int) -> dict[str, Any]:
+        """Log fields for an ``INPUT_STALE`` drop: which leg was late and by how much (ms, rounded), never content.
+        ``relay_to_agent`` when the relay → agent leg alone is over the budget; ``phone_to_relay`` when it is not (the
+        delay came before the relay stamped the batch: the phone, its network or the relay's inbound side);
+        ``phone_to_agent`` when the relay did not stamp it (the legs cannot be told apart)."""
+        if self.relay is None:
+            leg = "phone_to_agent"
+        elif self.relay * 1000.0 > budget_ms:
+            leg = "relay_to_agent"
+        else:
+            leg = "phone_to_relay"
+        return {
+            "late_leg": leg,
+            "phone_age_ms": round(self.phone * 1000.0),
+            "relay_age_ms": round(self.relay * 1000.0) if self.relay is not None else None,
+            "budget_ms": int(budget_ms),
         }
 
 
@@ -586,9 +621,9 @@ class InputSessionManager:
             self._schedule_ack(session)
             return False
         age = self._batch_age(session, vb, relay_received_at, relay_connection_id)
-        if age * 1000.0 > self.age_budget_ms:
+        if age.seconds * 1000.0 > self.age_budget_ms:
             session.dropped_events += count
-            await self._report("INPUT_STALE", session=session)
+            await self._report("INPUT_STALE", session=session, log_fields=age.stale_fields(self.age_budget_ms))
             self._schedule_ack(session)
             return False
         needed = vb.required_capabilities
@@ -610,7 +645,7 @@ class InputSessionManager:
         session.lease_expires_at = time.monotonic() + self.lease_seconds
         if count:
             now = time.monotonic()
-            self._queue.append(_Pending(sid, vb.seq, list(vb.payload["events"]), now, now - age))
+            self._queue.append(_Pending(sid, vb.seq, list(vb.payload["events"]), now, now - age.seconds))
             self._wake.set()
         else:
             self._schedule_ack(session)  # keepalive: the phone still learns last_seq/holds at ≤ 4/s
@@ -636,16 +671,17 @@ class InputSessionManager:
         vb: VerifiedInputBatch,
         relay_received_at: str | None,
         relay_connection_id: str | None,
-    ) -> float:
-        """Seconds this batch spent in transit beyond the fastest recent batch of the same phone (phone
-        clock offset removed), or beyond the fastest recent relay hop when that is larger."""
+    ) -> BatchAge:
+        """How long this batch spent in transit beyond the fastest recent batch of the same phone (phone clock
+        offset removed) and beyond the fastest recent relay hop; its age is the larger of the two."""
         now = now_utc()
         mono = time.monotonic()
         if session.clock is None:
             session.clock = self._new_estimator()
         delta = vb.age_seconds(now)
         session.clock.observe(delta, mono)
-        age = session.clock.age(delta)
+        phone = session.clock.age(delta)
+        relay: float | None = None
         if relay_received_at is not None:
             try:
                 relay_delta = (now - parse_rfc3339(relay_received_at)).total_seconds()
@@ -656,8 +692,8 @@ class InputSessionManager:
                     self._relay_clock = self._new_estimator()  # a new relay connection/instance: new clock
                     self._relay_clock_conn = relay_connection_id
                 self._relay_clock.observe(relay_delta, mono)
-                age = max(age, self._relay_clock.age(relay_delta))
-        return age
+                relay = self._relay_clock.age(relay_delta)
+        return BatchAge(phone, relay)
 
     async def _run(self) -> None:
         while True:
@@ -1005,9 +1041,11 @@ class InputSessionManager:
         session: InputSession | None = None,
         session_id: str | None = None,
         controller_id: str | None = None,
+        log_fields: dict[str, Any] | None = None,
     ) -> None:
         """Error frame for a dropped batch/event, at most one per code per second (counts go in the ack). It names
-        the batch's session and controller so the relay can deliver it to that phone (rules.input_sessions)."""
+        the batch's session and controller so the relay can deliver it to that phone (rules.input_sessions).
+        ``log_fields`` add content-free numbers to the log line (``INPUT_STALE``: :meth:`BatchAge.stale_fields`)."""
         now = time.monotonic()
         if now - self._last_error_at.get(code, 0.0) < ERROR_FRAME_INTERVAL:
             return
@@ -1016,7 +1054,7 @@ class InputSessionManager:
         text = message or str(defaults.get("user_message", code))
         sid = session.input_session_id if session is not None else session_id
         cid = session.controller_id if session is not None else controller_id
-        log.info("input batch dropped", code=code, session=sid is not None)
+        log.info("input batch dropped", code=code, session=sid is not None, **(log_fields or {}))
         await self._send(
             error_frame(
                 (code, text, bool(defaults.get("retryable", False))), ref_input_session_id=sid, ref_controller_id=cid
@@ -1063,4 +1101,4 @@ class InputSessionManager:
             self._holds_path.unlink()
 
 
-__all__ = ["HOLDS_FILENAME", "InputSession", "InputSessionManager", "coalesce_events", "new_session_id"]
+__all__ = ["HOLDS_FILENAME", "BatchAge", "InputSession", "InputSessionManager", "coalesce_events", "new_session_id"]

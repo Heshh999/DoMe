@@ -6,6 +6,10 @@ rectangles are PHYSICAL pixels in virtual-desktop coordinates: the units Desktop
 (left, then top), so the ``surface_index`` the phone names stays stable while the topology does. The display
 orientation comes from ``EnumDisplaySettingsW`` (``dmDisplayOrientation``), 0 when it cannot be read.
 
+The Windows.Graphics.Capture fallback (``windows-capture``) numbers monitors differently: one-based, in the raw
+``EnumDisplayMonitors`` order. :meth:`WindowsScreen.capture_position` finds the streamed monitor in that order
+(:func:`capture_order_position`, pure and unit-tested on Linux).
+
 Every ctypes call declares ``argtypes``/``restype`` (handles are 64-bit). Exercised on a Windows device only:
 **not yet verified on a device** (rotated, HDR and mixed-DPI monitors in particular).
 """
@@ -126,6 +130,22 @@ def order_monitors(found: list[tuple[tuple[int, int, int, int], bool, int]]) -> 
     return out
 
 
+def capture_order_position(
+    found: list[tuple[tuple[int, int, int, int], bool]], *, left: int, top: int, width: int, height: int, primary: bool
+) -> int | None:
+    """Pure: the ONE-based position, in raw ``EnumDisplayMonitors`` order (``found``: ``(left, top, right, bottom),
+    primary`` per monitor, in that order), of the monitor DoMe streams: windows-capture's ``monitor_index``. The
+    primary is recognised by its flag (as :func:`dome_agent.screen.session.match_monitor` does), another monitor by
+    its exact rectangle in physical pixels. None: it is not there (unplugged, or the topology changed)."""
+    rect = (left, top, left + width, top + height)
+    for position, (found_rect, found_primary) in enumerate(found, start=1):
+        if primary and found_primary:
+            return position
+        if not primary and not found_primary and tuple(found_rect) == rect:
+            return position
+    return None
+
+
 class WindowsScreen:
     """:class:`ScreenAdapter` on ``user32``. Constructed on ``win32`` only; the DLL loads on first use."""
 
@@ -160,7 +180,9 @@ class WindowsScreen:
             if setter is not None and previous:
                 setter(previous)
 
-    def monitors(self) -> list[Monitor]:
+    def _enumerate(self) -> list[tuple[tuple[int, int, int, int], bool, int]]:
+        """Every monitor in raw ``EnumDisplayMonitors`` order: its rectangle (physical pixels: the calling thread is
+        per-monitor DPI aware v2 meanwhile), whether it is the primary, and its rotation."""
         user32 = self._libs()
         found: list[tuple[tuple[int, int, int, int], bool, int]] = []
 
@@ -185,7 +207,16 @@ class WindowsScreen:
                     "Windows could not list the monitors.",
                     detail={"detail": "unsupported_display"},
                 )
-        monitors = order_monitors(found)
+        return found
+
+    def capture_position(self, *, left: int, top: int, width: int, height: int, primary: bool) -> int | None:
+        """windows-capture's one-based ``monitor_index`` of the monitor DoMe streams (:func:`capture_order_position`
+        on a fresh raw enumeration), or None when it is not there."""
+        found = [(rect, is_primary) for rect, is_primary, _rotation in self._enumerate()]
+        return capture_order_position(found, left=left, top=top, width=width, height=height, primary=primary)
+
+    def monitors(self) -> list[Monitor]:
+        monitors = order_monitors(self._enumerate())
         if not monitors:
             raise ProtocolError(
                 "SCREEN_CAPTURE_UNAVAILABLE", "Windows lists no monitor.", detail={"detail": "unsupported_display"}
@@ -205,4 +236,4 @@ class WindowsScreen:
         return orientation * 90 if orientation in (0, 1, 2, 3) else 0
 
 
-__all__ = ["DEVMODEW", "MONITORINFOEXW", "WindowsScreen", "order_monitors"]
+__all__ = ["DEVMODEW", "MONITORINFOEXW", "WindowsScreen", "capture_order_position", "order_monitors"]

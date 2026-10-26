@@ -270,9 +270,7 @@ class ScreenTrack(MediaStreamTrack):
         try:
             self._source.open()
         except Exception as exc:  # noqa: BLE001 - every open failure is the honest capture error
-            self._emit(
-                {"ev": "error", "code": getattr(exc, "code", "SCREEN_CAPTURE_UNAVAILABLE"), "detail": _detail(exc)}
-            )
+            self._emit(_error_event(exc))
             self.stop()
             return False
         self._opened = True
@@ -282,9 +280,7 @@ class ScreenTrack(MediaStreamTrack):
         try:
             return self._source.read()
         except Exception as exc:  # noqa: BLE001 - the source is gone: the peer reports capture_failed
-            self._emit(
-                {"ev": "error", "code": getattr(exc, "code", "SCREEN_CAPTURE_UNAVAILABLE"), "detail": _detail(exc)}
-            )
+            self._emit(_error_event(exc))
             self.stop()
             return None
 
@@ -299,6 +295,19 @@ def _detail(exc: BaseException) -> str | None:
     if isinstance(detail, dict) and isinstance(detail.get("detail"), str):
         return str(detail["detail"])
     return None
+
+
+def _error_event(exc: BaseException) -> dict[str, Any]:
+    """The worker's ``error`` event for a source that failed. ``message`` is a ``ProtocolError``'s own text (written
+    by the capture modules, a library's words in it sanitised there) so the agent's log says why; any other exception
+    is named by its class only, never by its text."""
+    message = getattr(exc, "message", None)
+    return {
+        "ev": "error",
+        "code": getattr(exc, "code", "SCREEN_CAPTURE_UNAVAILABLE"),
+        "detail": _detail(exc),
+        "message": message[:200] if isinstance(message, str) and message else exc.__class__.__name__,
+    }
 
 
 __all__ = ["FLOOR_SECONDS", "ScreenTrack"]

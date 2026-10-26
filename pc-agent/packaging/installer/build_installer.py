@@ -19,7 +19,9 @@ Steps:
    programs' own archives: ``aiortc.contrib`` and ``dome_agent.testing`` are never inside, ``DoMe.exe`` always
    carries the ``screen-worker`` dispatch, aiortc is inside exactly when Screen view is (with
    ``aiortc/rtcrtpsender.py`` as source for the worker's PLI hook check), and the browser helper carries no
-   Screen view code. The licence gate on the folder and the worker's ``--self-test`` are separate workflow
+   Screen view code. A Windows build with Screen view also carries windows-capture's native module
+   (``_internal/windows_capture/windows_capture.pyd``, the Windows.Graphics.Capture fallback), and no build carries
+   ``cv2`` or ``numpy``. The licence gate on the folder and the worker's ``--self-test`` are separate workflow
    steps (``licence_gate.py check --frozen`` and ``screen-self-test``).
 4. Compiles ``packaging/installer/DoMe.iss`` with ISCC (Inno Setup 6) into
    ``dist/installer/DoMe-Setup-<version>.exe`` and writes ``SHA256SUMS`` and ``BUILD-INFO.txt`` next to it.
@@ -89,6 +91,10 @@ MANIFEST_MODULE = PC_AGENT / "dome_agent" / "bridge" / "manifest.py"
 LICENCE_GATE = PC_AGENT / "packaging" / "licence_gate.py"
 NOTICES_HEAD = PC_AGENT / "packaging" / "THIRD_PARTY_NOTICES.txt"
 LICENCES = PC_AGENT / "packaging" / "licenses"
+# The Windows.Graphics.Capture fallback's native module (dome-agent.spec bundles it alone, without the package's
+# Python wrapper, which needs cv2 and numpy; neither may be in the folder: OpenCV carries its own FFmpeg).
+WGC_NATIVE = Path("_internal") / "windows_capture" / "windows_capture.pyd"
+NEVER_SHIPPED = ("cv2", "numpy")
 TIMESTAMP_URL = "http://timestamp.digicert.com"
 # Azure Artifact Signing's timestamp service (vendor docs, how-to-signing-integrations, read 2026-10-20).
 ARTIFACT_SIGNING_TIMESTAMP_URL = "http://timestamp.acs.microsoft.com"
@@ -255,8 +261,11 @@ def run_pyinstaller(dist: Path, work: Path) -> None:
     subprocess.run(cmd, check=True)
 
 
-def check_folder(app: Path) -> list[str]:
-    """Problems with the PyInstaller folder (empty when it is complete and carries no test material)."""
+def check_folder(app: Path, *, windows: bool | None = None) -> list[str]:
+    """Problems with the PyInstaller folder (empty when it is complete and carries no test material). ``windows``
+    (default: this machine is Windows) adds the checks only a Windows build can pass (windows-capture's native module
+    is a Windows-only dependency; ``--pyinstaller-only`` also runs on Linux)."""
+    windows = os.name == "nt" if windows is None else windows
     problems: list[str] = []
     contract = app / "_internal" / "dome_protocol" / "_contract"
     required = [
@@ -284,6 +293,13 @@ def check_folder(app: Path) -> list[str]:
     screen = screen_view_included(app)
     if screen and not (app / "_internal" / "aiortc" / "rtcrtpsender.py").is_file():
         problems.append("Screen view is built in but _internal/aiortc/rtcrtpsender.py (the PLI hook check) is missing")
+    if screen and windows and not (app / WGC_NATIVE).is_file():
+        problems.append(
+            f"Screen view is built in but {WGC_NATIVE.as_posix()} (the Windows.Graphics.Capture fallback) is missing"
+        )
+    for name in NEVER_SHIPPED:
+        if (app / "_internal" / name).exists():
+            problems.append(f"_internal/{name} must not be shipped (only windows-capture's native module is used)")
     agent, host = frozen_modules(app / exe_name("DoMe")), frozen_modules(app / exe_name("dome-native-host"))
     if agent is not None and host is not None:
         problems += check_frozen_modules(agent, host, screen=screen)

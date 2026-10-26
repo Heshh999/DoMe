@@ -16,6 +16,11 @@ dependencies = [
     "uvicorn[standard]>=0.54.0,<1",
 ]
 
+[tool.uv]
+# The same exclusion as pc-agent/pyproject.toml (a path dependency's [tool.uv] settings do not apply here): DoMe
+# loads only windows-capture's native module, never its OpenCV/NumPy wrapper.
+exclude-dependencies = ["opencv-python", "numpy"]
+
 [tool.uv.sources]
 dome-protocol = { path = "../shared/python", editable = true }
 dome-api = { path = "../cloud-api", editable = true }

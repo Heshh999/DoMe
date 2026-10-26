@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,50 @@ def test_screen_view_follows_the_build_environment() -> None:
     )
 
 
+def test_the_spec_bundles_windows_captures_native_module_alone() -> None:
+    """The Windows.Graphics.Capture fallback: only windows-capture's .pyd, where capture_wgc.load_native looks for it;
+    its Python wrapper (it imports cv2 and numpy) is never named for analysis, and cv2/numpy are excluded outright."""
+    from dome_agent.screen.worker import capture_wgc
+
+    screen_block = SPEC.split("if SCREEN_VIEW:", 1)[1].split("\nagent = Analysis(", 1)[0]
+    assert 'wgc_package = importlib.util.find_spec("windows_capture")' in screen_block
+    assert 'glob("windows_capture*.pyd")' in screen_block
+    assert 'agent_binaries += [(str(path), "windows_capture") for path in wgc_native]' in screen_block
+    assert 'if sys.platform == "win32" and not wgc_native:' in screen_block  # a Windows build without it stops
+    assert "windows_capture" not in spec_list("agent_hidden")
+    assert {"cv2", "numpy"} <= set(ast.literal_eval(analysis_kwargs("agent_entry.py")["excludes"]))
+    # the folder the spec writes is the one the loader and the folder check expect
+    assert capture_wgc.NATIVE_MODULE == "windows_capture.windows_capture"
+    assert bi.WGC_NATIVE.as_posix() == "_internal/windows_capture/windows_capture.pyd"
+
+
+def test_windows_capture_is_pinned_for_windows_and_opencv_and_numpy_never_resolve() -> None:
+    """pyproject.toml pins windows-capture 2.0.1 on Windows in the screen extra and excludes OpenCV and NumPy (its
+    wrapper's needs; OpenCV carries its own FFmpeg); both lock files (pc-agent and the integration tests, which
+    install pc-agent's screen extra) agree and pin the wheel whose native module DoMe's code was checked against."""
+    project = tomllib.loads((PC_AGENT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert "windows-capture==2.0.1; sys_platform == 'win32'" in project["optional-dependencies"]["screen"]
+    assert not [d for d in project["dependencies"] if d.startswith("windows-capture")]
+    for root in (PC_AGENT, PC_AGENT.parent / "tests"):
+        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        assert sorted(pyproject["tool"]["uv"]["exclude-dependencies"]) == ["numpy", "opencv-python"], root
+        lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+        assert sorted(lock["manifest"]["excludes"]) == ["numpy", "opencv-python"], root
+        names = {package["name"] for package in lock["package"]}
+        assert not names & {"numpy", "opencv-python", "opencv-python-headless"}, root
+        [locked] = [package for package in lock["package"] if package["name"] == "windows-capture"]
+        assert locked["version"] == "2.0.1" and "dependencies" not in locked
+        assert locked["wheels"] == [
+            {
+                "url": "https://files.pythonhosted.org/packages/6c/02/cdb3c75e60863e94fbd53c2b3607e61af5d464a4f9301e45897"
+                "fcb08dbfa/windows_capture-2.0.1-cp39-abi3-win_amd64.whl",
+                "hash": "sha256:209c2318e2168802b9afd1005e99499639e8835e71a1e188a3ddc77c7ccc3f04",
+                "size": 229121,
+                "upload-time": locked["wheels"][0]["upload-time"],
+            }
+        ]
+
+
 def test_every_dome_agent_module_the_spec_names_exists() -> None:
     names = [n for n in spec_list("agent_hidden") if n.startswith("dome_agent.")]
     names += re.findall(r'"(dome_agent\.screen\.worker\.\w+)"', SPEC)
@@ -134,6 +179,8 @@ def fake_folder(root: Path, *, screen: bool, notices: bool = True, pystray: bool
         (app / "_internal" / "av").mkdir()
         (app / "_internal" / "aiortc").mkdir()
         (app / "_internal" / "aiortc" / "rtcrtpsender.py").write_text("", encoding="utf-8")
+        (app / bi.WGC_NATIVE).parent.mkdir()
+        (app / bi.WGC_NATIVE).write_bytes(b"MZ")  # a Windows build's; the Linux check does not ask for it
     if notices:
         gate = bi.licence_gate()
         (app / gate.NOTICES_NAME).write_text("notices", encoding="utf-8")
@@ -170,6 +217,23 @@ def test_screen_view_needs_the_pli_hook_source_and_its_modules(tmp_path: Path, a
     problems = bi.check_folder(app)
     assert any("rtcrtpsender.py (the PLI hook check) is missing" in p for p in problems)
     assert any("lacks aiortc.rtcrtpsender" in p for p in problems)  # the fake archive has no aiortc either
+
+
+def test_a_windows_screen_build_needs_the_wgc_native_module_and_never_opencv(
+    tmp_path: Path, archives: dict[str, Any]
+) -> None:
+    archives["DoMe"] = AGENT_MODULES | SCREEN_MODULES
+    app = fake_folder(tmp_path, screen=True)
+    assert bi.check_folder(app, windows=True) == []
+    (app / bi.WGC_NATIVE).unlink()
+    assert bi.check_folder(app, windows=False) == []  # a Linux --pyinstaller-only check cannot have it
+    [problem] = bi.check_folder(app, windows=True)
+    assert "_internal/windows_capture/windows_capture.pyd (the Windows.Graphics.Capture fallback) is missing" in problem
+    for name in ("cv2", "numpy"):
+        (app / "_internal" / name).mkdir()
+        assert any(f"_internal/{name} must not be shipped" in p for p in bi.check_folder(app, windows=False))
+    archives["DoMe"] = set(AGENT_MODULES)
+    assert bi.check_folder(fake_folder(tmp_path / "plain", screen=False), windows=True) == []  # no Screen view
 
 
 def test_without_pyinstaller_the_archives_are_not_read(

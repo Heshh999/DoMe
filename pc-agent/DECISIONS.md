@@ -529,13 +529,45 @@
 84. **Requested IDRs are rate-limited to two per second** (design §5.3; `ScreenTrack.force_keyframe`). PLI/FIR, the
     phone's `keyframe` message and the pipe op wait for a 500 ms slot and coalesce; join, resume, a new geometry and an
     encoder reopen are never delayed. For VP8 the track calls aiortc's original `_send_keyframe` when the slot comes.
-85. **The WGC fallback asks for the primary by name and checks the first frame's size** (`WgcSource`): windows-capture
-    numbers monitors in raw `EnumDisplayMonitors` order, DoMe's index puts the primary first, so `monitor_index=None`
-    (the package's primary) is used, any other monitor is refused (Phase 2 maps by device name or rectangle), and a
-    first frame whose size differs from the monitor the taps map onto ends the session `capture_failed`.
+85. **The WGC fallback asks for the streamed monitor by its raw position and checks the first frame's size**
+    (`WgcSource`; revised 2026-10-26). windows-capture 2.0.1's `monitor_index` is ONE-based in raw `EnumDisplayMonitors`
+    order and `None` means index 1 (the first monitor enumerated, NOT the primary, as this entry used to assume). DoMe's
+    index puts the primary first, so the worker looks the monitor up in the raw order (`WindowsScreen.capture_position`:
+    the primary by `MONITORINFOF_PRIMARY`, another monitor by its physical rectangle) and passes that position; any
+    monitor can therefore fall back, not only the primary. A first frame whose size differs from the monitor the taps
+    map onto still ends the session `capture_failed`.
 86. **A build without the media stack says so** (`screen.media_stack_available`, CONTRACT_ISSUES #24): checked with
     `importlib.util.find_spec` (the agent never imports aiortc / PyAV), the start is refused before any window or bar,
     the tray shows "Screen view: not in this version of DoMe" (disabled) and `status().screen.included` is False.
 87. **An IPv4 address ending a sentence is masked** (`logsetup._IPV4_RE`, copied in `crashguard`): the trailing
     lookahead is `(?!\w|\.\d)`, so "could not reach 192.168.1.5." is masked while "1.2.3.4.5" is not, and the leading
     one allows an underscore ("ip_10.0.0.1").
+88. **windows-capture's native module alone, without OpenCV or NumPy** (2026-10-26; `capture_wgc.load_native`,
+    `[tool.uv] exclude-dependencies`). windows-capture 2.0.1 (MIT) declares `numpy` and `opencv-python` and its
+    `__init__.py` imports both, for helpers DoMe does not use (saving PNGs, numpy views). OpenCV's wheel carries its own
+    FFmpeg (`opencv_videoio_ffmpeg*.dll`), which the licence gate refuses outside `av.libs` (F1 now catches it by name),
+    and both are tens of MB. So pyproject.toml (and tests/pyproject.toml, which installs pc-agent's `screen` extra)
+    excludes both, the worker loads the Rust extension `windows_capture.windows_capture` by file without the package's
+    `__init__`, and the PyInstaller spec bundles the `.pyd` alone. The API used was read from the 2.0.1 source
+    (`windows-capture-python/src/lib.rs`): `NativeWindowsCapture(...)`, `start_free_threaded()` / `stop()` /
+    `is_finished()`, the six-argument frame callback with a mapped BGRA `NativeMappedFrame` (`bytes_per_row`,
+    `buffer_view()`). The pin is exact (`==2.0.1`): another version must be read again before it is taken.
+89. **The WGC frame path copies once and converts with libswscale** (`capture_wgc.bgra_frame`). The callback only hands
+    the mapped frame over (newest wins; a superseded one is released unread, which unmaps it); `read()` copies its rows
+    into a BGRA `av.VideoFrame` (one copy when PyAV's row pitch equals D3D11's, else row by row) and `reformat`s to
+    yuv420p at the track's size. The previous code fed `plane.update()` packed rows, which raises whenever PyAV pads a
+    row (a 1366-pixel-wide monitor: 5464 vs 5472 bytes). Only `cursor_capture` and `monitor_index` are set: a border or
+    update-interval setting Windows 10 lacks fails the start, so Windows' yellow border stays and frames come at the
+    desktop's own rate (the one-slot queue absorbs it).
+90. **Desktop Duplication's own reason reaches the log; no other adapter is tried** (2026-10-26; `capture_dda`). The first
+    device run logged only `detail=unsupported_display`, and that word was meaningless: the classifier read PyAV's
+    exception string, which quotes the graph, so `output_idx` matched every failure. `ddagrab` names the DXGI cause only
+    through `av_log`, which PyAV drops at its default level; `DdagrabSource.open` now collects this thread's FFmpeg
+    ERROR lines while the graph opens (level ERROR only meanwhile), and the error's message and the worker's fallback
+    warning carry them sanitised (`sanitise_reason`: one line, no paths, no long strings, ≤ 200 characters); the worker's
+    `error` event and the agent's "screen worker reported an error" line carry the detail and that message. The detail
+    is classified from FFmpeg's n8.1.3 phrases. Trying other adapters is not done: `ddagrab` (n8.1.3
+    `vsrc_ddagrab.c`) has no adapter option and duplicates `output_idx` of its D3D11VA device's adapter (the default one
+    unless a `hw_device_ctx` is handed to the filter, which the `lavfi` device cannot do), so another adapter would need
+    PyAV's `Graph` API with a hardware device context that PyAV does not expose for filters. Windows.Graphics.Capture,
+    which composes every adapter's output, is the fallback for that case.

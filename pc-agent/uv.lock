@@ -6,6 +6,12 @@ resolution-markers = [
     "sys_platform == 'win32'",
 ]
 
+[manifest]
+excludes = [
+    "numpy",
+    "opencv-python",
+]
+
 [[package]]
 name = "aioice"
 version = "0.10.2"
@@ -296,11 +302,13 @@ dev = [
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-pywin32" },
+    { name = "windows-capture", marker = "sys_platform == 'win32'" },
 ]
 screen = [
     { name = "aiortc" },
     { name = "av", version = "17.1.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'win32'" },
     { name = "av", version = "17.1.0+lgpl.ffmpeg8.1.3", source = { url = "https://github.com/Heshh999/DoMe/releases/download/av-lgpl-17.1.0-ffmpeg-n8.1.3-r3/av-17.1.0+lgpl.ffmpeg8.1.3-cp311-abi3-win_amd64.whl" }, marker = "sys_platform == 'win32'" },
+    { name = "windows-capture", marker = "sys_platform == 'win32'" },
 ]
 
 [package.metadata]
@@ -329,6 +337,7 @@ requires-dist = [
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=6.1" },
     { name = "types-pywin32", marker = "extra == 'dev'", specifier = ">=312.0.0.20261006" },
     { name = "websockets", specifier = ">=15.0,<18" },
+    { name = "windows-capture", marker = "sys_platform == 'win32' and extra == 'screen'", specifier = "==2.0.1" },
     { name = "winsdk", marker = "sys_platform == 'win32'", specifier = ">=1.0.0b10" },
 ]
 provides-extras = ["screen", "dev", "build"]
@@ -1051,6 +1060,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c6/2a/90008411c652dcfae34345a2169f4becd066a4ba71eebfa8dd801e0445e1/websockets-17.2-cp312-cp312-win_amd64.whl", hash = "sha256:faa763b677e96f1beccc6b4d7e8c079dfeed2f249f57a19debc321b519ee64ec", size = 218528, upload-time = "2026-10-03T14:53:51.486Z" },
     { url = "https://files.pythonhosted.org/packages/1f/a1/b8ad6c17f8e75ba2215422fffe0d7f0c4b690dcff1c47c0473db0d253d51/websockets-17.2-cp312-cp312-win_arm64.whl", hash = "sha256:63499fc49efe48bccc2fca40723bc7adb198866cbe159093dd979905316994b6", size = 218457, upload-time = "2026-10-03T14:53:52.938Z" },
     { url = "https://files.pythonhosted.org/packages/8a/58/835cd51934d6780fa586f275b5d9901eead6d81569b4343b3767cdbaae4c/websockets-17.2-py3-none-any.whl", hash = "sha256:6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae", size = 211883, upload-time = "2026-10-03T14:56:51.898Z" },
+]
+
+[[package]]
+name = "windows-capture"
+version = "2.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/00/326a51bc2b27bc53e2a3e6d0c8f320af7e65f8315fb0d1d149699ca45995/windows_capture-2.0.1.tar.gz", hash = "sha256:2c2b394f4587b067cf520456f7f64c11b00380851b077a4d061fe5356a9a7645", size = 148413, upload-time = "2026-08-08T16:07:07.162Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/02/cdb3c75e60863e94fbd53c2b3607e61af5d464a4f9301e45897fcb08dbfa/windows_capture-2.0.1-cp39-abi3-win_amd64.whl", hash = "sha256:209c2318e2168802b9afd1005e99499639e8835e71a1e188a3ddc77c7ccc3f04", size = 229121, upload-time = "2026-08-08T16:07:04.283Z" },
 ]
 
 [[package]]

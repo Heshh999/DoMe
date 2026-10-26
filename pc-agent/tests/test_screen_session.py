@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import structlog
 from dome_protocol import (
     ProtocolError,
     format_rfc3339,
@@ -495,6 +496,26 @@ async def test_a_worker_crash_is_capture_failed(fast: AgentHarness, controller: 
     ended = await expect_screen_event(fast, "ended", "capture_failed")
     assert ended["reason"] == "capture_failed" and fast.ui.hidden == 1
     assert fast.agent.screen.history.recent()[0]["reason"] == "capture_failed"
+
+
+async def test_a_capture_error_after_dtls_is_logged_with_its_reason(fast: AgentHarness, controller: Controller) -> None:
+    """The field log of 2026-10-26 said only "SCREEN_CAPTURE_UNAVAILABLE": the agent's line now carries the worker's
+    detail and message (the capture modules' own text, FFmpeg's or Windows' words sanitised there)."""
+    _res, worker = await live(fast, controller)
+    message = (
+        "Windows.Graphics.Capture could not start: Exception: Capture session threw an exception: The Graphics "
+        "Capture API is not supported on this platform.\n" + "x" * 300
+    )
+    with structlog.testing.capture_logs() as logs:
+        await worker.emit(
+            {"ev": "error", "code": "SCREEN_CAPTURE_UNAVAILABLE", "detail": "unsupported_display", "message": message}
+        )
+        ended = await expect_screen_event(fast, "ended", "capture_failed")
+    assert ended["reason"] == "capture_failed"
+    [line] = [e for e in logs if e["event"] == "screen worker reported an error"]
+    assert line["code"] == "SCREEN_CAPTURE_UNAVAILABLE" and line["detail"] == "unsupported_display"
+    assert line["message"].startswith("Windows.Graphics.Capture could not start: Exception: Capture session threw")
+    assert "\n" not in line["message"] and len(line["message"]) == 200
 
 
 async def test_a_worker_that_refuses_to_start_maps_its_error(fast: AgentHarness, controller: Controller) -> None:

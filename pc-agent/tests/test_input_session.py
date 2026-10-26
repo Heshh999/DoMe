@@ -13,9 +13,10 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+import structlog
 from dome_protocol import format_rfc3339, load_schemas, now_utc
 
-from dome_agent.input_session import HOLDS_FILENAME, AgeEstimator, coalesce_events
+from dome_agent.input_session import HOLDS_FILENAME, AgeEstimator, BatchAge, coalesce_events
 from dome_agent.platform.protocol import ForegroundApp
 
 from .conftest import AgentHarness
@@ -315,6 +316,62 @@ async def test_relay_received_at_bounds_the_relay_to_agent_leg(harness: AgentHar
     await harness.relay.send(frame)
     await expect_error(harness, "INPUT_STALE")
     assert harness.fake.input_count("move") == 2
+
+
+def test_batch_age_names_the_late_leg_in_whole_milliseconds() -> None:
+    assert BatchAge(0.1234, 2.5006).stale_fields(1000) == {
+        "late_leg": "relay_to_agent",
+        "phone_age_ms": 123,
+        "relay_age_ms": 2501,
+        "budget_ms": 1000,
+    }
+    assert BatchAge(2.0, 0.05).stale_fields(1000) == {
+        "late_leg": "phone_to_relay",
+        "phone_age_ms": 2000,
+        "relay_age_ms": 50,
+        "budget_ms": 1000,
+    }
+    assert BatchAge(1.5).stale_fields(1000) == {
+        "late_leg": "phone_to_agent",
+        "phone_age_ms": 1500,
+        "relay_age_ms": None,
+        "budget_ms": 1000,
+    }
+    assert BatchAge(0.2, 1.1).seconds == 1.1 and BatchAge(0.3).seconds == 0.3 and BatchAge(0.4, 0.1).seconds == 0.4
+
+
+@pytest.mark.parametrize(
+    ("phone_late", "relay_late", "leg"),
+    [(2.0, 0.0, "phone_to_relay"), (0.0, 2.5, "relay_to_agent")],
+)
+async def test_a_stale_drop_logs_which_leg_was_late_and_never_the_input(
+    harness: AgentHarness, controller: Controller, phone_late: float, relay_late: float, leg: str
+) -> None:
+    """A diagnostics bundle must show where latency built up: the INPUT_STALE line names the late leg and both
+    ages in ms (each against its own sender's clock), and nothing the phone typed."""
+    sid = (await start_input(harness, controller))["result"]["input_session_id"]
+    conn = str(uuid.uuid4())
+    for seq in (1, 2):  # the baselines: a prompt phone and a prompt relay hop
+        await harness.relay.send(relay_input_batch_frame(controller.input_batch(sid, seq, [MOVE]), conn))
+    await wait_for(lambda: harness.fake.input_count("move") == 2)
+    sentinel = "ZEBRA-STALE-" + uuid.uuid4().hex[:6]
+    late = controller.input_batch(
+        sid, 3, [{"type": "text", "text": sentinel}], issued_at=now_utc() - timedelta(seconds=phone_late)
+    )
+    frame = relay_input_batch_frame(late, conn)
+    frame["relay"]["received_at"] = format_rfc3339(now_utc() - timedelta(seconds=relay_late))
+    with structlog.testing.capture_logs() as logs:
+        await harness.relay.send(frame)
+        await expect_error(harness, "INPUT_STALE")
+    [line] = [e for e in logs if e.get("code") == "INPUT_STALE"]
+    assert line["event"] == "input batch dropped" and line["late_leg"] == leg
+    assert line["budget_ms"] == harness.agent.input.age_budget_ms
+    late_ms, prompt_ms = (line["phone_age_ms"], line["relay_age_ms"])
+    if leg == "relay_to_agent":
+        late_ms, prompt_ms = prompt_ms, late_ms
+    assert abs(late_ms - 1000 * max(phone_late, relay_late)) < 500 and prompt_ms < 500
+    assert isinstance(late_ms, int) and isinstance(prompt_ms, int)
+    assert sentinel not in json.dumps(logs, default=str)
 
 
 async def test_forged_and_misaddressed_batches_are_rejected(harness: AgentHarness, controller: Controller) -> None:

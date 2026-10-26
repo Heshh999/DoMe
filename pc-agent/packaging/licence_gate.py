@@ -63,7 +63,8 @@ wheel therefore never reaches a Windows build. ``check --frozen`` applies to eve
 (``.dll``, ``.pyd``, ``.exe``) R1, R3, R4 and R9, and to every other file name R1, plus:
 
 - F1 av.libs: every DLL in ``_internal/av.libs`` is on the R2 allow-list, and no FFmpeg, libvpx or libopus DLL
-  lies anywhere else.
+  lies anywhere else, nor any DLL with ``ffmpeg`` in its name (OpenCV's ``opencv_videoio_ffmpeg*.dll`` is a whole
+  FFmpeg build; windows-capture's Python wrapper would pull OpenCV in, which pyproject.toml excludes).
 - F2 runtime DLLs: every other DLL matches :data:`FROZEN_DLL_STEMS` (the Python runtime, the Visual C++
   runtime, pywin32, google-crc32c), each covered by THIRD_PARTY_NOTICES.txt. An unknown one is a warning, and
   a failure with ``--strict`` (release.yml): the list was written without a Windows build at hand, so the
@@ -77,8 +78,9 @@ wheel therefore never reaches a Windows build. ``check --frozen`` applies to eve
 ``screen-self-test`` runs the frozen ``DoMe.exe screen-worker --self-test`` (with a throw-away state folder)
 and checks its JSON report: with Screen view, aiortc 1.15.0 and the ``+lgpl`` PyAV import, the decoder set is
 exactly ``{wrapped_avframe}`` (R7 on the frozen build), a ``lavfi`` ``testsrc`` frame decodes, the PLI hook point
-exists and VP8 encodes (H.264 through Media Foundation is reported only); without it, the worker answers
-and reports aiortc and av missing. Either way no crash log may appear. ``bundle-notices`` writes
+exists, VP8 encodes (H.264 through Media Foundation is reported only) and windows-capture's native module loads
+(``wgc_native``: the Windows.Graphics.Capture fallback is in the build; no capture is started); without it, the worker
+answers and reports aiortc and av missing. Either way no crash log may appear. ``bundle-notices`` writes
 ``THIRD_PARTY_NOTICES.txt`` (the hand-written Part 1, then the Python runtime's licence and every installed
 package's own licence files, read from the running interpreter: run it with the build venv's Python) and
 copies ``licenses/*.txt`` next to it.
@@ -212,6 +214,10 @@ LICENCE_FILES = (
 )
 # DLLs a frozen DoMe may hold outside av.libs, with the THIRD_PARTY_NOTICES.txt part that covers each (F2).
 # Written from CPython 3.12's Windows layout, pywin32 and google-crc32c without a Windows build at hand.
+# windows-capture 2.0.1 (Screen view, MIT) adds no entry: _internal/windows_capture/windows_capture.pyd is a .pyd,
+# not a DLL (R1/R3/R4/R9 apply to it), and its import table (read from the wheel with pefile) names only
+# python3.dll, VCRUNTIME140.dll, Windows' own DLLs and api-ms-win-* sets; the Rust crates it links statically are
+# listed in THIRD_PARTY_NOTICES.txt Part 1 section 5.
 FROZEN_DLL_STEMS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     (re.compile(pattern), covered_by)
     for pattern, covered_by in (
@@ -834,7 +840,7 @@ def evaluate_frozen(
         if _in_av_libs(entry):
             if not allowed(name):
                 fail.append(Violation("F1 av.libs", where, f"stem {dll_stem(name)!r} is not on the FFmpeg allow-list"))
-        elif FFMPEG_FAMILY.fullmatch(dll_stem(name)):
+        elif FFMPEG_FAMILY.fullmatch(dll_stem(name)) or "ffmpeg" in dll_stem(name):
             fail.append(Violation("F1 av.libs", where, "an FFmpeg or codec library outside _internal/av.libs"))
         elif _frozen_dll_covered(name) is None:
             target = fail if strict else warn
@@ -1014,6 +1020,16 @@ def evaluate_screen_self_test(
         rows.append(SmokeRow("VP8 encoder available", True, vp8, summary or shown(encoders)))
         h264 = any(r.get("kind") == "h264" and r.get("available") is True for r in listed)
         rows.append(SmokeRow("H.264 through Media Foundation", False, h264, summary or shown(encoders)))
+        wgc = check("wgc_native")
+        classes = wgc.get("value", {}).get("classes") if isinstance(wgc.get("value"), dict) else None
+        rows.append(
+            SmokeRow(
+                "Windows.Graphics.Capture fallback (windows-capture's native module loads)",
+                True,
+                wgc.get("ok") is True and isinstance(classes, list) and "NativeWindowsCapture" in classes,
+                shown(wgc),
+            )
+        )
         rows.append(
             SmokeRow(
                 "the worker's own verdict (exit code 0)",

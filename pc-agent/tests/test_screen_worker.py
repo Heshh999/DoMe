@@ -285,7 +285,21 @@ async def test_track_captures_only_after_dtls_refreshes_still_frames_distinctly_
         await track.recv()
 
 
-async def test_track_reports_a_dead_source_as_capture_failed() -> None:
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            ProtocolError("SCREEN_CAPTURE_UNAVAILABLE", "gone", detail={"detail": "busy"}),
+            {"ev": "error", "code": "SCREEN_CAPTURE_UNAVAILABLE", "detail": "busy", "message": "gone"},
+        ),
+        # any other exception is named by its class only: its text never reaches the agent's log
+        (
+            OSError(r"C:\Users\Jane\secret.txt"),
+            {"ev": "error", "code": "SCREEN_CAPTURE_UNAVAILABLE", "detail": None, "message": "OSError"},
+        ),
+    ],
+)
+async def test_track_reports_a_dead_source_as_capture_failed(error: Exception, expected: dict[str, Any]) -> None:
     class Dying:
         width, height = 64, 36
 
@@ -293,7 +307,7 @@ async def test_track_reports_a_dead_source_as_capture_failed() -> None:
             return None
 
         def read(self) -> Any:
-            raise ProtocolError("SCREEN_CAPTURE_UNAVAILABLE", "gone", detail={"detail": "busy"})
+            raise error
 
         def close(self) -> None:
             return None
@@ -313,7 +327,7 @@ async def test_track_reports_a_dead_source_as_capture_failed() -> None:
     )
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(track.recv(), 5)
-    assert events == [{"ev": "error", "code": "SCREEN_CAPTURE_UNAVAILABLE", "detail": "busy"}]
+    assert events == [expected]
     await track.aclose()
 
 
