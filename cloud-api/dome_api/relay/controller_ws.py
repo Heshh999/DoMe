@@ -171,12 +171,27 @@ async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | 
         raise WebSocketDisconnect(CLOSE_FRAME_TOO_LARGE)
     try:
         frame = loads_strict(text, max_bytes=svc.settings.relay_max_frame_bytes, max_depth=12, require_object=True)
-        svc.schemas.validate_frame("controller_to_relay", frame)
+        validate_inbound_frame(svc, frame)
     except ProtocolError as exc:
         await ws.send_text(dumps_compact(frames.error_frame(exc.code, exc.message)))
         return None
     assert isinstance(frame, dict)
     return frame
+
+
+def validate_inbound_frame(svc: Services, frame: Any) -> None:
+    """``controller_to_relay`` is a ``oneOf`` whose every branch pins ``type`` to a const, so a frame typed
+    ``input_batch`` satisfies the union exactly when it satisfies that one branch; checking the branch alone costs a
+    fifth to a third as much (jsonschema evaluates every branch of a ``oneOf``), and a touchpad sends up to 40 of these
+    a second. A frame the branch refuses is checked against the union again, so the error is the union's, word for
+    word (DECISIONS #111)."""
+    if isinstance(frame, dict) and frame.get("type") == "input_batch":
+        try:
+            svc.schemas.validate_def("relay-frames", "controller_input_batch", frame)
+            return
+        except ProtocolError:
+            pass
+    svc.schemas.validate_frame("controller_to_relay", frame)
 
 
 async def _loop(

@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     relay_controller_frame_burst: int = Field(default=120, ge=1)
     # Security-event rows a single controller socket may write per minute (rejections, refused subscribes).
     relay_security_events_per_connection_per_minute: int = Field(default=20, ge=1)
+    # Input batches (up to 40/s per phone) re-read the controller, plan, PC and grant rows at most this often per
+    # socket and PC; every relay path that changes one of them drops the socket's copy at once (DECISIONS #110).
+    # 0 reads them for every batch, as before the cache.
+    relay_input_auth_ttl_seconds: float = Field(default=1.0, ge=0, le=5)
     # Public URLs handed to the agent at link time. Default: derived from public_origin.
     relay_url: str | None = None
     api_url: str | None = None

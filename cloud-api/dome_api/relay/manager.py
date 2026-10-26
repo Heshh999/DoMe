@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from dome_protocol import dumps_compact
+from dome_protocol import KeyRecord, dumps_compact
 from dome_protocol.keys import b64url_encode
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -42,6 +42,7 @@ CLOSE_REVOKED = 4003
 CLOSE_AUTH_REQUIRED = 4008
 MAX_AGENT_INPUT_SESSIONS = 4
 MAX_AGENT_SCREEN_SESSIONS = 4
+MAX_INPUT_AUTH_PCS = 8  # cached input authorizations per controller socket (one per PC it sent batches for)
 # pc_state fields added in protocol 1.1; a 1.0 peer rejects unknown fields, so its copy of a state frame omits them
 PC_STATE_1_1_FIELDS = ("foreground_app", "input_session", "input_restricted")
 
@@ -73,6 +74,23 @@ class InFlight:
     requires_confirmation: bool
     executing_seen: bool = False
     state: str = "created"
+
+
+@dataclass(frozen=True, slots=True)
+class InputAuthorization:
+    """The database half of ``route_input_batch`` for one controller socket and one PC, as read at ``loaded_at``
+    (``time.monotonic()``): the socket's key record, the plan and whether it enables the controller, the PC's
+    ownership and state, and the live grant's capabilities. Fields after the first refusal are left unset, as the
+    per-batch reads stopped there. Kept on the socket for ``relay_input_auth_ttl_seconds`` and dropped at once by
+    every relay path that changes one of these rows (``ConnectionManager.invalidate_input_auth``, DECISIONS #110)."""
+
+    loaded_at: float
+    record: KeyRecord | None  # None: the controller row is gone or no longer this socket's (UNKNOWN_KEY, close)
+    controller_revoked: bool = False
+    plan: Plan | None = None
+    plan_enabled: bool = False
+    pc_refusal: str | None = None  # ACCOUNT_MISMATCH or PC_PLAN_DISABLED
+    capabilities: frozenset[str] | None = None  # the live grant's; None: no live grant on this PC (GRANT_MISSING)
 
 
 class _Conn:
@@ -196,6 +214,8 @@ class ControllerConn(_Conn):
         "input_seq",
         "input_refused",
         "supports_screen",
+        "input_auth",
+        "input_auth_epoch",
     )
 
     def __init__(self, ws: WebSocket, session_id: uuid.UUID, account_id: uuid.UUID, kid: str) -> None:
@@ -211,6 +231,29 @@ class ControllerConn(_Conn):
         self.input_seq: dict[str, int] = {}  # input_session_id -> highest seq forwarded on this socket (bounded)
         self.input_refused = 0  # input_batch frames refused by the per-socket input bucket (separate from commands)
         self.supports_screen = False  # hello announced protocol 1.4: the only sockets that see screen_* frames
+        self.input_auth: dict[uuid.UUID, InputAuthorization] = {}  # pc_id -> cached input checks (bounded)
+        # bumped by every invalidation: a database read that began before it is used once but never cached
+        self.input_auth_epoch = 0
+
+    def cached_input_auth(self, pc_id: uuid.UUID, now: float, ttl: float) -> InputAuthorization | None:
+        auth = self.input_auth.get(pc_id)
+        return auth if auth is not None and now - auth.loaded_at < ttl else None
+
+    def remember_input_auth(self, pc_id: uuid.UUID, auth: InputAuthorization, epoch: int) -> None:
+        """Cache ``auth``, read while the socket was at ``epoch``, unless an invalidation came in during the read."""
+        if epoch != self.input_auth_epoch:
+            return
+        if pc_id not in self.input_auth and len(self.input_auth) >= MAX_INPUT_AUTH_PCS:
+            del self.input_auth[next(iter(self.input_auth))]  # oldest PC first
+        self.input_auth[pc_id] = auth
+
+    def forget_input_auth(self, pc_id: uuid.UUID | None = None) -> None:
+        """Drop the cached input checks for one PC (or all) and discard any read still in progress."""
+        self.input_auth_epoch += 1
+        if pc_id is None:
+            self.input_auth.clear()
+        else:
+            self.input_auth.pop(pc_id, None)
 
     def input_notice_due(self, now: datetime) -> bool:
         """At most one RATE_LIMITED error frame (and log line) per second for refused input batches."""
@@ -263,9 +306,32 @@ class ConnectionManager:
     # when this process started: a controller this process has never seen bound counts as absent only from here, so a
     # relay restart gives every Screen view owner the same grace to reconnect as a dropped socket does
     started_at: datetime = field(default_factory=utcnow)
+    # how long a controller socket may route input batches on its cached InputAuthorization for a PC (DECISIONS #110)
+    input_auth_ttl: float = field(init=False)
 
     def __post_init__(self) -> None:
         self.agent_events = SlidingWindowLimiter(self.settings.relay_security_events_per_connection_per_minute, 60)
+        self.input_auth_ttl = self.settings.relay_input_auth_ttl_seconds
+
+    # ----- input authorization cache (DECISIONS #110) --------------------------------------------
+    def invalidate_input_auth(
+        self,
+        *,
+        pc_id: uuid.UUID | None = None,
+        account_id: uuid.UUID | None = None,
+        controller_id: uuid.UUID | None = None,
+    ) -> None:
+        """A committed change may have made cached input authorizations stale: every socket of the account or of the
+        controller drops all of its entries, every other socket its entry for the PC, so the next batch re-reads the
+        database. Call it after the commit; a read that was already in flight is then discarded by the socket's epoch
+        instead of being cached."""
+        for conn in self.controllers.values():
+            if (account_id is not None and conn.account_id == account_id) or (
+                controller_id is not None and conn.controller_id == controller_id
+            ):
+                conn.forget_input_auth()
+            elif pc_id is not None:
+                conn.forget_input_auth(pc_id)
 
     # ----- hello proof ---------------------------------------------------------------------------
     def accept_hello_nonce(self, nonce: str, expires_at: datetime) -> bool:
@@ -341,6 +407,7 @@ class ConnectionManager:
 
     async def disconnect_agent(self, pc_id: uuid.UUID, *, revoked_reason: str | None) -> None:
         """Close the PC's socket; with ``revoked_reason`` the agent is told its cloud access is gone."""
+        self.invalidate_input_auth(pc_id=pc_id)  # unlink and re-link revoke the PC's grants first
         conn = self.agents.get(pc_id)
         if conn is None:
             return
@@ -354,6 +421,9 @@ class ConnectionManager:
         self.controllers[conn.connection_id] = conn
         if conn.controller_id is not None:
             self.controller_last_bound_at.pop(conn.controller_id, None)
+            # the bound hello just moved the controller's last_seen_at, which orders plan_enabled_controller_ids: after
+            # a downgrade another phone of the account may have dropped out of the enabled set
+            self.invalidate_input_auth(account_id=conn.account_id)
 
     def unregister_controller(self, conn: ControllerConn) -> None:
         self.controllers.pop(conn.connection_id, None)
@@ -418,6 +488,7 @@ class ConnectionManager:
         """Everything the live relay does after a grant/controller revocation was committed:
         best-effort ``cancel`` to the PC for the controller's in-flight commands (their results still
         terminate them honestly), ``revoked`` + close for the controller's sockets, fresh snapshots."""
+        self.invalidate_input_auth(controller_id=controller_id)
         for pc_id in pc_ids:
             agent = self.agent_for(pc_id)
             if agent is None:
@@ -657,6 +728,7 @@ class ConnectionManager:
     async def push_account_snapshots(self, account_id: uuid.UUID) -> int:
         """Fresh snapshots to every online PC of the account (a plan change, a device selection). The account's
         outstanding phone TURN credentials are revoked as well (design §13: plan change)."""
+        self.invalidate_input_auth(account_id=account_id)
         pushed = 0
         for conn in list(self.agents.values()):
             if conn.account_id == account_id and not conn.closed and await self.push_grants_snapshot(conn.pc_id):
@@ -666,6 +738,9 @@ class ConnectionManager:
         return pushed
 
     async def push_grants_snapshot(self, pc_id: uuid.UUID) -> bool:
+        # every committed change to the PC's grants, its enabled flag or the account's plan ends here (pairing,
+        # grant_update, revocation, PATCH /pcs, plan changes and selections), whether or not the agent is online
+        self.invalidate_input_auth(pc_id=pc_id)
         conn = self.agent_for(pc_id)
         if conn is None:
             return False

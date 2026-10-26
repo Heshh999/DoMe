@@ -5,6 +5,7 @@ command_id a controller sends ends with exactly one result (``rules.terminal_res
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -28,7 +29,14 @@ from dome_api.db.models import PC, Account, Command, Controller, Grant
 from dome_api.logging import get_logger
 from dome_api.plans import Plan, catalog, plan_for
 from dome_api.relay import frames
-from dome_api.relay.manager import CLOSE_REVOKED, AgentConn, ConnectionManager, ControllerConn, InFlight
+from dome_api.relay.manager import (
+    CLOSE_REVOKED,
+    AgentConn,
+    ConnectionManager,
+    ControllerConn,
+    InFlight,
+    InputAuthorization,
+)
 from dome_api.screen.metering import AllowanceExhaustedError
 from dome_api.security.ratelimit import SlidingWindowLimiter, TokenBucketLimiter
 from dome_api.settings import Settings
@@ -206,6 +214,60 @@ async def resolve_controller_record(
         return None, None
     jwk = {str(k): str(v) for k, v in ctrl.public_jwk.items()}
     return ctrl, KeyRecord(controller_id=str(ctrl.id), account_id=str(ctrl.account_id), jwk=jwk)
+
+
+async def load_input_authorization(
+    db: AsyncSession, mgr: ConnectionManager, conn: ControllerConn, pc_id: uuid.UUID, loaded_at: float
+) -> InputAuthorization:
+    """Read what ``route_input_batch`` checks in the database, in the order it checks it, stopping at the first
+    refusal like the per-batch reads did: the socket's controller row, the plan and the enabled set, the PC, the
+    live grant on it."""
+    ctrl, record = await resolve_controller_record(db, conn)
+    if ctrl is None or record is None:
+        return InputAuthorization(loaded_at, None)
+    if ctrl.revoked_at is not None:
+        return InputAuthorization(loaded_at, record, controller_revoked=True)
+    account = await db.get(Account, conn.account_id)
+    plan = plan_for(account.plan if account else None)
+    if ctrl.id not in await mgr.plan_enabled_controller_ids(db, conn.account_id, plan):
+        return InputAuthorization(loaded_at, record, plan=plan)
+    pc = await db.get(PC, pc_id)
+    if pc is None or pc.deleted_at is not None or pc.account_id != conn.account_id:
+        return InputAuthorization(loaded_at, record, plan=plan, plan_enabled=True, pc_refusal="ACCOUNT_MISMATCH")
+    if not pc.enabled:
+        return InputAuthorization(loaded_at, record, plan=plan, plan_enabled=True, pc_refusal="PC_PLAN_DISABLED")
+    capabilities = await db.scalar(
+        select(Grant.capabilities).where(
+            Grant.controller_id == ctrl.id,
+            Grant.pc_id == pc.id,
+            Grant.account_id == conn.account_id,
+            Grant.revoked_at.is_(None),
+        )
+    )
+    return InputAuthorization(
+        loaded_at,
+        record,
+        plan=plan,
+        plan_enabled=True,
+        capabilities=frozenset(capabilities) if capabilities is not None else None,
+    )
+
+
+async def input_authorization(
+    svc: Services, mgr: ConnectionManager, conn: ControllerConn, pc_id: uuid.UUID
+) -> InputAuthorization:
+    """The socket's cached checks for the PC while younger than ``mgr.input_auth_ttl``, else a fresh read (DECISIONS
+    #110). A touchpad sends up to 40 batches/s; reading five rows for each one made the relay's per-socket queue the
+    bottleneck. Changes made through this relay drop the cached copy at once; the TTL bounds the rest."""
+    now = time.monotonic()
+    cached = conn.cached_input_auth(pc_id, now, mgr.input_auth_ttl)
+    if cached is not None:
+        return cached
+    epoch = conn.input_auth_epoch
+    async with svc.db() as db:
+        auth = await load_input_authorization(db, mgr, conn, pc_id, now)
+    conn.remember_input_auth(pc_id, auth, epoch)
+    return auth
 
 
 def compute_deadline(cmd: VerifiedCommand, received_at: datetime, registry_limits: dict[str, int]) -> datetime:
@@ -413,7 +475,9 @@ async def route_input_batch(
     record, bind the batch to this socket's controller and account, require a live grant covering every
     event type, the PC online and past its first snapshot, the per-controller input budget, then forward the
     envelope verbatim. No ``commands`` row is written and nothing about the content is logged. Rejections are
-    ``error`` frames with ``ref_pc_id`` and never close the socket, except a kid mismatch (UNKNOWN_KEY, 4003)."""
+    ``error`` frames with ``ref_pc_id`` and never close the socket, except a kid mismatch (UNKNOWN_KEY, 4003).
+    The database rows behind the checks come from ``input_authorization`` (cached per socket and PC, DECISIONS #110);
+    the signature, binding, window and sequence are checked on every batch."""
     pc_id_str: str = frame["pc_id"]
     envelope = frame["envelope"]
     received_at = utcnow()
@@ -422,57 +486,48 @@ async def route_input_batch(
             raise Rejection("UNKNOWN_KEY", "Envelope kid does not match this connection", close=True)
         if not conn.supports_input:
             raise Rejection("PROTOCOL_INCOMPATIBLE", "Announce protocol 1.1 in hello to send input")
-        if conn.controller_id is None:
+        controller_id = conn.controller_id
+        if controller_id is None:
             raise Rejection("GRANT_MISSING", "This connection is not bound to a paired controller")
-        async with svc.db() as db:
-            ctrl, record = await resolve_controller_record(db, conn)
-            if ctrl is None or record is None:
-                raise Rejection("UNKNOWN_KEY", close=True)
-            if ctrl.revoked_at is not None:
-                raise Rejection("CONTROLLER_REVOKED")
-            try:
-                batch = verify_and_parse_input_batch(
-                    envelope,
-                    lambda kid: record if kid == conn.kid else None,
-                    registry=svc.registry,
-                    schemas=svc.schemas,
-                )
-                required = batch.required_capabilities
-            except ProtocolError as exc:
-                # the shared window check speaks in command terms; for a stream the honest code is INPUT_STALE
-                code = "INPUT_STALE" if exc.code == "COMMAND_EXPIRED" else exc.code
-                raise Rejection(code, exc.message, detail=exc.detail or None) from None
-            if batch.target_pc_id != pc_id_str:
-                raise Rejection("TARGET_PC_MISMATCH")
-            # Defence in depth against replay on this socket: the agent's seq check is authoritative
-            # (rules.input_sessions), but a batch this socket already forwarded for the same session is dropped here.
-            last = conn.input_seq.get(batch.input_session_id)
-            if last is not None and batch.seq <= last:
-                raise Rejection("INPUT_SEQUENCE_INVALID")
-            pc_id = uuid.UUID(pc_id_str)
-            account = await db.get(Account, conn.account_id)
-            plan = plan_for(account.plan if account else None)
-            if ctrl.id not in await mgr.plan_enabled_controller_ids(db, conn.account_id, plan):
-                raise Rejection("CONTROLLER_PLAN_DISABLED")
-            pc = await db.get(PC, pc_id)
-            if pc is None or pc.deleted_at is not None or pc.account_id != conn.account_id:
-                raise Rejection("ACCOUNT_MISMATCH", "No such PC on this account")
-            if not pc.enabled:
-                raise Rejection("PC_PLAN_DISABLED")
-            grant = await db.scalar(
-                select(Grant).where(
-                    Grant.controller_id == ctrl.id,
-                    Grant.pc_id == pc.id,
-                    Grant.account_id == conn.account_id,
-                    Grant.revoked_at.is_(None),
-                )
+        pc_id = uuid.UUID(pc_id_str)  # the frame schema already holds pc_id to a lowercase UUID
+        auth = await input_authorization(svc, mgr, conn, pc_id)
+        record = auth.record
+        if record is None:
+            raise Rejection("UNKNOWN_KEY", close=True)
+        if auth.controller_revoked:
+            raise Rejection("CONTROLLER_REVOKED")
+        try:
+            batch = verify_and_parse_input_batch(
+                envelope,
+                lambda kid: record if kid == conn.kid else None,
+                registry=svc.registry,
+                schemas=svc.schemas,
             )
-            if grant is None:
-                raise Rejection("GRANT_MISSING")
-            held = set(grant.capabilities)
-            if not ({"pointer", "keyboard"} & held) or not required <= held:
-                raise Rejection("INPUT_NOT_PERMITTED", detail={"missing": sorted(required - held)})
-        if not limiters.allow_input(plan, ctrl.id):
+            required = batch.required_capabilities
+        except ProtocolError as exc:
+            # the shared window check speaks in command terms; for a stream the honest code is INPUT_STALE
+            code = "INPUT_STALE" if exc.code == "COMMAND_EXPIRED" else exc.code
+            raise Rejection(code, exc.message, detail=exc.detail or None) from None
+        if batch.target_pc_id != pc_id_str:
+            raise Rejection("TARGET_PC_MISMATCH")
+        # Defence in depth against replay on this socket: the agent's seq check is authoritative
+        # (rules.input_sessions), but a batch this socket already forwarded for the same session is dropped here.
+        last = conn.input_seq.get(batch.input_session_id)
+        if last is not None and batch.seq <= last:
+            raise Rejection("INPUT_SEQUENCE_INVALID")
+        plan = auth.plan
+        if plan is None or not auth.plan_enabled:
+            raise Rejection("CONTROLLER_PLAN_DISABLED")
+        if auth.pc_refusal == "ACCOUNT_MISMATCH":
+            raise Rejection("ACCOUNT_MISMATCH", "No such PC on this account")
+        if auth.pc_refusal is not None:
+            raise Rejection(auth.pc_refusal)
+        held = auth.capabilities
+        if held is None:
+            raise Rejection("GRANT_MISSING")
+        if not ({"pointer", "keyboard"} & held) or not required <= held:
+            raise Rejection("INPUT_NOT_PERMITTED", detail={"missing": sorted(required - held)})
+        if not limiters.allow_input(plan, controller_id):
             raise Rejection("RATE_LIMITED")
         agent = mgr.agent_for(pc_id)
         if agent is None:
@@ -688,6 +743,8 @@ __all__ = [
     "Rejection",
     "audited_event",
     "compute_deadline",
+    "input_authorization",
+    "load_input_authorization",
     "reject_throttled",
     "resolve_controller_record",
     "route_command",

@@ -529,3 +529,45 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     handles sales tax and VAT registration and filing, for an extra fee, with its own rules on which Checkout
     parameters are allowed) is a business decision for the founder; it would change this parameter, `automatic_tax` and
     the docs together (docs/BILLING.md §2).
+
+## Relay input path (2026-10-26)
+
+110. **Input batches are routed on a per-socket copy of the database checks, re-read at most once a second.** On
+    staging the touchpad lagged by seconds and the PC dropped 30–60% of batches as `INPUT_STALE`. `route_input_batch`
+    read the controller, account, plan-enabled set, PC and grant for every batch: five statements, about eight round
+    trips to the database with the pool's pre-ping, BEGIN and ROLLBACK, and ~7 ms of ORM CPU on the test machine.
+    A socket handles its frames one at a time, so at 40 batches/s any round trip above ~3 ms made its queue grow
+    without bound (measured: 36 ms per batch at a 3.9 ms RTT; phone-to-PC latency reached 2.4 s after 5 s of
+    dragging). Now `router.input_authorization` keeps one `InputAuthorization` per controller socket and PC
+    (`ControllerConn.input_auth`, at most 8 PCs): the key record and revocation, the plan and whether it enables the
+    controller, the PC's ownership and enabled flag, and the live grant's capabilities. They are read in the same order
+    with the same early stops as before, and every refusal keeps its code, message and place in the order. The
+    signature, controller/account binding, window, sequence, rate budget and agent checks still run on every batch.
+    **TTL**: `DOME_RELAY_INPUT_AUTH_TTL_SECONDS`, default 1 s (0 reads for every batch, at most 5). One read a second
+    per streaming socket is 1/40 of the old load; a longer TTL would save little more and widen the window for changes
+    the relay cannot see. **Invalidation**, always after the change committed: `push_grants_snapshot(pc)` drops the
+    PC's entry on every socket, whether or not the agent is online (reached by pairing approval, `grant_update`,
+    `PATCH /v1/pcs`, controller rename, revocations and billing plan changes, which push every PC of the account);
+    `push_account_snapshots(account)` (the downgrade selection) and `register_controller` for a bound socket (its hello
+    moved `last_seen_at`, which orders the enabled set after a downgrade) drop every entry on the account's sockets;
+    `apply_controller_revocation(controller)` drops every entry on the controller's sockets, which it closes anyway;
+    `disconnect_agent(pc)` drops the PC's entries (unlink and re-link revoke the PC's grants first). **Race**: every
+    invalidation bumps the socket's epoch; a read that began before the bump is used for the batch that triggered it
+    (without the cache that batch would have read the same rows) but is never kept. **Bounded staleness**: a change
+    the relay does not hear about (a row edited by hand, or by a second process, which ADR-0001 D1 rules out) reaches
+    a streaming socket within the TTL: at most ~1 s, about 40 batches at the input budget. The PC agent enforces
+    grants from its own snapshot and stays the authority. Logout and session revocation close the sockets, and their
+    caches with them, as before. Commands, `subscribe`, confirmations and `screen_ice_request` still read the
+    database every time. Measured with the integration harness (300 batches; latency injected by a TCP proxy):
+    before, 9.8 ms wall and 9.9 ms CPU per batch on the local socket, 8.4–9.6 round trips per batch, 36.6 ms per batch
+    at a 3.9 ms RTT and 70.7 ms at 7.9 ms. After, about 2 ms wall and 2.1 ms CPU per batch at any RTT, and
+    0.2–0.3 round trips per batch on a paced 40/s stream. Phone-to-PC latency is 3–4 ms p50 at every RTT tried
+    (p95 47 ms at 7.7 ms RTT: the once-a-second read).
+111. **`input_batch` frames are schema-checked against their own branch first** (`controller_ws.validate_inbound_frame`).
+    `controller_to_relay` is a bare `oneOf` whose branches each require `type` and pin it to a const of their own. A
+    frame typed `input_batch` therefore satisfies the union exactly when it satisfies `controller_input_batch`.
+    jsonschema evaluates every branch of a `oneOf`, so the branch alone costs 0.2–0.3 ms instead of 1–1.1 ms. A frame
+    the branch refuses is checked against the union again, so error codes and messages are unchanged. A test pins the
+    union's shape and compares both paths on good and bad frames. The payload schema is now the largest per-batch CPU
+    item: `input_batch_payload`, whose `input_event` is the same kind of union, costs 1.2–1.5 ms with four events. It
+    lives in `dome_protocol`, shared with the agent, and is left for a change there.

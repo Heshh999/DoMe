@@ -248,6 +248,15 @@ Rules: `shared/protocol/version.json → rules.input_sessions`, `rules.grant_upd
    (`PROTOCOL_INCOMPATIBLE`: the PC needs an agent update);
 9. forward `{type: input_batch, envelope, relay{received_at, connection_id}}` with the envelope **verbatim**.
 
+The rows behind steps 2, 5 and 6 (the controller's key and revocation, the plan and its enabled set, the PC, the
+live grant) are read at most once per `DOME_RELAY_INPUT_AUTH_TTL_SECONDS` (1 s) per socket and PC and kept on the
+socket; the signature, binding, window and sequence are checked on every batch (DECISIONS #110). Every change made
+through this process drops the copy at once (pairing, `grant_update`, revocations, `PATCH /v1/pcs`, unlink and
+re-link, plan changes and the downgrade selection, another phone of the account binding a socket); a row edited
+behind the relay's back takes effect within the TTL. A steady 40 batches/s stream costs one read a second instead
+of five statements per batch (integration-tested). `input_batch` frames are schema-checked against their own branch
+of `controller_to_relay` first (DECISIONS #111).
+
 No `commands` row, no result, no security event and no log line per accepted batch; the content of
 `text` events is never logged (rejections log the error code and ids only). Rejections are `error` frames
 with `ref_pc_id` (no command id exists) and at most one `input_rejected` security event per minute per
@@ -380,6 +389,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_RELAY_HELLO_TIMEOUT_SECONDS` | `10` | Time a socket has to send `hello`. |
 | `DOME_RELAY_CONTROLLER_FRAMES_PER_MINUTE` / `DOME_RELAY_CONTROLLER_FRAME_BURST` | `600` / `120` | Inbound frames one controller socket may send (token bucket, checked before any database work). Refused frames are answered `RATE_LIMITED` from memory; after `burst` refusals the socket is closed (4000) with one `controller_throttled` security event. |
 | `DOME_RELAY_SECURITY_EVENTS_PER_CONNECTION_PER_MINUTE` | `20` | Security-event rows one controller socket may write per minute (`command_rejected`, `subscribe_refused`, `input_rejected`), and `relay_frame_rejected` rows one PC may cause per minute; the first suppressed one becomes a single `relay_events_throttled` row. |
+| `DOME_RELAY_INPUT_AUTH_TTL_SECONDS` | `1` | How long a controller socket routes `input_batch` frames on its cached copy of the controller, plan, PC and grant rows before reading them again (0–5; 0 reads them for every batch). Changes made through the relay apply at once regardless; this bounds only changes made behind its back (DECISIONS #110). |
 | `DOME_RELAY_URL` / `DOME_API_URL` | derived from the public origin | URLs handed to the agent at link time (`wss://…/ws/agent`, `https://…`). |
 | `DOME_PC_ACCESS_TOKEN_SECONDS` | `3600` | Lifetime of PC access tokens. |
 | `DOME_RATE_LINK_START_PER_HOUR` | `10` | `POST /v1/agent-link/start` per client IP. |
