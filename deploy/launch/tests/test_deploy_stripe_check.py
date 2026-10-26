@@ -538,7 +538,7 @@ def _drop_price(variable: str) -> Callable[[World], None]:
         (_feature("payment_method_update.enabled", False), "does not let customers update their card"),
         (_feature("subscription_update.enabled", False), "does not let customers switch between DoMe Pro and DoMe Pro Plus"),
         (_feature("subscription_update.default_allowed_updates", ["quantity"]), "does not let customers switch between"),
-        (_feature("subscription_update.products", None), f"does not offer the price in `{PRO_MONTHLY}`, `{PRO_ANNUAL}`"),
+        (_feature("subscription_update.products", []), f"does not offer the prices in `{PRO_MONTHLY}`, `{PRO_ANNUAL}`"),
         (_drop_price(PLUS_ANNUAL), f"Switching plans in the customer portal does not offer the price in `{PLUS_ANNUAL}`."),
     ],
 )  # fmt: skip
@@ -550,6 +550,20 @@ def test_customer_portal_settings_that_differ_from_the_guide_are_warnings(
     deployed(world, run)
     assert expected in run.summary and "- Stripe check: " in run.summary
     assert row(run).endswith("5 prices, webhook endpoint and customer portal match; 1 warning in the Notes |")
+
+
+@pytest.mark.parametrize("absent", ["null", "missing"])
+def test_a_product_list_stripe_does_not_show_is_not_a_warning(world: World, absent: str) -> None:
+    # Deploy #9: a portal the founder had set up drew "does not offer the price in" all four prices
+    update = world.stripe.portal_features()["subscription_update"]
+    if absent == "null":
+        update["products"] = None
+    else:
+        del update["products"]
+    run = staging(world)
+    deployed(world, run)
+    assert "does not offer" not in run.summary and "- Stripe check: " not in run.summary
+    assert row(run).endswith("5 prices, webhook endpoint and customer portal match |")
 
 
 # ======================================================================================================

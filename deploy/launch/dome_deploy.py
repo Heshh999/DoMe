@@ -2514,11 +2514,18 @@ class StripeChecker:
                 "The customer portal does not let customers switch between DoMe Pro and DoMe Pro Plus (monthly or "
                 f"yearly). Turn on switching plans with the four subscription prices in {where} and save."
             )
+        elif not isinstance(products, list):
+            # Stripe may leave the product list out of this answer (Deploy #9 warned about all four prices on a portal
+            # the founder had set up), so an absent list is "not shown", never "nothing offered"
+            pass
         elif not_offered := [n for n, p in subscription_prices if p not in offered]:
+            one = len(not_offered) == 1
             self.check.warnings.append(
-                f"Switching plans in the customer portal does not offer the price in {_names(not_offered)}. Add it "
-                f"(the product and that price) in {where} and save."
-            )
+                "Switching plans in the customer portal does not offer the "
+                + (f"price in {_names(not_offered)}. Add it (the product and that price)" if one else
+                   f"prices in {_names(not_offered)}. Add them (the products and those prices)")
+                + f" in {where} and save."
+            )  # fmt: skip
         self.matched.append("customer portal")
 
 

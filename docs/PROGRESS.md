@@ -2,6 +2,34 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-26 — Deploy #9: the Stripe check passed against real Stripe; the migration step hung; migrations now time out
+
+- Deploy #9 (run 40341198561, staging, commit c79dbf3) was the first run of the Stripe check against real Stripe. Summary
+  row: **"Stripe account: domeremote sandbox (`acct_1UShS3R4ji9bTAm2`), Test mode: 5 prices, webhook endpoint and
+  customer portal match"**. So the key, the five prices (type, interval, amount, currency, mode), the webhook endpoint
+  and the portal are all right, and the "key from another account" suspicion of 2026-10-23 is ruled out. The founder's
+  "Manage subscription" opening Stripe's portal also shows that customers.create and billing_portal.sessions.create work
+  with this key. The staging checkout failure therefore lies in checkout.sessions.create itself: the 24-hour
+  `expires_at` edge (fixed in c79dbf3, not yet deployed) or something the new `stripe_error` / `stripe_param` log
+  fields will name.
+- The check's one warning was that plan switching offered none of the four prices. It was most likely a false alarm:
+  the check read a product list that Stripe had not returned as an empty list. A list Stripe does not show is now
+  treated as "not shown", and the warning names one price or several correctly. deploy/launch: 389 passed.
+- **The deploy itself failed.** Fly's release command (`alembic -c alembic.ini upgrade head`; no new migration in this
+  commit, so it had nothing to do) never finished, and flyctl gave up after 5 minutes with "timeout reached waiting
+  for machine's state to change". Nothing changed: staging keeps running 852cdc2, with the Stripe secrets re-staged.
+  The likely cause is a database connection that never answered (Neon's free compute not waking), but the release
+  machine printed nothing.
+- `dome_api/db/alembic/env.py` now connects with `connect_timeout` 20 s and sets `lock_timeout` 60 s (a session setting
+  committed before Alembic's own transaction), so a silent database or a held lock becomes an error in the release log
+  within a minute. `tests/test_migration_timeouts.py`:
+  - a silent TCP server fails within the connect timeout;
+  - a lock held on `alembic_version` fails with "lock timeout";
+  - downgrade and upgrade still commit.
+
+  Both of the first two hang when the change is removed. cloud-api: 581 passed, 7 skipped.
+- Next (founder): run Deploy for staging again. If the release step fails again, the log now shows why.
+
 ## 2026-10-23 — The first test purchase on staging failed; Deploy now checks the Stripe setup with Stripe itself
 
 - **What happened.** On staging (852cdc2), Billing > DoMe Pro > Continue to payment answered "Our payment provider didn't
