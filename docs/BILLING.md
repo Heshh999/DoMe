@@ -7,9 +7,14 @@ in `cloud-api/dome_api/billing/` and are integration-tested on Linux with real P
 (`cloud-api/dome_api/billing/fake_provider.py`). The Stripe adapter is unit-tested without the network, and since
 2026-10-23 every request it sends (with the billing service's own arguments) and every response field it reads is
 checked against stripe-mock v0.206.0, Stripe's official mock API, in CI (§12). stripe-mock checks parameter names,
-types, enums and the API version, not an account's objects or rules, so nothing has been sandbox-provider-tested yet:
-the founder's first Stripe test-mode run on staging is still the proof (`docs/LAUNCH_SETUP.md` "Stripe (payments)").
-Production has no Stripe values, so billing there is **off**:
+types, enums and the API version, not an account's objects or rules. **First sandbox purchase (2026-10-26):** on
+staging (commit 2a6bd78, Stripe sandbox "domeremote sandbox"), the founder bought DoMe Pro monthly through Checkout with
+test card 4242 and reports that it worked. That is the first `sandbox-provider-tested` evidence: customer creation,
+the Checkout page and the payment. It took two fixes found on the way: Checkout's `expires_at` now stays under
+Stripe's 24-hour limit, and every page turns off Managed Payments, which new accounts have on by default and which
+refused DoMe's tax-off pages (cloud-api/DECISIONS.md 106 and 109). Not yet confirmed: the webhook deliveries in
+Stripe's log, the Billing page turning to Pro, cancelling through the Portal, a yearly plan and a top-up
+(`docs/LAUNCH_SETUP.md` §11A step 7). Production has no Stripe values, so billing there is **off**:
 nothing can be bought and everyone stays on Free. On staging and production the values come from the GitHub
 Environment through the Deploy button, which checks them before touching Fly (all seven or none, key and price-id
 shapes, no live key on staging), stores the two secrets in Fly, passes the five price ids, removes Stripe secrets
@@ -22,7 +27,7 @@ OIDC through `tools/dev-idp`, simulated agents/phones, `FakeStripe` signing its 
 Stripe does), `stripe-mock-validated` (requests and response fields checked by stripe-mock v0.206.0, Stripe's
 official mock API, started in CI with `-strict-version-check`: parameter names, types, enums and the API version the
 pinned SDK sends; it knows no account, so a price's existence and type, the account name Checkout needs, the
-`expires_at` window and the Portal configuration are not checked), `sandbox-provider-tested` (none yet),
+`expires_at` window and the Portal configuration are not checked), `sandbox-provider-tested` (against the founder's Stripe sandbox on staging, founder-reported; first: a Pro monthly Checkout, 2026-10-26),
 `not implemented`, `not yet verified`.
 
 ## 1. What exists now
@@ -40,7 +45,7 @@ pinned SDK sends; it knows no account, so a price's existence and type, the acco
 | Grace and downgrade selection | 7-day grace after a failed payment; `GET/PUT /v1/account/plan-selection` within 14 days of a downgrade | integration-tested (fake provider) |
 | Reconciler | Hourly pass in the API process; `dome-api --billing-reconcile` runs one pass by hand | integration-tested (fake provider) |
 | Account deletion | `BillingService.cancel_for_account_deletion()` with a `pending_deletions` retry | integration-tested (fake provider); the `DELETE /v1/account` route is **not implemented** |
-| Stripe adapter | `billing/stripe_provider.py` on the official `stripe` SDK 16.x (`*_async` methods, SDK retries off, 10 s timeout) | unit-tested against the SDK's own signature helper, object models and Stripe-shaped error answers (`test_billing_stripe_adapter.py`); stripe-mock-validated: every request with the service's own arguments, and the fields read back (`test_stripe_provider_mock.py`, CI); **sandbox-provider-tested: not yet** |
+| Stripe adapter | `billing/stripe_provider.py` on the official `stripe` SDK 16.x (`*_async` methods, SDK retries off, 10 s timeout) | unit-tested against the SDK's own signature helper, object models and Stripe-shaped error answers (`test_billing_stripe_adapter.py`); stripe-mock-validated: every request with the service's own arguments, and the fields read back (`test_stripe_provider_mock.py`, CI); **sandbox-provider-tested** for customer creation and a subscription Checkout (staging, 2026-10-26, founder-reported); Portal, top-up and the webhook path not yet |
 | Disputes, refunds, trials | Recorded as `ignored` with a `billing.needs_operator` warning (disputes, refunds); no trial is configured | **not implemented** |
 | PWA | Billing page states, pricing page "Available now" when `billing_enabled` (mobile-app, built separately) | unit-tested (component tests in `mobile-app`) |
 

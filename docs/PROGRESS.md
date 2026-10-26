@@ -2,6 +2,21 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-26 — First payment through DoMe: a test-mode Pro purchase on staging worked
+
+- After a staging Deploy of 2a6bd78 (Managed Payments off on every Checkout), the founder bought DoMe Pro monthly on
+  https://staging.domeremote.com with Stripe's test card 4242 in the "domeremote sandbox" and reports: "it worked".
+- First `sandbox-provider-tested` evidence for billing: customer creation, the hosted Checkout page and the payment
+  (docs/BILLING.md header and adapter row updated).
+- Still to confirm, from LAUNCH_SETUP §11A step 7:
+  - the Billing page shows **Pro**;
+  - Stripe's webhook deliveries to `/v1/billing/webhook` answered 200;
+  - cancelling through Manage subscription shows the end date.
+
+  Not yet tried: a yearly plan, Pro Plus (offered only while the AI assistant is on) and a top-up (needs Pro and the
+  assistant on).
+- Evidence: founder-reported on a real Stripe sandbox; nothing in live mode, and production billing stays off.
+
 ## 2026-10-26 — Cause of the staging checkout failure found: Stripe's Managed Payments; every Checkout now turns it off
 
 - Deploy #10 (run 40352386032, ec9862e) **succeeded**: staging runs the Stripe check, the migration time limits and
