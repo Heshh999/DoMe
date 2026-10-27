@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import time
+import types
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -527,7 +528,7 @@ async def test_worker_geometry_ops_announce_a_new_generation_and_a_failed_rebuil
     track = StubTrack()
     app._track = track  # noqa: SLF001
     app._geometry = {"gen": 1, "surface_index": 0, "width": 1280, "height": 720, "rotation": 0, "reserved": []}  # noqa: SLF001
-    app._source_spec = {"kind": "fake", "pattern": "synthetic", "fps": 5}  # noqa: SLF001
+    app._source_spec = {"kind": "fake", "pattern": "synthetic", "fps": 5, "preflight": {"detail": "busy"}}  # noqa: SLF001
     await app._handle({"op": "reserved", "surface_index": 1, "reserved": [{"x": 0, "y": 0, "w": 65535, "h": 9}]})  # noqa: SLF001
     await app._handle(  # noqa: SLF001
         {"op": "rebuild", "source": {"surface_index": 1, "width": 2560, "height": 1600, "rotation": 90}, "reserved": []}
@@ -540,6 +541,7 @@ async def test_worker_geometry_ops_announce_a_new_generation_and_a_failed_rebuil
     assert events[0]["surface_index"] == 1 and events[0]["reserved"][0]["h"] == 9 and events[0]["width"] == 1280
     assert (events[1]["width"], events[1]["height"], events[1]["rotation"]) == (1152, 720, 90)  # level 3.1, 16:10
     assert [(w, h) for _s, w, h in track.replaced] == [(1152, 720)]
+    assert "preflight" not in app._source_spec  # noqa: SLF001  # the start's verdict was about another monitor
     track.replaced[0][0].close()
     app._source_spec = {"kind": "ddagrab", "fps": 30}  # noqa: SLF001  # Desktop Duplication cannot open off Windows
     with pytest.raises(ProtocolError) as exc:
@@ -1166,61 +1168,78 @@ async def _pull(track: ScreenTrack, seconds: float) -> None:
         await asyncio.wait_for(track.recv(), 5)
 
 
+class _Scripted:
+    """Like PyAV's decode iterator (a generator): an item that is an exception is raised, and that raise FINISHES the
+    iterator, so every later ``next`` is StopIteration until the container hands out a fresh one."""
+
+    def __init__(self, items: list[Any]) -> None:
+        self.items = items  # shared with the container: a fresh iterator continues the script
+        self.dead = False
+
+    def __iter__(self) -> Any:
+        return self
+
+    def __next__(self) -> Any:
+        if self.dead or not self.items:
+            raise StopIteration
+        item = self.items.pop(0)
+        if isinstance(item, BaseException):
+            self.dead = True
+            raise item
+        return item
+
+    def close(self) -> None:
+        self.dead = True
+
+
 class _Container:
+    """A scripted stand-in for PyAV's InputContainer: ``decode`` hands out iterators over the same script."""
+
+    def __init__(self, items: list[Any] | None = None) -> None:
+        self.items = list(items or [])
+        self.decodes = 0
+        self.streams = types.SimpleNamespace(video=[object()])
+
+    def decode(self, _stream: Any) -> _Scripted:
+        self.decodes += 1
+        return _Scripted(self.items)
+
     def close(self) -> None:
         return None
 
 
 def _scripted_dda(monkeypatch: pytest.MonkeyPatch, scripts: list[list[Any]]) -> Any:
-    """A DdagrabSource whose graph is a scripted iterator per (re)open: an item that is an exception is raised."""
+    """A DdagrabSource whose graph is a scripted container per (re)open (:class:`_Container`)."""
     from dome_agent.screen.worker import capture_dda
 
     with monkeypatch.context() as m:
         m.setattr(sys, "platform", "win32")
         source = capture_dda.DdagrabSource(0, 64, 36, 30)
     opens: list[int] = []
-
-    class Scripted:
-        """Like PyAV's decode iterator: an error does not end it (EAGAIN is raised again and again)."""
-
-        def __init__(self, items: list[Any]) -> None:
-            self.items = list(items)
-
-        def __iter__(self) -> Any:
-            return self
-
-        def __next__(self) -> Any:
-            if not self.items:
-                raise StopIteration
-            item = self.items.pop(0)
-            if isinstance(item, BaseException):
-                raise item
-            return item
-
-        def close(self) -> None:
-            return None
-
-    def scripted(items: list[Any]) -> Any:
-        return Scripted(items)
+    containers: list[_Container] = []
 
     def open_() -> None:
         opens.append(1)
         if not scripts:
             raise ProtocolError("SCREEN_CAPTURE_UNAVAILABLE", "no graph", detail={"detail": "driver"})
-        source._container = _Container()  # noqa: SLF001
-        source._frames = scripted(scripts.pop(0))  # noqa: SLF001
+        container = _Container(scripts.pop(0))
+        containers.append(container)
+        source._container = container  # noqa: SLF001
+        source._frames = container.decode(None)  # noqa: SLF001
 
     source.open = open_
     source.opens = opens
+    source.containers = containers
     return source
 
 
 def test_a_still_desktop_is_not_access_lost_and_a_frame_resets_the_rebuild_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ddagrab with dup_frames=0 answers EAGAIN (PyAV's BlockingIOError) while nothing changes: that is None, never a
-    rebuild; access-lost errors rebuild the graph, and a frame in between resets the count, so a long session
-    survives any number of UAC prompts (each is a desktop switch)."""
+    """EAGAIN (PyAV's BlockingIOError: no frame yet, the first read of a fresh graph) is None, never a rebuild;
+    access-lost errors rebuild the graph, and a frame in between resets the count, so a long session survives any
+    number of UAC prompts (each is a desktop switch). The same still frame after a rebuild counts as a change (a new
+    graph starts afresh), so every reopen here yields one frame."""
     import errno
 
     frame = still_frame(64, 36)
@@ -1232,6 +1251,9 @@ def test_a_still_desktop_is_not_access_lost_and_a_frame_resets_the_rebuild_count
     source = _scripted_dda(monkeypatch, scripts)
     source.open()
     assert source.read() is None and source.read() is None and source.rebuilds == 0  # still: no rebuild
+    # each EAGAIN finished PyAV's generator: a fresh one over the same container, never a reopen (a dead generator
+    # would otherwise answer StopIteration at every read, for ever, with no error)
+    assert source.containers[0].decodes == 3 and len(source.opens) == 1
     got = 0
     for _ in range(40):
         out = source.read()
@@ -1264,3 +1286,20 @@ def test_a_reopen_that_fails_backs_off_and_does_not_end_capture_at_once(monkeypa
         for _ in range(10):
             source.read()
     assert source.rebuilds == capture_dda.REBUILD_LIMIT + 1
+
+
+def test_a_graph_that_ends_is_rebuilt_not_read_for_ever(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EOF (the decode iterator ends: StopIteration) is a failure like access lost — the graph is rebuilt and a frame
+    resets the count — never a source that silently answers None at every read."""
+    from dome_agent.screen.worker import capture_dda
+
+    frame = still_frame(64, 36)
+    source = _scripted_dda(monkeypatch, [[frame], [frame], [], [], [], []])
+    source.open()
+    assert source.read() is not None
+    assert source.read() is None and source.rebuilds == 1 and len(source.opens) == 2  # EOF: rebuilt
+    assert source.read() is not None and source.rebuilds == 0  # a frame from the new graph resets the count
+    with pytest.raises(ProtocolError) as exc:
+        for _ in range(10):
+            source.read()
+    assert exc.value.code == "SCREEN_CAPTURE_UNAVAILABLE" and source.rebuilds == capture_dda.REBUILD_LIMIT + 1

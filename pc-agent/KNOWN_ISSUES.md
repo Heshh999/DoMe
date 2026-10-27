@@ -104,7 +104,8 @@
     (a desktop process without a window), the first frame's size on scaled, rotated and HDR monitors, colours
     (libswscale's BT.601 conversion of the BGRA frame), the CPU cost of a full-resolution copy per changed frame at the
     desktop's refresh rate, and Windows' yellow border. Why Desktop Duplication failed on the founder's PC is still
-    unknown: the next diagnostics bundle names FFmpeg's reason (DECISIONS #90).
+    unknown: the next diagnostics bundle names FFmpeg's reason (DECISIONS #90, #92), the pre-flight's raw HRESULT
+    (#95) and the display hardware — adapters, outputs, remote session, GPU preference (#96).
 22. **Bar placement on scaled and multi-monitor PCs is written against the documentation only** (DECISIONS #79): the
     Tk thread is made per-monitor DPI aware (v2) so bar geometry is physical pixels, each bar's real rectangle is read
     with `GetWindowRect` / `MonitorFromWindow` and must lie on its monitor (else the start is refused and a live
@@ -135,34 +136,59 @@
 28. **The strict offer check accepts any `application` section whose protocol names SCTP** and leaves the finer
     SDP parsing to aiortc; an offer aiortc refuses after the strict check answers `SCREEN_OFFER_INVALID` with
     `reason: media` rather than a more specific reason.
-29. **The agent's monitor numbering is not checked against `ddagrab`'s `output_idx`.** The agent numbers monitors
-    primary first, then by position (`platform/windows/screen.py`), and passes that number to `ddagrab` as
-    `output_idx`, which counts the outputs of the DEFAULT graphics adapter only, as DXGI lists them (`ddagrab` has no
-    adapter option: DECISIONS #90). On a one-adapter PC the primary is normally output 0, and Phase 1 phones only ask
-    for the primary, but on a multi-monitor or hybrid-GPU PC the two numberings may differ, or the monitor may not be
-    on the default adapter at all ("Failed to enumerate DXGI output N", then the WGC fallback, which finds monitors by
-    rectangle): **not yet verified on a device**. Phase 2 ("Next screen") must map by the monitor's rectangle
-    (`IDXGIOutput::GetDesc`) before it offers other monitors.
+29. **`ddagrab`'s `output_idx` is now mapped through DXGI, on paper.** The agent numbers monitors primary first, then
+    by position (`platform/windows/screen.py`); `ddagrab`'s `output_idx` counts the outputs of the DEFAULT graphics
+    adapter as DXGI lists them (`ddagrab` has no adapter option: DECISIONS #90). Since 2026-10-26 the worker maps the
+    streamed monitor's rectangle to an output of the default adapter at open time and skips Desktop Duplication for a
+    monitor on another adapter (DECISIONS #93; the pure mapping is unit-tested). What only a PC can show: that
+    `IDXGIFactory1::EnumAdapters1(0)` is the adapter `D3D11CreateDevice(NULL)` picks on that PC (Windows reorders both
+    for a per-app GPU preference, which the bundle now reports), that `DXGI_OUTPUT_DESC.DesktopCoordinates` equals
+    `MONITORINFO.rcMonitor` on scaled and rotated monitors, and the ctypes COM calls themselves (vtable slots, IIDs and
+    structure layouts are asserted against the SDK on Linux only). When the lookup cannot answer, the surface index is
+    used as before.
 30. **The Screen view tkinter windows (grant window, consent window, bars) have no automated test that opens a real
     window.** (The bar controller's placement check and heartbeat are unit-tested against a fake tkinter since
     2026-10-22.)
     Their button logic (`GrantWindowModel`, `ConsentWindowModel`), the menu items, the fail-closed paths without a
     display and the agent's use of them through a fake UI are unit-tested; the windows themselves, `WS_EX_NOACTIVATE`,
     the display affinity and the hotkey are **not yet verified on a device** (this environment has no Tk).
-31. **A capture source that cannot open is reported only after DTLS** (DECISIONS #82): no frame may exist before the
-    phone's certificate is verified, so `ddagrab` / WGC open in the track, after `connected`. A PC whose duplication is
-    busy (another capture app) or unsupported therefore answers the start, shows the bars, connects and then ends
-    `capture_failed` ("Your PC's screen sharing stopped unexpectedly"), instead of refusing the start with
-    `SCREEN_CAPTURE_UNAVAILABLE{busy|unsupported_display}`. The worker's `error` still names the detail and the
-    capture's own reason in the agent's log (DECISIONS #90). A pre-flight that checks the duplication without
-    capturing a frame is a candidate for the device round.
-32. **Desktop Duplication's still-desktop behaviour is not verified on a device** (DECISIONS #83): `DdagrabSource`
-    treats `av.error.BlockingIOError` (EAGAIN) as "nothing new" and returns None, but if PyAV's lavfi read blocks
-    instead, the 1 fps floor cannot fire while the desktop is still and the phone's stall detector would re-session.
-    Device checklist (`README.md`): a still desktop for 10 s keeps ≥ 1 fps with no rebuild; one UAC prompt pauses
-    rather than ends. If lavfi blocks, switch to PyAV's `Graph` pull API (ADR-0002 D4).
+31. **A capture source that cannot open is reported only after DTLS — now with a pre-flight before the bars**
+    (DECISIONS #82, #95). No frame may exist before the phone's certificate is verified, so `ddagrab` / WGC still open in
+    the track, after `connected`. Since 2026-10-26 the start runs a bounded DXGI probe first (the same device and output
+    `ddagrab` would use, one `DuplicateOutput1` released at once, no frame, on a thread of its own): a PC whose D3D11
+    device cannot be created is refused `driver` before any bar (no capture path works without one); a duplication that
+    is busy, unsupported for the display or refused in a remote session is NOT refused — the worker is told so (the
+    source spec's `preflight`), skips Desktop Duplication and opens Windows.Graphics.Capture at once, the HRESULT's name
+    in its fallback warning (DECISIONS #95, revised). What remains: the probe is advice (past 500 ms, unable to run,
+    still running from a previous start, or on a replacement / takeover the start proceeds as before); a failure the
+    probe cannot see (the `scale_d3d11` video processor, a frame that never comes) and a WGC start that fails too (a
+    Remote Desktop session, if WGC does not work there either) still end `capture_failed` after the bars with the
+    worker's reason in the agent's log (DECISIONS #90, #92). The HRESULT → detail mapping is unit-tested; whether a
+    hybrid-GPU PC answers `DXGI_ERROR_UNSUPPORTED` to `DuplicateOutput1` from a desktop process, whether WGC then
+    streams it, and whether the probe fits 500 ms with a cold driver, is **not yet verified on a device**.
+32. **Desktop Duplication on a still desktop: the premise was wrong, the fix is not device-verified** (DECISIONS #83,
+    revised by #94). `vsrc_ddagrab.c` with `dup_frames=0` loops until the desktop changes, so the `lavfi` read blocked
+    and `av.error.BlockingIOError` never came. The source now asks for `dup_frames=1` and drops re-sent frames by a
+    content signature, and `av.open` (whose `probe_output_format` also waits for a real frame) runs on a helper thread
+    that owns the container until it is handed over. Device checklist (`README.md`): a still desktop for 10 s keeps
+    ≥ 1 fps with no rebuild; the picture appears within a second of a start on a still desktop (does DXGI deliver the
+    current desktop as the first frame after `DuplicateOutput1`, or only after a change? the bars are drawn before the
+    duplication starts, so a start may need the cursor to move); the CPU cost of the signature at 30 fps on a 4K
+    monitor (about 0.4 ms per 1280x720 frame here); one UAC prompt pauses rather than ends. If the first frame does
+    not come on a still desktop, the agent must nudge the desktop (repaint a bar) after the worker connects.
 33. **Current Windows builds do not include Screen view** (DECISIONS #86): they are made without the `screen` extra, so
     they still announce protocol 1.4 (pairing needs `pc_key_mac`) but refuse every start with
     `ACTION_UNAVAILABLE{reason: screen_view_not_included}` before any window or bar, and the tray shows "Screen view:
     not in this version of DoMe". A build with the shipping LGPL wheel (`.github/workflows/ffmpeg-lgpl.yml`, never run)
     is what turns it on.
+34. **The DXGI, D3D11 and DisplayConfig code is written against the SDK, not run on a device** (DECISIONS #93, #95,
+    #96; `platform/windows/dxgi.py`, `displayconfig.py`). COM is driven through ctypes by vtable slot; the slots, the
+    IIDs, the structure layouts (fixed-width fields, UTF-16 `WCHAR` arrays) and the HRESULT constants are asserted on
+    Linux against the SDK headers and documentation, and every entry point is failure-tolerant (a wrong slot would most
+    likely raise or return a failing HRESULT, which the callers treat as "no answer": the pre-flight lets the start
+    proceed, the output lookup uses the surface index, the bundle records `{"error": ...}`). A slot that happened to
+    resolve to another method with a compatible signature could instead return a wrong answer; the worker's
+    `--self-test` (`dxgi_outputs`: adapter and output counts) on the installer workflow's Windows runner and the next
+    device bundle (`hardware.dxgi_adapters` next to `hardware.monitors`) are the checks. Not device-tested either: the
+    `UserGpuPreferences` value format and whether the advanced-colour query needs a newer Windows than the probe's
+    `IDXGIOutput5` (Windows 10 1703).

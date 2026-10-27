@@ -632,7 +632,7 @@ class TrayUI:
 
             text = _status_text(self.agent)
             try:
-                path = write_bundle(self.settings, self.agent.status())
+                path = write_bundle(self.settings, self.agent.status(), platform=self.agent.platform)
             except Exception as exc:  # noqa: BLE001 - a full disk must not take the menu down
                 log.warning("diagnostics bundle not written", error=exc.__class__.__name__)
                 self.notify("DoMe", f"Could not save the diagnostics file ({exc.__class__.__name__}).")

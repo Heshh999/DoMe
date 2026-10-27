@@ -2,6 +2,66 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-27 — Device round 1 answered: touchpad latency and Screen view capture, from the founder's diagnostics
+
+- **What the founder saw (2026-10-26, Windows 11, build fa8de22, iPhone, staging).** Pairing failed until both devices
+  used the same account (two sign-in methods had made two accounts); then it worked. The touchpad was "extremely
+  delayed"; Screen view never showed a picture. The diagnostics bundle (`dome-diagnostics-20261026T180235Z`, redacted)
+  showed 30–60 % of input batches dropped `INPUT_STALE`, two input sessions ending `lease_expired` while the phone
+  still sent, and every Screen view start ending `capture_failed` 1 ms after "Desktop Duplication unavailable; trying
+  Windows.Graphics.Capture", with the WebRTC path already connected (`path: direct`).
+- **Investigation (three read-only analysts on the bundle and the code; skeptic and judge stages were cut off by the
+  session limit).** Verified: the relay made five SQL statements (8–9 round trips to Neon) per batch and processes a
+  socket's frames one after another, so at the phone's send rate a queue grew every swipe; the phone sent one batch
+  per animation frame (~60/s) against a 40/s budget (burst 80), so after ~4 s of motion one frame in three was refused
+  `RATE_LIMITED`; a batch dropped as stale did not renew the 3 s lease; the relay stamped `received_at` after the
+  frame had waited in its queue, hiding relay backlog from the agent's leg estimate; the `unsupported_display` label
+  was an artefact (PyAV quotes the whole graph, which contains `output_idx`, and installs a no-op log callback, so
+  FFmpeg's real reason never existed); the WGC fallback imported a package that was never a dependency;
+  `ddagrab`'s `output_idx` counts the default adapter's outputs, not DoMe's monitors; with `dup_frames=0` a read
+  blocks on a still desktop. The regression "a couple of days ago" came from the environment (database distance,
+  usage), not from the Screen view code. Reports: scratch `root-causes/{latency,capture,machine}/report.md`.
+- **Fixes, three rounds, all pushed:**
+  - **Relay (0d9fd9b):** a per-socket input authorization cache (1 s TTL, invalidated at once on every grant, plan,
+    PC and revocation path the relay sees); ~2 ms per batch and no SQL on a steady stream. Measured with the
+    integration harness and a latency-injecting proxy: phone→PC delay 1.2 s typical / 2.4 s worst before, 3 ms after,
+    at a 3.9 ms database round trip; relay CPU share 0.54 → 0.20. 19 tests.
+  - **PC (e65bbad):** Windows.Graphics.Capture fallback rebuilt against windows-capture 2.0.1's real API (Rust module
+    loaded by file so OpenCV/NumPy and their second FFmpeg are never shipped; `start_free_threaded`; row pitch; monitor
+    order; a `close()` that stops); the installer build's self-test now fails if the frozen app cannot load it
+    (run 40381517644 passed); FFmpeg's own error lines captured and classified; `INPUT_STALE` lines name the late leg.
+  - **Round 2 (this commit), built by three agents, reviewed by three adversarial reviewers (15 findings: 3 major,
+    all fixed) and verified by a fixer:**
+    - *PC:* a stale batch renews the lease once per new sequence number (a replayed one no longer can, the major
+      finding); `ddagrab` failures classified from exception class/errno and captured FFmpeg lines, EBUSY by errno 16;
+      the monitor is mapped to a DXGI output by HMONITOR through a new `platform/windows/dxgi.py` and another-adapter
+      monitors go straight to WGC; `dup_frames=1` with duplicate frames dropped by CRC-32 signature and `av.open` on a
+      helper thread (1.5 s wait), so a still desktop cannot block the worker; a bounded (500 ms, own thread)
+      pre-flight `DuplicateOutput1` probe refuses a start only when no D3D11 device exists and otherwise hands the
+      HRESULT to the fallback decision (the reviewers' second major: the first version refused the very cases WGC
+      serves); the diagnostics bundle gains a `hardware` section (DXGI adapters and outputs without PCI ids or monitor
+      names, remote-session flag, Windows build, GPU preference word, advanced-colour state) and per-session input
+      counters; WGC no longer forces `cursor_capture` (fails on Windows 10 before 1903). 1190 passed, both mypy
+      configurations, lock checks.
+    - *Phone:* the touchpad flushes at most `input_batches_per_second` (a per-second window guard, so 30/s at 60 Hz
+      and 40/s at 120 Hz), coalescing motion across frames by the existing rules, with time-based back-pressure
+      (doubles the interval when the oldest unacknowledged batch is more than half the age budget late, and on an
+      `INPUT_STALE` notice) and recovery; the signing identity is cached in memory and dropped on sign-out, forget,
+      corruption and another tab's upgrade. 1454 passed; mutation runs against the new tests.
+    - *Relay:* a per-socket read-ahead task stamps every frame on arrival (`relay.received_at` is now true), an
+      input batch that waited past the age budget behind a newer one is dropped there with one `INPUT_STALE` per
+      second, and a once-per-second `relay.input_timing` log line (counts, auth/verify/forward/lag ms; no content)
+      lets the next staging bundle attribute delay. 606 passed. `pool_recycle` stays 600 (DECISIONS 114).
+    - End to end: `tests/test_e2e_input.py` (real agent process, relay, PostgreSQL) 3 passed.
+- **Open:** two contract deviations for the next contract round (cloud-api CONTRACT_ISSUES 24, pc-agent 26); whether
+  WGC works in a Remote Desktop session; the full `tests/` suite was not run this round; `controllerKey.ts`'s
+  `blocking()` never closes the connection (pre-existing, one line). Only a real Windows PC can show the DXGI
+  mapping, the pre-flight HRESULTs, `dup_frames=1` read behaviour, and that WGC streams a picture.
+- **Next (founder):** Deploy staging, install the new `DoMe-Setup-0.1.0+<this commit>` over the current one (link and
+  pairing survive), re-test the touchpad and Screen view, send tray → Diagnostics… and the three hardware answers
+  (laptop/desktop, GPU names in Task Manager, which GPU the monitor is on).
+- Evidence: unit- and integration-tested on Linux; nothing from this round on a device yet.
+
 ## 2026-10-26 — First payment through DoMe: a test-mode Pro purchase on staging worked
 
 - After a staging Deploy of 2a6bd78 (Managed Payments off on every Checkout), the founder bought DoMe Pro monthly on

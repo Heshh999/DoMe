@@ -671,3 +671,45 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     Deploy pointer only for `auth` and `bad_request`, as the Deploy check cannot see ids DoMe saved earlier).
     In live mode and with billing off it never appears, so a customer never sees a reason code; only the five
     known reasons are ever shown, never text from the server.
+
+79. **The touchpad stream is paced to the contract, and slows itself when the PC falls behind.** (Device
+    round, 2026-10-26: 31–52 % of touchpad batches dropped INPUT_STALE against staging, one session ended by
+    its own lateness; the latency root-cause report.) The client flushed one signed batch per animation
+    frame — 60/s on an iPhone, 120/s on ProMotion — against the relay's `limits.input_batches_per_second`
+    = 40 sustained (`plans.json input_rate_limit`, burst 80): after four seconds of motion one frame in three
+    came back RATE_LIMITED, and every frame fed a relay whose service time was already longer than a frame.
+    Now (`lib/input.ts`):
+    - Flushes still ride `requestAnimationFrame`, so the events of one frame always travel together, but a
+      frame that comes sooner than `FLUSH_INTERVAL_MS` = 1000 / `input_batches_per_second` after the last
+      flush re-arms instead of flushing when the queue holds only motion (`pointer_move`, `pointer_move_to`,
+      `pointer_scroll`, `pointer_wheel`), which keeps coalescing by the rules that already applied within a
+      frame: adjacent moves sum (clamped), consecutive `move_to` keep the last, nothing else is merged, order
+      and count are kept, 64 per batch. Wheel and scroll events are not summed: neither the contract nor the
+      PC's `coalesce_events` does, and Screen view interleaves every wheel with a `move_to` anyway. The
+      effective rate is the largest frame multiple under the budget: 40/s on a 120 Hz display, 30/s on 60 Hz
+      (the report's queue model puts the relay's safe service time at ~33 ms per batch for 30/s, twice that
+      for 60/s). A 2 ms slack absorbs frame-timestamp jitter so that 3 × 8.33 ms counts as 25; the slack alone
+      would let a cadence just over the interval (23.5 ms frames) send 42/s and drain the relay's burst in half a
+      minute, so the gate has a second guard (review): motion also waits while `input_batches_per_second` flushes
+      went out within the last second, whatever the cadence.
+    - A button, key, text or shortcut in the queue flushes on the very next frame, taking any held motion
+      along in order, so a tap never waits for the gate; `flush()` (Screen view taps, Compose and Send, Stop
+      Input) still sends at once and restarts the interval.
+    - Back-pressure from the acks the PC already sends (≤ 4/s, `last_seq`): the client remembers when each
+      batch left and judges the oldest unacknowledged one against the session's fastest batch-to-ack round
+      trip — the PC's own stale rule is "`input_age_budget_ms` slower than the fastest recent batch". More
+      than half the budget late → `congested`: the interval doubles (20/s or 15/s) until the excess is back
+      under a quarter of the budget. A constant network delay sits in the floor and never counts; the ack
+      cadence (a quarter second) stays under the threshold. The relay's own drops leave no trace in the acks
+      (cloud-api DECISIONS #112: it drops a batch that waited its age budget behind a newer one and forwards
+      only the newest, whose ack settles the dropped ones as if acknowledged), so an `INPUT_STALE` notice —
+      from the relay (`ref_pc_id` only) or from the PC — holds `congested` for 1.5 s after the last one
+      (review); notices come at most once a second while drops continue. The flag is in the session state and
+      the diagnostics bundle (`input.congested`); the pill does not show it yet (KNOWN_ISSUES 39).
+    - The signer no longer costs an IndexedDB read and a kid derivation per batch: `lib/controllerKey.ts`
+      holds the identity (key pair, JWK, kid) in memory after its first use — dropped on sign-out, "Forget
+      this installation", a corrupt record and another tab's schema upgrade, and a failed load is never kept
+      — and `lib/signing.ts::signInputBatchWithKid` signs with the derived kid: the shared library's envelope
+      and schema check, one `sign` per batch (the shared `signPayload` has no way to pass a kid,
+      CONTRACT_ISSUES 21). The key stays non-extractable; `test/signing.test.ts` has the shared verifier
+      accept the result. Commands and the hello proof keep the shared signer and share the cached pair.

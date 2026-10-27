@@ -5,8 +5,12 @@
  * semantics); the PC answers with the session id, lease and what the grant allows. From then on
  * events travel as `controller_input_batch` frames: ≤ max_batch_events per batch, `seq` strictly
  * increasing per session, adjacent pointer motion summed before signing (never across a button,
- * scroll, text, key or shortcut), one flush per animation frame, an empty keepalive batch about every
- * second while nothing else was sent. `input_ack` frames report Windows acceptance (not an application
+ * scroll, text, key or shortcut), flushed on animation frames but never more often than
+ * limits.input_batches_per_second allows — a frame that comes too early, or one that would be the budget's
+ * next batch within a second, keeps coalescing motion into the next one, while a button, key, text or
+ * shortcut always goes on the next frame — spaced out further while the PC's acks lag or the relay or the
+ * PC reports INPUT_STALE (`congested`, DECISIONS 79), an empty keepalive batch about every second while
+ * nothing else was sent. `input_ack` frames report Windows acceptance (not an application
  * effect); `input_session` frames end or suspend the session with the agent's reason. Leaving the
  * screen, Stop Input, the page being hidden, a PC switch, sign-out or a dropped socket stops the
  * session; nothing queued is ever replayed afterwards.
@@ -23,10 +27,12 @@
  * (SCREEN_SESSION_REQUIRED) or with a stale `gen` (SCREEN_GEOMETRY_CHANGED): those rejections drop the batch and keep
  * the session, exactly like the INPUT_* rejections, and arrive as `error` frames naming the input session.
  */
-import { buildInputBatchPayload, LIMITS, ProtocolError, signInputBatch, type InputEvent, type relayFrames } from "@dome/protocol";
+import { buildInputBatchPayload, LIMITS, ProtocolError, type InputEvent, type relayFrames } from "@dome/protocol";
 
 import type { CommandRecord, Identity } from "./commands.ts";
+import type { ControllerIdentity } from "./controllerKey.ts";
 import { errorSummary, log } from "./log.ts";
+import { signInputBatchWithKid } from "./signing.ts";
 
 export type { InputEvent };
 export type ForegroundApp = relayFrames.ForegroundApp;
@@ -68,6 +74,11 @@ export interface InputSessionState {
   lastSentAt: number | null;
   /** Milliseconds since the last ack while live, re-evaluated when `tick()` runs. */
   batchesSent: number;
+  /**
+   * The PC's acks lag the batches sent by more than half its age budget beyond this session's fastest round trip:
+   * flushes are spaced out until they catch up (DECISIONS 79).
+   */
+  congested: boolean;
 }
 
 export const EMPTY_INPUT_STATE: InputSessionState = {
@@ -91,6 +102,7 @@ export const EMPTY_INPUT_STATE: InputSessionState = {
   startedAt: null,
   lastSentAt: null,
   batchesSent: 0,
+  congested: false,
 };
 
 export interface InputTimers {
@@ -108,7 +120,8 @@ export interface InputClientDeps {
   /** Resolves when the record is terminal or flagged "no answer" (null: dropped by a reset). */
   onceSettled(commandId: string): Promise<CommandRecord | null>;
   identity(): Identity | null;
-  keyPair(): Promise<CryptoKeyPair>;
+  /** The controller identity held in memory (lib/controllerKey.ts): a batch costs one `sign`, no storage read and no kid derivation. */
+  signingKey(): Promise<ControllerIdentity>;
   connected(): boolean;
   onChange(state: InputSessionState): void;
   timers?: InputTimers;
@@ -123,6 +136,30 @@ export type StopReason = "stopped" | "leave" | "hidden" | "pc_switch" | "sign_ou
 /** Keepalive cadence: the lease is 3 s; an empty batch roughly every second keeps it renewed. */
 export const KEEPALIVE_MS = 1000;
 const ACK_WAIT_MS = 3000;
+/**
+ * Flushes ride animation frames but never come closer together than the relay's sustained budget allows
+ * (limits.input_batches_per_second; above it the relay answers RATE_LIMITED and the batch is lost, DECISIONS 79):
+ * a frame that comes too early keeps coalescing motion into the next one.
+ */
+export const FLUSH_INTERVAL_MS = 1000 / LIMITS.input_batches_per_second;
+/** Frame timestamps jitter by a millisecond or two; without this slack a 120 Hz display (3 × 8.33 ms) would flush every fourth frame instead of every third. */
+const FRAME_SLACK_MS = 2;
+/**
+ * The gate's second guard: the slack alone lets a frame cadence just over the interval (23.5 ms) send 42/s, so motion
+ * also waits while the budget's worth of batches went out within this window, whatever the cadence.
+ */
+const RATE_WINDOW_MS = 1000;
+/** Back-pressure: the flush interval while the PC's acks lag (`congested`), as a multiple of FLUSH_INTERVAL_MS. */
+const CONGESTED_INTERVAL_FACTOR = 2;
+/**
+ * An INPUT_STALE notice (from the PC, or from the relay dropping a batch that waited its age budget behind a newer one,
+ * DECISIONS 79) keeps `congested` on this long after the last one: the relay forwards only the newest batch, so the PC's
+ * ack for it settles the dropped ones as if acknowledged and the lag measure alone would never see them. Notices come
+ * at most once a second while drops continue.
+ */
+const STALE_HOLD_MS = 1500;
+/** Unacknowledged batches remembered for the lag measure: a batch older than its lifetime has expired everywhere, so the table stays bounded even if no ack ever comes. */
+const SENT_AT_MAX = LIMITS.input_batches_per_second * LIMITS.input_batch_lifetime_seconds;
 
 const globalTimers: InputTimers = {
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -146,6 +183,11 @@ const MOTION_MAX = LIMITS.input_motion_max;
 
 export function needsPointer(ev: InputEvent): boolean {
   return ev.type === "pointer_move" || ev.type === "pointer_button" || ev.type === "pointer_scroll" || ev.type === "pointer_move_to" || ev.type === "pointer_wheel";
+}
+
+/** Events a too-early frame may hold back: motion and scrolling keep arriving while the finger moves. A button, key, text or shortcut never waits for the gate. */
+function isMotion(ev: InputEvent): boolean {
+  return ev.type === "pointer_move" || ev.type === "pointer_move_to" || ev.type === "pointer_scroll" || ev.type === "pointer_wheel";
 }
 
 /**
@@ -186,6 +228,16 @@ export class InputSessionClient {
   private droppedBaseline = 0;
   private ackWaiters: Array<{ seq: number; droppedBefore: number; resolve: (r: AckOutcome) => void; timer: unknown }> = [];
   private startNonce = 0;
+  /** When the last flush went out (ms of `now()`); the rate gate measures from here. */
+  private lastFlushAt = 0;
+  /** When the flushes of the last RATE_WINDOW_MS went out (ms of `now()`, oldest first). */
+  private flushTimes: number[] = [];
+  /** When each batch still unacknowledged left this phone (seq → ms; insertion order is seq order). Acks prune it. */
+  private sentAt = new Map<number, number>();
+  /** Fastest batch-to-ack round trip seen this session (ms): the baseline the pipeline's lag is judged against, as the PC's own age estimator does. */
+  private lagFloor = Infinity;
+  /** When the last INPUT_STALE notice arrived (ms of `now()`); -Infinity when none did this session. */
+  private staleAt = -Infinity;
 
   constructor(deps: InputClientDeps) {
     this.deps = deps;
@@ -220,7 +272,7 @@ export class InputSessionClient {
     if (this.state.phase === "starting") return this.state;
     const nonce = ++this.startNonce;
     this.clearTimers();
-    this.pending = [];
+    this.discardQueue();
     this.set({ ...EMPTY_INPUT_STATE, phase: "starting", pcId });
     if (!this.deps.connected()) {
       this.set({ phase: "failed", problem: { code: "PC_RECONNECTING" } });
@@ -279,7 +331,7 @@ export class InputSessionClient {
     this.startNonce += 1; // a start in flight must not resurrect the session
     const { phase, pcId, sessionId } = this.state;
     this.clearTimers();
-    this.pending = [];
+    this.discardQueue();
     this.resolveWaiters("ended");
     if (phase === "idle") return;
     this.set({ ...EMPTY_INPUT_STATE, pcId, phase: "idle" });
@@ -301,9 +353,9 @@ export class InputSessionClient {
     if (this.state.phase !== "live" && this.state.phase !== "starting" && this.state.phase !== "suspended") return;
     this.startNonce += 1;
     this.clearTimers();
-    this.pending = [];
+    this.discardQueue();
     this.resolveWaiters("ended");
-    this.set({ phase: "ended", endReason: "controller_disconnected", problem: { code: "PC_RECONNECTING" } });
+    this.set({ phase: "ended", endReason: "controller_disconnected", problem: { code: "PC_RECONNECTING" }, congested: false });
     log.info("input.session_connection_lost");
   }
 
@@ -329,13 +381,40 @@ export class InputSessionClient {
     const schedule = this.deps.scheduleFrame ?? defaultScheduleFrame;
     this.frameHandle = schedule(() => {
       this.frameHandle = null;
-      void this.flush();
+      this.onFrame();
     });
   }
 
   /**
+   * One animation frame. Motion alone waits when the frame comes sooner than the flush interval after the last flush,
+   * or when the budget's worth of batches already went out within the last second (the next frame re-checks,
+   * coalescing meanwhile); anything discrete in the queue goes out now, so a tap or a key is never held back by the
+   * gate (at most one frame).
+   */
+  private onFrame(): void {
+    if (this.state.phase !== "live" || this.pending.length === 0) return;
+    const now = this.now().getTime();
+    this.updateCongestion(now);
+    const interval = FLUSH_INTERVAL_MS * (this.state.congested ? CONGESTED_INTERVAL_FACTOR : 1);
+    const early = now - this.lastFlushAt < interval - FRAME_SLACK_MS || this.recentFlushes(now) >= LIMITS.input_batches_per_second;
+    if (early && this.pending.every(isMotion)) {
+      this.scheduleFlush();
+      return;
+    }
+    void this.flush();
+  }
+
+  /** Flushes within the last RATE_WINDOW_MS, older ones forgotten. */
+  private recentFlushes(now: number): number {
+    while (this.flushTimes.length > 0 && this.flushTimes[0]! <= now - RATE_WINDOW_MS) this.flushTimes.shift();
+    return this.flushTimes.length;
+  }
+
+  /**
    * Sign and send everything queued, in order, as batches of at most maxBatchEvents. Resolves with
-   * the seq of the last batch sent (null when nothing was queued or the session is not live).
+   * the seq of the last batch sent (null when nothing was queued or the session is not live). Sends at
+   * once, regardless of the rate gate (Screen view taps, Compose and Send, Stop Input), and restarts
+   * the gate's interval.
    */
   flush(): Promise<number | null> {
     if (this.frameHandle !== null) {
@@ -343,6 +422,9 @@ export class InputSessionClient {
       this.frameHandle = null;
     }
     if (this.state.phase !== "live" || this.pending.length === 0) return Promise.resolve(null);
+    this.lastFlushAt = this.now().getTime();
+    this.recentFlushes(this.lastFlushAt);
+    this.flushTimes.push(this.lastFlushAt);
     const events = coalesceMotion(this.pending);
     this.pending = [];
     const batches: InputEvent[][] = [];
@@ -372,8 +454,8 @@ export class InputSessionClient {
       const seq = this.state.seq + 1;
       const payload = buildInputBatchPayload({ accountId: identity.accountId, controllerId: identity.controllerId, targetPcId: pcId, inputSessionId: sessionId, seq, events, now: this.now() });
       try {
-        const pair = await this.deps.keyPair();
-        const envelope = await signInputBatch(pair.privateKey, pair.publicKey, payload);
+        const { keyPair, kid } = await this.deps.signingKey();
+        const envelope = await signInputBatchWithKid(keyPair.privateKey, kid, payload);
         if (nonce !== this.startNonce || this.state.phase !== "live") return null;
         this.deps.sendBatch({ type: "input_batch", pc_id: pcId, envelope });
       } catch (e) {
@@ -381,7 +463,13 @@ export class InputSessionClient {
         if (e instanceof ProtocolError && e.code === "PC_RECONNECTING") this.onConnectionLost();
         return null;
       }
-      this.set({ seq, lastSentAt: this.now().getTime(), batchesSent: this.state.batchesSent + 1 });
+      const sentAt = this.now().getTime();
+      this.sentAt.set(seq, sentAt);
+      for (const old of this.sentAt.keys()) {
+        if (this.sentAt.size <= SENT_AT_MAX) break;
+        this.sentAt.delete(old);
+      }
+      this.set({ seq, lastSentAt: sentAt, batchesSent: this.state.batchesSent + 1 });
       return seq;
     };
     const p = this.chain.then(run, run);
@@ -416,7 +504,15 @@ export class InputSessionClient {
   private onAck(frame: relayFrames.AgentInputAck): boolean {
     if (!this.state.sessionId || frame.input_session_id !== this.state.sessionId) return false;
     const ack: InputAckSummary = { lastSeq: frame.last_seq, acceptedEvents: frame.accepted_events, droppedEvents: frame.dropped_events, at: frame.at, receivedAt: this.now().getTime() };
+    // Flow control (DECISIONS 79): the acknowledged batch's round trip refines the floor; everything up to it is settled.
+    const sent = this.sentAt.get(ack.lastSeq);
+    if (sent !== undefined) this.lagFloor = Math.min(this.lagFloor, ack.receivedAt - sent);
+    for (const seq of this.sentAt.keys()) {
+      if (seq > ack.lastSeq) break;
+      this.sentAt.delete(seq);
+    }
     this.set({ lastAck: ack, heldButtons: [...frame.held_buttons], heldKeys: [...frame.held_keys] });
+    this.updateCongestion(ack.receivedAt);
     const still: typeof this.ackWaiters = [];
     for (const w of this.ackWaiters) {
       if (ack.lastSeq >= w.seq) {
@@ -436,11 +532,11 @@ export class InputSessionClient {
     }
     if (frame.event === "started") return true;
     this.clearTimers();
-    this.pending = [];
+    this.discardQueue();
     this.startNonce += 1;
     this.resolveWaiters("ended");
     const problem = frame.event === "suspended" ? { code: "INPUT_SUSPENDED" } : { code: endCode(frame.reason) };
-    this.set({ phase: frame.event === "suspended" ? "suspended" : "ended", endReason: frame.reason, holdsReleased: frame.holds_released, problem, heldButtons: [], heldKeys: [] });
+    this.set({ phase: frame.event === "suspended" ? "suspended" : "ended", endReason: frame.reason, holdsReleased: frame.holds_released, problem, heldButtons: [], heldKeys: [], congested: false });
     log.info("input.session_" + frame.event, { reason: frame.reason, holds_released: frame.holds_released });
     return true;
   }
@@ -460,15 +556,15 @@ export class InputSessionClient {
     log.info("input.batch_rejected", { code });
     if (code === "INPUT_SESSION_EXPIRED" || code === "INPUT_SESSION_REQUIRED" || code === "PC_OFFLINE" || code === "PC_RECONNECTING") {
       this.clearTimers();
-      this.pending = [];
+      this.discardQueue();
       this.startNonce += 1;
       this.resolveWaiters("ended");
-      this.set({ phase: "ended", problem: { code }, endReason: this.state.endReason ?? (code === "INPUT_SESSION_EXPIRED" ? "lease_expired" : "controller_disconnected") });
+      this.set({ phase: "ended", problem: { code }, endReason: this.state.endReason ?? (code === "INPUT_SESSION_EXPIRED" ? "lease_expired" : "controller_disconnected"), congested: false });
     } else if (code === "INPUT_SUSPENDED") {
       this.clearTimers();
-      this.pending = [];
+      this.discardQueue();
       this.resolveWaiters("ended");
-      this.set({ phase: "suspended", problem: { code }, endReason: "backpressure" });
+      this.set({ phase: "suspended", problem: { code }, endReason: "backpressure", congested: false });
     } else if (code === "INPUT_NOT_PERMITTED") {
       this.resolveWaiters("dropped");
       this.set({ problem: { code } });
@@ -478,6 +574,11 @@ export class InputSessionClient {
       // the batch was dropped, the session continues; the UI shows the notice.
       this.resolveWaiters("dropped");
       this.set({ problem: { code } });
+      if (code === "INPUT_STALE") {
+        // the stream is late somewhere (the PC's dispatch, or the relay's queue, whose drops no ack ever shows): slow down
+        this.staleAt = this.now().getTime();
+        this.updateCongestion(this.staleAt);
+      }
     }
     return inputCode;
   }
@@ -519,6 +620,37 @@ export class InputSessionClient {
     this.ackWaiters = [];
   }
 
+  /** Drop everything queued and the flow-control memory of a session that is over or restarting; nothing is ever replayed. */
+  private discardQueue(): void {
+    this.pending = [];
+    this.sentAt.clear();
+    this.lagFloor = Infinity;
+    this.lastFlushAt = 0;
+    this.flushTimes = [];
+    this.staleAt = -Infinity;
+  }
+
+  /**
+   * Back-pressure (DECISIONS 79). The oldest batch still unacknowledged says how long the pipeline is. The PC drops a
+   * batch once it is input_age_budget_ms slower than the fastest recent one, so once that batch has been out for more
+   * than half the budget beyond this session's fastest round trip, flushes are spaced out, until the excess is back
+   * under a quarter of the budget. The PC acks at most four times a second (rules.input_sessions (4)), so a quarter
+   * second of lag is ordinary and never trips this; a constant network delay sits in the floor and does not either.
+   * An INPUT_STALE notice holds the flag for STALE_HOLD_MS whatever the lag says: the relay's own drops leave no trace
+   * in the acks (it forwards the newest batch, whose ack settles the ones it dropped).
+   */
+  private updateCongestion(now: number): void {
+    const oldest = this.sentAt.values().next();
+    const lag = oldest.done ? 0 : now - oldest.value;
+    const excess = lag - (this.lagFloor === Infinity ? 0 : this.lagFloor);
+    const budget = this.state.ageBudgetMs;
+    const staleNotice = now - this.staleAt < STALE_HOLD_MS;
+    const congested = staleNotice || (this.state.congested ? excess > budget / 4 : excess > budget / 2);
+    if (congested === this.state.congested) return;
+    log.info(congested ? "input.flow_congested" : "input.flow_recovered", { lag_ms: Math.round(lag), floor_ms: this.lagFloor === Infinity ? null : Math.round(this.lagFloor), outstanding: this.sentAt.size, stale_notice: staleNotice });
+    this.set({ congested });
+  }
+
   private clearTimers(): void {
     if (this.keepaliveHandle !== null) this.timers.clearInterval(this.keepaliveHandle);
     this.keepaliveHandle = null;
@@ -530,7 +662,7 @@ export class InputSessionClient {
   reset(): void {
     this.startNonce += 1;
     this.clearTimers();
-    this.pending = [];
+    this.discardQueue();
     this.resolveWaiters("ended");
     this.set({ ...EMPTY_INPUT_STATE });
   }

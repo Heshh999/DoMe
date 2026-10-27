@@ -8,7 +8,9 @@ orientation comes from ``EnumDisplaySettingsW`` (``dmDisplayOrientation``), 0 wh
 
 The Windows.Graphics.Capture fallback (``windows-capture``) numbers monitors differently: one-based, in the raw
 ``EnumDisplayMonitors`` order. :meth:`WindowsScreen.capture_position` finds the streamed monitor in that order
-(:func:`capture_order_position`, pure and unit-tested on Linux).
+(:func:`capture_order_position`, pure and unit-tested on Linux). Desktop Duplication (``ddagrab``) numbers them
+differently again — outputs of the default graphics adapter — which :mod:`dxgi` resolves; :meth:`WindowsScreen
+.duplication_probe` asks it whether duplicating a monitor would work before a Screen view start answers.
 
 Every ctypes call declares ``argtypes``/``restype`` (handles are 64-bit). Exercised on a Windows device only:
 **not yet verified on a device** (rotated, HDR and mixed-DPI monitors in particular).
@@ -24,7 +26,7 @@ from typing import Any
 
 from dome_protocol import ProtocolError
 
-from ..protocol import Monitor
+from ..protocol import DuplicationProbe, Monitor
 
 MONITORINFOF_PRIMARY = 0x00000001
 ENUM_CURRENT_SETTINGS = 0xFFFFFFFF
@@ -222,6 +224,18 @@ class WindowsScreen:
                 "SCREEN_CAPTURE_UNAVAILABLE", "Windows lists no monitor.", detail={"detail": "unsupported_display"}
             )
         return monitors
+
+    def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
+        """Whether ``ddagrab`` could duplicate ``monitor`` now (:func:`dxgi.probe_duplication`: the same device and
+        output, one ``DuplicateOutput1`` released at once, no frame). Never raises."""
+        from . import dxgi  # DXGI/D3D11 are loaded only when Screen view asks
+
+        try:
+            return dxgi.probe_duplication(
+                left=monitor.left, top=monitor.top, width=monitor.width, height=monitor.height
+            )
+        except Exception as exc:  # noqa: BLE001 - a probe that cannot run is "no answer", never a refusal
+            return DuplicationProbe(None, reason=f"probe failed ({exc.__class__.__name__})")
 
     @staticmethod
     def _rotation(user32: Any, device: str) -> int:

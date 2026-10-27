@@ -17,7 +17,7 @@ import type { relayFrames, rest } from "@dome/protocol";
 import { Runtime, setRuntimeForTests } from "../../src/app/runtime.ts";
 import { configureApi } from "../../src/lib/api.ts";
 import { writePin } from "../../src/lib/controllerKey.ts";
-import { EMPTY_INPUT_STATE } from "../../src/lib/input.ts";
+import { EMPTY_INPUT_STATE, FLUSH_INTERVAL_MS } from "../../src/lib/input.ts";
 import { EMPTY_SCREEN_STATE, type ScreenSessionState } from "../../src/lib/screen.ts";
 import { COPY } from "../../src/lib/screenStatus.ts";
 import { ScreenPage } from "../../src/pages/app/ScreenPage.tsx";
@@ -41,6 +41,8 @@ let peers: FakePeerConnection[];
 let timers: FakeTimers;
 let pcKey: FakePcKey;
 let frames: Array<() => void>;
+/** The input client's clock: each round of frames is one flush interval later, so motion held by the rate gate goes out (DECISIONS 79). */
+let inputClock: number;
 let wakeRequests: number;
 let wakeReleases: number;
 const inputTimers = { ...noTimers, setTimeout: (fn: () => void, ms: number): unknown => setTimeout(fn, ms), clearTimeout: (h: unknown): void => clearTimeout(h as ReturnType<typeof setTimeout>) };
@@ -116,6 +118,7 @@ async function answerInputStart() {
 }
 
 async function sendFrames(): Promise<void> {
+  inputClock += FLUSH_INTERVAL_MS;
   const fns = frames.splice(0, frames.length);
   await act(async () => {
     for (const fn of fns) fn();
@@ -144,6 +147,7 @@ beforeEach(async () => {
   answered = new Set<string>();
   sockets = [];
   frames = [];
+  inputClock = Date.now();
   timers = new FakeTimers();
   wakeRequests = 0;
   wakeReleases = 0;
@@ -184,6 +188,7 @@ beforeEach(async () => {
     screenTimers: timers,
     screenNow: () => new Date(timers.now),
     inputTimers,
+    inputNow: () => new Date(inputClock),
     scheduleFrame: (fn) => {
       frames.push(fn);
       return frames.length;

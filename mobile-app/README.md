@@ -304,10 +304,14 @@ scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key mate
   `input.session_start` as a signed command on entering the screen (INPUT_SESSION_OWNED → Take over
   prompt → `params.takeover=true`); the result's session id, lease, `max_batch_events`,
   pointer/keyboard flags and foreground app drive the UI. Events are signed with
-  `buildInputBatchPayload` + `signInputBatch` into `controller_input_batch` frames
-  (`RelayClient.sendInputBatch`, validated like every frame): `seq` strictly increasing per session,
-  ≤ 64 events, adjacent motion summed, never across a click/scroll/text/key/shortcut, one flush per
-  animation frame, an empty keepalive about every second. `input.session_stop` on leaving the screen,
+  `buildInputBatchPayload` + `lib/signing.ts` (the shared envelope, the kid held in memory; DECISIONS 79)
+  into `controller_input_batch` frames (`RelayClient.sendInputBatch`, validated like every frame): `seq`
+  strictly increasing per session, ≤ 64 events, adjacent motion summed, never across a
+  click/scroll/text/key/shortcut, flushed on animation frames but never faster than
+  `limits.input_batches_per_second` (motion coalesces across the frames it waits for, a tap or key goes on
+  the next frame, the rate halves while the PC's acks lag or after an INPUT_STALE notice — `congested`), an
+  empty keepalive about every
+  second. `input.session_stop` on leaving the screen,
   Stop Input, page hidden, PC switch, sign-out; a dropped socket ends the session locally. Nothing
   queued is ever sent late or replayed. `input_ack` = Windows acceptance (live pill "Live · Windows
   accepted N", held buttons/keys shown), never an app effect; `input_session` suspended/ended carry the

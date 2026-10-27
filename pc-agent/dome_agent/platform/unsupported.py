@@ -10,7 +10,16 @@ from pathlib import Path
 
 from dome_protocol import ProtocolError
 
-from .protocol import AppWindow, ForegroundApp, MediaSession, Monitor, PlatformSet, VolumeState, WindowState
+from .protocol import (
+    AppWindow,
+    DuplicationProbe,
+    ForegroundApp,
+    MediaSession,
+    Monitor,
+    PlatformSet,
+    VolumeState,
+    WindowState,
+)
 
 
 def _unsupported(what: str) -> ProtocolError:
@@ -182,6 +191,9 @@ class UnsupportedScreen:
 
     def monitors(self) -> list[Monitor]:
         raise _unsupported("screen enumeration")
+
+    def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
+        return DuplicationProbe(None, reason="Desktop Duplication is only available on Windows")
 
 
 def build_unsupported_platform() -> PlatformSet:

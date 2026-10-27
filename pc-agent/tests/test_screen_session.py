@@ -532,6 +532,93 @@ async def test_a_worker_that_refuses_to_start_maps_its_error(fast: AgentHarness,
     assert res["error"]["code"] == "SCREEN_CAPTURE_UNAVAILABLE" and res["error"]["detail"] == {"detail": "busy"}
 
 
+async def test_the_preflight_refuses_a_start_only_when_no_capture_path_could_serve_it(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """KNOWN_ISSUES #31: a PC without a D3D11 device used to answer the start, show the bars, connect and end
+    `capture_failed`. The DXGI probe before the bars refuses that with the honest detail. A duplication that is busy,
+    unsupported for the display or refused in a remote session is NOT refused: the Windows.Graphics.Capture fallback
+    exists for exactly those (DECISIONS #88), so the start goes on and the worker is told to skip Desktop Duplication."""
+    from dome_agent.platform.protocol import DuplicationProbe
+    from dome_agent.screen import preflight
+
+    fast.fake.duplication_probe = DuplicationProbe(0x887A0005, stage="device", adapter="GPU A")
+    with structlog.testing.capture_logs() as logs:
+        res = await start_screen(fast, controller)
+    assert res["state"] == "failed", res
+    assert res["error"]["code"] == "SCREEN_CAPTURE_UNAVAILABLE" and res["error"]["detail"] == {"detail": "driver"}
+    [line] = [e for e in logs if e["event"] == "capture pre-flight refused the start"]
+    assert line["detail"] == "driver" and line["hresult"] == "0x887a0005" and line["stage"] == "device"
+    assert line["surface_index"] == 0 and line["adapter"] == "GPU A"
+    assert not fast.ui.bars_shown and fast.ui.hidden == 0 and fast.screen_worker.spawned == []
+    assert fast.agent.screen.current is None and fast.agent.screen.history.recent() == []
+    # Desktop Duplication's own refusals: the start goes on, bars, worker, answer; the worker's source spec carries the
+    # verdict (detail and HRESULT name) so it skips Desktop Duplication and opens Windows.Graphics.Capture at once
+    cases = [
+        (DuplicationProbe(preflight.DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, stage="duplicate", output_index=0), "busy"),
+        (DuplicationProbe(preflight.DXGI_ERROR_UNSUPPORTED, stage="duplicate", adapter="GPU A"), "unsupported_display"),
+        (DuplicationProbe(preflight.E_ACCESSDENIED, remote_session=True, stage="duplicate"), "remote_session"),
+    ]
+    for probe, detail in cases:
+        fast.fake.duplication_probe = probe
+        with structlog.testing.capture_logs() as logs:
+            res, worker = await live(fast, controller)
+        assert res["state"] == "succeeded" and fast.ui.bars_shown
+        [line] = [e for e in logs if e["event"].startswith("capture pre-flight found Desktop Duplication failing")]
+        assert line["detail"] == detail and line["hresult"] == f"0x{probe.hresult:08x}"
+        assert worker.start_message is not None
+        verdict = worker.start_message["source"]["preflight"]
+        assert verdict["detail"] == detail and verdict["hresult"] == f"0x{probe.hresult:08x}"
+        assert verdict["hresult_name"] == preflight.HRESULT_NAMES[probe.hresult] and verdict["stage"] == "duplicate"
+        await fast.agent.screen.end("stopped")
+        await expect_screen_event(fast, "ended", "stopped")
+    assert fast.fake.count("duplication_probe") == len(cases) + 1
+    # the probe passes: no verdict travels, the start goes on exactly as before
+    fast.fake.duplication_probe = DuplicationProbe(preflight.S_OK, stage="duplicate", output_index=0)
+    res, worker = await live(fast, controller)
+    assert res["state"] == "succeeded" and worker.start_message is not None
+    assert "preflight" not in worker.start_message["source"]
+
+
+async def test_a_probe_that_passes_does_not_hide_a_real_capture_failure(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """The probe is advice, not the only path: after a passing probe the real open (after DTLS) can still fail, and
+    that is reported exactly as before."""
+    from dome_agent.platform.protocol import DuplicationProbe
+    from dome_agent.screen import preflight
+
+    fast.fake.duplication_probe = DuplicationProbe(preflight.S_OK, stage="duplicate", output_index=0)
+    fast.screen_worker.fail_start = "SCREEN_CAPTURE_UNAVAILABLE"
+    fast.screen_worker.fail_detail = "unsupported_display"
+    res = await start_screen(fast, controller)
+    assert res["error"]["code"] == "SCREEN_CAPTURE_UNAVAILABLE"
+    assert res["error"]["detail"] == {"detail": "unsupported_display"} and fast.ui.hidden == 1
+
+
+async def test_a_slow_or_absent_probe_does_not_delay_or_refuse_the_start(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    from dome_agent.platform.protocol import DuplicationProbe
+
+    fast.fake.probe_delay_seconds = 0.6
+    fast.agent.screen.preflight_timeout = 0.2
+    t0 = time.monotonic()
+    res, worker = await live(fast, controller)
+    assert res["state"] == "succeeded" and time.monotonic() - t0 < 1.8
+    await fast.agent.screen.end("stopped")
+    await expect_screen_event(fast, "ended", "stopped")
+    fast.fake.probe_delay_seconds = 0.0
+    await asyncio.sleep(0.6)  # the slow probe's own thread returns: no later start finds it still running
+    # a probe is never run for a replacement or takeover: our own worker's duplication would count as "busy"
+    res, worker = await live(fast, controller)
+    probes = fast.fake.count("duplication_probe")
+    fast.fake.duplication_probe = DuplicationProbe(0x887A0022, stage="duplicate")
+    res = await start_screen(fast, controller)  # the same phone again: replaces its session, no probe
+    assert res["state"] == "succeeded" and fast.fake.count("duplication_probe") == probes
+    fast.fake.duplication_probe = None
+
+
 async def test_a_worker_that_never_answers_is_capture_unavailable(fast: AgentHarness, controller: Controller) -> None:
     fast.screen_worker.answer_delay = 5.0
     fast.agent.screen.worker_start_timeout = 0.3
@@ -1067,6 +1154,7 @@ async def test_pointer_move_to_needs_a_connected_session_at_the_current_gen(
     err = await expect_error(fast, "SCREEN_SESSION_REQUIRED")
     assert err["ref_controller_id"] == controller.controller_id and err["ref_input_session_id"] == sid
     assert fast.fake.input_count("move_to") == 0 and fast.fake.input_count("button") == 0  # dropped whole
+    assert fast.agent.input.summary()["session"]["dropped_batches"] == 1
     await live(fast, controller)
     await send_batch(fast, controller, sid, 2, [{"type": "pointer_move_to", "x": 65535, "y": 65535, "gen": 7}])
     await expect_error(fast, "SCREEN_GEOMETRY_CHANGED")

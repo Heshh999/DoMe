@@ -7,6 +7,12 @@
  * If storage is unavailable or the key is gone (cleared site data, private browsing), the UI
  * explains that this installation must pair again. There is deliberately no recovery shortcut.
  *
+ * The identity (key pair, public JWK, kid) is held in memory after its first use (DECISIONS 79): the
+ * touchpad signs 30–40 batches a second, and an IndexedDB read plus the kid derivation (exportKey,
+ * importKey, SHA-256) per batch counted toward each batch's age budget on the PC. The copy is dropped
+ * wherever the stored key may have changed — sign-out, "Forget this installation", a corrupt record,
+ * another tab upgrading the database — and a failed load is never kept.
+ *
  * Since protocol 1.4 the same database also holds the PC identity keys pinned at pairing (`pins`,
  * rules.pc_key_pinning; written only by `lib/pcKeyPins.ts` after the MAC verified). A pin belongs to
  * the pairing, so it lives next to the key: sign-out keeps both, "Forget this installation" deletes both.
@@ -67,8 +73,9 @@ function db(): Promise<IDBPDatabase<DomeDb>> {
         if (!database.objectStoreNames.contains("pins")) database.createObjectStore("pins");
       },
       blocking() {
-        // another tab upgraded the schema; drop our handle so the next call reopens
+        // another tab upgraded the schema; drop our handle (and the identity read through it) so the next call reopens
         dbPromise = null;
+        forgetIdentity();
       },
     }).catch((e: unknown) => {
       dbPromise = null;
@@ -99,13 +106,15 @@ export async function getExistingKeyPair(): Promise<CryptoKeyPair | null> {
   if (stored === undefined) return null;
   if (!isUsableKeyPair(stored)) {
     log.warn("controller_key.corrupt_record_discarded");
+    forgetIdentity();
     await database.delete("keys", KEY_RECORD);
     throw new KeyStorageError("corrupt", "The stored controller key was unusable and has been removed; pair again.");
   }
   return stored;
 }
 
-export async function getOrCreateKeyPair(): Promise<CryptoKeyPair> {
+/** The stored key pair, generated and stored on first use. Reads storage every time: callers go through `getControllerIdentity`. */
+async function loadOrCreateKeyPair(): Promise<CryptoKeyPair> {
   const existing = await getExistingKeyPair().catch((e: unknown) => {
     if (e instanceof KeyStorageError && e.reason === "corrupt") return null;
     throw e;
@@ -126,11 +135,38 @@ export async function getOrCreateKeyPair(): Promise<CryptoKeyPair> {
   return pair;
 }
 
-export async function getControllerIdentity(): Promise<ControllerIdentity> {
-  const keyPair = await getOrCreateKeyPair();
+/**
+ * The identity held in memory after its first use (file comment). Every signer goes through here, so one storage
+ * read and one kid derivation serve the whole session, and concurrent first uses share the one load. A load that
+ * fails is forgotten at once so the next call tries storage again.
+ */
+let identityPromise: Promise<ControllerIdentity> | null = null;
+
+function forgetIdentity(): void {
+  identityPromise = null;
+}
+
+export function getControllerIdentity(): Promise<ControllerIdentity> {
+  if (!identityPromise) {
+    const loading = loadIdentity();
+    identityPromise = loading;
+    loading.catch(() => {
+      if (identityPromise === loading) identityPromise = null;
+    });
+  }
+  return identityPromise;
+}
+
+async function loadIdentity(): Promise<ControllerIdentity> {
+  const keyPair = await loadOrCreateKeyPair();
   const jwk = await exportPublicJwk(keyPair.publicKey);
   const kid = await kidFromJwk(jwk);
   return { keyPair, jwk, kid };
+}
+
+/** The signing key pair, from the identity held in memory. */
+export async function getOrCreateKeyPair(): Promise<CryptoKeyPair> {
+  return (await getControllerIdentity()).keyPair;
 }
 
 export async function getState(key: string): Promise<string | null> {
@@ -156,6 +192,7 @@ export function setStoredControllerId(id: string | null): Promise<void> {
 export async function clearAccountState(): Promise<void> {
   const database = await db();
   await database.clear("state");
+  forgetIdentity(); // the key stays; the next use reads it from storage again
 }
 
 /** Full local reset (Settings → "Forget this installation"): the key and every PC pin are deleted, pairing is required again. */
@@ -164,6 +201,7 @@ export async function deleteInstallationKey(): Promise<void> {
   await database.clear("state");
   await database.clear("pins");
   await database.delete("keys", KEY_RECORD);
+  forgetIdentity();
   log.info("controller_key.deleted_by_user");
 }
 
@@ -190,7 +228,8 @@ export async function listPins(): Promise<PcKeyPin[]> {
   return database.getAll("pins");
 }
 
-/** Test/diagnostic hook: forget the cached connection so a fresh `openDB` happens. */
+/** Test/diagnostic hook: forget the cached connection and identity so a fresh `openDB` and key read happen. */
 export function resetDbHandleForTests(): void {
   dbPromise = null;
+  forgetIdentity();
 }

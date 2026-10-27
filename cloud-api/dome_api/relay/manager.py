@@ -25,6 +25,7 @@ from dome_api.entitlements import EntitlementSigner
 from dome_api.logging import get_logger
 from dome_api.plans import Plan, plan_for
 from dome_api.relay import frames
+from dome_api.relay.input_timing import InputTiming
 from dome_api.security import events
 from dome_api.security.ratelimit import SlidingWindowLimiter
 from dome_api.settings import Settings
@@ -216,6 +217,8 @@ class ControllerConn(_Conn):
         "supports_screen",
         "input_auth",
         "input_auth_epoch",
+        "input_timing",
+        "input_stale_notified",
     )
 
     def __init__(self, ws: WebSocket, session_id: uuid.UUID, account_id: uuid.UUID, kid: str) -> None:
@@ -234,6 +237,8 @@ class ControllerConn(_Conn):
         self.input_auth: dict[uuid.UUID, InputAuthorization] = {}  # pc_id -> cached input checks (bounded)
         # bumped by every invalidation: a database read that began before it is used once but never cached
         self.input_auth_epoch = 0
+        self.input_timing = InputTiming()  # the socket's current relay.input_timing window (DECISIONS #113)
+        self.input_stale_notified: datetime | None = None  # last INPUT_STALE sent for batches dropped unrouted
 
     def cached_input_auth(self, pc_id: uuid.UUID, now: float, ttl: float) -> InputAuthorization | None:
         auth = self.input_auth.get(pc_id)
@@ -260,6 +265,14 @@ class ControllerConn(_Conn):
         if self.input_throttle_notified is not None and (now - self.input_throttle_notified).total_seconds() < 1:
             return False
         self.input_throttle_notified = now
+        return True
+
+    def input_stale_notice_due(self, now: datetime) -> bool:
+        """At most one INPUT_STALE error frame (and log line) per second for batches the socket loop dropped unrouted
+        because they waited the whole age budget behind a newer one (DECISIONS #112), as the agent paces its own."""
+        if self.input_stale_notified is not None and (now - self.input_stale_notified).total_seconds() < 1:
+            return False
+        self.input_stale_notified = now
         return True
 
     def remember_input_seq(self, input_session_id: str, seq: int) -> None:
@@ -308,10 +321,13 @@ class ConnectionManager:
     started_at: datetime = field(default_factory=utcnow)
     # how long a controller socket may route input batches on its cached InputAuthorization for a PC (DECISIONS #110)
     input_auth_ttl: float = field(init=False)
+    # seconds between relay.input_timing lines per streaming controller socket; 0 turns them off (DECISIONS #113)
+    input_timing_interval: float = field(init=False)
 
     def __post_init__(self) -> None:
         self.agent_events = SlidingWindowLimiter(self.settings.relay_security_events_per_connection_per_minute, 60)
         self.input_auth_ttl = self.settings.relay_input_auth_ttl_seconds
+        self.input_timing_interval = self.settings.relay_input_timing_interval_seconds
 
     # ----- input authorization cache (DECISIONS #110) --------------------------------------------
     def invalidate_input_auth(
@@ -488,6 +504,9 @@ class ConnectionManager:
         """Everything the live relay does after a grant/controller revocation was committed:
         best-effort ``cancel`` to the PC for the controller's in-flight commands (their results still
         terminate them honestly), ``revoked`` + close for the controller's sockets, fresh snapshots."""
+        # Defence in depth, not a live path of its own: revoke_controller_sockets below closes every socket of the
+        # controller and each input-authorization cache dies with its socket. The drop covers a socket whose close fails
+        # or is still draining when its next batch arrives; no test pins it (review, 2026-10-26).
         self.invalidate_input_auth(controller_id=controller_id)
         for pc_id in pc_ids:
             agent = self.agent_for(pc_id)

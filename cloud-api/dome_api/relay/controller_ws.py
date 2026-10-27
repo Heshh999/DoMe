@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from dome_protocol import (
@@ -34,6 +38,7 @@ from dome_api.relay.manager import (
 from dome_api.relay.router import (
     RateLimiters,
     audited_event,
+    drop_stale_input,
     reject_throttled,
     resolve_controller_record,
     route_command,
@@ -46,6 +51,68 @@ from dome_api.state import Services
 from dome_api.util import ts_required, utcnow
 
 log = get_logger("dome_api.relay.controller")
+# Frames the reader may hold ahead of the socket loop before it stops reading and the socket itself holds the sender
+# back, as it did before the reader existed (DECISIONS #112): a second of input batches at the budget plus the
+# per-controller burst (40 + 80), with room for the pings and acks between them.
+INBOX_DEPTH = 128
+
+
+@dataclass(frozen=True, slots=True)
+class InboundFrame:
+    """A frame taken off the controller socket, with the moment it arrived: ``received_at`` (wall clock) becomes the
+    ``relay.received_at`` stamp the agent measures the relay → agent leg with, ``read_at`` (``time.monotonic()``) is
+    what the loop's own lag and the stale drop are measured from (DECISIONS #112). Stamped before the size check,
+    the parse and the schema check, so everything the relay does with the frame counts as the relay's."""
+
+    frame: dict[str, Any]
+    received_at: datetime
+    read_at: float
+
+
+class Inbox:
+    """The frames a controller socket's reader has taken off the wire and the loop has not handled yet, in arrival
+    order (``None`` for a frame the parser or the schema refused, which the loop counts). ``put`` and ``get`` keep the
+    order of everything they hold; nothing is reordered. At ``depth`` frames the reader waits for ``space``, so the
+    sender is held back by the socket exactly as before read-ahead. A read that failed is kept and raised by ``get``
+    once the frames before it are handled, so a disconnect still ends the loop in order."""
+
+    __slots__ = ("pending", "depth", "failure", "_wake", "_space")
+
+    def __init__(self, depth: int) -> None:
+        self.pending: deque[InboundFrame | None] = deque()
+        self.depth = depth
+        self.failure: Exception | None = None
+        self._wake = asyncio.Event()
+        self._space = asyncio.Event()
+        self._space.set()
+
+    def put(self, inbound: InboundFrame | None) -> None:
+        self.pending.append(inbound)
+        if len(self.pending) >= self.depth:
+            self._space.clear()
+        self._wake.set()
+
+    def fail(self, exc: Exception) -> None:
+        self.failure = exc
+        self._wake.set()
+
+    async def space(self) -> None:
+        await self._space.wait()
+
+    async def get(self) -> InboundFrame | None:
+        while not self.pending:
+            if self.failure is not None:
+                raise self.failure
+            self._wake.clear()
+            await self._wake.wait()
+        inbound = self.pending.popleft()
+        if len(self.pending) < self.depth:
+            self._space.set()
+        return inbound
+
+    def holds_input_batch(self) -> bool:
+        """Whether a newer ``input_batch`` is waiting: the condition for dropping an aged one unrouted."""
+        return any(i is not None and i.frame["type"] == "input_batch" for i in self.pending)
 
 
 async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimiters) -> None:
@@ -68,7 +135,8 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
     conn: ControllerConn | None = None
     slot_reserved = True
     try:
-        hello = await _receive_frame(ws, svc, wait_seconds=svc.settings.relay_hello_timeout_seconds)
+        first = await _receive_frame(ws, svc, wait_seconds=svc.settings.relay_hello_timeout_seconds)
+        hello = first.frame if first is not None else None
         if (
             hello is None
             or hello.get("type") != "hello"
@@ -164,8 +232,9 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
             limiters.forget_connection(conn)
 
 
-async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | None = None) -> dict[str, Any] | None:
+async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | None = None) -> InboundFrame | None:
     text = await (asyncio.wait_for(ws.receive_text(), wait_seconds) if wait_seconds is not None else ws.receive_text())
+    received_at, read_at = utcnow(), time.monotonic()  # the moment the frame left the socket (DECISIONS #112)
     if len(text.encode("utf-8", "surrogatepass")) > svc.settings.relay_max_frame_bytes:
         await ws.close(code=CLOSE_FRAME_TOO_LARGE)
         raise WebSocketDisconnect(CLOSE_FRAME_TOO_LARGE)
@@ -176,7 +245,7 @@ async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | 
         await ws.send_text(dumps_compact(frames.error_frame(exc.code, exc.message)))
         return None
     assert isinstance(frame, dict)
-    return frame
+    return InboundFrame(frame, received_at, read_at)
 
 
 def validate_inbound_frame(svc: Services, frame: Any) -> None:
@@ -194,27 +263,67 @@ def validate_inbound_frame(svc: Services, frame: Any) -> None:
     svc.schemas.validate_frame("controller_to_relay", frame)
 
 
+async def _read_ahead(ws: WebSocket, svc: Services, conn: ControllerConn, inbox: Inbox) -> None:
+    """Take frames off the socket as they arrive, stamped, while the loop handles earlier ones (DECISIONS #112): a
+    frame's wait for its turn then happens here, where the stamp sees it, instead of in the server's receive buffer,
+    where nothing did. Ends with the socket; the first failed read is left for the loop to raise in order."""
+    try:
+        while True:
+            await inbox.space()
+            inbound = await _receive_frame(ws, svc)
+            conn.last_seen = utcnow()
+            inbox.put(inbound)
+    except Exception as exc:  # noqa: BLE001 - a disconnect (or anything else) ends the loop once the inbox drains
+        inbox.fail(exc)
+
+
 async def _loop(
     ws: WebSocket, svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn
+) -> None:
+    inbox = Inbox(INBOX_DEPTH)
+    reader = asyncio.create_task(_read_ahead(ws, svc, conn, inbox))
+    try:
+        await _handle_frames(svc, mgr, limiters, conn, inbox)
+    finally:
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        # the window in progress when the socket closed (DECISIONS #113)
+        conn.input_timing.flush(
+            time.monotonic(), mgr.input_timing_interval, controller_id=str(conn.controller_id), final=True
+        )
+
+
+async def _handle_frames(
+    svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, inbox: Inbox
 ) -> None:
     bad_frames = 0
     bucket_key = str(conn.connection_id)
     while not conn.closed:
-        frame = await _receive_frame(ws, svc)
-        conn.last_seen = utcnow()
-        if frame is None:
+        inbound = await inbox.get()
+        if inbound is None:
             bad_frames += 1
             if bad_frames >= 5:
                 await conn.close(CLOSE_PROTOCOL_ERROR)
                 return
             continue
+        frame = inbound.frame
         kind = frame["type"]
         if kind == "input_batch":
-            # The input stream has its own pre-database bucket (rules.input_sessions: 40 batches/s), far above the
-            # command bucket. Refusals are RATE_LIMITED errors at most once per second per socket; ordinary
-            # overshoot while dragging keeps the session, a sustained flood (refusals beyond 2x the budget for
-            # about 5 s) closes the socket like a command flood does.
-            if not limiters.input_frames.allow(bucket_key):
+            now = time.monotonic()
+            timing = conn.input_timing
+            timing.count(now, frame["pc_id"])
+            if now - inbound.read_at > limiters.input_age_budget and inbox.holds_input_batch():
+                # It waited the agent's whole age budget for its turn here and a newer batch is already behind it:
+                # the PC would discard it as stale, so it dies here unrouted (DECISIONS #112). The newest batch is
+                # never dropped, so the PC still sees the stream (and renews the session lease) however late.
+                timing.dropped += 1
+                await drop_stale_input(conn, frame["pc_id"])
+            elif not limiters.input_frames.allow(bucket_key):
+                # The input stream has its own pre-database bucket (rules.input_sessions: 40 batches/s), far above
+                # the command bucket. Refusals are RATE_LIMITED errors at most once per second per socket; ordinary
+                # overshoot while dragging keeps the session, a sustained flood (refusals beyond 2x the budget for
+                # about 5 s) closes the socket like a command flood does.
+                timing.refuse("RATE_LIMITED")
                 conn.input_refused += 1
                 if not limiters.input_refusals.allow(bucket_key):
                     await _close_throttled(mgr, conn, reason="input_flood", refused=conn.input_refused)
@@ -225,8 +334,10 @@ async def _loop(
                             "RATE_LIMITED", "Too many input batches; slow down", ref_pc_id=frame["pc_id"]
                         )
                     )
-                continue
-            await route_input_batch(svc, mgr, limiters, conn, frame)
+            else:
+                timing.route(now - inbound.read_at, len(inbox.pending))
+                await route_input_batch(svc, mgr, limiters, conn, frame, received_at=inbound.received_at)
+            timing.flush(time.monotonic(), mgr.input_timing_interval, controller_id=str(conn.controller_id))
             continue
         # Per-socket inbound budget, before any database work: a flood of well-formed frames is answered
         # from memory and, after ``burst`` refusals, the socket is closed (4000) with one security event.

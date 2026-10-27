@@ -365,9 +365,16 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
 ### 5.2 Capture
 
 - **Primary: DXGI Desktop Duplication through FFmpeg `ddagrab`**, opened by PyAV as an `lavfi` graph:
-  `ddagrab=output_idx=N:framerate=30:draw_mouse=1:dup_frames=0, scale_d3d11=w=W:h=H:format=nv12,
-  hwdownload, format=nv12`. GPU colour conversion and scaling, no per-pixel Python; `dup_frames=0` sends
-  nothing while the screen is still; `ddagrab` sets per-monitor-v2 DPI itself **[inspected]**. **The
+  `ddagrab=output_idx=N:framerate=30:draw_mouse=1:dup_frames=1, scale_d3d11=w=W:h=H:format=nv12,
+  hwdownload, format=nv12`. GPU colour conversion and scaling, no per-pixel Python. **Revised 2026-10-27
+  (device round 1):** `dup_frames=0` was the design, but in FFmpeg n8.1.3 `ddagrab`'s `request_frame` then loops
+  until the desktop changes, so a `lavfi` read *blocks* on a still screen instead of returning `EAGAIN`, and
+  `av.open` itself waits for a real frame (`probe_output_format`); the build ships `dup_frames=1` and the worker
+  drops re-sent frames by a CRC-32 signature of the visible bytes, keeping the 1 fps floor time-driven
+  (pc-agent/DECISIONS.md 94, KNOWN_ISSUES 32). `output_idx` is the index among the **default adapter's**
+  outputs, not DoMe's monitor index: the worker maps the monitor to a DXGI output by HMONITOR and, when the
+  monitor hangs off another adapter, goes straight to the Windows.Graphics.Capture fallback (DECISIONS 93).
+  `ddagrab` sets per-monitor-v2 DPI itself **[inspected]**. **The
   `lavfi` device needs one decoder**: libavdevice's `lavfi_read_header()` sets the video stream's codec to
   `AV_CODEC_ID_WRAPPED_AVFRAME` and `lavfi_read_packet()` wraps the `AVFrame` struct itself in the packet
   (`libavdevice/lavfi.c`, FFmpeg master, **[inspected]**), so PyAV's `container.decode()` must run the
@@ -378,8 +385,8 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
   `buffersink` pulled directly, no decoder involved), then CPU `hwdownload` + `swscale` at 15 fps. The choice
   is recorded in ADR-0002 Decision 4.
 - **Variable frame rate with a floor:** only changed frames are sent, but the worker keeps the **last raw
-  NV12 frame** and **re-encodes** it at ≥ 1 fps while the screen is still (`dup_frames=0` delivers nothing
-  then), so the phone's stall detector stays meaningful. Encoded packets are never re-sent: feeding a P-frame
+  NV12 frame** and **re-encodes** it at ≥ 1 fps while the screen is still (re-sent duplicate frames are dropped
+  by signature before encoding), so the phone's stall detector stays meaningful. Encoded packets are never re-sent: feeding a P-frame
   to the decoder twice applies its motion and residual twice and corrupts the picture until the next IDR.
   Re-encoding a still frame yields a near-empty skip P-frame. WP1.4 asserts on the fake source that two
   consecutive still-frame packets are distinct encoder outputs, not byte-identical copies.

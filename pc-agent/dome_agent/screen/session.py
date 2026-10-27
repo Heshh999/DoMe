@@ -6,7 +6,10 @@ One live :class:`ScreenSession` per PC, copying :class:`~dome_agent.input_sessio
 against the LOCAL grant; here the checks run in the design's order: remote control on → the Windows session unlocked
 and not on the secure desktop → ``relay.screen`` present and valid (the first allowance ticket) → the strict SDP check
 → ownership (``SCREEN_SESSION_OWNED`` unless ``takeover``) → consent (ask mode, the PC-wide post-Stop cooldown, the
-back-off and the 1-hour block) → the monitors → the old session ends (``takeover`` / ``replaced``) → a "Screen view
+back-off and the 1-hour block) → the monitors → the Desktop Duplication pre-flight (:mod:`preflight`: a bounded DXGI
+probe, no frame; a PC without a D3D11 device refuses the start here with the honest detail, and a busy / unsupported /
+remote-session duplication is handed to the worker, which goes straight to Windows.Graphics.Capture instead of ending
+``capture_failed`` after the bars) → the old session ends (``takeover`` / ``replaced``) → a "Screen view
 on" bar on EVERY monitor, confirmed (fail-closed: ``SCREEN_CAPTURE_UNAVAILABLE{detail: indicator}``) → only then the
 worker is spawned and its send-only answer signed with the PC's identity key and sent in a ``screen_answer`` frame,
 never in the result.
@@ -53,6 +56,7 @@ from . import NOT_INCLUDED_MESSAGE, SCREEN_VIEW_NOT_INCLUDED, media_stack_availa
 from .consent import ConsentBroker, ConsentGate, PermissionUiState
 from .history import ScreenHistory
 from .indicator import IndicatorController
+from .preflight import PREFLIGHT_TIMEOUT_SECONDS, preflight_refuses, preflight_verdict, probe_fields, run_preflight
 from .sdp_check import check_offer
 from .signing import sign_screen_answer
 from .supervisor import WorkerLauncher, WorkerSupervisor
@@ -170,6 +174,9 @@ class ScreenSession:
     geometry_pending: bool = False
     geometry_pending_since: float = 0.0
     reserved: list[dict[str, int]] = field(default_factory=list)  # the bars' band over the streamed monitor
+    # the pre-flight's verdict when Desktop Duplication would fail (the worker then skips it); None when it passed,
+    # could not run, or was not run (replacement, takeover, a wgc source)
+    preflight: dict[str, Any] | None = None
     started_emitted: bool = False
     end_reason: str | None = None
     # allowance tickets (rules.screen_sessions (4))
@@ -249,6 +256,7 @@ class ScreenSessionManager:
         stop_grace: float = 2.0,
         source: dict[str, Any] | None = None,
         media_available: Callable[[], bool] = media_stack_available,
+        preflight_timeout_seconds: float = PREFLIGHT_TIMEOUT_SECONDS,
     ) -> None:
         limits = load_registry().limits
         self._media_available = media_available
@@ -295,6 +303,7 @@ class ScreenSessionManager:
             else load_registry().get("screen.session_start").timeout_ms / 1000 - START_BUDGET_MARGIN_SECONDS
         )
         self.tick_timeout_seconds = tick_timeout_seconds
+        self.preflight_timeout = preflight_timeout_seconds
         self.usage_min_interval = USAGE_MIN_INTERVAL_SECONDS
         self.source = dict(source) if source is not None else {"kind": "fake" if platform.name == "fake" else "ddagrab"}
         self.gate = ConsentGate(store)
@@ -455,6 +464,10 @@ class ScreenSessionManager:
         consent = await self._consent(controller_id, display_name)
         monitors = await self._monitors()
         monitor = self._pick_surface(monitors, surface)
+        preflight = None
+        if existing is None:
+            # No session of ours holds a duplication (a replacement's probe would count our own worker's as busy)
+            preflight = await self._capture_preflight(monitor, registry)
         # The consent window can stay open for 30 s: Disable remote control, a lock or a UAC prompt meanwhile refuses
         # the start exactly as at entry (design §7 "refuses new starts"), before any bar or worker exists.
         await self._recheck_start_conditions(registry)
@@ -480,6 +493,7 @@ class ScreenSessionManager:
             started_wall=format_rfc3339(now_utc()),
         )
         session.gens.append((1, monitor))
+        session.preflight = preflight
         self._apply_ticket(session, ticket)
         self._current = session
         self._update_status()
@@ -490,6 +504,33 @@ class ScreenSessionManager:
             # and no half-started session may stay behind.
             await self._abort_start(session)
             raise
+
+    async def _capture_preflight(self, monitor: Monitor, registry: Any) -> dict[str, Any] | None:
+        """KNOWN_ISSUES #31: a bounded DXGI probe of Desktop Duplication before any bar or worker exists (:mod:`preflight`).
+        A D3D11 device that cannot be created refuses the start with the honest detail (no capture path works without
+        one); any other failure is returned as the source spec's ``preflight`` entry, so the worker skips Desktop
+        Duplication and opens Windows.Graphics.Capture at once, the HRESULT in its fallback warning, instead of the
+        start being refused for a display the fallback exists to serve. A probe that cannot run or runs late changes
+        nothing, and a probe that passes is still followed by the real open after DTLS, reported as before if it fails."""
+        if self.source.get("kind") == "wgc":
+            return None  # Windows.Graphics.Capture only: Desktop Duplication is never tried
+        detail, probe = await run_preflight(self._platform, monitor, budget_seconds=self.preflight_timeout)
+        if probe is None:
+            return None
+        fields = probe_fields(probe)
+        if detail is None:
+            log.debug("capture pre-flight passed", surface_index=monitor.index, **fields)
+            return None
+        if preflight_refuses(probe, detail):
+            log.warning("capture pre-flight refused the start", detail=detail, surface_index=monitor.index, **fields)
+            raise registry.make_error("SCREEN_CAPTURE_UNAVAILABLE", detail=detail)
+        log.warning(
+            "capture pre-flight found Desktop Duplication failing; the worker will use Windows.Graphics.Capture",
+            detail=detail,
+            surface_index=monitor.index,
+            **fields,
+        )
+        return preflight_verdict(probe, detail)
 
     async def _recheck_start_conditions(self, registry: Any) -> None:
         if not self._remote_enabled():
@@ -699,6 +740,8 @@ class ScreenSessionManager:
         source = dict(self.source)
         source.update(_source_geometry(monitor))
         source.setdefault("fps", 30)
+        if session.preflight is not None:
+            source["preflight"] = dict(session.preflight)  # the worker skips Desktop Duplication (capture_dda)
         session.reserved = self.indicator.reserved_for(monitor)
         preference = [c for c, offered in (("h264", h264), ("vp8", vp8)) if offered]
         message: dict[str, Any] = {

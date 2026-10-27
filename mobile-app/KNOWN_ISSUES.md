@@ -205,3 +205,12 @@ Items from the review that were recorded rather than fully closed, plus residual
 38. **Every Windows build of DoMe so far lacks Screen view** (pc-agent KNOWN_ISSUES #33): its PC refuses a
     start with `ACTION_UNAVAILABLE{reason: screen_view_not_included}` and the page shows "Screen view isn't
     in DoMe on your PC yet" (no retry). Not yet seen on a device.
+
+39. **The touchpad's back-pressure thresholds come from the latency model, not from a device.** `congested`
+    trips when the oldest unacknowledged batch is more than half of `input_age_budget_ms` later than the
+    session's fastest round trip and clears under a quarter, or for 1.5 s after an `INPUT_STALE` notice from
+    the relay or the PC (DECISIONS 79); `test/inputFlow.test.ts` exercises them against a simulated PC and a
+    simulated relay that drops behind a newer batch, no phone has shown them yet. Until the first ack arrives
+    the floor is zero, so a PC more than ~250 ms away (round trip plus the ack cadence) may see one brief
+    halving at the start of a session; a relay notice every second keeps the rate halved for as long as the
+    drops last plus 1.5 s. The pill does not show the flag; it is in the diagnostics bundle (`input.congested`).

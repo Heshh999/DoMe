@@ -273,11 +273,35 @@ class Monitor:
         return {"index": self.index, "width": self.width, "height": self.height, "primary": self.primary}
 
 
+@dataclass(frozen=True, slots=True)
+class DuplicationProbe:
+    """What the Screen view pre-flight found out about Desktop Duplication for one monitor, BEFORE a start answers
+    (``platform/windows/dxgi.py``; the detail is decided by ``screen.preflight``). ``hresult`` is the raw result of
+    ``IDXGIOutput5::DuplicateOutput1`` (or ``IDXGIOutput1::DuplicateOutput``) on the output the monitor maps to, as an
+    unsigned 32-bit number (0 = S_OK), or of ``D3D11CreateDevice`` when ``stage`` is ``device``; None when the probe
+    could not run (no DXGI, the monitor is not on the default adapter, an older Windows): the start then proceeds as
+    without a pre-flight. ``remote_session`` is ``GetSystemMetrics(SM_REMOTESESSION) != 0``. ``adapter`` is the default
+    adapter's description (hardware, no identifiers), ``output_index`` the output's index on it. ``reason`` is a short,
+    content-free explanation for the log."""
+
+    hresult: int | None
+    remote_session: bool = False
+    stage: str = ""  # device | output | duplicate
+    adapter: str = ""
+    output_index: int | None = None
+    reason: str = ""
+
+
 class ScreenAdapter(Protocol):
     """Monitor enumeration for Screen view (design §15: ``platform/windows/screen.py``). Synchronous."""
 
     def monitors(self) -> list[Monitor]:
         """Every monitor in physical pixels, primary first; ``PLATFORM_UNSUPPORTED`` where none can be read."""
+        ...
+
+    def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
+        """Whether Desktop Duplication of ``monitor`` would start right now (no frame is captured; the duplication is
+        released at once). Never raises: a probe that cannot run answers ``hresult=None``."""
         ...
 
 
@@ -287,6 +311,9 @@ class NoScreen:
 
     def monitors(self) -> list[Monitor]:
         raise ProtocolError("PLATFORM_UNSUPPORTED", "screen enumeration is only available on Windows")
+
+    def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
+        return DuplicationProbe(None, reason="no screen adapter")
 
 
 class InputAdapter(Protocol):

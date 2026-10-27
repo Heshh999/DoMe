@@ -111,7 +111,7 @@ export class Runtime {
       sendCommand: (input) => this.commands.send({ pcId: input.pcId, action: input.action, params: input.params, target: null, source: input.source }),
       onceSettled: (commandId) => this.commands.onceSettled(commandId),
       identity: () => this.identity(),
-      keyPair: () => getOrCreateKeyPair(),
+      signingKey: () => getControllerIdentity(),
       connected: () => this.relay.isOpen,
       onChange: (state) => useInputStore.getState().setSession(state),
       ...(options.inputTimers ? { timers: options.inputTimers } : {}),

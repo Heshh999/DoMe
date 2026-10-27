@@ -294,7 +294,7 @@ def test_diagnostics_item_saves_the_bundle_and_shows_the_status(
     saved = Path("C:/DoMe/diagnostics/dome-diagnostics.json")
     outcome: dict[str, Any] = {"result": saved}
 
-    def write_bundle(_settings: Any, _status: Any) -> Path:
+    def write_bundle(_settings: Any, _status: Any, **_kw: Any) -> Path:
         if isinstance(outcome["result"], Exception):
             raise outcome["result"]
         return saved
@@ -306,7 +306,7 @@ def test_diagnostics_item_saves_the_bundle_and_shows_the_status(
     tray.notify = lambda title, message: notes.append(message)  # type: ignore[method-assign]
     tray._show_text_window = lambda title, text: shown.append((title, text))  # type: ignore[method-assign]
     tray.agent = SimpleNamespace(
-        store=store, status=lambda: _status(bridge_unavailable_reason="held by another process")
+        store=store, platform=None, status=lambda: _status(bridge_unavailable_reason="held by another process")
     )
     tray._tk._root = object()  # noqa: SLF001
     item = _item(tray._menu(), "Diagnostics…")  # noqa: SLF001

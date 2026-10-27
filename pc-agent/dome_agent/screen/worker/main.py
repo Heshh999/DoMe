@@ -243,6 +243,9 @@ class WorkerApp:
         if track is None or not self._geometry:
             return
         spec = {**self._source_spec, **{k: v for k, v in dict(message.get("source", {})).items() if k != "kind"}}
+        # the start's pre-flight verdict was about the monitor the start picked, at that moment: the rebuilt source
+        # tries Desktop Duplication again (a failure falls back to Windows.Graphics.Capture as before)
+        spec.pop("preflight", None)
         width, height = fit_level_31(int(spec.get("width", 1280)), int(spec.get("height", 720)))
         source = _build_source(str(spec.get("kind", "ddagrab")), spec, width, height, int(spec.get("fps", 30)))
         self._source_spec = spec
@@ -398,18 +401,33 @@ def _build_source(kind: str, spec: dict[str, Any], width: int, height: int, fps:
 
         if kind == "wgc":
             return wgc()
-        from .capture_dda import DdagrabSource, DdaWithFallback
+        from .capture_dda import DdagrabSource, DdaWithFallback, locate_ddagrab_output, preflight_skip
 
         def fell_back(exc: ProtocolError) -> None:
-            # the message carries FFmpeg's own reason, sanitised (capture_dda.ffmpeg_error_text): the diagnostics
-            # bundle then says why, not only the contract's detail word
+            # the message carries FFmpeg's own reason, sanitised (capture_dda.ffmpeg_error_text), or why Desktop
+            # Duplication was skipped (the monitor is on another adapter): the diagnostics bundle then says why, not
+            # only the contract's detail word
             log.warning(
                 "Desktop Duplication unavailable; trying Windows.Graphics.Capture",
                 detail=_detail(exc) or "driver",
                 reason=exc.message,
             )
 
-        return DdaWithFallback(DdagrabSource(index, width, height, fps), wgc, on_fallback=fell_back)
+        def locate() -> Any:
+            # at open time (after DTLS): ddagrab's output_idx is an index among the DEFAULT adapter's outputs, found by
+            # the monitor's rectangle; the surface index stands in when DXGI cannot answer
+            return locate_ddagrab_output(
+                left=origin[0], top=origin[1], width=expected[0], height=expected[1], fallback_idx=index
+            )
+
+        # the agent's pre-flight may have found Desktop Duplication failing (spec["preflight"]): skipped, WGC at once
+        return DdaWithFallback(
+            DdagrabSource(index, width, height, fps),
+            wgc,
+            on_fallback=fell_back,
+            locate=locate,
+            skip=preflight_skip(spec.get("preflight")),
+        )
     raise ProtocolError(
         "SCREEN_CAPTURE_UNAVAILABLE", f"unknown source kind {kind!r}", detail={"detail": "unsupported_display"}
     )
@@ -471,13 +489,26 @@ def self_test(*, dev_h264: bool) -> dict[str, Any]:
         native = load_native()  # loads the module only: no capture session, no frame
         return {"classes": sorted(name for name in dir(native) if name.startswith("Native"))}
 
+    def dxgi_outputs() -> dict[str, Any]:
+        # numbers only: how many adapters DXGI lists and how many outputs each has (ddagrab's output_idx counts the
+        # first adapter's); a build machine without a desktop shows a software adapter with none
+        from ...platform.windows.dxgi import enumerate_adapters
+
+        adapters = enumerate_adapters()
+        return {
+            "adapters": len(adapters),
+            "outputs_per_adapter": [len(a.outputs) for a in adapters],
+            "software_adapters": sum(1 for a in adapters if a.software),
+        }
+
     check("imports", imports)
     check("encoders", lambda: list_encoders(dev_h264=dev_h264))
     check("decoders", decoders)
     check("lavfi_testsrc_frame", lavfi_frame)
     check("pli_hook", hook)
-    if sys.platform == "win32":  # windows-capture is a Windows-only dependency
+    if sys.platform == "win32":  # windows-capture and DXGI are Windows only
         check("wgc_native", wgc_native)
+        check("dxgi_outputs", dxgi_outputs)
     return report
 
 

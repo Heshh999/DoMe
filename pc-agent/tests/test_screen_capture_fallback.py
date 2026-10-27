@@ -1,9 +1,12 @@
 """Desktop Duplication's failure reasons and the Windows.Graphics.Capture fallback (design §5.2), on Linux.
 
-* ``capture_dda``: FFmpeg's own error lines (collected while the graph opens; PyAV drops them by default) reach the
-  error's message sanitised (no paths, no long strings such as the graph, ≤ 200 characters), and the detail is
-  classified from them, never from PyAV's exception string (it quotes the graph, ``output_idx`` included). A real
-  ``lavfi`` graph that fails to configure stands in for ``ddagrab``.
+* ``capture_dda``: FFmpeg's own error lines (collected while the graph opens and around every read; PyAV drops them by
+  default) reach the error's message sanitised (no paths, no long strings such as the graph, ≤ 200 characters), and the
+  detail is classified from PyAV's exception class and errno and from those lines (or ``exc.log``), never from PyAV's
+  exception string (it quotes the graph, ``output_idx`` included). A real ``lavfi`` graph that fails to configure
+  stands in for ``ddagrab``; a graph whose open is held back stands in for a still desktop (``probe_output_format``
+  waits for a real frame); ``color`` stands in for ``dup_frames=1`` re-sending the same picture; the DXGI output lookup
+  runs against fake adapter rows.
 * ``capture_wgc`` against a fake of windows-capture 2.0.1's NATIVE module injected through ``sys.modules`` (its
   constructor signature copied from ``windows-capture-python/src/lib.rs``): the monitor is passed as the package's
   one-based raw position, mapped BGRA frames with a wider row pitch become yuv420p at the track's size, the newest
@@ -19,10 +22,12 @@ from __future__ import annotations
 import ctypes
 import gc
 import importlib.machinery
+import json
 import shutil
 import subprocess
 import sys
 import sysconfig
+import time
 import types
 import weakref
 from collections.abc import Callable, Iterator
@@ -63,47 +68,123 @@ def test_sanitise_reason_is_capped() -> None:
     assert len(text) == capture_dda.REASON_MAX_CHARS == 200 and capture_dda.sanitise_reason("x y", 1) == "x"
 
 
+GRAPH = capture_dda.ddagrab_graph(0, 1280, 720, 30)  # what PyAV quotes as the "filename" of every lavfi error
+EXT, UNKN = capture_dda.AVERROR_EXTERNAL, capture_dda.AVERROR_UNKNOWN
+DDA = "Parsed_ddagrab_0"
+EXTERNAL = "Generic error in an external library"
+
+
+def line(message: str, name: str = DDA) -> tuple[int, str, str]:
+    return (16, name, message + "\n")  # as av.logging.Capture records an AV_LOG_ERROR line
+
+
 @pytest.mark.parametrize(
-    ("reason", "detail"),
-    [  # the phrases are libavfilter/vsrc_ddagrab.c's (FFmpeg n8.1.3), as ffmpeg_error_text composes them
-        ("Too many open duplication sessions; Device or resource busy (errno 16)", "busy"),
+    ("exc", "logged", "remote", "detail"),
+    [  # realistic PyAV 17 exceptions (class, errno, PyAV's strerror, the graph as filename) and vsrc_ddagrab.c's lines
+        # DXGI_ERROR_NOT_CURRENTLY_AVAILABLE -> AVERROR(EBUSY): the MinGW build has no strerror_r, so the text says
+        # "Error number -16 occurred", never "busy"; errno 16 decides, with or without the captured line
+        (av.error.OSError(16, "Error number -16 occurred", GRAPH), [], False, "busy"),
         (
-            "Selected output not supported; Failed to configure output pad on Parsed_ddagrab_0; "
-            "Generic error in an external library (errno 542398533)",
+            av.error.OSError(16, "Error number -16 occurred", GRAPH),
+            [line("Too many open duplication sessions")],
+            False,
+            "busy",
+        ),
+        # DXGI_ERROR_UNSUPPORTED and an output the default adapter lacks: both AVERROR_EXTERNAL, only the line tells
+        (
+            av.error.ExternalError(EXT, EXTERNAL, GRAPH),
+            [line("Selected output not supported"), line(f"Failed to configure output pad on {DDA}")],
+            False,
             "unsupported_display",
         ),
         (
-            "Failed to enumerate DXGI output 1; Generic error in an external library (errno 542398533)",
+            av.error.ExternalError(EXT, EXTERNAL, GRAPH),
+            [line("Failed to enumerate DXGI output 0")],
+            False,
             "unsupported_display",
         ),
-        ("Desktop duplication access denied; Operation not permitted (errno 1)", "remote_session"),
-        ("Failed to create D3D11VA device.; Generic error in an external library (errno 542398533)", "driver"),
-        ("Failed duplicating output; Generic error in an external library (errno 542398533)", "driver"),
-        # the old classifier read PyAV's exception string, which quotes the graph: "output_idx" matched every failure
-        ("Invalid argument: 'ddagrab=output_idx=0:framerate=30' returned 22", "driver"),
+        # the same exception with NO lines: nothing says "unsupported" (the graph's "output_idx" never counts)
+        (av.error.ExternalError(EXT, EXTERNAL, GRAPH), [], False, "driver"),
+        # exc.log (PyAV's own last-error tuple) stands in when the capture holds nothing
+        (
+            av.error.ExternalError(EXT, EXTERNAL, GRAPH, (16, DDA, "Selected output not supported\n")),
+            [],
+            False,
+            "unsupported_display",
+        ),
+        (av.error.ExternalError(EXT, EXTERNAL, GRAPH), [line("Failed duplicating output")], False, "driver"),
+        # E_ACCESSDENIED -> AVERROR(EPERM) -> PermissionError: remote session only when Windows says so
+        (
+            av.error.PermissionError(1, "Operation not permitted", GRAPH),
+            [line("Desktop duplication access denied")],
+            True,
+            "remote_session",
+        ),
+        (
+            av.error.PermissionError(1, "Operation not permitted", GRAPH),
+            [line("Desktop duplication access denied")],
+            False,
+            "driver",
+        ),
+        (av.error.PermissionError(13, "Permission denied", GRAPH), [], True, "remote_session"),
+        # no D3D11 device (hwcontext_d3d11va.c -> AVERROR_UNKNOWN), scale_d3d11's video processor: the driver
+        (
+            av.error.UnknownError(UNKN, "Unknown error occurred", GRAPH),
+            [line("Failed to create D3D11VA device.")],
+            False,
+            "driver",
+        ),
+        (
+            av.error.ExternalError(EXT, EXTERNAL, GRAPH),
+            [line("Failed to create video processor: HRESULT 0x80070057", "Parsed_scale_d3d11_1")],
+            False,
+            "driver",
+        ),
+        (av.error.ArgumentError(22, "Invalid argument", GRAPH), [], False, "driver"),
     ],
 )
-def test_classify_capture_error_reads_ffmpegs_own_phrases(reason: str, detail: str) -> None:
-    assert capture_dda.classify_capture_error(reason) == detail
+def test_classify_capture_failure_reads_the_class_errno_and_ffmpegs_lines_never_the_text(
+    exc: Exception, logged: list[tuple[int, str, str]], remote: bool, detail: str
+) -> None:
+    assert "output_idx" in str(exc), "PyAV quotes the graph: the text is what the old classifier matched"
+    assert capture_dda.classify_capture_failure(exc, logged, remote_session=lambda: remote) == detail
+    error = capture_dda.capture_error("Desktop Duplication could not start", exc, logged, remote_session=lambda: remote)
+    assert error.code == "SCREEN_CAPTURE_UNAVAILABLE" and error.detail == {"detail": detail}
+    assert error.message.startswith("Desktop Duplication could not start: ")
+    assert "output_idx" not in error.message and "ddagrab=" not in error.message and len(error.message) <= 240
 
 
 def test_ffmpeg_error_text_puts_the_logged_cause_first_and_never_the_graph() -> None:
-    graph = capture_dda.ddagrab_graph(0, 1280, 720, 30)
-    exc = av.error.ExternalError(542398533, "Generic error in an external library", graph)
+    exc = av.error.ExternalError(EXT, EXTERNAL, GRAPH)
     assert "output_idx" in str(exc)  # what the old classifier read
     logged = [
-        (16, "Parsed_ddagrab_0", "Selected output not supported\n"),
-        (16, "Parsed_ddagrab_0", "Failed to configure output pad on Parsed_ddagrab_0\n"),
-        (16, "Parsed_ddagrab_0", "Selected output not supported\n"),  # a repeat is kept once
+        line("Selected output not supported"),
+        line(f"Failed to configure output pad on {DDA}"),
+        line("Selected output not supported"),  # a repeat is kept once
     ]
     text = capture_dda.ffmpeg_error_text(exc, logged)
     assert text == (
         "Selected output not supported; Failed to configure output pad on Parsed_ddagrab_0; "
         "Generic error in an external library (errno 542398533)"
     )
-    assert capture_dda.classify_capture_error(text) == "unsupported_display"
+    # exc.log is used only when nothing was captured; the captured lines win otherwise
+    with_log = av.error.ExternalError(EXT, EXTERNAL, GRAPH, (16, DDA, "Failed duplicating output\n"))
+    assert capture_dda.ffmpeg_error_text(with_log) == f"Failed duplicating output; {EXTERNAL} (errno {EXT})"
+    assert capture_dda.ffmpeg_error_text(with_log, logged).startswith("Selected output not supported; Failed to conf")
+    assert capture_dda.ffmpeg_error_text(av.error.ExternalError(EXT, EXTERNAL, GRAPH)) == f"{EXTERNAL} (errno {EXT})"
     assert capture_dda.ffmpeg_error_text(RuntimeError(r"boom at C:\Users\Jane\x")) == "RuntimeError: boom at [path]"
     assert capture_dda.ffmpeg_error_text(RuntimeError()) == "RuntimeError"
+
+
+@pytest.mark.parametrize(
+    ("message", "detail"),
+    [
+        ("The Graphics Capture API is not supported on this platform.", "unsupported_display"),
+        ("Failed to get monitor from index: The monitor was not found.", "driver"),
+    ],
+)
+def test_classify_wgc_error_reads_windows_captures_words(message: str, detail: str) -> None:
+    assert capture_wgc.classify_wgc_error(message) == detail
 
 
 def dda(monkeypatch: pytest.MonkeyPatch, graph: str) -> Any:
@@ -161,6 +242,296 @@ def test_the_running_source_is_logged_once_with_its_size(monkeypatch: pytest.Mon
             "size": "64x36",
         }
     ]
+
+
+def test_read_errors_keep_ffmpegs_lines_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An access-lost error at read time ("AcquireNextFrame failed: 887a0026") is logged by ddagrab, not said by PyAV:
+    the lines are captured around every read as well, and the fourth error in a row carries them."""
+    source = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
+    source.open()
+    frames = source._frames  # noqa: SLF001
+
+    class Failing:
+        def __next__(self) -> Any:
+            av.logging.log(av.logging.ERROR, DDA, "AcquireNextFrame failed: 887a0026")
+            raise av.error.ExternalError(EXT, EXTERNAL, GRAPH)
+
+        def __iter__(self) -> Any:
+            return self
+
+        def close(self) -> None:
+            frames.close()
+
+    source._frames = Failing()  # noqa: SLF001
+    monkeypatch.setattr(source, "open", lambda: None)  # a reopen that "succeeds" without a graph: read fails again
+    monkeypatch.setattr(capture_dda, "REOPEN_BACKOFF_SECONDS", (0.0,))
+    with pytest.raises(ProtocolError) as caught:
+        for _ in range(20):
+            if source.read() is None and source._frames is None:  # noqa: SLF001
+                source._frames = Failing()  # noqa: SLF001 - the "rebuilt" graph fails the same way
+    assert caught.value.detail == {"detail": "driver"}
+    assert caught.value.message.startswith(
+        "Desktop Duplication failed 3 times in a row: AcquireNextFrame failed: 887a0026; "
+    )
+    assert "output_idx" not in caught.value.message and av.logging.get_level() is None
+    source.close()
+
+
+def test_a_still_desktop_leaves_the_open_pending_and_the_opener_closes_an_abandoned_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ddagrab's probe_output_format makes av.open block until the desktop changes. The open runs on its own thread:
+    after `open_wait` the source reports it pending (reads answer None, bounded), adopts the graph when it arrives,
+    and a source closed while still pending lets the opener close the container it created, never another thread."""
+    import threading
+
+    release = threading.Event()
+    real_open = av.open
+
+    def slow_open(graph: str, **kw: Any) -> Any:
+        release.wait(10)
+        return real_open(graph, **kw)
+
+    monkeypatch.setattr(av, "open", slow_open)
+    source = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
+    source.open_wait = 0.2
+    with structlog.testing.capture_logs() as logs:
+        t0 = time.monotonic()
+        source.open()
+    assert 0.15 < time.monotonic() - t0 < 2.0
+    assert [e["event"] for e in logs] == ["Desktop Duplication is waiting for the first desktop change"]
+    t0 = time.monotonic()
+    assert source.read() is None and source.read() is None  # pending: no frame, each wait bounded
+    assert time.monotonic() - t0 < 1.0
+    release.set()
+    frame = next(f for f in (source.read() for _ in range(100)) if f is not None)
+    assert (frame.width, frame.height, frame.format.name) == (64, 36, "nv12")
+    source.close()
+    # abandoned while pending: the helper thread finishes the open and closes what it opened
+    release.clear()
+    other = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
+    other.open_wait = 0.1
+    other.open()
+    pending = other._pending  # noqa: SLF001
+    assert pending is not None and not pending.done.is_set()
+    other.close()
+    release.set()
+    pending.thread.join(10)
+    assert pending.done.is_set() and pending.error is None and pending.collect() is None  # closed, never handed over
+    assert other._frames is None and other._pending is None  # noqa: SLF001
+
+
+def test_repeated_frames_are_dropped_by_their_content_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dup_frames=1: ddagrab re-sends its last frame at the frame rate while the desktop is still. The same picture
+    downloaded again has a new buffer and pts, so the signature of its visible bytes decides: None for a repeat (the
+    track's floor takes over), a frame for a change."""
+    source = dda(monkeypatch, "color=c=black:size=64x36:rate=60,format=nv12")  # the same frame, forever
+    source.open()
+    first = next(f for f in (source.read() for _ in range(10)) if f is not None)
+    assert first.format.name == "nv12"
+    assert all(source.read() is None for _ in range(10)) and source.frames_repeated == 10
+    source.close()
+    moving = dda(monkeypatch, "testsrc=size=64x36:rate=60,format=nv12")
+    moving.open()
+    frames = [moving.read() for _ in range(6)]
+    assert sum(f is not None for f in frames) >= 5 and moving.frames_repeated == 0  # testsrc changes every frame
+    moving.close()
+
+
+def test_frame_signature_ignores_row_padding_and_sees_any_visible_change() -> None:
+    a = av.VideoFrame(66, 4, "nv12")  # width 66: PyAV pads the rows
+    for plane in a.planes:
+        plane.update(bytes([0x40]) * plane.buffer_size)
+    b = av.VideoFrame(66, 4, "nv12")
+    for plane in b.planes:
+        plane.update(bytes([0x40]) * plane.buffer_size)
+    assert a.planes[0].line_size > 66
+    assert capture_dda.frame_signature(a) == capture_dda.frame_signature(b)
+    padding = bytearray(a.planes[0])
+    padding[66] = 0xFF  # the first padding byte of row 0: stale pool memory on a real frame
+    a.planes[0].update(bytes(padding))
+    assert capture_dda.frame_signature(a) == capture_dda.frame_signature(b)
+    visible = bytearray(b.planes[1])
+    visible[0] ^= 0x01  # one chroma byte: a change the phone must see
+    b.planes[1].update(bytes(visible))
+    assert capture_dda.frame_signature(a) != capture_dda.frame_signature(b)
+    rgb = av.VideoFrame(3, 2, "rgb24")  # a format the table does not know is hashed whole
+    assert capture_dda.frame_signature(rgb)[:3] == (3, 2, "rgb24")
+
+
+# ----- which output ddagrab is asked for ----------------------------------------------------------------------------------
+def adapters() -> list[Any]:
+    from dome_agent.platform.windows.dxgi import DxgiAdapter, DxgiOutput
+
+    return [
+        DxgiAdapter(
+            0,
+            "Intel(R) UHD Graphics",
+            0x8086,
+            0x9A49,
+            False,
+            (DxgiOutput(0, r"\\.\DISPLAY1", 0, 0, 2560, 1440, True, 0),),
+        ),
+        DxgiAdapter(
+            1,
+            "NVIDIA GeForce RTX 3060 Laptop GPU",
+            0x10DE,
+            0x2520,
+            False,
+            (
+                DxgiOutput(0, r"\\.\DISPLAY2", 2560, 0, 4480, 1080, True, 0),
+                DxgiOutput(1, r"\\.\DISPLAY3", -1920, 0, 0, 1080, True, 90),
+            ),
+        ),
+        DxgiAdapter(2, "Microsoft Basic Render Driver", 0x1414, 0x8C, True),
+    ]
+
+
+def test_locate_ddagrab_output_maps_the_monitor_to_the_default_adapters_output_or_skips() -> None:
+    located = capture_dda.locate_ddagrab_output
+    on_default = located(left=0, top=0, width=2560, height=1440, fallback_idx=3, enumerate=adapters)
+    assert (on_default.output_idx, on_default.skip) == (0, False)
+    elsewhere = located(left=-1920, top=0, width=1920, height=1080, fallback_idx=2, enumerate=adapters)
+    assert elsewhere.skip and elsewhere.output_idx is None
+    assert (
+        elsewhere.reason
+        == "the monitor is output 1 of adapter 1 (NVIDIA GeForce RTX 3060 Laptop GPU), not of the default adapter"
+    )
+    # DXGI does not list the monitor (unplugged, resized) or cannot be asked: today's behaviour, the surface index
+    with structlog.testing.capture_logs() as logs:
+        missing = located(left=0, top=0, width=800, height=600, fallback_idx=1, enumerate=adapters)
+
+        def broken() -> list[Any]:
+            raise OSError("CreateDXGIFactory1 failed (0x887a0004)")
+
+        failed = located(left=0, top=0, width=2560, height=1440, fallback_idx=1, enumerate=broken)
+    assert (missing.output_idx, missing.skip) == (1, False) and (failed.output_idx, failed.skip) == (1, False)
+    assert [e["log_level"] for e in logs] == ["warning", "warning"] and logs[1]["error"] == "OSError"
+    assert "0x887a0004" not in json.dumps(logs)
+
+
+def test_dda_with_fallback_aims_or_skips_desktop_duplication_before_opening_it() -> None:
+    from dome_agent.screen.worker.capture_dda import DdaWithFallback, OutputChoice, preflight_skip
+
+    class Dda:
+        def __init__(self) -> None:
+            self.width, self.height, self.output_idx, self.opened = 1280, 720, 0, 0
+
+        def open(self) -> None:
+            self.opened += 1
+
+        def read(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class Wgc(Dda):
+        pass
+
+    fell: list[ProtocolError] = []
+    primary, built = Dda(), []
+
+    def wgc() -> Wgc:
+        built.append(1)
+        return Wgc()
+
+    # the monitor is output 1 of the default adapter: ddagrab gets output_idx=1 and runs
+    with structlog.testing.capture_logs() as logs:
+        source = DdaWithFallback(primary, wgc, on_fallback=fell.append, locate=lambda: OutputChoice(1))
+        source.open()
+    assert primary.output_idx == 1 and primary.opened == 1 and built == [] and fell == []
+    assert logs[0]["event"] == "Desktop Duplication output index differs from the surface index"
+    assert (logs[0]["surface_index"], logs[0]["output_idx"]) == (0, 1)
+    # the monitor is on another adapter: ddagrab is never opened, WGC runs, the reason is reported
+    primary = Dda()
+    skip = OutputChoice(
+        None, skip=True, reason="the monitor is output 0 of adapter 1 (GPU B), not of the default adapter"
+    )
+    source = DdaWithFallback(primary, wgc, on_fallback=fell.append, locate=lambda: skip)
+    source.open()
+    assert primary.opened == 0 and built == [1]
+    assert fell[0].detail == {"detail": "unsupported_display"}
+    assert (
+        fell[0].message
+        == "Desktop Duplication skipped: the monitor is output 0 of adapter 1 (GPU B), not of the default adapter"
+    )
+    # a lookup that raises (it never should) changes nothing
+    primary = Dda()
+
+    def raising() -> OutputChoice:
+        raise RuntimeError("ctypes")
+
+    DdaWithFallback(primary, wgc, on_fallback=fell.append, locate=raising).open()
+    assert primary.opened == 1 and primary.output_idx == 0 and built == [1]
+    # the agent's pre-flight found Desktop Duplication failing (the source spec's `preflight`): skipped before the
+    # lookup, WGC at once, the HRESULT's name in the reason the fallback warning carries
+    primary, fell, built = Dda(), [], []
+    verdict = {"detail": "busy", "hresult": "0x887a0022", "hresult_name": "DXGI_ERROR_NOT_CURRENTLY_AVAILABLE"}
+    asked: list[int] = []
+
+    def locating() -> OutputChoice:
+        asked.append(1)
+        return OutputChoice(1)
+
+    DdaWithFallback(primary, wgc, on_fallback=fell.append, locate=locating, skip=preflight_skip(verdict)).open()
+    assert primary.opened == 0 and built == [1] and asked == []
+    assert fell[0].detail == {"detail": "busy"}
+    assert fell[0].message == "Desktop Duplication skipped: the pre-flight answered DXGI_ERROR_NOT_CURRENTLY_AVAILABLE"
+
+
+@pytest.mark.parametrize(
+    ("verdict", "detail", "reason"),
+    [
+        (
+            {"detail": "unsupported_display", "hresult": "0x887a0004", "hresult_name": "DXGI_ERROR_UNSUPPORTED"},
+            "unsupported_display",
+            "DXGI_ERROR_UNSUPPORTED",
+        ),
+        ({"detail": "remote_session", "hresult": "0x80070005", "hresult_name": None}, "remote_session", "0x80070005"),
+        ({"detail": "driver", "hresult": None, "hresult_name": None}, "driver", "a failure"),
+        ({"detail": "indicator"}, "driver", "a failure"),  # not a capture detail: never forwarded as one
+    ],
+)
+def test_preflight_skip_reads_the_agents_verdict(verdict: dict[str, Any], detail: str, reason: str) -> None:
+    from dome_agent.screen.worker.capture_dda import preflight_skip
+
+    skip = preflight_skip(verdict)
+    assert skip is not None and skip.code == "SCREEN_CAPTURE_UNAVAILABLE" and skip.detail == {"detail": detail}
+    assert skip.message == f"Desktop Duplication skipped: the pre-flight answered {reason}"
+
+
+def test_preflight_skip_is_none_without_a_verdict() -> None:
+    from dome_agent.screen.worker.capture_dda import preflight_skip
+
+    assert preflight_skip(None) is None and preflight_skip({}) is None and preflight_skip({"detail": 3}) is None
+    assert preflight_skip("busy") is None
+
+
+def test_the_worker_asks_dxgi_for_the_output_at_open_time_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[dict[str, Any]] = []
+
+    def locate(**kw: Any) -> Any:
+        asked.append(kw)
+        return capture_dda.OutputChoice(kw["fallback_idx"])
+
+    monkeypatch.setattr(capture_dda, "locate_ddagrab_output", locate)
+
+    class Dda:
+        def __init__(self, *_args: Any) -> None:
+            self.width, self.height, self.output_idx = 1280, 720, 1
+
+        def open(self) -> None:
+            return None
+
+    monkeypatch.setattr(capture_dda, "DdagrabSource", Dda)
+    spec = {"surface_index": 1, "primary": False, "left": 2560, "top": 0, "width": 1920, "height": 1080}
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", "win32")
+        source = worker_main._build_source("ddagrab", spec, 1280, 720, 30)  # noqa: SLF001
+    assert asked == []  # constructing asks nothing (and captures nothing)
+    source.open()
+    assert asked == [{"left": 2560, "top": 0, "width": 1920, "height": 1080, "fallback_idx": 1}]
 
 
 def test_the_fallback_warning_carries_desktop_duplications_reason(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,9 +717,10 @@ def test_wgc_asks_for_the_streamed_monitor_by_its_raw_position_and_streams_yuv42
         source.open()
     [capture] = FakeCapture.instances
     assert located == [{"left": 0, "top": 0, "width": 66, "height": 4, "primary": True}]
-    # only the cursor and the monitor are set: Windows 10 refuses a border or update-interval setting it lacks
+    # only the monitor is set: the package refuses an explicit cursor, border or update-interval setting on a Windows 10
+    # that lacks the property (IsCursorCaptureEnabled is 1903+), and Windows draws the cursor by default
     assert capture.settings == {
-        "cursor_capture": True,
+        "cursor_capture": None,
         "draw_border": None,
         "secondary_window": None,
         "minimum_update_interval": None,
@@ -517,14 +889,22 @@ def test_the_worker_passes_the_monitors_rectangle_to_wgc(monkeypatch: pytest.Mon
 
 
 def test_the_self_test_loads_the_native_module_on_windows_only(monkeypatch: pytest.MonkeyPatch, native: Any) -> None:
+    from dome_agent.platform.windows import dxgi
+
     if sys.platform != "win32":
-        assert "wgc_native" not in worker_main.self_test(dev_h264=True)["checks"]
+        checks = worker_main.self_test(dev_h264=True)["checks"]
+        assert "wgc_native" not in checks and "dxgi_outputs" not in checks
+    monkeypatch.setattr(dxgi, "enumerate_adapters", adapters)  # the ctypes enumeration needs Windows
     with monkeypatch.context() as m:
         m.setattr(sys, "platform", "win32")
         report = worker_main.self_test(dev_h264=True)
     assert report["checks"]["wgc_native"] == {
         "ok": True,
         "value": {"classes": ["NativeCaptureControl", "NativeMappedFrame", "NativeWindowsCapture"]},
+    }
+    assert report["checks"]["dxgi_outputs"] == {  # numbers only: no description, no device name reaches the self-test
+        "ok": True,
+        "value": {"adapters": 3, "outputs_per_adapter": [1, 2, 0], "software_adapters": 1},
     }
     assert not FakeCapture.instances  # loaded only: no capture session was created
 

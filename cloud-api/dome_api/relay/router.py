@@ -98,8 +98,12 @@ class RateLimiters:
             settings.relay_controller_frames_per_minute, settings.relay_controller_frame_burst
         )
         self.events = SlidingWindowLimiter(settings.relay_security_events_per_connection_per_minute, 60)
-        per_second = int((registry.limits if registry is not None else {}).get("input_batches_per_second", 40))
+        limits = registry.limits if registry is not None else {}
+        per_second = int(limits.get("input_batches_per_second", 40))
         burst = max(p.input_rate_limit.burst for p in catalog().plans.values())
+        # the agent's age budget for a batch at dispatch (version.json): an input_batch that waited this long for the
+        # socket loop while a newer one arrived behind it is dropped unrouted (controller_ws, DECISIONS #112)
+        self.input_age_budget = int(limits.get("input_age_budget_ms", 1000)) / 1000.0
         self.input_frames = TokenBucketLimiter(per_second * 60, burst)
         self.input_flood_factor = 2
         self.input_flood_seconds = 5
@@ -262,7 +266,9 @@ async def input_authorization(
     now = time.monotonic()
     cached = conn.cached_input_auth(pc_id, now, mgr.input_auth_ttl)
     if cached is not None:
+        conn.input_timing.auth_hits += 1
         return cached
+    conn.input_timing.auth_misses += 1
     epoch = conn.input_auth_epoch
     async with svc.db() as db:
         auth = await load_input_authorization(db, mgr, conn, pc_id, now)
@@ -469,7 +475,13 @@ async def route_command(
 
 
 async def route_input_batch(
-    svc: Services, mgr: ConnectionManager, limiters: RateLimiters, conn: ControllerConn, frame: dict[str, Any]
+    svc: Services,
+    mgr: ConnectionManager,
+    limiters: RateLimiters,
+    conn: ControllerConn,
+    frame: dict[str, Any],
+    *,
+    received_at: datetime | None = None,
 ) -> None:
     """``rules.input_sessions`` (2), relay half: verify the controller's signature with the socket's key
     record, bind the batch to this socket's controller and account, require a live grant covering every
@@ -477,10 +489,15 @@ async def route_input_batch(
     envelope verbatim. No ``commands`` row is written and nothing about the content is logged. Rejections are
     ``error`` frames with ``ref_pc_id`` and never close the socket, except a kid mismatch (UNKNOWN_KEY, 4003).
     The database rows behind the checks come from ``input_authorization`` (cached per socket and PC, DECISIONS #110);
-    the signature, binding, window and sequence are checked on every batch."""
+    the signature, binding, window and sequence are checked on every batch. ``received_at`` is the moment the frame
+    arrived on the socket (the loop's stamp, DECISIONS #112); it becomes ``relay.received_at`` for the agent, so the
+    time the batch waited for its turn here counts toward the relay → agent leg. The time spent in each stage goes to
+    the socket's ``relay.input_timing`` window (DECISIONS #113)."""
     pc_id_str: str = frame["pc_id"]
     envelope = frame["envelope"]
-    received_at = utcnow()
+    if received_at is None:
+        received_at = utcnow()
+    timing = conn.input_timing
     try:
         if envelope.get("kid") != conn.kid:
             raise Rejection("UNKNOWN_KEY", "Envelope kid does not match this connection", close=True)
@@ -490,12 +507,15 @@ async def route_input_batch(
         if controller_id is None:
             raise Rejection("GRANT_MISSING", "This connection is not bound to a paired controller")
         pc_id = uuid.UUID(pc_id_str)  # the frame schema already holds pc_id to a lowercase UUID
+        started = time.monotonic()
         auth = await input_authorization(svc, mgr, conn, pc_id)
+        timing.auth.add(time.monotonic() - started)
         record = auth.record
         if record is None:
             raise Rejection("UNKNOWN_KEY", close=True)
         if auth.controller_revoked:
             raise Rejection("CONTROLLER_REVOKED")
+        started = time.monotonic()
         try:
             batch = verify_and_parse_input_batch(
                 envelope,
@@ -508,6 +528,8 @@ async def route_input_batch(
             # the shared window check speaks in command terms; for a stream the honest code is INPUT_STALE
             code = "INPUT_STALE" if exc.code == "COMMAND_EXPIRED" else exc.code
             raise Rejection(code, exc.message, detail=exc.detail or None) from None
+        finally:
+            timing.verify.add(time.monotonic() - started)
         if batch.target_pc_id != pc_id_str:
             raise Rejection("TARGET_PC_MISMATCH")
         # Defence in depth against replay on this socket: the agent's seq check is authoritative
@@ -551,11 +573,31 @@ async def route_input_batch(
             "envelope": envelope,
             "relay": {"received_at": ts_required(received_at), "connection_id": str(conn.connection_id)},
         }
-        if not await agent.send(forwarded, validate=False):
+        started = time.monotonic()
+        sent = await agent.send(forwarded, validate=False)
+        timing.forward.add(time.monotonic() - started)
+        if not sent:
             raise Rejection("PC_OFFLINE")
         conn.remember_input_seq(batch.input_session_id, batch.seq)
+        timing.forwarded += 1
     except Rejection as rej:
+        timing.refuse(rej.code)
         await _reject_input(mgr, limiters, conn, pc_id_str, rej)
+
+
+async def drop_stale_input(conn: ControllerConn, pc_id: str) -> None:
+    """A batch the socket loop dropped without routing it: it waited the agent's whole age budget for its turn while
+    a newer batch arrived behind it, so the PC would have discarded it as stale (DECISIONS #112). The phone hears
+    INPUT_STALE at most once per second, as it does from the agent; nothing about the batch was checked, so no
+    security event is written."""
+    if not conn.input_stale_notice_due(utcnow()):
+        return
+    await conn.send(
+        frames.error_frame(
+            "INPUT_STALE", "Dropped by the relay: the batch waited longer than the input age budget", ref_pc_id=pc_id
+        )
+    )
+    log.info("input_batch.dropped_stale", controller_id=str(conn.controller_id), pc_id=pc_id)
 
 
 async def route_screen_ice_request(
@@ -743,6 +785,7 @@ __all__ = [
     "Rejection",
     "audited_event",
     "compute_deadline",
+    "drop_stale_input",
     "input_authorization",
     "load_input_authorization",
     "reject_throttled",

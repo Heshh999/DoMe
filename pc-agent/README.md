@@ -38,6 +38,7 @@ dome_agent/
                    (the worker process: pipe, Job object, ticks, redacted stderr), sdp_check.py (strict offer
                    check), signing.py (PC-signed answer), consent.py (consent gate, permission-UI state, window
                    models), indicator.py (bars confirmed before capture, reserved rectangles), history.py,
+                   preflight.py (the Desktop Duplication probe before the bars: raw HRESULT → honest detail),
                    probe.py (Phase 0 probe), worker/ (the separate send-only aiortc process: main, rtc, track,
                    encode, fake sources; capture_dda / capture_wgc written for Windows, not yet verified)
   single_instance.py one agent per user session: named mutex (Windows) / flock, second-launch `show`, repair
@@ -54,13 +55,15 @@ dome_agent/
   state.py         pc_state aggregation → state frames (after snapshot, on change debounced, every 30 s)
   actions/         one handler per registry action; results validated with registry.validate_result
   platform/        protocol.py (interfaces incl. InputAdapter/ForegroundApp) · windows/* (real APIs incl.
-                   input.py = SendInput, instance.py = mutex) · unsupported.py (other OSes)
+                   input.py = SendInput, instance.py = mutex, dxgi.py = adapters/outputs + the DuplicateOutput
+                   probe, displayconfig.py = HDR state) · unsupported.py (other OSes)
   bridge/          host.py (native-messaging host), ipc.py (named pipe / unix socket), server.py (agent side)
   control.py       local CLI ⇄ agent channel (same identity rule as the bridge IPC)
   tray.py ui.py    pystray tray + tkinter pairing windows; 1.4: the Screen view grant and consent windows, the
                    "Screen view on" bars (one per monitor), the red badge, the Ctrl+Alt+Shift+S hotkey, the
                    history window; NullUI for headless runs (no bars → Screen view fails closed)
-  diagnostics.py   redacted bundle
+  diagnostics.py   redacted bundle, with a hardware inventory (monitors; on Windows DXGI adapters/outputs, remote
+                   session, build, GPU preference, HDR state; each item on its own, no handles, no pixels)
   testing/         fake_platform.py, fake_relay.py (fake API + relay), fake_extension.py, fake_ui.py,
                    fake_screen_worker.py — TEST DOUBLES ONLY
 packaging/         dome-agent.spec (ONE PyInstaller folder: DoMe.exe, dome-native-host.exe, _internal),
@@ -252,8 +255,12 @@ integration-tested on Linux). A build without the media stack refuses every star
   check (`sdp_check.check_offer`: ≤ 12 KiB, printable ASCII + CRLF, `v=0`, exactly one `sha-256` fingerprint
   value, `setup`, ICE credentials, exactly `video recvonly` + `audio recvonly` + one SCTP `application`
   section, H.264 or VP8; anything else `SCREEN_OFFER_INVALID{reason}`) → ownership
-  (`SCREEN_SESSION_OWNED` unless `takeover`) → consent (below) → monitors → the old session ends
-  (`takeover` / `replaced`) → **a bar on every monitor, confirmed** (fail closed:
+  (`SCREEN_SESSION_OWNED` unless `takeover`) → consent (below) → monitors → the Desktop Duplication pre-flight
+  (`screen/preflight.py`: a DXGI `DuplicateOutput1` probe on the monitor's output, released at once, on its own thread,
+  bounded to 500 ms; a PC without a D3D11 device is refused `driver`, a failing duplication — `busy` /
+  `unsupported_display` / `remote_session` from the raw HRESULT — is handed to the worker, which skips Desktop
+  Duplication for Windows.Graphics.Capture, else the start goes on as before) → the old session ends (`takeover` /
+  `replaced`) → **a bar on every monitor, confirmed** (fail closed:
   `SCREEN_CAPTURE_UNAVAILABLE{indicator}`) → only then the worker is spawned. The worker's send-only answer is
   signed with the PC's identity key (`signing.sign_screen_answer`, verified against the shared fixture
   vector) and leaves in a `screen_answer` frame, never in the result or the journal.
@@ -262,7 +269,11 @@ integration-tested on Linux). A build without the media stack refuses every star
   agent tick (ticks are sent only while the UI thread that owns the bars still answers). STUN only (no TURN
   credential ever reaches the PC). Capture starts only after `connectionState == "connected"` (DTLS to the
   certificate the phone signed): the capture source is constructed at `start` but opened only by the track after
-  that, on every kind (`ddagrab`, its WGC fallback, a rebuild's new source). Pre-encoded H.264 track with
+  that, on every kind (`ddagrab`, its WGC fallback, a rebuild's new source). `ddagrab` runs with `dup_frames=1`
+  (a `dup_frames=0` read blocks on a still desktop) and its `output_idx` is the monitor's index among the DEFAULT
+  adapter's outputs, found through DXGI at open time (a monitor on another adapter goes straight to WGC); the source
+  drops re-sent frames by a CRC-32 of their visible bytes, opens on a helper thread (the open waits for a real frame)
+  and classifies failures from PyAV's class/errno and FFmpeg's captured lines. Pre-encoded H.264 track with
   SPS/PPS before every IDR, 1 fps floor by re-encoding the held raw frame (never re-sending a packet), PLI →
   IDR through the `RTCRtpSender._send_keyframe` hook, at most two requested IDRs a second (periodic IDR
   fallback), path detection from the
@@ -328,9 +339,15 @@ integration-tested on Linux). A build without the media stack refuses every star
   bar, the tray, the hotkey, `DoMe.exe stop-screen` and *Disable remote control*.
 * **Device checklist (Phase 0 / §18 round, nothing here is device-verified)**: the bars on every monitor at 100 %,
   125 %, 150 % and mixed scaling, with a secondary monitor left of the primary (each bar on its monitor, taps under
-  it refused); a still desktop for 10 s keeps ≥ 1 fps with no rebuild; one UAC prompt pauses rather than ends; the
-  WGC fallback's first frame is the primary's size; Ctrl+Alt+Shift+S; the Job object killing the worker when DoMe.exe
-  is ended in Task Manager; the Windows firewall prompt on first use.
+  it refused); a still desktop for 10 s keeps ≥ 1 fps with no rebuild, and a start on a still desktop shows a picture
+  within a second (else the first frame needs a cursor move: KNOWN_ISSUES #32); one UAC prompt pauses rather than
+  ends; the WGC fallback's first frame is the primary's size; a second capture app (OBS display capture) or a Remote
+  Desktop session makes the pre-flight hand the start to WGC ("capture pre-flight found Desktop Duplication failing"
+  with the HRESULT, then "Desktop Duplication skipped: the pre-flight answered ..." and `source=wgc` in the log); on a
+  hybrid-GPU laptop the external monitor streams through WGC with "Desktop Duplication skipped: ... not of the default
+  adapter" in the log;
+  the diagnostics bundle's `hardware` section lists the monitors, adapters and outputs; Ctrl+Alt+Shift+S; the Job
+  object killing the worker when DoMe.exe is ended in Task Manager; the Windows firewall prompt on first use.
 
 ## Single instance per Windows user session (spec §10)
 

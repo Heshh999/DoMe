@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     # socket and PC; every relay path that changes one of them drops the socket's copy at once (DECISIONS #110).
     # 0 reads them for every batch, as before the cache.
     relay_input_auth_ttl_seconds: float = Field(default=1.0, ge=0, le=5)
+    # One INFO line (relay.input_timing: counts and milliseconds per stage, no content) per streaming controller socket
+    # about this often while it sends input batches; 0 turns the line off (DECISIONS #113).
+    relay_input_timing_interval_seconds: float = Field(default=1.0, ge=0, le=60)
     # Public URLs handed to the agent at link time. Default: derived from public_origin.
     relay_url: str | None = None
     api_url: str | None = None

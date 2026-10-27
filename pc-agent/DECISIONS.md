@@ -571,3 +571,119 @@
     unless a `hw_device_ctx` is handed to the filter, which the `lavfi` device cannot do), so another adapter would need
     PyAV's `Graph` API with a hardware device context that PyAV does not expose for filters. Windows.Graphics.Capture,
     which composes every adapter's output, is the fallback for that case.
+91. **A stale batch renews the input lease; lateness alone never ends a session** (2026-10-26 device round;
+    `InputSessionManager.handle_batch`). The founder's bundle showed a session ending `lease_expired` after 3 s of
+    batches that were all more than 1 s late while the finger was still moving: `handle_batch` returned on
+    `INPUT_STALE` before the lease renewal, so a relay backlog killed the session. A stale batch is authenticated, in
+    sequence and proof that the phone is sending, so it now renews `lease_expires_at` (a late keepalive too) and is still
+    dropped and counted as before; a replayed sequence number or a batch for another session renews nothing, so only
+    silence ends a session. A stale batch does not advance `last_seq` (what the acks report: the phone's back-pressure
+    reads a stale batch as unacknowledged, DECISIONS mobile-app 79), so the review's replay — one signed stale
+    envelope re-delivered by a relay every 200 ms, which passed the `seq <= last_seq` guard every time and renewed the
+    lease for ever — is stopped by a second counter: `InputSession.seen_seq` is the newest authenticated, in-sequence
+    `seq` judged, stale ones included, and the stale path renews only when `seq > seen_seq` (the replay is still
+    dropped `INPUT_STALE` and counted; `summary()` reports both counters, CONTRACT_ISSUES #26). The rate-limited
+    `INPUT_STALE` line carries both clock baselines and the dispatch queue's
+    depth next to the two ages, and `summary()` keeps per-session counters (batches accepted / dropped / stale, the worst
+    age per leg) for the current and the last ended session, with the budget and the lease, so the next bundle can say
+    which leg was slow after the session is gone. Nothing of the phone's content is in any of it.
+92. **Desktop Duplication failures are classified from PyAV's exception class and errno and FFmpeg's captured lines,
+    never from the exception's text** (revises #90's text matching; `capture_dda.classify_capture_failure`). PyAV
+    installs a no-op log callback, so `ddagrab`'s lines exist only while `av.logging.set_level(ERROR)` and an
+    `av.logging.Capture` are active: `ffmpeg_error_lines` (reference-counted across the opener and reader threads) now
+    wraps the open AND every read, and `exc.log` (PyAV's last ERROR tuple, `None` at its default level) is the fallback
+    when the capture is empty. The MinGW FFmpeg build has no `strerror_r`, so `AVERROR(EBUSY)` reads "Error number -16
+    occurred" and never "busy": `errno == 16` decides `busy`. `PermissionError` (E_ACCESSDENIED) is `remote_session`
+    only when `GetSystemMetrics(SM_REMOTESESSION)` is non-zero, else `driver` (the agent refuses a secure desktop
+    before the worker exists). "Selected output not supported" / "Failed to enumerate DXGI output" (both
+    `AVERROR_EXTERNAL`) are `unsupported_display`; "Failed to create D3D11VA device" (`AVERROR_UNKNOWN`), `scale_d3d11`'s
+    video-processor lines and anything else are `driver`. PyAV skips a repeated identical line, so the lines of a run of
+    consecutive read failures are accumulated and the fourth failure's error carries them all. Unit-tested with real PyAV
+    exception objects that quote the graph (`output_idx` in `str(exc)` for every case) and with `exc.log` None vs set.
+    windows-capture's start errors keep a text classifier of their own (`capture_wgc.classify_wgc_error`): the package
+    raises a bare `Exception` whose text is all there is.
+93. **`ddagrab`'s `output_idx` is resolved through DXGI, and a monitor on another adapter skips Desktop Duplication**
+    (`platform/windows/dxgi.py`, `capture_dda.locate_ddagrab_output`, `DdaWithFallback.open`; resolves the gap
+    KNOWN_ISSUES #29 recorded). `vsrc_ddagrab.c` duplicates `IDXGIAdapter::EnumOutputs(output_idx)` of its D3D11 device's
+    adapter, the DEFAULT one (`D3D11CreateDevice(NULL, HARDWARE)`: the first adapter `IDXGIFactory1::EnumAdapters1`
+    lists), so the index is an index among that adapter's outputs, not DoMe's primary-first monitor index. At open time
+    (after DTLS) the worker enumerates the adapters and their outputs (`CreateDXGIFactory1` → `EnumAdapters1` →
+    `GetDesc1` → `EnumOutputs` → `GetDesc`) and finds the output whose `DesktopCoordinates` is the streamed monitor's
+    rectangle (physical pixels in virtual-desktop coordinates, the same units `MONITORINFO.rcMonitor` uses; the
+    `HMONITOR` is matched first when known): on the default adapter its index is the `output_idx`; on another adapter
+    Desktop Duplication is skipped with the reason in the fallback warning ("output N of adapter M (<description>), not
+    of the default adapter") and Windows.Graphics.Capture, which composes every adapter's output, runs at once; when DXGI
+    cannot be asked or does not list the monitor, the surface index is used as before. The COM calls are driven through
+    ctypes by vtable slot with fixed-width field types (so the structure layouts are identical on Linux, where the sizes
+    are asserted against the SDK's); the pure mapping (`locate_output`) is unit-tested with fake adapter rows.
+    **Not yet verified on a device.**
+94. **`dup_frames=1`, repeats dropped by a content signature, the open owned by its own thread** (revises #83;
+    `capture_dda.DdagrabSource`). `vsrc_ddagrab.c`'s `request_frame` loops on `AcquireNextFrame` until the desktop
+    changes when `dup_frames=0`, so the `lavfi` read BLOCKED on a still screen: `av.error.BlockingIOError` was never
+    raised, the 1 fps floor could not fire and `aclose` could release the container under a thread still inside it (#83's
+    premise was wrong; the device checklist item stands). With `dup_frames=1` every read returns within about a frame
+    interval (the filter paces to `framerate`, waits half an interval and re-sends its last frame). A re-sent frame is the
+    same picture downloaded again (new buffer, new `pts`), so the source compares a CRC-32 of the visible bytes
+    (`frame_signature`, row padding excluded, about 0.4 ms for 1280x720 NV12) and answers None for a repeat: the
+    FrameSource contract holds and the track's time-driven floor re-encodes the held frame at ≥ 1 fps unchanged (the
+    `SyntheticSource`/`LavfiTestSource` fakes behave as before). `probe_output_format` runs inside `av.open` and also
+    waits for a real frame (no option skips it), so `open()` runs `av.open` on a helper thread and waits 1.5 s (review:
+    under the track's 2 s `aclose` wait, so a track closed during the open waits the open out; was 3 s): a duplication
+    that fails does so within milliseconds and is raised classified; a still desktop leaves the open PENDING, reads
+    answer None (bounded waits) until the helper has the graph, and a source closed meanwhile lets the helper close the
+    container it created. The container is only ever closed by the thread that opened it or by the thread that reads
+    it; reads are bounded and the open wait is under `aclose`'s, and an open that outlives `aclose` anyway is released
+    by its own thread when it returns (`ScreenTrack._in_thread` releases an ended track's source). PyAV's decode
+    iterator is a generator, finished by any exception raised through it (review): after EAGAIN the source takes a fresh
+    iterator over the same container, and an iterator that ends (EOF) is a failure that rebuilds the graph like access
+    lost — never a source that answers None for ever. Access-lost rebuilds, the three-in-a-row limit and the reopen
+    back-off are unchanged. Unit-tested with a held-back `av.open`, `color` (the same frame forever), `testsrc` and a
+    scripted container whose iterators die like PyAV's.
+95. **A Desktop Duplication pre-flight before the bars refuses a start that would fail anyway** (resolves KNOWN_ISSUES
+    #31; `screen/preflight.py`, `platform/windows/dxgi.probe_duplication`, `ScreenSessionManager._capture_preflight`).
+    #82 moved the source's open after DTLS, so a busy / unsupported / remote-session PC answered the start, showed the
+    bars, connected and ended `capture_failed` ("stopped unexpectedly"). After the monitors are picked and before the
+    old session ends or any bar exists, the agent asks the screen adapter for a `DuplicationProbe`: the same
+    `D3D11CreateDevice(NULL, HARDWARE, VIDEO_SUPPORT)` as `hwcontext_d3d11va.c`, the device's own adapter, the output
+    matching the monitor, one `IDXGIOutput5::DuplicateOutput1` with the BGRA format list under per-monitor-v2 DPI
+    awareness (`IDXGIOutput1::DuplicateOutput` before Windows 10 1703), released at once, no frame. The raw HRESULT,
+    which `ddagrab` never prints, is mapped by the pure `preflight_detail`: `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` → `busy`,
+    `DXGI_ERROR_UNSUPPORTED` → `unsupported_display` (`remote_session` when Windows says this is one),
+    `DXGI_ERROR_SESSION_DISCONNECTED` → `remote_session`, `E_ACCESSDENIED` → `remote_session` / `driver`, a vanished
+    output → `unsupported_display`, a failed device and the rest → `driver`. The probe runs on a thread bounded to
+    500 ms (the D3D11 device creation included): past the budget, unable to run (no DXGI, the monitor on another
+    adapter, an older Windows) or raising, the start proceeds exactly as before, and a probe that passes is still followed
+    by the real open after DTLS, whose failure is reported as today. No probe is run for a replacement or takeover (our
+    own worker's duplication would read as busy) or when the source kind is `wgc`. The screen adapter protocol gained
+    `duplication_probe` (Windows, fake, unsupported, `NoScreen`); the session tests drive it through the fake platform.
+    **Revised the same day (review).** Refusing `busy` / `unsupported_display` / `remote_session` refused the very PCs
+    #88's Windows.Graphics.Capture fallback exists for (`DdaWithFallback` tries WGC on any Desktop Duplication failure,
+    and the capture report's most likely cause on the founder's PC is `DuplicateOutput1` → `DXGI_ERROR_UNSUPPORTED`).
+    Now `preflight_refuses` refuses only what no capture path could serve: a D3D11 device that cannot be created (stage
+    `device`; windows-capture's `create_d3d_device` is the same `D3D11CreateDevice(NULL, HARDWARE)` call) → `driver`.
+    Every other failure travels to the worker as the source spec's `preflight` entry (`preflight_verdict`: detail,
+    HRESULT, its name, stage) and `capture_dda.preflight_skip` makes `DdaWithFallback` skip Desktop Duplication and open
+    WGC at once, the HRESULT's name in the fallback warning ("Desktop Duplication skipped: the pre-flight answered
+    DXGI_ERROR_NOT_CURRENTLY_AVAILABLE"). Whether WGC works in a Remote Desktop session is unknown: it is tried, and
+    its own failure is reported as today. The probe also no longer runs on the agent's shared default executor (the
+    pool the touchpad's dispatch and the watchdog use): a driver call that hangs would have kept one pooled thread per
+    start. It runs on a daemon thread of its own, one at a time (a start while the previous probe has not returned
+    proceeds as without a pre-flight, logged), and a return after the budget is logged with its duration so the bundle
+    shows the hang.
+96. **The diagnostics bundle names the display hardware** (`diagnostics.hardware_probes` / `collect_hardware`,
+    `platform/windows/displayconfig.py`). The first Screen view bundle carried no monitor list, adapter, remote-session
+    flag or Windows build, so a hybrid-GPU PC and a remote session were indistinguishable. `hardware` now holds the
+    agent's own monitor list (from the platform's screen adapter, any platform) and on Windows the DXGI adapters with
+    their outputs (description, vendor id, the software flag — the PCI device id is left out, review: more hardware
+    identity than the capture report asked for; device name, attached-to-desktop, desktop rectangle, rotation — no
+    handles, no memory sizes, no pixels), `GetSystemMetrics(SM_REMOTESESSION)`, the Windows
+    build, the per-app GPU preference under `HKCU\Software\Microsoft\DirectX\UserGpuPreferences` for this executable
+    (the value word only — `auto` / `power_saving` / `high_performance`, `unknown` when the entry holds no
+    `GpuPreference` token — never the path or the raw value) and each active display path's advanced-colour state
+    through `QueryDisplayConfig` / `DisplayConfigGetDeviceInfo` (the GDI device name, which joins the row to the DXGI
+    output; the monitor's friendly name is not asked for — the platform's monitors carry no names; supported / enabled /
+    wide colour enforced / force disabled, bits per channel). Every item is collected on its own: one that
+    fails leaves `{"error": "<class>"}` and never costs the bundle; everything passes through the existing redaction. The
+    tray's and the control channel's `diagnostics` pass the agent's platform; the offline CLI path has no platform and
+    writes the Windows items alone. The worker's `--self-test` prints the DXGI adapter and output counts (numbers only).
+    Written against the SDK and **not yet verified on a device**.

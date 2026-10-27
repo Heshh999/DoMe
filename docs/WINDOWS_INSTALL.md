@@ -555,8 +555,15 @@ pull in). While the fallback runs, Windows draws its own yellow border around th
 had no fallback ("Windows.Graphics.Capture support is not installed"). Later builds include the fallback, and the
 worker's self-test on the build machine checks that it loads. The DoMe log (and so the diagnostics bundle) now also
 says why Desktop Duplication failed, in FFmpeg's own words with any file path removed (for example "Selected output
-not supported"), and which capture finally ran (`source=dda` or `source=wgc`) at what size. **Not yet verified on a
-device.**
+not supported"), and which capture finally ran (`source=dda` or `source=wgc`) at what size. Since the device round of
+2026-10-26, DoMe also checks Desktop Duplication BEFORE it answers a start (half a second at most): if another app
+holds the display's capture, if the display is not supported or if this is a Remote Desktop session, DoMe goes straight
+to Windows.Graphics.Capture (the log names the Windows result code), and only a PC whose graphics device cannot be
+created at all is refused at once ("driver") instead of seeing the bars appear and the picture stop; it
+finds the monitor among the graphics adapter's outputs itself (a monitor driven by the other graphics chip goes
+straight to Windows.Graphics.Capture); and the diagnostics bundle has a `hardware` section naming the monitors, the
+graphics adapters and their outputs, whether this is a remote session, the Windows build, a per-app GPU preference for
+DoMe.exe and each display's HDR state (no pixels, no addresses). **Not yet verified on a device.**
 
 **Allowing a phone (on the PC only).** A phone can never give itself Screen view, and neither can the
 DoMe service or a pairing (`--yes` included):

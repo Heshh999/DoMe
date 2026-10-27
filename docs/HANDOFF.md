@@ -396,7 +396,14 @@ founder-driven; then:
    **Next (founder), in this order:**
    1. Done 2026-10-22: the LGPL wheel and the first Windows build with Screen view (above).
    2. Staging: done 2026-10-23 (Deploy #8, run 40026044503, commit 852cdc2: Stripe test mode, Screen view ON,
-      no relay server). Then the device round on your own PC and
+      no relay server). **Device round 1 (2026-10-26) done and answered:** pairing works (same account on both
+      devices), Screen view ended `capture_failed` (Desktop Duplication refused the display, the WGC fallback was
+      not shipped) and the touchpad dropped 30–60 % of batches as stale (the relay's five database reads per batch,
+      the phone's 60/s send rate, a lease that a stale batch did not renew); all fixed on 2026-10-26/27 (PROGRESS).
+      **Device round 2 (next):** Deploy staging, install the newest `DoMe-Setup-0.1.0+<commit>` from the Windows
+      installer run of the latest push over the current one (no unlink needed: the link and pairing stay), then
+      re-test the touchpad and Screen view and send tray → Diagnostics… (it now lists the graphics adapters and
+      monitors, and names the capture failure if one remains). Then the rest of the device round on your own PC and
       iPhone against staging (`docs/LAUNCH_SETUP.md` §11B "Testing it on your own PC": unlink, install with
       `/ApiUrl=https://staging.domeremote.com`, link, pair, allow) with `docs/design/screen-view.md` §18
       checklist items 1–11 and 13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, GPU,

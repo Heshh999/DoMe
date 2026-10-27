@@ -38,7 +38,7 @@ export interface DiagnosticsReport {
   pcs: DiagnosticsInput["pcs"];
   selected_pc_id: string | null;
   commands: Array<{ command_id: string; pc_id: string; action: string; state: string; origin: string | null; error_code: string | null; duration_ms: number | null; created_at: string; no_answer: boolean }>;
-  input: { phase: string; pc_id: string | null; pointer: boolean; keyboard: boolean; seq: number; batches_sent: number; last_ack_seq: number | null; accepted_events: number | null; dropped_events: number | null; problem_code: string | null; end_reason: string | null } | null;
+  input: { phase: string; pc_id: string | null; pointer: boolean; keyboard: boolean; seq: number; batches_sent: number; last_ack_seq: number | null; accepted_events: number | null; dropped_events: number | null; congested: boolean; problem_code: string | null; end_reason: string | null } | null;
   screen: { phase: string; pc_id: string | null; verified: boolean; path: string | null; turn: string | null; encoder: string | null; retries: number; stalled: boolean; problem_code: string | null; end_reason: string | null; live_seconds: number | null } | null;
   log: LogEntry[];
 }
@@ -106,6 +106,7 @@ export function buildDiagnostics(input: DiagnosticsInput): DiagnosticsReport {
           last_ack_seq: input.input.lastAck?.lastSeq ?? null,
           accepted_events: input.input.lastAck?.acceptedEvents ?? null,
           dropped_events: input.input.lastAck?.droppedEvents ?? null,
+          congested: input.input.congested,
           problem_code: input.input.problem?.code ?? null,
           end_reason: input.input.endReason,
         }

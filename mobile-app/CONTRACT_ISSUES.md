@@ -105,3 +105,19 @@ modified; each item records the workaround used here.
     setup is wrong. The phone reads the reason (an additive detail `errors.json` does not list) for its own
     copy (decision 78); an unknown or missing reason keeps the contract's message. Proposed: name the detail
     and its five values at the next contract round.
+
+20. **The contract names the relay's input budget but not a send rate for the phone.**
+    `limits.input_batches_per_second` (40) is enforced per controller (`plans.json input_rate_limit`, burst
+    80) and nothing tells a controller how fast to flush; one batch per animation frame (60–120/s) is the
+    natural implementation and is refused one frame in three after four seconds of motion. The phone now
+    paces itself from that limit (DECISIONS 79). Suggested: say in `rules.input_sessions` that a controller
+    must not sustain more than `input_batches_per_second` batches and should coalesce motion across frames
+    to stay under it, and whether adjacent `pointer_wheel` / `pointer_scroll` events may be summed like
+    `pointer_move` (the PC's `coalesce_events` does not; the phone keeps them as sent).
+
+21. **`signPayload` always derives the kid.** `shared/ts/src/signing.ts::signPayload(privateKey, publicKey,
+    text)` runs `exportKey` + `importKey` + SHA-256 on every call to recompute the RFC 7638 thumbprint —
+    three WebCrypto round trips inside every input batch's age. The phone signs batches with its own
+    `lib/signing.ts::signInputBatchWithKid` (the same envelope and schema check, the kid computed once;
+    DECISIONS 79). Suggested: an optional precomputed `kid` on `signPayload` / `signInputBatch` in the
+    shared library, so the phone can drop its copy.

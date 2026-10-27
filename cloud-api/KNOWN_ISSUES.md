@@ -28,12 +28,11 @@ Items the review surfaced that are deliberately deferred, with the reason and th
    operator interface (spec §15: strong operator authentication, audit, no command execution) is the
    intended home; until then an operator answers out of band. `DOME_SUPPORT_RESPONSE_EXPECTATION` stays unset
    until the founder decides on a realistic expectation.
-7. **Per-batch database work on the input path.** `route_input_batch` performs about five queries per
-   accepted batch (controller record, account/plan, plan-enabled controllers, PC, grant). The suite forwards
-   well above the 40 batches/s budget on one socket, but at many concurrent touchpads this is the first thing
-   to optimise: a one-second per-socket authorisation cache invalidated by `grant_update`, revocation and
-   `pc_status` changes. Not done yet because the agent re-verifies every batch against its local grant, so a
-   stale relay check cannot grant anything.
+7. ~~**Per-batch database work on the input path.**~~ Resolved (2026-10-26, DECISIONS #110): `route_input_batch`
+   routes on a per-socket copy of the controller, plan, PC and grant rows, re-read at most once per
+   `DOME_RELAY_INPUT_AUTH_TTL_SECONDS` and dropped at once by every relay path that changes one of them. What remains
+   per batch is the signature, window, sequence and the payload schema (~2 ms); `relay.input_timing` (DECISIONS #113)
+   shows the split per second per socket, so the next bundle can prove or clear the relay.
 8. **The relay does not tell the agent that a controller's socket closed.** `rules.input_sessions` lists
    "the relay losing the controller's socket" as a session-ending trigger with reason
    `controller_disconnected`, but `relay_to_agent` has no frame for it (`CONTRACT_ISSUES.md` #12); the agent's

@@ -175,6 +175,8 @@ async def test_keyboard_only_grant_can_start_but_not_point(harness: AgentHarness
     assert harness.fake.input_count("move") == 0
     ack = await expect_ack(harness, 2)
     assert ack["dropped_events"] == 1 and ack["accepted_events"] == 1
+    session = harness.agent.input.summary()["session"]
+    assert session["dropped_batches"] == 1 and session["accepted_batches"] == 1 and session["stale_batches"] == 0
 
 
 async def test_session_start_refused_when_locked_or_disabled_or_unsupported(
@@ -253,6 +255,9 @@ async def test_replayed_seq_and_stale_batches_are_dropped(harness: AgentHarness,
     ack = await expect_ack(harness, 3)
     assert ack["dropped_events"] == 2 and ack["accepted_events"] == 2
     assert harness.agent.input.current is not None and harness.agent.input.current.live  # rejections never end it
+    session = harness.agent.input.summary()["session"]
+    assert session["dropped_batches"] == 2 and session["stale_batches"] == 1 and session["accepted_batches"] == 2
+    assert session["last_seq"] == 3 and session["seen_seq"] == 3
 
 
 def test_age_estimator_removes_a_constant_clock_offset() -> None:
@@ -319,23 +324,32 @@ async def test_relay_received_at_bounds_the_relay_to_agent_leg(harness: AgentHar
 
 
 def test_batch_age_names_the_late_leg_in_whole_milliseconds() -> None:
-    assert BatchAge(0.1234, 2.5006).stale_fields(1000) == {
+    assert BatchAge(0.1234, 2.5006, 0.0801, -1.9995).stale_fields(1000, queued=3) == {
         "late_leg": "relay_to_agent",
         "phone_age_ms": 123,
         "relay_age_ms": 2501,
         "budget_ms": 1000,
+        "phone_baseline_ms": 80,
+        "relay_baseline_ms": -2000,  # the relay's clock runs 2 s ahead of the PC's: an offset, not a delay
+        "queued": 3,
     }
     assert BatchAge(2.0, 0.05).stale_fields(1000) == {
         "late_leg": "phone_to_relay",
         "phone_age_ms": 2000,
         "relay_age_ms": 50,
         "budget_ms": 1000,
+        "phone_baseline_ms": None,
+        "relay_baseline_ms": None,
+        "queued": None,
     }
     assert BatchAge(1.5).stale_fields(1000) == {
         "late_leg": "phone_to_agent",
         "phone_age_ms": 1500,
         "relay_age_ms": None,
         "budget_ms": 1000,
+        "phone_baseline_ms": None,
+        "relay_baseline_ms": None,
+        "queued": None,
     }
     assert BatchAge(0.2, 1.1).seconds == 1.1 and BatchAge(0.3).seconds == 0.3 and BatchAge(0.4, 0.1).seconds == 0.4
 
@@ -371,7 +385,15 @@ async def test_a_stale_drop_logs_which_leg_was_late_and_never_the_input(
         late_ms, prompt_ms = prompt_ms, late_ms
     assert abs(late_ms - 1000 * max(phone_late, relay_late)) < 500 and prompt_ms < 500
     assert isinstance(late_ms, int) and isinstance(prompt_ms, int)
+    # both clock baselines (what the ages were judged against) and the dispatch queue's depth travel with the line
+    assert isinstance(line["phone_baseline_ms"], int) and abs(line["phone_baseline_ms"]) < 500
+    assert isinstance(line["relay_baseline_ms"], int) and abs(line["relay_baseline_ms"]) < 500
+    assert line["queued"] == 0
     assert sentinel not in json.dumps(logs, default=str)
+    session = harness.agent.input.summary()["session"]
+    assert session["stale_batches"] == 1 and session["dropped_batches"] == 1 and session["accepted_batches"] == 2
+    worst = session["max_phone_age_ms" if leg == "phone_to_relay" else "max_relay_age_ms"]
+    assert abs(worst - late_ms) < 500 and session["dropped_events"] == 1 and session["accepted_events"] == 2
 
 
 async def test_forged_and_misaddressed_batches_are_rejected(harness: AgentHarness, controller: Controller) -> None:
@@ -492,6 +514,77 @@ async def test_keepalives_renew_the_lease(fast: AgentHarness, controller: Contro
     assert fast.agent.input.current is not None and fast.agent.input.current.live
     ack = await expect_ack(fast, 6)
     assert ack["accepted_events"] == 0
+
+
+async def test_only_stale_batches_keep_the_session_alive(fast: AgentHarness, controller: Controller) -> None:
+    """Device run 2026-10-26, session 4: every batch arrived > 1 s late for 3 s and the session died `lease_expired`
+    while the finger was still moving. A stale batch is authenticated and in sequence, so it renews the lease; it is
+    still dropped (INPUT_STALE, counted) and the next prompt batch is injected."""
+    sid = (await start_input(fast, controller))["result"]["input_session_id"]
+    await send_batch(fast, controller, sid, 1, [MOVE])  # the baseline: a prompt batch
+    await wait_for(lambda: fast.fake.input_count("move") == 1)
+    late = timedelta(seconds=2.5)
+    for seq in range(2, 10):  # 1.6 s of nothing but late batches, against a 0.6 s lease
+        await send_batch(fast, controller, sid, seq, [MOVE], issued_at=now_utc() - late)
+        await asyncio.sleep(0.2)
+    await send_batch(fast, controller, sid, 10, [], issued_at=now_utc() - late)  # a late keepalive renews too
+    await asyncio.sleep(0.5)
+    current = fast.agent.input.current
+    assert current is not None and current.live and current.input_session_id == sid
+    assert fast.fake.input_count("move") == 1  # the late motion was never injected
+    await send_batch(fast, controller, sid, 11, [MOVE])
+    await wait_for(lambda: fast.fake.input_count("move") == 2)
+    ack = await expect_ack(fast, 11)
+    assert ack["dropped_events"] == 8 and ack["accepted_events"] == 2
+    session = fast.agent.input.summary()["session"]
+    assert session["stale_batches"] == 9 and session["dropped_batches"] == 9 and session["accepted_batches"] == 2
+    assert session["max_phone_age_ms"] > 2000
+
+
+async def test_a_replayed_stale_batch_does_not_renew_the_lease(fast: AgentHarness, controller: Controller) -> None:
+    """The relay's per-socket sequence guard stops an honest phone from re-sending; a relay that holds one signed stale
+    envelope could otherwise keep the session (and a drag's held button) alive after the phone vanished. A stale batch
+    does not advance `last_seq` (the acks keep reporting it unacknowledged, which the phone's back-pressure reads), so
+    the sequence number is remembered apart: the same stale seq delivered again is dropped and renews nothing."""
+    sid = (await start_input(fast, controller))["result"]["input_session_id"]
+    await send_batch(fast, controller, sid, 1, [MOVE])
+    await wait_for(lambda: fast.fake.input_count("move") == 1)
+    late = timedelta(seconds=2.5)
+    for _ in range(8):  # 1.6 s of the SAME stale seq 2, against a 0.6 s lease
+        await send_batch(fast, controller, sid, 2, [MOVE], issued_at=now_utc() - late)
+        await asyncio.sleep(0.2)
+    ended = await expect_session_event(fast, "ended", "lease_expired")
+    assert ended["input_session_id"] == sid and fast.fake.input_count("move") == 1
+    last = fast.agent.input.summary()["last_session"]
+    assert last["end_reason"] == "lease_expired" and last["accepted_batches"] == 1
+    assert last["stale_batches"] >= 1 and last["last_seq"] == 1 and last["seen_seq"] == 2
+    err = await expect_error(fast, "INPUT_STALE")
+    assert err["ref_input_session_id"] == sid
+
+
+async def test_batches_that_fail_the_sequence_or_session_check_do_not_renew(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Only a batch the session accepts as its own and in order proves the phone is alive: a replayed sequence
+    number and a batch for another session leave the lease alone, and the session ends `lease_expired`."""
+    sid = (await start_input(fast, controller))["result"]["input_session_id"]
+    await send_batch(fast, controller, sid, 1, [MOVE])
+    await wait_for(lambda: fast.fake.input_count("move") == 1)
+    for _ in range(6):  # 1.2 s of replays against a 0.6 s lease
+        await send_batch(fast, controller, sid, 1, [MOVE])
+        await asyncio.sleep(0.2)
+    ended = await expect_session_event(fast, "ended", "lease_expired")
+    assert ended["input_session_id"] == sid
+    sid = (await start_input(fast, controller))["result"]["input_session_id"]
+    other = "x" * 22
+    for seq in range(1, 7):
+        await send_batch(fast, controller, other, seq, [MOVE])
+        await asyncio.sleep(0.2)
+    ended = await expect_session_event(fast, "ended", "lease_expired")
+    assert ended["input_session_id"] == sid and fast.fake.input_count("move") == 1
+    last = fast.agent.input.summary()["last_session"]
+    assert last["end_reason"] == "lease_expired" and last["controller_id"] == controller.controller_id
+    assert last["accepted_batches"] == 0 and last["stale_batches"] == 0 and last["duration_seconds"] >= 0.6
 
 
 async def test_session_stop_releases_holds_and_is_idempotent(harness: AgentHarness, controller: Controller) -> None:

@@ -1176,7 +1176,7 @@ class Agent:
             return {"requested": True}
 
         async def diagnostics(_: dict[str, Any]) -> dict[str, Any]:
-            path = await asyncio.to_thread(write_bundle, self.settings, self.status())
+            path = await asyncio.to_thread(write_bundle, self.settings, self.status(), platform=self.platform)
             return {"path": str(path)}
 
         async def power_cancel(_: dict[str, Any]) -> dict[str, Any]:

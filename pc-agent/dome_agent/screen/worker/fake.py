@@ -1,8 +1,8 @@
 """Frame sources behind the :class:`FrameSource` seam (design §5.2) and the fakes that run on Linux.
 
 ``read()`` blocks for at most one frame interval and returns the next **changed** frame, or None when the screen is
-still (``ddagrab``'s ``dup_frames=0`` delivers nothing then): the track keeps the last raw frame and re-encodes it at
-≥ 1 fps so the phone's stall detector stays meaningful. Sources:
+still (the ``ddagrab`` source drops the frames the filter re-sends unchanged): the track keeps the last raw frame and
+re-encodes it at ≥ 1 fps so the phone's stall detector stays meaningful. Sources:
 
 * :class:`LavfiTestSource`: FFmpeg's ``testsrc`` through the ``lavfi`` device (the same device the Windows source
   uses for ``ddagrab``), converted to yuv420p in the graph. ``still`` makes it deliver one frame and then nothing.

@@ -17,10 +17,16 @@ against a per-session estimate of the phone's clock offset (:class:`AgeEstimator
 receipt-minus-issued_at, seeded by the ``input.session_start`` command), so a phone clock a few seconds
 behind or ahead of the PC neither kills the touchpad nor hides a relay stall; the relay's
 ``received_at`` stamp bounds the relay → agent leg the same way. An ``INPUT_STALE`` drop's log line names
-the late leg and both ages in ms (:class:`BatchAge`), so a diagnostics bundle shows where latency built up.
+the late leg, both ages and both clock baselines in ms and the dispatch queue's depth (:class:`BatchAge`), and
+:meth:`InputSessionManager.summary` keeps per-session counters (batches accepted / dropped / stale, the worst age
+per leg) for the current and the last ended session, so a diagnostics bundle shows where latency built up.
 Rejections drop the batch and are
 reported as (rate-limited) ``error`` frames plus ``dropped_events`` in the next ack; they never end the
-session. NOTE: the current relay does not forward agent ``error`` frames (they carry no session or
+session. **A stale batch still renews the lease, once per sequence number**: it is authenticated, correctly sequenced
+and proves the phone is sending, so lateness alone can never end a session (the first device run lost a session to
+``lease_expired`` after 3 s of late batches while the finger was still moving); only silence does. The sequence number
+of a stale batch is remembered (``seen_seq``, apart from ``last_seq``, which the acks report and which a stale batch
+does not advance), so the same stale envelope re-delivered by a relay proves nothing new and renews nothing. NOTE: the current relay does not forward agent ``error`` frames (they carry no session or
 controller reference, CONTRACT_ISSUES.md #11), so in the integrated system the phone sees only the
 ``dropped_events`` count, ``input_session{suspended|ended}`` and ``pc_state``. Accepted batches are dispatched in order on one worker: adjacent
 ``pointer_move`` events are summed, nothing is merged across any other event, and if the dispatch lag
@@ -157,7 +163,8 @@ class InputSession:
     started_at: float  # monotonic
     lease_expires_at: float  # monotonic
     state: SessionState = "live"
-    last_seq: int = 0
+    last_seq: int = 0  # the newest batch accepted (or dropped whole for a Screen view gate): what the acks report
+    seen_seq: int = 0  # the newest authenticated, in-sequence batch judged, stale ones included: the lease's guard
     accepted_events: int = 0
     dropped_events: int = 0
     held_buttons: set[str] = field(default_factory=set)
@@ -167,10 +174,34 @@ class InputSession:
     blocked_at: float = 0.0  # monotonic time the block was set
     end_reason: str | None = None
     clock: AgeEstimator | None = None  # the owning phone's clock offset (issued_at vs our receipt)
+    # Latency bookkeeping for the diagnostics bundle (counts and milliseconds only, never content).
+    accepted_batches: int = 0
+    dropped_batches: int = 0
+    stale_batches: int = 0
+    max_phone_age_ms: int = 0
+    max_relay_age_ms: int | None = None  # None until the relay stamped a batch
 
     @property
     def live(self) -> bool:
         return self.state == "live"
+
+    def note_age(self, age: BatchAge) -> None:
+        """Remember the worst extra delay seen per leg (every judged batch, accepted or not)."""
+        self.max_phone_age_ms = max(self.max_phone_age_ms, round(age.phone * 1000.0))
+        if age.relay is not None:
+            self.max_relay_age_ms = max(self.max_relay_age_ms or 0, round(age.relay * 1000.0))
+
+    def latency_summary(self) -> dict[str, Any]:
+        """The counters :meth:`InputSessionManager.summary` reports (content-free)."""
+        return {
+            "accepted_events": self.accepted_events,
+            "dropped_events": self.dropped_events,
+            "accepted_batches": self.accepted_batches,
+            "dropped_batches": self.dropped_batches,
+            "stale_batches": self.stale_batches,
+            "max_phone_age_ms": self.max_phone_age_ms,
+            "max_relay_age_ms": self.max_relay_age_ms,
+        }
 
     def lease_expires_text(self) -> str:
         remaining = max(0.0, self.lease_expires_at - time.monotonic())
@@ -190,17 +221,22 @@ class BatchAge:
     """How late a batch is, per leg (seconds of extra delay over the fastest recent message on that leg, each
     judged against its own sender's clock): ``phone`` from the phone's ``issued_at`` (the whole way, phone → relay →
     agent) and ``relay`` from the relay's ``received_at`` (relay → agent only; None when the relay did not stamp it).
-    The batch's age is the larger of the two."""
+    The batch's age is the larger of the two. ``phone_baseline`` / ``relay_baseline`` are the estimators' baselines
+    the ages were judged against (seconds; ``latency - clock offset`` of the fastest recent message, so a jump in
+    one between two bundles is a clock step, not a stall)."""
 
     phone: float
     relay: float | None = None
+    phone_baseline: float | None = None
+    relay_baseline: float | None = None
 
     @property
     def seconds(self) -> float:
         return max(self.phone, self.relay or 0.0)
 
-    def stale_fields(self, budget_ms: int) -> dict[str, Any]:
-        """Log fields for an ``INPUT_STALE`` drop: which leg was late and by how much (ms, rounded), never content.
+    def stale_fields(self, budget_ms: int, *, queued: int | None = None) -> dict[str, Any]:
+        """Log fields for an ``INPUT_STALE`` drop: which leg was late and by how much (ms, rounded), both clock
+        baselines and how many accepted batches still wait for dispatch (``queued``), never content.
         ``relay_to_agent`` when the relay → agent leg alone is over the budget; ``phone_to_relay`` when it is not (the
         delay came before the relay stamped the batch: the phone, its network or the relay's inbound side);
         ``phone_to_agent`` when the relay did not stamp it (the legs cannot be told apart)."""
@@ -215,6 +251,9 @@ class BatchAge:
             "phone_age_ms": round(self.phone * 1000.0),
             "relay_age_ms": round(self.relay * 1000.0) if self.relay is not None else None,
             "budget_ms": int(budget_ms),
+            "phone_baseline_ms": round(self.phone_baseline * 1000.0) if self.phone_baseline is not None else None,
+            "relay_baseline_ms": round(self.relay_baseline * 1000.0) if self.relay_baseline is not None else None,
+            "queued": queued,
         }
 
 
@@ -317,6 +356,7 @@ class InputSessionManager:
         self._relay_clock = self._new_estimator()
         self._relay_clock_conn: str | None = None
         self._end_lock = asyncio.Lock()
+        self._last_session: dict[str, Any] | None = None  # the last ended session's counters (summary())
         self.acks_sent = 0
         self.sessions_started = 0
 
@@ -515,9 +555,16 @@ class InputSessionManager:
                 "input session ended",
                 reason=reason,
                 holds_released=released,
-                accepted_events=session.accepted_events,
-                dropped_events=session.dropped_events,
+                **session.latency_summary(),
             )
+            self._last_session = {
+                "controller_id": session.controller_id,
+                "end_reason": reason,
+                "duration_seconds": round(time.monotonic() - session.started_at, 1),
+                "last_seq": session.last_seq,
+                "seen_seq": session.seen_seq,
+                **session.latency_summary(),
+            }
             await self._emit_session(session, "ended", reason, released)
             self._on_state_change()
             return released
@@ -617,18 +664,34 @@ class InputSessionManager:
             return False
         if vb.seq <= session.last_seq:
             session.dropped_events += count
+            session.dropped_batches += 1
             await self._report("INPUT_SEQUENCE_INVALID", session=session)
             self._schedule_ack(session)
             return False
+        # A stale batch does not advance last_seq (the phone's acks keep seeing it as unacknowledged), so its sequence
+        # number is remembered apart: the same stale envelope delivered again is judged again, but proves nothing new.
+        first_delivery = vb.seq > session.seen_seq
+        session.seen_seq = max(session.seen_seq, vb.seq)
         age = self._batch_age(session, vb, relay_received_at, relay_connection_id)
+        session.note_age(age)
         if age.seconds * 1000.0 > self.age_budget_ms:
+            # Late, but authenticated and in sequence: the phone is still sending. The lease is renewed so that
+            # lateness alone never ends the session (only silence does); the batch itself is dropped as before. A
+            # replay of a stale sequence number renews nothing: a relay holding one signed envelope could otherwise
+            # keep the session, and its held buttons, alive after the phone went silent.
+            if first_delivery:
+                session.lease_expires_at = time.monotonic() + self.lease_seconds
             session.dropped_events += count
-            await self._report("INPUT_STALE", session=session, log_fields=age.stale_fields(self.age_budget_ms))
+            session.dropped_batches += 1
+            session.stale_batches += 1
+            fields = age.stale_fields(self.age_budget_ms, queued=len(self._queue))
+            await self._report("INPUT_STALE", session=session, log_fields=fields)
             self._schedule_ack(session)
             return False
         needed = vb.required_capabilities
         if ("pointer" in needed and not session.pointer) or ("keyboard" in needed and not session.keyboard):
             session.dropped_events += count
+            session.dropped_batches += 1
             await self._report("INPUT_NOT_PERMITTED", session=session)
             self._schedule_ack(session)
             return False
@@ -636,6 +699,7 @@ class InputSessionManager:
         if screen_code is not None:
             # An absolute pointer without the picture (or at a stale geometry) is dropped whole; the session continues.
             session.dropped_events += count
+            session.dropped_batches += 1
             session.last_seq = vb.seq
             session.lease_expires_at = time.monotonic() + self.lease_seconds
             await self._report(screen_code, session=session)
@@ -643,6 +707,7 @@ class InputSessionManager:
             return False
         session.last_seq = vb.seq
         session.lease_expires_at = time.monotonic() + self.lease_seconds
+        session.accepted_batches += 1
         if count:
             now = time.monotonic()
             self._queue.append(_Pending(sid, vb.seq, list(vb.payload["events"]), now, now - age.seconds))
@@ -682,6 +747,7 @@ class InputSessionManager:
         session.clock.observe(delta, mono)
         phone = session.clock.age(delta)
         relay: float | None = None
+        relay_baseline: float | None = None
         if relay_received_at is not None:
             try:
                 relay_delta = (now - parse_rfc3339(relay_received_at)).total_seconds()
@@ -693,7 +759,8 @@ class InputSessionManager:
                     self._relay_clock_conn = relay_connection_id
                 self._relay_clock.observe(relay_delta, mono)
                 relay = self._relay_clock.age(relay_delta)
-        return BatchAge(phone, relay)
+                relay_baseline = self._relay_clock.baseline
+        return BatchAge(phone, relay, session.clock.baseline, relay_baseline)
 
     async def _run(self) -> None:
         while True:
@@ -968,6 +1035,8 @@ class InputSessionManager:
         return self._foreground
 
     def summary(self) -> dict[str, Any]:
+        """Status / diagnostics view: the current session (with its latency counters), the last ended session's
+        counters (a bundle is usually written after the trouble), totals; counts and milliseconds, never content."""
         s = self._current
         return {
             "session": None
@@ -978,14 +1047,17 @@ class InputSessionManager:
                 "pointer": s.pointer,
                 "keyboard": s.keyboard,
                 "last_seq": s.last_seq,
-                "accepted_events": s.accepted_events,
-                "dropped_events": s.dropped_events,
+                "seen_seq": s.seen_seq,
+                **s.latency_summary(),
                 "held_buttons": sorted(s.held_buttons),
                 "held_keys": sorted(s.held_keys),
                 "lease_expires_at": s.lease_expires_text(),
             },
+            "last_session": self._last_session,
             "sessions_started": self.sessions_started,
             "acks_sent": self.acks_sent,
+            "age_budget_ms": self.age_budget_ms,
+            "lease_seconds": self.lease_seconds,
             "input_restricted": self._restricted,
             "foreground_process": self._foreground.process_name if self._foreground else None,
         }

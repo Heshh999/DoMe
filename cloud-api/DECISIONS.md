@@ -571,3 +571,57 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     union's shape and compares both paths on good and bad frames. The payload schema is now the largest per-batch CPU
     item: `input_batch_payload`, whose `input_event` is the same kind of union, costs 1.2–1.5 ms with four events. It
     lives in `dome_protocol`, shared with the agent, and is left for a change there.
+112. **An input batch is stamped when it arrives on the socket, and the socket is read ahead of the loop.** The agent
+    measures the relay → agent leg from `relay.received_at`; `route_input_batch` stamped it when the batch's turn came,
+    so every millisecond a batch waited for the relay counted against the phone → relay leg, and the agent's new
+    `late_leg` field would have blamed the phone for a relay backlog. Moving the stamp to the read alone would not have
+    helped: the controller loop was strictly `receive → route → receive`, so a batch that arrived while another was
+    being routed waited inside the server's receive buffer, before any read, where no stamp could see it. Now
+    `controller_ws._read_ahead` is a task per socket that takes frames off the wire as they arrive, stamps each
+    (`InboundFrame.received_at`, wall clock, and `read_at`, monotonic; before the size check, the parse and the schema
+    check) and appends it to an `Inbox`; the loop takes them from there in arrival order. Nothing is reordered: the
+    inbox is one deque for every frame type, so a command between two batches stays between them (tested). At
+    `INBOX_DEPTH` (128) frames the reader stops reading and the socket holds the sender back, as the server's buffer
+    did before. A failed read (a disconnect, an oversized frame's 1009) is raised by the loop once the frames before it
+    are handled, so the socket still ends in order. `relay.received_at` keeps its meaning, "when the relay received
+    the frame"; it is only true now. The frame schema and the agent contract are unchanged. **Bounded queue** (the
+    latency report's "ideally"): a small *count*-bounded queue that drops the oldest batch beyond two or three was
+    considered and rejected: a phone's two animation-frame flushes or a Wi‑Fi burst delivering several frames at once
+    are ordinary, those batches are fresh, and dropping one loses pointer motion (`dx`/`dy` are cumulative) in normal
+    conditions. Instead the loop drops a batch unrouted when **both** hold: it waited longer than the agent's age budget
+    (`version.json limits.input_age_budget_ms`, `RateLimiters.input_age_budget`) for its turn, so the PC would discard
+    it as stale anyway, *and* a newer `input_batch` is already waiting behind it. The newest batch is never dropped,
+    so the PC still sees the stream however late and can renew the session lease on it; a relay that dropped every late
+    batch would have starved the lease exactly as the stale drops on the PC did on 2026-10-26 (session 4). The phone
+    hears `INPUT_STALE` (`ref_pc_id`, no session id: the batch was never parsed) at most once per second, as from the
+    agent; `input_batch.dropped_stale` is logged at the same rate; no security event, as nothing was checked. A dropped
+    batch spends no token of the pre-database bucket. The per-socket seq guard is untouched: a dropped batch was never
+    forwarded, so `input_seq` does not move, and the later batch has a higher seq (tested, with the replay check after
+    it). After #110 a backlog needs the relay to be slowed about tenfold (Fly's shared-CPU quota would do it); the
+    drop then keeps the relay's own delay pinned at the budget instead of growing for the rest of the gesture.
+    Observable change for a phone: the error for a frame the parser or schema refuses is now sent as it is read, so
+    it can precede the answer to an earlier frame still being routed.
+113. **`relay.input_timing`: one INFO line per second per streaming controller socket.** The diagnostics bundle could
+    not say whether the relay was slow; the relay logged nothing per accepted batch (correctly) and nothing per second.
+    `relay/input_timing.py::InputTiming` keeps one window per socket: `received` (input_batch frames the loop took),
+    `forwarded`, `dropped` (#112), `refused` as `[{reason, count}]` (the pre-database RATE_LIMITED included; codes are
+    values, never keys, because the redactor masks keys ending in `_key` such as UNKNOWN_KEY), `auth_hits` /
+    `auth_misses` (#110's cache), `queued_max` (frames waiting behind a batch when the loop took it), and max/mean
+    milliseconds for `auth` (`input_authorization`), `verify` (signature, binding, window, payload schema), `forward`
+    (the send to the PC, its lock included) and `lag` (from the frame's arrival on the socket, #112, to the start of
+    its routing: with read-ahead this is the relay's queue). The window opens with its first batch and the line is
+    written when a batch completes at least `DOME_RELAY_INPUT_TIMING_INTERVAL_SECONDS` (default 1, 0 off) after that,
+    never per batch and never more than once per interval per socket, plus once for the window still open when the
+    socket closes. It carries `controller_id` and `pc_id` (plus `pcs` when a window served more than one PC), both
+    already in the rejection lines, and no content: no envelope, payload, event or text. Tested: the shape, the rate
+    limit (a 20-batch burst writes nothing; the batch a second later writes one line counting 21), the final line on
+    close, and that `logging.redact` leaves every field intact; the Screen view sentinel test for SDP and credentials
+    in log output still passes. Reading it: `lag_max_ms` near or above `auth_max_ms + verify_max_ms + forward_max_ms`
+    sustained means the loop is behind; `auth_max_ms` is the once-a-second database read; everything else should sit
+    at a few milliseconds on an idle shared CPU and grows together under CPU throttling.
+114. **`pool_recycle` stays at 600 s.** The machine report suggested 1800 s for Neon to cut TLS reconnects; the value
+    is pinned by `tests/test_database_url.py` and documented as Fly Managed Postgres guidance, whose proxy drains
+    connections after 10 minutes: at 1800 s production's pre-ping would fail and reconnect on the hot path anyway, so
+    the change helps staging only, would need a per-environment setting, and after #110 the input path touches the
+    pool once per second per socket, where a recycle costs one ~0.1–0.3 s read per pooled connection per 10 minutes,
+    far inside the 1 s budget. Left as is.

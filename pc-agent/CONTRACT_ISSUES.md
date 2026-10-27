@@ -144,3 +144,15 @@
     which is now exactly the secure desktop's own time even when a missing bar overlaps it; the phone keeps the same
     set (mobile-app). `relay-frames.schema.json` allows this as is; `rules.screen_sessions` does not say whether pauses
     nest — suggest saying so.
+26. **The lease is renewed by a stale batch, once per sequence number** (2026-10-26 device round, DECISIONS #91).
+    `rules.input_sessions` (2) says the agent "renews the lease on every valid batch" and that an `INPUT_STALE` batch
+    "is dropped"; it does not say whether a dropped-stale batch is "valid" for the lease. The founder's bundle showed a
+    session ending `lease_expired` after 3 s of batches that were all late while the finger still moved, so the agent
+    now renews the lease on an authenticated, in-sequence batch even when it is dropped as stale — but only the first
+    time that `seq` is seen (`seen_seq`): a replayed stale envelope renews nothing. The ack's `last_seq` ("the last
+    accepted seq" of the sequence rule) is NOT advanced by a stale batch, so the phone's back-pressure keeps seeing it as
+    unacknowledged. Proposed wording: "renews the lease on every authenticated batch whose seq is greater than any seq
+    seen for the session, dropped-stale batches included; a replayed seq never renews it". Related: the relay now also
+    answers `INPUT_STALE` (with `ref_pc_id`, no session id) for a batch that waited longer than `input_age_budget_ms` in
+    its own queue behind a newer one (cloud-api CONTRACT_ISSUES #24), which PROTOCOL.md §17.6 ("outside the 5 s window
+    (relay)") does not list.

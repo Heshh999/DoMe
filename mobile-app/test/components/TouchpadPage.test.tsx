@@ -14,6 +14,7 @@ import type { rest } from "@dome/protocol";
 
 import { Runtime, setRuntimeForTests } from "../../src/app/runtime.ts";
 import { configureApi } from "../../src/lib/api.ts";
+import { FLUSH_INTERVAL_MS } from "../../src/lib/input.ts";
 import { clearLogs, recentLogs } from "../../src/lib/log.ts";
 import { TouchpadPage } from "../../src/pages/app/TouchpadPage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
@@ -29,9 +30,12 @@ let rt: Runtime;
 let sockets: FakeSocket[];
 let socket: FakeSocket;
 let frames: Array<() => void>;
+/** The input client's clock: each round of frames is one flush interval later, so motion held by the rate gate goes out (DECISIONS 79). */
+let inputClock: number;
 const timers = { ...noTimers, setTimeout: (fn: () => void, ms: number): unknown => setTimeout(fn, ms), clearTimeout: (h: unknown): void => clearTimeout(h as ReturnType<typeof setTimeout>) };
 
 async function runFrames(): Promise<void> {
+  inputClock += FLUSH_INTERVAL_MS;
   const fns = frames.splice(0, frames.length);
   await act(async () => {
     for (const fn of fns) fn();
@@ -109,6 +113,7 @@ beforeEach(async () => {
   signedIn();
   clearLogs();
   frames = [];
+  inputClock = Date.now();
   sockets = [];
   rt = new Runtime({
     relay: {
@@ -121,6 +126,7 @@ beforeEach(async () => {
     },
     clockIntervalMs: 600_000,
     inputTimers: timers,
+    inputNow: () => new Date(inputClock),
     scheduleFrame: (fn) => {
       frames.push(fn);
       return frames.length;

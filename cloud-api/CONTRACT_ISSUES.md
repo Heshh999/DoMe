@@ -125,3 +125,14 @@ next protocol MINOR bump.
     allowance window". Likewise the relay forgives a start refused at the PC (`SCREEN_CONSENT_DECLINED` /
     `_TIMEOUT`, no `started`, within the consent timeout + 5 s) on a counter of its own, three per window, which
     `rules.screen_metering` (3) does not mention (it names only `connection_failed`).
+24. **The relay answers `INPUT_STALE` for a batch that waited too long in its own queue** (2026-10-26 device round,
+    DECISIONS #112). `rules.input_sessions` (2) and PROTOCOL.md §17.6 list only two `INPUT_STALE` senders: the relay for
+    an envelope outside the 5 s window, the PC for a batch older than `input_age_budget_ms` at dispatch. The relay now
+    also drops an `input_batch` unrouted when it waited longer than `input_age_budget_ms` in the socket's inbox AND a
+    newer batch is already pending (the PC would have dropped it as stale anyway; the newest batch is never dropped, so
+    the PC still renews the lease), and tells the phone `INPUT_STALE` with `ref_pc_id` only — no
+    `ref_input_session_id`, because nothing about the batch was verified — at most once per second, with no security
+    event. The phone reads it like the PC's `INPUT_STALE` (the batch was dropped, the session continues) and slows its
+    stream (mobile-app DECISIONS 79). Proposed wording for §17.6: "`INPUT_STALE` — relay: outside the 5 s window, or
+    the batch waited longer than `input_age_budget_ms` at the relay behind a newer batch (`ref_pc_id` only); PC: older
+    than the 1 s age budget at dispatch". The agent's side of the same round is pc-agent CONTRACT_ISSUES #26.

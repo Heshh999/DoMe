@@ -11,8 +11,10 @@ Windows.Graphics.Capture composes the desktop whatever adapter drives the monito
 
   - ``NativeWindowsCapture(on_frame_arrived, on_closed, cursor_capture, draw_border, secondary_window,
     minimum_update_interval, dirty_region, monitor_index, window_name, window_hwnd)``; ``None`` keeps Windows' default
-    for a setting. DoMe sets only ``cursor_capture=True`` and ``monitor_index``: a border or update-interval setting
-    that Windows 10 lacks would fail the start.
+    for a setting. DoMe sets only ``monitor_index``: every other setting stays at Windows' default (the cursor IS drawn
+    by default), because the package refuses any explicit cursor, border, secondary-window or update-interval setting
+    on a Windows 10 whose ``GraphicsCaptureSession`` lacks the property (``graphics_capture_api.rs``:
+    ``CursorConfigUnsupported`` etc.; ``IsCursorCaptureEnabled`` exists from 1903, the API itself from 1803).
   - ``start_free_threaded()`` sets the session up and starts capturing on the package's own thread, raising when it
     cannot (no Windows.Graphics.Capture, no such monitor). It returns a control whose ``stop()`` posts ``WM_QUIT`` to
     that thread and joins it (the GIL released meanwhile) and whose ``is_finished()`` tells whether it ended.
@@ -52,13 +54,24 @@ from typing import Any
 import structlog
 from dome_protocol import ProtocolError
 
-from .capture_dda import classify_capture_error, sanitise_reason
+from .capture_dda import sanitise_reason
 from .encode import VIDEO_TIME_BASE
 
 log = structlog.get_logger(__name__)
 
 NATIVE_MODULE = "windows_capture.windows_capture"
 PIXEL_FORMAT = "bgra8"  # ColorFormat::Bgra8, the only format windows-capture 2.0.1 asks Windows.Graphics.Capture for
+
+
+def classify_wgc_error(message: str) -> str:
+    """The contract's detail for a start failure windows-capture reports: the package raises a bare ``Exception``
+    whose text is Windows' or its own reason (``graphics_capture_api.rs``: "The Graphics Capture API is not supported
+    on this platform" when ``GraphicsCaptureSession::IsSupported`` is false; a monitor that is not found; a D3D error),
+    so the words are all there is. Windows.Graphics.Capture has no duplication limit and no remote-session refusal."""
+    text = message.lower()
+    if "not supported" in text or "unsupported" in text:
+        return "unsupported_display"
+    return "driver"
 
 
 def load_native() -> Any:
@@ -200,16 +213,14 @@ class WgcSource:
                 detail={"detail": "unsupported_display"},
             )
         try:
-            capture = native.NativeWindowsCapture(
-                self._on_frame_arrived, self._on_closed, cursor_capture=True, monitor_index=position
-            )
+            capture = native.NativeWindowsCapture(self._on_frame_arrived, self._on_closed, monitor_index=position)
             self._control = capture.start_free_threaded()
         except Exception as exc:  # noqa: BLE001 - the package raises a bare Exception with Windows' reason
             reason = sanitise_reason(f"{exc.__class__.__name__}: {exc}")
             raise ProtocolError(
                 "SCREEN_CAPTURE_UNAVAILABLE",
                 f"Windows.Graphics.Capture could not start: {reason}",
-                detail={"detail": classify_capture_error(reason)},
+                detail={"detail": classify_wgc_error(reason)},
             ) from None
         self.capture_index = position
         log.info(
@@ -304,4 +315,4 @@ class WgcSource:
                 break
 
 
-__all__ = ["NATIVE_MODULE", "WgcSource", "bgra_frame", "capture_position", "load_native"]
+__all__ = ["NATIVE_MODULE", "WgcSource", "bgra_frame", "capture_position", "classify_wgc_error", "load_native"]

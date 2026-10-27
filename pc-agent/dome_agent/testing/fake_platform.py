@@ -18,6 +18,7 @@ from ..platform.protocol import (
     NAMED_KEYS,
     SHORTCUTS,
     AppWindow,
+    DuplicationProbe,
     F11NotEnabledError,
     ForegroundApp,
     InputHoldError,
@@ -89,6 +90,10 @@ class FakeState:
     monitors: list[Monitor] = field(default_factory=lambda: [Monitor(0, 0, 0, 1920, 1080, True)])  # settable topology
     screen_fail: str | None = None  # error code raised by monitors() (None = enumerate normally)
     cursor: tuple[int, int] = (0, 0)  # where move_to last placed the cursor (physical virtual-desktop pixels)
+    # what the Desktop Duplication pre-flight answers (None: the probe cannot run here, the start proceeds as before);
+    # probe_delay_seconds makes it slow, like a driver loading
+    duplication_probe: DuplicationProbe | None = None
+    probe_delay_seconds: float = 0.0
 
     def record(self, name: str, *args: object) -> None:
         self.calls.append((name, args))
@@ -563,6 +568,13 @@ class FakeScreen:
         if self.st.screen_fail:
             raise ProtocolError(self.st.screen_fail, "fake platform cannot list the monitors")
         return list(self.st.monitors)
+
+    def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
+        self.st.record("duplication_probe", monitor.index)
+        if self.st.probe_delay_seconds:
+            time.sleep(self.st.probe_delay_seconds)
+        probe = self.st.duplication_probe
+        return probe if probe is not None else DuplicationProbe(None, reason="fake platform has no DXGI")
 
 
 class FakeNativeHost:
