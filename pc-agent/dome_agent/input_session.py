@@ -26,8 +26,9 @@ session. **A stale batch still renews the lease, once per sequence number**: it 
 and proves the phone is sending, so lateness alone can never end a session (the first device run lost a session to
 ``lease_expired`` after 3 s of late batches while the finger was still moving); only silence does. The sequence number
 of a stale batch is remembered (``seen_seq``, apart from ``last_seq``, which the acks report and which a stale batch
-does not advance), so the same stale envelope re-delivered by a relay proves nothing new and renews nothing. NOTE: the current relay does not forward agent ``error`` frames (they carry no session or
-controller reference, CONTRACT_ISSUES.md #11), so in the integrated system the phone sees only the
+does not advance), so the same stale envelope re-delivered by a relay proves nothing new and renews nothing. The relay
+routes an agent ``error`` frame that names ``ref_controller_id`` to that controller's own sockets with ``ref_pc_id``
+added (protocol 1.1 amendment; CONTRACT_ISSUES.md #11 resolved), so the phone sees the rejection code as well as the
 ``dropped_events`` count, ``input_session{suspended|ended}`` and ``pc_state``. Accepted batches are dispatched in order on one worker: adjacent
 ``pointer_move`` events are summed, nothing is merged across any other event, and if the dispatch lag
 exceeds the age budget the backlog is discarded and the session is suspended (fresh start required).

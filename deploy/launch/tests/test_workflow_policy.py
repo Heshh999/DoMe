@@ -289,6 +289,13 @@ def test_each_job_runs_the_program_once_with_its_own_mode(wf: dict[str, Any]) ->
     assert runs["deploy"][-1] == program[1] and len(runs["deploy"]) == 2  # flyctl install, then the program
 
 
+def test_dockerfile_release_channel_defaults_to_production() -> None:
+    """A build without the argument (the manual `fly deploy --config deploy/fly.toml` path) must never carry the
+    test-only Screen view readout (mobile-app DECISIONS 82); the Deploy workflow passes the environment's channel."""
+    text = DOCKERFILE.read_text()
+    assert re.findall(r"^ARG VITE_DOME_RELEASE_CHANNEL=(\S*)$", text, re.MULTILINE) == ["production"]
+
+
 def test_dockerfile_base_images_are_pinned_by_digest() -> None:
     text = DOCKERFILE.read_text()
     args = dict(re.findall(r"^ARG ((?:PYTHON|NODE|UV)_IMAGE)=(\S+)$", text, re.MULTILINE))

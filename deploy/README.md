@@ -52,7 +52,8 @@ runtime    python:3.12-slim-bookworm, user dome (uid 10001), /app/cloud-api/.ven
   them is a manual edit (resolve the tag, replace the digest, let CI build it); no bot does it yet.
 - The API serves the PWA from the same origin (`/` static, `/v1` REST, `/ws` sockets), so there is
   no CORS configuration and no second deployable. API and PWA are always the same commit.
-- Build arguments: `VITE_DOME_RELEASE_CHANNEL` (default `staging`), `VITE_DOME_SUPPORT_URL`,
+- Build arguments: `VITE_DOME_RELEASE_CHANNEL` (default `production`: a build without the argument never shows the
+  test-only Screen view readout, mobile-app DECISIONS 82; the Deploy workflow passes each environment's channel), `VITE_DOME_SUPPORT_URL`,
   `VITE_DOME_API_ORIGIN` (leave empty: same origin), all public, build-time values; and
   `DOME_BUILD_COMMIT`, the git commit, which becomes an environment variable and the OCI
   `org.opencontainers.image.revision` label. `/healthz` reports it as `"commit"`, so a deploy can prove

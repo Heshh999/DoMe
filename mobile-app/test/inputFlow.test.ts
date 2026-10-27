@@ -15,7 +15,7 @@ import type { CommandRecord } from "../src/lib/commands.ts";
 import type { ControllerIdentity } from "../src/lib/controllerKey.ts";
 import { FLUSH_INTERVAL_MS, InputSessionClient, type InputEvent, type InputSessionState } from "../src/lib/input.ts";
 import { FakeTimers } from "./helpers/fakeTimers.ts";
-import { ACCOUNT, CONTROLLER, PC, TS } from "./helpers/harness.ts";
+import { ACCOUNT, CONTROLLER, flush, PC, TS } from "./helpers/harness.ts";
 
 const SESSION_ID = "A".repeat(22);
 const RATE = LIMITS.input_batches_per_second;
@@ -404,6 +404,34 @@ describe("explicit flush and a fresh session", () => {
     expect(h.sent).toHaveLength(2);
     await h.frame(FLUSH_INTERVAL_MS);
     expect(h.sent).toHaveLength(3);
+  });
+
+  it("an INPUT_STALE notice settles only the waiters whose batch is at least the age budget old; a younger Send waits for its ack (DECISIONS 84)", async () => {
+    const h = await live();
+    h.client.enqueue(click);
+    const oldSeq = (await h.client.flush())!;
+    const old = h.client.awaitAck(oldSeq, 10_000);
+    h.timers.now += LIMITS.input_age_budget_ms + 50;
+    h.client.enqueue(click);
+    const youngSeq = (await h.client.flush())!;
+    let young: string | null = null;
+    const youngDone = h.client.awaitAck(youngSeq, 10_000).then((o) => (young = o));
+    h.timers.now += 200;
+    // the relay dropped some batch that waited its age budget (cloud-api DECISIONS #112): no seq, no session id
+    h.client.handleFrame({ type: "error", error: { code: "INPUT_STALE", message: "Dropped by the relay: the batch waited longer than the input age budget", retryable: true }, ref_pc_id: PC });
+    await expect(old).resolves.toBe("dropped"); // old enough to have been the stale batch
+    await flush(2);
+    expect(young).toBeNull(); // 200 ms old: it cannot be the stale one; the ack decides
+    expect(h.client.snapshot.problem).toEqual({ code: "INPUT_STALE" });
+    expect(h.client.snapshot.congested).toBe(true); // the hold stays
+    h.ack(youngSeq);
+    await youngDone;
+    expect(young).toBe("accepted");
+    // any other per-batch rejection still settles every waiter: it can name any batch
+    h.client.enqueue(click);
+    const next = h.client.awaitAck((await h.client.flush())!, 10_000);
+    h.client.handleFrame({ type: "error", error: { code: "INPUT_RESTRICTED", message: "x", retryable: true }, ref_pc_id: PC, ref_input_session_id: SESSION_ID });
+    await expect(next).resolves.toBe("dropped");
   });
 
   it("a new session starts with a clean gate, floor and flag", async () => {

@@ -586,7 +586,11 @@
     `INPUT_STALE` line carries both clock baselines and the dispatch queue's
     depth next to the two ages, and `summary()` keeps per-session counters (batches accepted / dropped / stale, the worst
     age per leg) for the current and the last ended session, with the budget and the lease, so the next bundle can say
-    which leg was slow after the session is gone. Nothing of the phone's content is in any of it.
+    which leg was slow after the session is gone. Nothing of the phone's content is in any of it. Bound of the renewal:
+    the agent verifies the envelope's `expires_at` before `handle_batch` (`input_batch_lifetime_seconds` = 5), so distinct
+    stale envelopes a relay holds back can renew the lease only until 5 s after the phone issued its last batch, plus the
+    3 s lease: a phone that stopped sending still loses the session (and its held buttons) within about 8 s, where before
+    it was 3 s after the last fresh batch.
 92. **Desktop Duplication failures are classified from PyAV's exception class and errno and FFmpeg's captured lines,
     never from the exception's text** (revises #90's text matching; `capture_dda.classify_capture_failure`). PyAV
     installs a no-op log callback, so `ddagrab`'s lines exist only while `av.logging.set_level(ERROR)` and an

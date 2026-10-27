@@ -34,8 +34,11 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550
 ############################################################################################
 FROM ${NODE_IMAGE} AS pwa
 ARG PNPM_VERSION=10.28.0
-# Build-time, public values (see .env.example "mobile-app"). Empty = same origin for the API.
-ARG VITE_DOME_RELEASE_CHANNEL=staging
+# Build-time, public values (see .env.example "mobile-app"). Empty = same origin for the API. The channel defaults to
+# production so that a build without the argument (an engineer's manual `fly deploy --config deploy/fly.toml`) never
+# carries the test-only Screen view readout (mobile-app DECISIONS 82); the Deploy workflow passes each environment's
+# channel from deploy/launch/environments.toml.
+ARG VITE_DOME_RELEASE_CHANNEL=production
 ARG VITE_DOME_API_ORIGIN=
 ARG VITE_DOME_SUPPORT_URL=
 ENV CI=true \

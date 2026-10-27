@@ -21,14 +21,15 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   of `width`/`height`.
 - **Phone (mobile-app):** the track is kept once the PC's answer has verified (held privately until `verified`, published
   in the same state write), with regression tests that fire `ontrack` inside the fake `setRemoteDescription` as browsers
-  do; a first-frame watchdog (keyframe requests, then one restart at 15 s, VP8 offered first on the retry; held while
+  do; a first-frame watchdog (keyframe requests, then one restart at 15 s, VP8 only on the retry when H.264 arrived but
+  never decoded; held while
   the PC reports a pause or the picture only waits for "Tap to show the picture"); a whitelisted `getStats` reduction
   (`screenStats.ts`) and a copyable on-page readout in dev/test/ci/staging builds only (allow-list), no pixel access; a
-  start-up timeline in the phone's diagnostics. 1499 passed; `pnpm check` clean.
+  start-up timeline in the phone's diagnostics. 1504 passed; `pnpm check` clean.
 - **PC (pc-agent):** `scale_d3d11=width=..:height=..:format=nv12`, pinned by a test against the n8.1.3 option names, the
   worker self-test and a licence-gate row; `h264_mf` opens with the low-delay flag and `max_b_frames=0`; a bounded drain
   pump re-encodes the held frame until the first packet or a PLI keyframe comes out (under 0.5 s with an encoder holding
-  7 frames; 7 s before); `encoder_stalled` after 3 s without a keyframe, after which the next session on this PC offers
+  7 frames; 7 s before); `encoder_stalled` after 5 s without a keyframe, after which the next session on this PC offers
   VP8 first; AVCC output converted to Annex B if an encoder ever produces it; RTP payloads capped at 1200 bytes; a
   `screen media` line every 5 s (RTP packets/bytes, receiver reports, loss, jitter, RTT, PLI/NACK counts, keyframes;
   no content or address) kept in `status.screen.session.media` and the last session's; the encoder's SPS
@@ -37,6 +38,15 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   `tests/test_e2e_screen.py` 14 passed.
 - 13 review findings (1 major: a pending Desktop Duplication open never fell back to WGC) all fixed; 25 of 25 mutants
   killed by the new tests.
+- **Final check (four checkers, a fixer).** One major, reproduced against the real client: the PC answers the phone's
+  `bye` with `ended{stopped}` up to 2 s later, and the phone, whose automatic fresh session had no id yet, took that
+  frame as its own and ended the retry before it began ("Stopped · 0 s" instead of the retry and the VP8 fallback).
+  Retired session ids are now remembered and their late frames dropped (mobile-app DECISIONS 83; regression tests on
+  the no-picture, stall and Stop → Start paths). Also: an INPUT_STALE notice no longer reports a Send as dropped when
+  its batch is too young to be the stale one (84); the Dockerfile's channel defaults to `production` (no readout on a
+  manual deploy); a `GpuPreference` value other than a short number is reported as `unknown`; the relay's parse-error
+  reply takes the send lock; wording fixed here (5 s, VP8 only), in ACCEPTANCE's Scenario 26 rows, COST_MODEL's input
+  cells, KNOWN_ISSUES 38, screen-view §16 and the input_session docstring.
 - **Deferred (KNOWN_ISSUES 35–38):** the hardware H.264 encoder (needs NV12/D3D11 input and the async MFT path),
   profile-level-id matching the real SPS, bitrate on a still screen, `live_seconds` counting from the first packet.
 - **Next (founder):** Deploy staging, install the new build over the current one (no unlink), start Screen view; the

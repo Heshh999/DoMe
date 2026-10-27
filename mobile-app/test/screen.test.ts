@@ -759,6 +759,89 @@ describe("ScreenSessionClient: the first-frame watchdog after DTLS (device round
   });
 });
 
+describe("ScreenSessionClient: the previous session's late frames during an automatic fresh session (DECISIONS 83)", () => {
+  /** The PC's `ended` for the session this phone left (its answer to our `bye`, up to 2 s later), forwarded by the relay. */
+  const lateEnded = (extra: Record<string, unknown> = {}) => sessionFrame("ended", "stopped", { live_seconds: 0, ...extra });
+
+  it("no_picture restart: ended{stopped} for the stopped session arrives while the retry waits for ICE servers; the retry goes on and verifies", async () => {
+    knobs.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    await until(() => commands("screen.session_stop").length === 1);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 1, sessionId: null });
+    socket.receive(lateEnded());
+    await flush(3);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 1, sessionId: null, endReason: null, otherViewer: false });
+    expect(logged("screen.session_ended")).toHaveLength(0);
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    const start = commands("screen.session_start")[1]!;
+    socket.receive(result(start.command_id));
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "connecting", retries: 1, sessionId: SESSION_ID });
+    expect(statusOf(rt.screen.snapshot).title).toBe(COPY.connecting);
+  });
+
+  it("…or after the retry's start command went out (phase starting): the PC's answer to the NEW start still verifies", async () => {
+    knobs.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "starting", retries: 1, sessionId: null });
+    socket.receive(lateEnded());
+    await flush(3);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "starting", retries: 1 });
+    const start = commands("screen.session_start")[1]!;
+    socket.receive(result(start.command_id));
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    expect(logged("screen.answer_ignored")).toHaveLength(0);
+    expect(logged("screen.answer_verified")).toHaveLength(2);
+    expect(rt.screen.snapshot.phase).toBe("connecting");
+  });
+
+  it("the stall restart is covered the same way, and a frame naming the session this phone is in still counts", async () => {
+    await goLive();
+    await timers.advance(STALL_RESTART_MS + 1100);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 1 });
+    socket.receive(lateEnded({ live_seconds: 6 }));
+    await flush(3);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 1, endReason: null, liveSeconds: null });
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    const start = commands("screen.session_start")[1]!;
+    socket.receive(result(start.command_id));
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    // the fixture PC reuses the id: a frame for the session this phone is in is never dropped as retired
+    socket.receive(sessionFrame("ended", "capture_failed", { live_seconds: 2 }));
+    await flush(3);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ended", endReason: "capture_failed", liveSeconds: 2 });
+  });
+
+  it("the owner's Stop, then Start: the PC's late ended{stopped} for the stopped session does not end the new start", async () => {
+    await goLive();
+    await rt.screen.stop("stopped");
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ended", endReason: "stopped" });
+    void rt.screen.start(PC);
+    await until(() => frames("screen_ice_request").length === 2);
+    socket.receive(lateEnded({ live_seconds: 3 }));
+    await flush(3);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 0, endReason: null });
+    // another phone's session on this PC is still noticed
+    socket.receive({ ...sessionFrame("started", "started"), screen_session_id: "T3RoZXJTZXNzaW9uMDFBQk", controller_id: OTHER_CONTROLLER });
+    await flush(3);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", otherViewer: true });
+  });
+});
+
 describe("ScreenSessionClient: what holds the first-frame watchdog (review of device round 2)", () => {
   const pausedMedia = (over: Partial<ScreenMediaFacts> = {}): ScreenMediaFacts => ({ at: 0, ready_state: 1, network_state: 2, paused: true, ended: false, width: 0, height: 0, current_time: 0, error: null, total_frames: 0, dropped_frames: 0, play: "rejected:NotAllowedError", rvfc: true, frame_ticks: 0, first_tick_ms: null, stream_active: true, track_state: "live", track_muted: false, track_enabled: true, ...over });
   afterEach(() => rt.screen.setMediaProbe(null));

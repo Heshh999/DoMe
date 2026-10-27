@@ -600,7 +600,9 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     it). After #110 a backlog needs the relay to be slowed about tenfold (Fly's shared-CPU quota would do it); the
     drop then keeps the relay's own delay pinned at the budget instead of growing for the rest of the gesture.
     Observable change for a phone: the error for a frame the parser or schema refuses is now sent as it is read, so
-    it can precede the answer to an earlier frame still being routed.
+    it can precede the answer to an earlier frame still being routed. That reply goes through the connection's send
+    lock like every other frame (the reader and the loop send concurrently), so one frame is never written inside
+    another.
 113. **`relay.input_timing`: one INFO line per second per streaming controller socket.** The diagnostics bundle could
     not say whether the relay was slow; the relay logged nothing per accepted batch (correctly) and nothing per second.
     `relay/input_timing.py::InputTiming` keeps one window per socket: `received` (input_batch frames the loop took),

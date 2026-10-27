@@ -100,6 +100,12 @@ def test_parse_gpu_preference_gives_the_value_word_only() -> None:
     assert dxgi.parse_gpu_preference("GpuPreference=7;") == "GpuPreference=7"  # a number Windows has not documented
     assert dxgi.parse_gpu_preference("SwapEffectUpgradeEnable=1;") == "unknown"  # no such token: never the raw value
     assert dxgi.parse_gpu_preference("") == "unknown"
+    # anything but a short number is not forwarded either: the bundle never carries registry text (DECISIONS #96)
+    assert dxgi.parse_gpu_preference("GpuPreference=hello world from user@host 10.0.0.5 in it;") == "unknown"
+    assert dxgi.parse_gpu_preference("GpuPreference=" + "7" * 300 + ";") == "unknown"
+    assert dxgi.parse_gpu_preference("GpuPreference=1234;") == "unknown"
+    assert dxgi.parse_gpu_preference("GpuPreference=-1;") == "unknown"
+    assert dxgi.parse_gpu_preference("GpuPreference=²;") == "unknown"  # a Unicode digit is not a Windows value
 
 
 def test_guid_from_string_lays_the_bytes_out_as_windows_does() -> None:

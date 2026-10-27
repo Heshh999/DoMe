@@ -221,9 +221,10 @@
     a minute) and the diagnostics bundle keeps the last 200 log lines, so after about a quarter of an hour the
     session's `screen encoder opened`, `screen transport` and `screen first keyframe` lines are no longer in the
     bundle; the counters are (`status.screen.session.media` while live, `status.screen.last_session_media` after),
-    and the final `screen media final` and `screen session ended` lines are at the end. `live_seconds` (and the Free
-    minutes) still start at the PC's first encoded packet, not at the phone's first shown frame, so a session that
-    shows nothing is counted as live: that is the contract's semantics and is raised separately.
+    and the final `screen media final` and `screen session ended` lines are at the end. `live_seconds` still starts
+    at the PC's first encoded packet, not at the phone's first shown frame, and the Free minutes are settled by the relay
+    from the moment it forwarded `screen.session_start` (`rules.screen_metering` (3)), so a session that shows nothing
+    is counted as live and charged either way: that is the contract's semantics and is raised separately.
 39. **What only a Windows PC and an iPhone can verify from device round 2** (DECISIONS #97 to #104): that
     `ddagrab ... scale_d3d11=width=..:height=..` now opens on the founder's Intel adapter and gives its first frame
     within 1.5 s (`screen capture source running source=dda`), or fails with a DXGI reason, or stays pending on a still

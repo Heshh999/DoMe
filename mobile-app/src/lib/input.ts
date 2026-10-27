@@ -568,17 +568,21 @@ export class InputSessionClient {
     } else if (code === "INPUT_NOT_PERMITTED") {
       this.resolveWaiters("dropped");
       this.set({ problem: { code } });
+    } else if (code === "INPUT_STALE") {
+      // the stream is late somewhere (the PC's dispatch, or the relay's queue, whose drops no ack ever shows): slow down.
+      // The notice names no batch, and only one at least the age budget old can be the stale one (the PC judges age
+      // against the budget; the relay drops a batch that waited the budget): a younger Send keeps waiting for its ack,
+      // which settles it by last_seq and dropped_events (DECISIONS 84)
+      this.staleAt = this.now().getTime();
+      this.resolveStaleWaiters(this.staleAt);
+      this.set({ problem: { code } });
+      this.updateCongestion(this.staleAt);
     } else {
-      // INPUT_SEQUENCE_INVALID / INPUT_STALE / INPUT_RESTRICTED / INPUT_INJECTION_FAILED / INPUT_TARGET_CHANGED / RATE_LIMITED,
+      // INPUT_SEQUENCE_INVALID / INPUT_RESTRICTED / INPUT_INJECTION_FAILED / INPUT_TARGET_CHANGED / RATE_LIMITED,
       // and since 1.4 INPUT_PAUSED_ON_PC / INPUT_TARGET_RESERVED / SCREEN_SESSION_REQUIRED / SCREEN_GEOMETRY_CHANGED:
       // the batch was dropped, the session continues; the UI shows the notice.
       this.resolveWaiters("dropped");
       this.set({ problem: { code } });
-      if (code === "INPUT_STALE") {
-        // the stream is late somewhere (the PC's dispatch, or the relay's queue, whose drops no ack ever shows): slow down
-        this.staleAt = this.now().getTime();
-        this.updateCongestion(this.staleAt);
-      }
     }
     return inputCode;
   }
@@ -618,6 +622,21 @@ export class InputSessionClient {
       w.resolve(outcome);
     }
     this.ackWaiters = [];
+  }
+
+  /** INPUT_STALE names no batch: a waiter whose batch left less than the age budget ago cannot be the stale one and keeps waiting. */
+  private resolveStaleWaiters(now: number): void {
+    const still: typeof this.ackWaiters = [];
+    for (const w of this.ackWaiters) {
+      const sent = this.sentAt.get(w.seq);
+      if (sent !== undefined && now - sent < this.state.ageBudgetMs) {
+        still.push(w);
+        continue;
+      }
+      this.timers.clearTimeout(w.timer);
+      w.resolve("dropped");
+    }
+    this.ackWaiters = still;
   }
 
   /** Drop everything queued and the flow-control memory of a session that is over or restarting; nothing is ever replayed. */

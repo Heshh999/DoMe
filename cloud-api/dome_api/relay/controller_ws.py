@@ -232,7 +232,9 @@ async def controller_endpoint(ws: WebSocket, svc: Services, limiters: RateLimite
             limiters.forget_connection(conn)
 
 
-async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | None = None) -> InboundFrame | None:
+async def _receive_frame(
+    ws: WebSocket, svc: Services, *, conn: ControllerConn | None = None, wait_seconds: float | None = None
+) -> InboundFrame | None:
     text = await (asyncio.wait_for(ws.receive_text(), wait_seconds) if wait_seconds is not None else ws.receive_text())
     received_at, read_at = utcnow(), time.monotonic()  # the moment the frame left the socket (DECISIONS #112)
     if len(text.encode("utf-8", "surrogatepass")) > svc.settings.relay_max_frame_bytes:
@@ -242,7 +244,12 @@ async def _receive_frame(ws: WebSocket, svc: Services, *, wait_seconds: float | 
         frame = loads_strict(text, max_bytes=svc.settings.relay_max_frame_bytes, max_depth=12, require_object=True)
         validate_inbound_frame(svc, frame)
     except ProtocolError as exc:
-        await ws.send_text(dumps_compact(frames.error_frame(exc.code, exc.message)))
+        reply = dumps_compact(frames.error_frame(exc.code, exc.message))
+        if conn is not None:
+            # the reader runs beside the loop's own sends (DECISIONS #112): through the connection's send lock
+            await conn.send_text(reply)
+        else:
+            await ws.send_text(reply)  # the hello path: no connection object yet, and nothing else sends
         return None
     assert isinstance(frame, dict)
     return InboundFrame(frame, received_at, read_at)
@@ -270,7 +277,7 @@ async def _read_ahead(ws: WebSocket, svc: Services, conn: ControllerConn, inbox:
     try:
         while True:
             await inbox.space()
-            inbound = await _receive_frame(ws, svc)
+            inbound = await _receive_frame(ws, svc, conn=conn)
             conn.last_seen = utcnow()
             inbox.put(inbound)
     except Exception as exc:  # noqa: BLE001 - a disconnect (or anything else) ends the loop once the inbox drains

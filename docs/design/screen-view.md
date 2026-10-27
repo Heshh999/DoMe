@@ -1071,6 +1071,8 @@ factory):
 | Free allowance used | `SCREEN_ALLOWANCE_EXHAUSTED` / `ended{allowance_exhausted}` | "You've used Free Screen view for now. It resets at 4:12 pm. The touchpad and remote still work." (no buy button) |
 | Another phone viewing | `SCREEN_SESSION_OWNED` | "Another phone is viewing this PC." [Take over] |
 | Connecting | timer | "Connecting to your PC's screen…" then "Trying the relay server…" |
+| Connected, no picture yet | DTLS up, no frame (the first-frame watchdog, §7) | "Connected. Waiting for the picture…" — a keyframe request at 3 s and 8 s, one fresh session at 15 s (counted with the stall restarts; VP8 only when H.264 arrived but never decoded); revised 2026-10-27 |
+| No picture after the retries | `SCREEN_CONNECTION_FAILED` `detail.cause: no_picture` | "Your PC connected, but no picture arrived." [Start again] |
 | `play()` rejected (Low Power Mode) | promise rejection | "Tap to show the picture." |
 | No path | 20 s with no DTLS | "Couldn't reach your PC's picture from this network. The touchpad and remote still work." [Try again] |
 | Relay guard hard cap | `turn: disabled` | "Screen view could only try a direct connection right now. It works on most home networks." |

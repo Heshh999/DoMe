@@ -816,3 +816,29 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     picture. Production builds render
     nothing and run no extra timer. `ScreenReadout.tsx` and `screenStats.ts` are in the no-pixel-access
     test's Screen view list (no canvas, no fetch, no socket, the stream assigned to nothing).
+
+83. **A session this phone has left is remembered, and its late lifecycle frames change nothing.** (Final check of
+    device round 2, 2026-10-27.) `restartFresh` (no picture at 15 s, a stall, a lost transport) stops the session —
+    `bye`, `screen.session_stop`, state reset — and starts the next one at once; the PC ends the old session on the
+    `bye` up to 2 s later and the relay forwards its `screen_session{ended, stopped}` to every socket of this
+    controller, by when the retry is in `ice`, `offering` or `starting` with `sessionId` still null. `onSessionFrame`
+    took any frame from this controller as its own while no id was known (that is how the PC's `started` is accepted
+    before the result arrives), so the old session's `ended` ran `endSession()`: the retry showed "Stopped · 0 s", the
+    start in flight returned at its next nonce check, and the VP8 fallback (80, 82) could never run. Reproduced against
+    the real client on the no-picture, stall and Stop → Start paths. Now the ids of sessions this phone stopped, saw end
+    or failed are kept in `retiredSessionIds` (a Set of at most `RETIRED_SESSIONS_MAX` = 8, oldest forgotten first), and
+    a `screen_session` frame naming one of them, other than the current session's id, is dropped before the ownership
+    test: it neither ends anything nor flips `otherViewer`. A frame for the session this phone is in is never dropped,
+    whatever the set holds (the test fixture reuses one id; a real PC never does). Residual and unchanged: the owner
+    stops during `starting`, before the result named the id, and the PC's `started`/`ended` for that session arrive
+    during the next start; not seen on a device, and the PC's 8 s viewer lease ends such a session on its own.
+84. **An INPUT_STALE notice settles only the Send waiters old enough to have been the stale batch.** The relay's stale
+    drop (cloud-api DECISIONS #112) is a new source of `INPUT_STALE` that names no batch; `onError` resolved every
+    pending `awaitAck` as "dropped", so a Send whose batch was forwarded and accepted was shown as rejected whenever an
+    unrelated motion batch was dropped in the same second (and a retry would type the text twice). A batch the PC or the
+    relay dropped as stale is at least `input_age_budget_ms` old when the notice arrives (the PC judges age against the
+    budget, the relay drops a batch that waited the budget, and the notice travels after that), so `resolveStaleWaiters`
+    resolves "dropped" only the waiters whose batch left at least the budget ago (or whose send time has left the
+    bounded table); younger ones keep waiting for the ack, which settles them by `last_seq` and `dropped_events` as
+    before. The congestion hold is unchanged. Every other per-batch rejection (INPUT_SEQUENCE_INVALID,
+    INPUT_RESTRICTED, …) still settles every waiter as "dropped": it can name any batch.

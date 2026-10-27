@@ -377,12 +377,16 @@ def remote_session_active() -> bool:
 
 def parse_gpu_preference(value: str) -> str:
     """Pure: the value word of a ``UserGpuPreferences`` entry (``GpuPreference=N;``): ``auto`` / ``power_saving`` /
-    ``high_performance``, ``GpuPreference=N`` for a number Windows has not documented, ``unknown`` when the entry
-    holds no such token. Never the raw value: the bundle gets the word only."""
+    ``high_performance``, ``GpuPreference=N`` for a number (at most three digits) Windows has not documented, ``unknown``
+    when the entry holds no such token or its value is not such a number. Never the raw value: the bundle gets the word
+    only (DECISIONS #96), whatever the registry string holds."""
     for part in str(value).split(";"):
         name, _sep, number = part.partition("=")
         if name.strip() == "GpuPreference":
-            return GPU_PREFERENCE_WORDS.get(number.strip(), f"GpuPreference={number.strip()}")
+            number = number.strip()
+            if not (number.isascii() and number.isdigit() and len(number) <= 3):
+                return "unknown"
+            return GPU_PREFERENCE_WORDS.get(number, f"GpuPreference={number}")
     return "unknown"
 
 

@@ -260,6 +260,13 @@ const globalTimers: ScreenTimers = {
 
 type IceOutcome = { kind: "servers"; frame: relayFrames.RelayScreenIceServers } | { kind: "error"; error: relayFrames.Error } | { kind: "timeout" } | { kind: "aborted" };
 
+/**
+ * Sessions this phone has left whose ids are still remembered: the PC ends a session up to 2 s after the phone's `bye`
+ * and the relay forwards that `ended` to every socket of this controller, by when the automatic fresh session is in
+ * flight with no id of its own yet (DECISIONS 83). A handful covers any realistic run of restarts.
+ */
+const RETIRED_SESSIONS_MAX = 8;
+
 /** End reasons after which the phone never restarts by itself (§2.2 step 5, §7). */
 const NO_RESUME: ReadonlySet<ScreenEndReason> = new Set(["stopped", "stopped_on_pc", "replaced", "takeover", "controller_revoked", "grant_removed", "plan_disabled", "remote_disabled", "allowance_exhausted"]);
 
@@ -317,6 +324,8 @@ export class ScreenSessionClient {
   private codecFallback: CodecFallback | null = null;
   /** The PC's active pause causes (relay frames come per cause; capture resumes only when none is left). */
   private pauseCauses = new Set<"secure_desktop" | "indicator">();
+  /** Ids of sessions this phone stopped, saw end or failed, oldest first (at most RETIRED_SESSIONS_MAX; DECISIONS 83). */
+  private retiredSessionIds = new Set<string>();
 
   constructor(deps: ScreenClientDeps) {
     this.deps = deps;
@@ -1026,6 +1035,11 @@ export class ScreenSessionClient {
 
   private onSessionFrame(frame: relayFrames.AgentScreenSession): boolean {
     if (frame.pc_id !== this.state.pcId) return false;
+    if (frame.screen_session_id !== this.state.sessionId && this.retiredSessionIds.has(frame.screen_session_id)) {
+      // a session this phone already left: its late `ended` (the PC's answer to our `bye`, up to 2 s later) must not
+      // end the automatic fresh session that is in flight with no id yet, nor count as another phone's (DECISIONS 83)
+      return true;
+    }
     const identity = this.deps.identity();
     const ours = identity !== null && frame.controller_id === identity.controllerId && (this.state.sessionId === null || this.state.sessionId === frame.screen_session_id);
     if (!ours) {
@@ -1057,6 +1071,7 @@ export class ScreenSessionClient {
         this.set({ pcState: "sending", pauseReason: null, phase: this.state.phase === "paused" ? "live" : this.state.phase, ...(frame.path ? { path: frame.path } : {}), lastFrameAt: this.lastFrame, stalled: false });
         return true;
       case "ended":
+        this.retire(frame.screen_session_id);
         this.endSession(frame.reason, frame.live_seconds);
         return true;
     }
@@ -1068,6 +1083,17 @@ export class ScreenSessionClient {
   private pauseShown(): "secure_desktop" | "indicator" | null {
     if (this.pauseCauses.has("secure_desktop")) return "secure_desktop";
     return this.pauseCauses.has("indicator") ? "indicator" : null;
+  }
+
+  /** Remember a session this phone has left, so its late lifecycle frames change nothing (bounded, oldest forgotten first). */
+  private retire(sessionId: string | null): void {
+    if (!sessionId) return;
+    this.retiredSessionIds.delete(sessionId);
+    this.retiredSessionIds.add(sessionId);
+    for (const oldest of this.retiredSessionIds) {
+      if (this.retiredSessionIds.size <= RETIRED_SESSIONS_MAX) break;
+      this.retiredSessionIds.delete(oldest);
+    }
   }
 
   private endSession(reason: ScreenEndReason, liveSeconds: number): void {
@@ -1094,6 +1120,7 @@ export class ScreenSessionClient {
     this.resolveIce({ kind: "aborted" });
     const { phase, pcId, sessionId, startedAt, consent, allowance, otherViewer, retries } = this.state;
     this.clearTimers();
+    this.retire(sessionId);
     if (phase === "idle") return;
     const liveSeconds = startedAt !== null ? Math.max(0, Math.round((this.now() - startedAt) / 1000)) : 0;
     const inSession = phase === "connecting" || phase === "live" || phase === "paused" || phase === "starting";
@@ -1171,6 +1198,7 @@ export class ScreenSessionClient {
 
   private fail(code: string, message?: string, detail?: Record<string, unknown>): ScreenSessionState {
     this.nonce += 1;
+    this.retire(this.state.sessionId);
     this.resolveIce({ kind: "aborted" });
     this.clearTimers();
     this.probeMedia();
