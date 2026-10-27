@@ -392,7 +392,7 @@ scripts/         gen-validators.ts, make-icons.mjs, check-bundle.ts (no key mate
   only while none is approved). A step that ends in FULLSCREEN_UNSUPPORTED shows the PC's message and
   a "Maximise instead" chip that fills "maximise <app>" (sent only with Send).
 
-### Screen view (beta), protocol 1.4 — `/app/screen` (docs/design/screen-view.md §2.2, §4, §8, §16; DECISIONS 66–74)
+### Screen view (beta), protocol 1.4 — `/app/screen` (docs/design/screen-view.md §2.2, §4, §8, §16; DECISIONS 66–82)
 
 Built and **unit-/component-tested in jsdom only, with a fake `RTCPeerConnection`; not yet verified on a
 device** (KNOWN_ISSUES 28). Behind the operator switch: the app reads `screen_view` from the public
@@ -451,7 +451,21 @@ left in this window", "Free Screen view refreshes today at 4:12 pm") and open th
   DoMe build has no Screen view says "This version of DoMe on your PC doesn't include Screen view yet";
   the Free allowance bar and "Refreshes today at 4:12 pm" reuse `lib/billing.ts`. Nothing about a
   session is stored; the SDP, candidates, ICE servers, credentials and the answer envelope never reach
-  the log (`log.ts` drops those keys) or diagnostics (phase, path, codes and seconds only).
+  the log (`log.ts` drops those keys) or diagnostics (phase, path, codes and seconds, plus the metadata
+  below).
+- **When no picture comes** (device round 2, DECISIONS 80–82): the video track that arrives inside
+  `setRemoteDescription` is kept and shown together with `verified`. Once DTLS is up the page says
+  "Connected. Waiting for the picture…"; with no frame, a keyframe request and a `screen.no_picture` log
+  line at 3 s and 8 s, a fresh session at 15 s (counted with the stall restarts; then "Your PC connected,
+  but no picture arrived."), and — when H.264 packets arrived but nothing decoded — that fresh session
+  offers VP8 only. A PC pause holds those steps (the paused time does not count), and a picture that only
+  waits for "Tap to show the picture" is never restarted: the steps count again from the tap. `getStats()` goes through a whitelist (`lib/screenStats.ts`: counts, codec, fmtp's
+  profile and packetization mode, the candidate TYPES; never an address, port or fingerprint) every 5 s;
+  the `<video>` reports its own metadata; a timeline keeps when each stage was reached. All of it is in
+  Settings › Diagnostics (`screen.stats`, `media`, `timeline`, `transport_connected`, `codec_fallback`),
+  and the dev, test-kit, CI and staging builds (an allow-list; never production or an unnamed build) show
+  it live in the stage's corner, under the page's overlays (`ScreenReadout`: a gate checklist, then the
+  numbers; Copy, with a small box to select the text where the clipboard is refused; Hide readout).
 
 ### The voice assistant, step 1 — `/app/assistant` (docs/design/assistant.md §4)
 
@@ -549,8 +563,26 @@ left in this window", "Free Screen view refreshes today at 4:12 pm") and open th
 
 ## Tests
 
-`pnpm check` — **84 files / 1431 tests passing, 1 skipped** (2026-10-22, Screen view beta after the review
-round; typecheck, lint, build and the bundle check clean).
+`pnpm check` — **89 files / 1499 tests passing, 1 skipped** (2026-10-27, device round 2: the kept video
+track, the first-frame watchdog, the stats whitelist and the readout; typecheck, lint, build and the bundle
+check clean).
+
+Device round 2 (DECISIONS 80–82): the fake peer now fires `track` inside `setRemoteDescription`, as
+browsers do; `screen` adds the founder's sequence (track during SRD → stream with `verified` → one frame →
+live), an empty `streams` array, an early track dropped and an audio track ignored, a stop during SRD; the
+watchdog (keyframe + `screen.no_picture` at 3 s and 8 s, a fresh session at 15 s, exhausted →
+`{cause: no_picture}` with its copy, a frame cancels it, the play hint; held by a PC pause and by a
+picture waiting for the tap, counted again from the tap; no hint without decoded frames; a first frame
+during the last step's stats read; no interval left after Stop); the VP8-only retry (and none when
+nothing arrived, VP8 already in use, or no VP8 in the browser); the 5 s stats loop, the ordered timeline, the
+probe's facts kept after Stop; live frames not published one by one; the SDP-sentinel diagnostics test
+with a Safari-shaped report full of addresses. `screenStats` (the whitelist, odd values, pair selection,
+fmtp, summaries untouched by redaction, the `<video>` probe, the readout lines), components
+`ScreenReadout` (the allow-listed channels only, expanded, under the overlays, gate lines without a
+stream, 1 s refresh, the remembered hide toggle and throwing storage, Copy and its select box), `ScreenSurface` (the probe: play() outcomes,
+rVFC or timeupdate ticks, the stream's flags, unregistered on unmount), `ScreenPage` (the readout in the
+stage, absent in production, "Connected. Waiting for the picture…", the play hint) and `SettingsPage`
+(the download carries the client's facts).
 
 Screen view beta (protocol 1.4, WP1.7): `screen` (the client over
 the real runtime with `test/helpers/fakePeer.ts` and `fakeTimers.ts`: no pin → nothing sent; the ICE request,

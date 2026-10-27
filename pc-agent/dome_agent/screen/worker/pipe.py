@@ -20,8 +20,10 @@ Framing: a 4-byte big-endian length followed by that many bytes of compact UTF-8
 
 Worker → agent (``ev``): ``answer {answer_sdp, encoder, geometry}`` or ``error {code, detail?, message}`` in reply to
 ``start``; ``connected {path}``, ``first_frame``, ``hb``, ``bye``, ``keyframe``, ``audio {on}``, ``geometry {...}``,
-``state {state, reason?}``, ``stats {relayed_bytes, bitrate_kbps, ...}``, ``disconnected {reason}``, ``exiting {reason}``;
-``geometry`` answers ``reserved`` and ``rebuild`` (``error`` when a rebuild cannot open its source).
+``state {state, reason?}``, ``stats {relayed_bytes, bitrate_kbps, ...}`` (every 2 s: RTP and receiver-report numbers and
+the track's counters), ``encoder_stalled {encoder, reason, encoded, aus}`` (once: no IDR within 5 s of the first frame,
+or the encoder failed), ``disconnected {reason}``, ``exiting {reason}``; ``geometry`` answers ``reserved`` and
+``rebuild`` (``error`` when a rebuild cannot open its source).
 No message is ever logged whole: SDP crosses here.
 """
 

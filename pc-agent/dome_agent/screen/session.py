@@ -28,6 +28,15 @@ supervisor's reader task that delivered the event (the stop waits for that reade
 
 Content hygiene (``rules.screen_content``): SDP exists in memory and on the private pipe only; frames, results, the
 history and the recovery file carry ids, geometry, flags, reasons and seconds.
+
+What the media path did (device round 2): the worker's 2 s ``stats`` events are kept as ``session.media``, a whitelist
+of numbers, flags and short words (:data:`MEDIA_KEYS`), shown in ``status.screen.session.media`` and, after the
+session, ``status.screen.last_session_media`` (a bundle downloaded after Stop still has it), and the ``screen session
+ended`` line carries the main ones. An ``encoder_stalled`` event (no H.264 keyframe within 5 s, or the encoder failed)
+does not end the session (the phone's no-picture watchdog starts a fresh one); for the next 24 hours of this agent
+run, a start whose offer has both codecs asks the worker for VP8 first (:data:`VP8_FIRST_SECONDS`; design §5.3 "A PC
+where H.264 failed ... offers VP8 first next time"). 1.4 signaling has no renegotiation, so the fallback is across
+sessions.
 """
 
 from __future__ import annotations
@@ -105,6 +114,59 @@ TICK_TIMEOUT_SECONDS = 10.0  # the worker exits after this long without an agent
 NORMALISED_MAX = 65535
 BITRATE_KBPS = {"direct": 1500, "relayed": 1000, "data_saver": 500}  # design §5.3
 STOP_HINT = "Stop: tray > Stop Screen view, or Ctrl+Alt+Shift+S"
+VP8_FIRST_SECONDS = 24 * 3600.0  # after an H.264 stall, starts offering both codecs ask for VP8 first this long
+# the worker's stats event fields kept in session.media (ints, floats, flags and short words only; never an address)
+MEDIA_KEYS = (
+    "captured",
+    "refreshed",
+    "pumped",
+    "encoded",
+    "aus",
+    "idr",
+    "au_bytes",
+    "pending",
+    "prepended",
+    "non_annexb",
+    "kf_req",
+    "kf_pli",
+    "kf_dc",
+    "kf_op",
+    "first_kf_ms",
+    "last_kf_ms",
+    "max_kf_ms",
+    "rtp_packets",
+    "rtp_bytes",
+    "rr",
+    "lost",
+    "jitter_ms",
+    "rtt_ms",
+    "loss",
+    "pli",
+    "nack",
+    "bitrate_kbps",
+    "encoder_label",
+    "stalled",
+)
+MEDIA_TEXT_MAX = 32
+
+
+def media_from_stats(ev: dict[str, Any]) -> dict[str, Any]:
+    """The whitelisted part of a worker ``stats`` event: :data:`MEDIA_KEYS` whose value is an int, a float, a bool,
+    None or a short printable word (anything else is dropped)."""
+    media: dict[str, Any] = {}
+    for key in MEDIA_KEYS:
+        if key not in ev:
+            continue
+        value = ev[key]
+        if value is None or isinstance(value, bool | int):
+            media[key] = value
+        elif isinstance(value, float):
+            media[key] = round(value, 3)
+        elif isinstance(value, str):
+            text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())[:MEDIA_TEXT_MAX]
+            if text:
+                media[key] = text
+    return media
 
 
 def new_session_id() -> str:
@@ -162,6 +224,7 @@ class ScreenSession:
     path: str | None = None
     relayed: bool = False
     relayed_bytes: int = 0
+    media: dict[str, Any] = field(default_factory=dict)  # the worker's last stats (media_from_stats)
     lease_expires_at: float = 0.0
     live_since: float | None = None
     accumulated: float = 0.0
@@ -324,6 +387,8 @@ class ScreenSessionManager:
         self._start_lock = asyncio.Lock()
         self._end_tasks: set[asyncio.Task[None]] = set()  # ends scheduled off the supervisor's tasks (strong refs)
         self.sessions_started = 0
+        self._last_media: dict[str, Any] | None = None  # the previous session's media, for the bundle after Stop
+        self._vp8_first_until: float | None = None  # monotonic: an H.264 stall asks the next starts for VP8 first
 
     # ----- lifecycle --------------------------------------------------------------------------------------
     def start(self) -> None:
@@ -744,6 +809,10 @@ class ScreenSessionManager:
             source["preflight"] = dict(session.preflight)  # the worker skips Desktop Duplication (capture_dda)
         session.reserved = self.indicator.reserved_for(monitor)
         preference = [c for c, offered in (("h264", h264), ("vp8", vp8)) if offered]
+        if h264 and vp8 and self.vp8_first_active():
+            # H.264 stalled on this PC in this agent run: VP8 first (the worker probes in this order)
+            preference = ["vp8", "h264"]
+            log.info("screen encoder preference", order=",".join(preference), reason="h264_stalled")
         message: dict[str, Any] = {
             "op": "start",
             "offer_sdp": offer_sdp,
@@ -825,12 +894,41 @@ class ScreenSessionManager:
         elif kind == "stats":
             if isinstance(ev.get("relayed_bytes"), int):
                 session.relayed_bytes = int(ev["relayed_bytes"])
+            session.media.update(media_from_stats(ev))
+        elif kind == "encoder_stalled":
+            self._note_encoder_stalled(session, ev)
         elif kind == "disconnected":
             self._end_soon(session, "viewer_gone" if session.connected else "connection_failed")
         elif kind in ("keyframe", "audio", "exiting"):
             log.debug("screen worker event", kind=kind)
         else:
             log.debug("unknown screen worker event dropped", kind=str(kind)[:32])
+
+    def _note_encoder_stalled(self, session: ScreenSession, ev: dict[str, Any]) -> None:
+        """The worker's H.264 encoder gave no keyframe in time, or failed: logged, kept in the media facts, and the
+        next starts (24 h, this agent run) ask for VP8 first. The session itself is not ended: the phone's no-picture
+        watchdog starts a fresh one, which then gets VP8."""
+        reason = ev.get("reason") if isinstance(ev.get("reason"), str) else "unknown"
+        session.media.update(media_from_stats({"stalled": reason}))
+        if ev.get("encoder", "h264") != "h264":
+            return
+        self._vp8_first_until = time.monotonic() + VP8_FIRST_SECONDS
+        log.warning(
+            "screen H.264 encoder stalled; the next Screen view on this PC offers VP8 first",
+            reason=str(reason)[:MEDIA_TEXT_MAX],
+            encoded=ev.get("encoded") if isinstance(ev.get("encoded"), int) else None,
+            aus=ev.get("aus") if isinstance(ev.get("aus"), int) else None,
+        )
+
+    def vp8_first_active(self, now: float | None = None) -> bool:
+        """Whether starts ask for VP8 first (an H.264 stall less than :data:`VP8_FIRST_SECONDS` ago)."""
+        until = self._vp8_first_until
+        if until is None:
+            return False
+        if (time.monotonic() if now is None else now) >= until:
+            self._vp8_first_until = None
+            return False
+        return True
 
     async def _on_worker_exit(self, session: ScreenSession, code: int | None) -> None:
         if session.answer_future is not None and not session.answer_future.done():
@@ -1000,6 +1098,8 @@ class ScreenSessionManager:
             self.indicator.disarm()
             self._delete_recovery()
             # 4. the relay, then the person at the PC and the local history
+            media = session.media
+            self._last_media = {"reason": reason, "live_seconds": live, **media}
             log.info(
                 "screen session ended",
                 reason=reason,
@@ -1007,6 +1107,16 @@ class ScreenSessionManager:
                 path=session.path,
                 connected=session.connected,
                 relayed_bytes=session.relayed_bytes,
+                encoder_label=media.get("encoder_label"),
+                encoded=media.get("encoded"),
+                aus=media.get("aus"),
+                idr=media.get("idr"),
+                rtp_packets=media.get("rtp_packets"),
+                rtp_kb=int(media.get("rtp_bytes") or 0) // 1024,
+                rr=media.get("rr"),
+                pli=media.get("pli"),
+                first_kf_ms=media.get("first_kf_ms"),
+                stalled=media.get("stalled"),
             )
             await self._emit(session, "ended", reason, live_seconds=live)
             if session.started_emitted:
@@ -1306,7 +1416,10 @@ class ScreenSessionManager:
                 "consent": s.consent,
                 "unlimited": s.unlimited,
                 "started_at": s.started_wall,
+                "media": dict(s.media),
             },
+            "last_session_media": dict(self._last_media) if self._last_media is not None else None,
+            "vp8_first": self.vp8_first_active(),
             "sessions_started": self.sessions_started,
             "included": self.media_available,
             "consent": self.gate.summary(),

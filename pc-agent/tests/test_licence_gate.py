@@ -23,6 +23,8 @@ from typing import Any
 
 import pytest
 
+from .ffmpeg_n813 import unknown_options
+
 GATE_PATH = Path(__file__).resolve().parents[1] / "packaging" / "licence_gate.py"
 HASH = "3f2a9c0d4b5e6f708192a3b4c5d6e7f8"
 CONFIGURATION = (
@@ -360,6 +362,20 @@ class FakeContext:
         return [object()] * self.packets if frame is None else []
 
 
+class FakeGraph:
+    """``av.filter.Graph`` as far as the smoke uses it: ``add`` refuses an option FFmpeg n8.1.3 does not have, the way
+    ``avfilter_init_str`` does (PyAV raises its OptionNotFoundError)."""
+
+    added: list[tuple[str, str | None]] = []
+
+    def add(self, name: str, args: str | None = None) -> object:
+        bad = unknown_options(name, args)
+        if bad:
+            raise OSError(1414549496, f"Option not found: {', '.join(bad)}")
+        FakeGraph.added.append((name, args))
+        return object()
+
+
 def fake_av(
     *,
     version: str = "17.1.0+lgpl.ffmpeg8.1.3",
@@ -391,7 +407,7 @@ def fake_av(
         _core=SimpleNamespace(library_meta={lib: {"license": LGPL} for lib in gate.LIBRARIES}),
         codecs_available=set(decoders) | set(encoders),
         Codec=codec,
-        filter=SimpleNamespace(filters_available=set(filters)),
+        filter=SimpleNamespace(filters_available=set(filters), Graph=FakeGraph),
         open=open_,
         CodecContext=SimpleNamespace(create=create),
         VideoFrame=lambda w, h, fmt: SimpleNamespace(pts=None),
@@ -407,6 +423,26 @@ def test_smoke_required_pass_and_runner_limits_are_reported_only() -> None:
     assert all(r.status == "REPORTED (failed)" for r in reported.values())
     table = gate.format_smoke(rows)
     assert "PASS" in table and "lavfi testsrc -> one NV12 frame" in table and "FAIL" not in table
+
+
+def test_smoke_parses_the_desktop_duplication_graph_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Device round 2: scale_d3d11 was given w/h, which only scale has, and Desktop Duplication failed on every PC.
+    The smoke creates each filter of the worker's graph with its options (never configured: no GPU, no desktop), so a
+    wrong option name fails the wheel's gate."""
+    FakeGraph.added.clear()
+    rows = {r.name: r for r in gate.smoke_checks(fake_av(), "17.1.0+lgpl.ffmpeg8.1.3", lambda: object())}
+    row = rows["ddagrab graph options parse"]
+    assert row.required and row.ok and row.detail == "ddagrab -> scale_d3d11 -> hwdownload -> format"
+    assert [name for name, _ in FakeGraph.added] == ["ddagrab", "scale_d3d11", "hwdownload", "format"]
+    monkeypatch.setattr(
+        gate,
+        "DDAGRAB_GRAPH",
+        "ddagrab=output_idx=0:framerate=30:draw_mouse=1:dup_frames=1,scale_d3d11=w=1280:h=720:format=nv12,"
+        "hwdownload,format=nv12",
+    )
+    rows = {r.name: r for r in gate.smoke_checks(fake_av(), "17.1.0+lgpl.ffmpeg8.1.3", lambda: object())}
+    row = rows["ddagrab graph options parse"]
+    assert not row.ok and row.status == "FAIL" and "Option not found: w, h" in row.detail
 
 
 def test_smoke_fails_when_a_graph_filter_is_missing() -> None:

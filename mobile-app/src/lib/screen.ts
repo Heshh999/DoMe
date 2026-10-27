@@ -20,6 +20,14 @@
  *      with the closed vocabulary and anything else is dropped; a `bye` ends the session when the page is hidden, left
  *      or stopped, together with the signed `screen.session_stop`.
  *
+ * The video track arrives inside `setRemoteDescription`, before its promise resolves (the browsers' order): it is kept
+ * aside and shown together with `verified` (device round 2, 2026-10-27: the phone dropped it and never left
+ * "Connecting…"). Once DTLS is up a first-frame watchdog asks for keyframes at 3 s and 8 s and starts a fresh session
+ * at 15 s; a PC pause (a Windows prompt, a missing bar) holds it, and a picture that only waits for the owner's tap
+ * (play() refused outside a gesture) is not restarted: the tap prompt stays and the watchdog counts again from the tap.
+ * `getStats()` is read through a whitelist (lib/screenStats.ts) every 5 s in session and the stages reached are kept
+ * as a timeline, so a session that shows nothing says where it stopped.
+ *
  * The phone never reads pixels: the stream only ever becomes a `<video>.srcObject` (test/no-pixel-access.test.ts).
  * Nothing here logs an SDP, a candidate, an address or a credential (log.ts also redacts those keys). The Free
  * allowance shown is a countdown for display; the PC's `ended{allowance_exhausted}` is authoritative.
@@ -31,6 +39,7 @@ import type { PcKeyPin } from "./controllerKey.ts";
 import { SCREEN_UNSUPPORTED_BROWSER } from "./labels.ts";
 import { errorSummary, log } from "./log.ts";
 import { GeometryTracker, type Geometry } from "./screenMap.ts";
+import { emptyTimeline, mediaSummary, reduceStats, statsSummary, type CodecFallback, type ScreenClientFacts, type ScreenMediaFacts, type ScreenStatsSnapshot, type ScreenTimeline, type StatsReportLike, type TimelineMark } from "./screenStats.ts";
 
 export type ScreenPhase = "idle" | "ice" | "offering" | "starting" | "connecting" | "live" | "paused" | "ended" | "failed";
 export type ScreenEndReason = relayFrames.AgentScreenSession["reason"];
@@ -68,9 +77,14 @@ export interface ScreenSessionState {
   tryingRelay: boolean;
   /** The PC-signed answer verified against the pinned key. Nothing is shown before this is true. */
   verified: boolean;
+  /** DTLS is up in this attempt: "Connected. Waiting for the picture…" until the first frame. */
+  transportConnected: boolean;
+  /** Frames are decoded but the `<video>` is paused without a frame callback: ask for one tap (play() again). */
+  playHint: boolean;
   /** The remote media stream, for `<video>.srcObject` only. */
   stream: MediaStream | null;
   startedAt: number | null;
+  /** The last frame as published: at live and whenever `stalled` flips (frames themselves are not published one by one). */
   lastFrameAt: number | null;
   /** No frame for 2 s while the PC says it is sending: a keyframe was requested; a fresh session follows if it stays. */
   stalled: boolean;
@@ -113,6 +127,8 @@ export const EMPTY_SCREEN_STATE: ScreenSessionState = {
   path: null,
   tryingRelay: false,
   verified: false,
+  transportConnected: false,
+  playHint: false,
   stream: null,
   startedAt: null,
   lastFrameAt: null,
@@ -159,6 +175,8 @@ export interface PeerConnectionLike {
   createOffer(): Promise<{ type?: string; sdp?: string }>;
   setLocalDescription(description: { type?: string; sdp?: string }): Promise<void>;
   setRemoteDescription(description: { type: "answer"; sdp: string }): Promise<void>;
+  /** Optional so a fake may leave it out; read only through the whitelist in lib/screenStats.ts. */
+  getStats?(): Promise<StatsReportLike>;
   readonly localDescription: { sdp: string } | null;
   readonly iceGatheringState: "new" | "gathering" | "complete";
   readonly connectionState: string;
@@ -167,7 +185,13 @@ export interface PeerConnectionLike {
   onicegatheringstatechange: ((ev: unknown) => void) | null;
   onconnectionstatechange: ((ev: unknown) => void) | null;
   oniceconnectionstatechange: ((ev: unknown) => void) | null;
-  ontrack: ((ev: { streams: readonly MediaStream[]; track: { kind: string } }) => void) | null;
+  ontrack: ((ev: TrackEventLike) => void) | null;
+}
+
+/** The `track` event as this client reads it (RTCTrackEvent satisfies it). */
+export interface TrackEventLike {
+  streams: readonly MediaStream[];
+  track: MediaStreamTrack | { kind: string };
 }
 
 export type PeerFactory = (config: { iceServers: RTCIceServer[] }) => PeerConnectionLike;
@@ -216,6 +240,14 @@ export const STALL_MS = 2_000;
 /** Still no frame this long after the keyframe request: a fresh session, at most MAX_RETRIES times. */
 export const STALL_RESTART_MS = 5_000;
 export const MAX_RETRIES = 2;
+/** After DTLS is up with no frame: a keyframe request (data channel) and a `screen.no_picture` line… */
+export const NO_PICTURE_FIRST_MS = 3_000;
+/** …a second one… */
+export const NO_PICTURE_SECOND_MS = 8_000;
+/** …then a fresh session, counted toward MAX_RETRIES (a PC build without the encoder pump took up to 9.2 s). */
+export const NO_PICTURE_RESTART_MS = 15_000;
+/** `getStats()` while in session (cheap; kept for the diagnostics bundle and the readout). */
+export const STATS_INTERVAL_MS = 5_000;
 /** A consent refusal this soon after the start was answered without a window (the back-off): different copy. */
 export const BACKOFF_REFUSAL_MS = 1_500;
 
@@ -252,8 +284,37 @@ export class ScreenSessionClient {
   private relayHintTimer: unknown = null;
   private consentTimer: unknown = null;
   private stallTimer: unknown = null;
+  private statsTimer: unknown = null;
+  /** The first-frame watchdog: 1 s ticks from DTLS up until the first frame (NO_PICTURE_*). */
+  private pictureTimer: unknown = null;
+  /** Set only after `verifyScreenAnswer` passed, just before `setRemoteDescription`: the structural guard for tracks. */
   private answerApplied = false;
+  /** The video stream that arrived inside setRemoteDescription, shown together with `verified` (never before). */
+  private pendingStream: MediaStream | null = null;
   private dcDropped = 0;
+  private hbSent = 0;
+  private dcReceived = 0;
+  /** When the answer verified, DTLS came up and the last frame was seen (wall-clock ms; frames are not published per frame). */
+  private answerAt: number | null = null;
+  private dtlsAt: number | null = null;
+  private lastFrame: number | null = null;
+  /** How many first-frame watchdog steps ran (1: +3 s, 2: +8 s, 3: +15 s restart). */
+  private noPictureStep = 0;
+  /** What the watchdog counts from: DTLS up, moved on by the time it was held, reset by the owner's tap. */
+  private pictureFrom: number | null = null;
+  /** The watchdog is held (a PC pause, or a picture waiting for the owner's tap) since this time. */
+  private heldSince: number | null = null;
+  /** The page reported `play()` refused (Low Power Mode, outside a gesture) and not played since. */
+  private playBlocked = false;
+  /** The +15 s step found a picture that only needs the owner's tap: no restart until the tap (a new `<video>`'s
+   *  play() would be refused just the same). */
+  private waitingForTap = false;
+  private timeline: ScreenTimeline = emptyTimeline();
+  private lastStats: ScreenStatsSnapshot | null = null;
+  private lastMedia: ScreenMediaFacts | null = null;
+  private mediaProbe: (() => ScreenMediaFacts) | null = null;
+  /** The next automatic retry offers VP8 only (H.264 arrived but never decoded); a start by the owner clears it. */
+  private codecFallback: CodecFallback | null = null;
   /** The PC's active pause causes (relay frames come per cause; capture resumes only when none is left). */
   private pauseCauses = new Set<"secure_desktop" | "indicator">();
 
@@ -294,8 +355,12 @@ export class ScreenSessionClient {
     this.geometry.reset();
     this.offerSdp = null;
     this.answerApplied = false;
+    this.pendingStream = null;
     this.dcDropped = 0;
     this.pauseCauses.clear();
+    this.resetFacts();
+    // the VP8 retry applies to the automatic fresh session only; the owner's own start offers H.264 first again
+    if (!options.retries) this.codecFallback = null;
     this.set({ ...EMPTY_SCREEN_STATE, ...kept, phase: "ice", pcId, retries: options.retries ?? 0 });
     if (!this.deps.peerFactory) return this.fail(SCREEN_UNSUPPORTED_BROWSER);
     if (!this.deps.connected()) return this.fail("PC_RECONNECTING");
@@ -375,7 +440,8 @@ export class ScreenSessionClient {
     const video = pc.addTransceiver("video", { direction: "recvonly" });
     // audio always, even in Phase 1 without sound: adding it later would pause an unmuted video on iOS (§2.2)
     const audio = pc.addTransceiver("audio", { direction: "recvonly" });
-    preferCodecs(video, "video");
+    if (this.codecFallback) preferVp8Only(video);
+    else preferCodecs(video, "video");
     preferCodecs(audio, "audio");
     const dc = pc.createDataChannel(SCREEN_DATA_CHANNEL_LABEL, { ordered: true });
     this.dc = dc;
@@ -533,6 +599,9 @@ export class ScreenSessionClient {
       this.failHard("SCREEN_ANSWER_INVALID", { reason: "screen_session_id differs between answer and result" });
       return;
     }
+    this.answerAt = this.now();
+    this.mark("answer_verified");
+    // from here on a track is ours: the browser fires `track` inside setRemoteDescription, before it resolves
     this.answerApplied = true;
     try {
       await pc.setRemoteDescription({ type: "answer", sdp: verified.payload.answer_sdp });
@@ -543,9 +612,12 @@ export class ScreenSessionClient {
       return;
     }
     if (nonce !== this.nonce) return;
-    this.set({ verified: true, phase: "connecting", sessionId: this.state.sessionId ?? verified.payload.screen_session_id, consentWaiting: false, consentDeadlineAt: null });
-    log.info("screen.answer_verified", { pc_id: this.state.pcId });
+    // the stream becomes visible only together with `verified` (nothing is shown before verification)
+    this.set({ verified: true, phase: "connecting", sessionId: this.state.sessionId ?? verified.payload.screen_session_id, consentWaiting: false, consentDeadlineAt: null, stream: this.pendingStream ?? this.state.stream });
+    this.pendingStream = null;
+    log.info("screen.answer_verified", { pc_id: this.state.pcId, stream: this.state.stream !== null });
     this.armConnectTimers();
+    this.startStatsLoop();
     // the transport may already be connected (the fake peer, or a very fast path)
     this.onPeerState(pc);
   }
@@ -566,15 +638,26 @@ export class ScreenSessionClient {
 
   // ---- the transport ----------------------------------------------------------------------------------
 
-  private onTrack(ev: { streams: readonly MediaStream[]; track: { kind: string } }): void {
-    if (!this.state.verified) {
-      // cannot happen: no remote description is ever applied before verification. Kept as a structural guard.
+  /**
+   * The browsers fire `track` inside setRemoteDescription, before its promise resolves (webrtc-pc; WebKit
+   * PeerConnectionBackend::setRemoteDescriptionSucceeded), so `verified` is still false here. `answerApplied` is the
+   * guard: it is set only after the signed answer verified, so a track can only come from the verified answer.
+   */
+  private onTrack(ev: TrackEventLike): void {
+    if (ev.track.kind !== "video") return;
+    log.info("screen.track", { streams: ev.streams.length, answer_applied: this.answerApplied, verified: this.state.verified });
+    if (!this.answerApplied) {
       log.warn("screen.track_before_verification_dropped");
       return;
     }
-    if (ev.track.kind !== "video") return;
-    const stream = ev.streams[0] ?? null;
-    if (stream) this.set({ stream });
+    this.mark("track");
+    const media = ev.streams[0] ?? streamOf(ev.track);
+    if (!media) {
+      log.warn("screen.track_without_stream");
+      return;
+    }
+    if (this.state.verified) this.set({ stream: media });
+    else this.pendingStream = media;
   }
 
   private onPeerState(pc: PeerConnectionLike): void {
@@ -590,19 +673,230 @@ export class ScreenSessionClient {
       this.connectTimer = null;
       if (this.relayHintTimer !== null) this.timers.clearTimeout(this.relayHintTimer);
       this.relayHintTimer = null;
-      this.set({ tryingRelay: false });
+      if (this.dtlsAt === null) {
+        this.dtlsAt = this.now();
+        this.pictureFrom = this.dtlsAt;
+        this.mark("dtls_connected");
+        log.info("screen.dtls_connected", { ms_since_answer: this.since(this.answerAt) });
+        this.startPictureWatchdog();
+      }
+      this.set({ tryingRelay: false, transportConnected: true });
     }
+  }
+
+  // ---- the first-frame watchdog (nothing else ends "connecting" once DTLS is up) ----------------------------------
+
+  private startPictureWatchdog(): void {
+    if (this.pictureTimer !== null) this.timers.clearInterval(this.pictureTimer);
+    this.noPictureStep = 0;
+    this.pictureTimer = this.timers.setInterval(() => this.checkPicture(), 1000);
+  }
+
+  private stopPictureWatchdog(): void {
+    if (this.pictureTimer !== null) this.timers.clearInterval(this.pictureTimer);
+    this.pictureTimer = null;
+  }
+
+  private checkPicture(): void {
+    if (this.state.phase !== "connecting" || this.pictureFrom === null) {
+      this.stopPictureWatchdog();
+      return;
+    }
+    const now = this.now();
+    // a PC pause (no frame is due; the PC refuses a new session while its secure desktop is up) or a picture waiting
+    // for the owner's tap: no keyframe request, no restart, and the held time does not count
+    const held = this.pictureHeld();
+    if (held) {
+      if (this.heldSince === null) {
+        this.heldSince = now;
+        log.info("screen.no_picture_held", { reason: held, after_ms: now - this.pictureFrom });
+      }
+      void this.readStats();
+      return;
+    }
+    if (this.heldSince !== null) {
+      // the clock goes on from where the hold stopped it, with at least the second step's room before a restart
+      this.pictureFrom = Math.max(this.pictureFrom + (now - this.heldSince), now - NO_PICTURE_SECOND_MS);
+      this.heldSince = null;
+    }
+    const after = now - this.pictureFrom;
+    const step = after >= NO_PICTURE_RESTART_MS ? 3 : after >= NO_PICTURE_SECOND_MS ? 2 : after >= NO_PICTURE_FIRST_MS ? 1 : 0;
+    if (step > this.noPictureStep) {
+      this.noPictureStep = step;
+      void this.noPicture(step as 1 | 2 | 3, after);
+      return;
+    }
+    // every second while waiting: the first RTP packet and the first decoded frame land on the timeline
+    void this.readStats();
+  }
+
+  /** Why the first-frame watchdog is held, or null: the PC paused, or the picture waits for the owner's tap. */
+  private pictureHeld(): "pc_paused" | "tap" | null {
+    if (this.state.pcState === "paused") return "pc_paused";
+    return this.waitingForTap ? "tap" : null;
+  }
+
+  /** +3 s and +8 s: a keyframe request and one log line; +15 s: one more line and a fresh session. */
+  private async noPicture(step: 1 | 2 | 3, afterMs: number): Promise<void> {
+    const nonce = this.nonce;
+    const keyframe = step < 3 ? this.sendChannel({ type: "keyframe" }) : false;
+    const stats = await this.readStats();
+    // a first frame, a stop or an end while getStats() ran: nothing more to do for this step
+    if (nonce !== this.nonce || this.state.phase !== "connecting") return;
+    const media = this.probeMedia();
+    log.info("screen.no_picture", { after_ms: afterMs, step, keyframe_sent: keyframe, stream: this.state.stream !== null, ...statsSummary(stats), ...mediaSummary(media) });
+    const decoded = stats?.inbound?.frames_decoded ?? 0;
+    // frames decode but the <video> never ran a frame callback and sits paused: one tap plays it (Low Power Mode)
+    const tapPlays = decoded > 0 && media !== null && media.paused === true && media.frame_ticks === 0;
+    if (step < 3) {
+      if (tapPlays && !this.state.playHint) this.set({ playHint: true });
+      return;
+    }
+    if (this.state.pcState === "paused") {
+      this.noPictureStep = 2; // the PC paused while the stats were read: held, and this step comes again after it
+      return;
+    }
+    if (this.playBlocked || tapPlays || this.state.playHint) {
+      // only the owner's tap can play it: a fresh session's <video> would be refused outside a gesture as well
+      this.waitingForTap = true;
+      this.noPictureStep = 2;
+      if (!this.state.playHint) this.set({ playHint: true });
+      return;
+    }
+    const received = stats?.inbound?.packets_received ?? 0;
+    if (!this.codecFallback && received > 0 && decoded === 0 && /h264/i.test(stats?.codec?.mime ?? "")) {
+      // H.264 arrives but never decodes on this phone: the fresh session offers VP8 only (the PC answers VP8)
+      this.codecFallback = { from: "h264", to: "vp8", reason: "not_decoded" };
+      log.info("screen.codec_fallback", { ...this.codecFallback });
+    }
+    void this.restartFresh("no_picture");
+  }
+
+  // ---- stats and facts (metadata only; lib/screenStats.ts) ---------------------------------------------------------
+
+  private startStatsLoop(): void {
+    if (this.statsTimer !== null) this.timers.clearInterval(this.statsTimer);
+    this.statsTimer = this.timers.setInterval(() => {
+      if (this.state.phase === "connecting" || this.state.phase === "live" || this.state.phase === "paused") void this.readStats();
+    }, STATS_INTERVAL_MS);
+  }
+
+  /** `getStats()` through the whitelist; the snapshot is kept for the readout and the diagnostics bundle. */
+  async readStats(): Promise<ScreenStatsSnapshot | null> {
+    const pc = this.pc;
+    if (!pc || typeof pc.getStats !== "function") return null;
+    let report: StatsReportLike;
+    try {
+      report = await pc.getStats();
+    } catch (e) {
+      log.info("screen.stats_failed", errorSummary(e));
+      return null;
+    }
+    if (this.pc !== pc) return null;
+    const snapshot = reduceStats(report, this.now());
+    this.lastStats = snapshot;
+    if ((snapshot.inbound?.packets_received ?? 0) > 0) this.mark("first_rtp");
+    if ((snapshot.inbound?.frames_decoded ?? 0) > 0) this.mark("first_decoded");
+    return snapshot;
+  }
+
+  /** The `<video>` registers what it can say about itself (metadata only); null when it goes away. */
+  setMediaProbe(probe: (() => ScreenMediaFacts) | null): void {
+    this.mediaProbe = probe;
+  }
+
+  /** The `<video>` facts now, or the last ones read while it existed. */
+  probeMedia(): ScreenMediaFacts | null {
+    if (this.mediaProbe) {
+      try {
+        this.lastMedia = this.mediaProbe();
+      } catch {
+        /* keep the last facts */
+      }
+    }
+    return this.lastMedia;
+  }
+
+  /** Everything the readout and the diagnostics bundle show, without reading the stats again. */
+  get facts(): ScreenClientFacts {
+    return {
+      stats: this.lastStats,
+      media: this.probeMedia(),
+      timeline: { ...this.timeline },
+      channel: { open: this.dc?.readyState === "open", hb_sent: this.hbSent, received: this.dcReceived, dropped: this.dcDropped },
+      transport_connected: this.timeline.dtls_connected !== null,
+      codec_fallback: this.codecFallback ? { ...this.codecFallback } : null,
+    };
+  }
+
+  /** The readout's refresh: fresh stats, then the facts. */
+  async readFacts(): Promise<ScreenClientFacts> {
+    await this.readStats();
+    return this.facts;
+  }
+
+  private mark(name: TimelineMark): void {
+    const base = this.state.sentAt;
+    if (base === null || this.timeline[name] !== null) return;
+    this.timeline[name] = Math.max(0, this.now() - base);
+  }
+
+  private since(at: number | null): number | null {
+    return at === null ? null : Math.max(0, this.now() - at);
+  }
+
+  private resetFacts(): void {
+    this.timeline = emptyTimeline();
+    this.lastStats = null;
+    this.lastMedia = null;
+    this.answerAt = null;
+    this.dtlsAt = null;
+    this.lastFrame = null;
+    this.noPictureStep = 0;
+    this.pictureFrom = null;
+    this.heldSince = null;
+    this.playBlocked = false;
+    this.waitingForTap = false;
+    this.hbSent = 0;
+    this.dcReceived = 0;
   }
 
   /** The `<video>` decoded a frame (requestVideoFrameCallback; metadata only, never pixels). */
   onVideoFrame(nowMs: number = this.now()): void {
     if (this.state.phase === "connecting" && this.state.verified) {
-      this.set({ phase: "live", startedAt: nowMs, lastFrameAt: nowMs, stalled: false });
+      this.lastFrame = nowMs;
+      this.stopPictureWatchdog();
+      this.mark("first_frame");
+      this.mark("live");
+      log.info("screen.first_frame", { ms_since_dtls: this.since(this.dtlsAt), ms_since_answer: this.since(this.answerAt) });
+      this.set({ phase: "live", startedAt: nowMs, lastFrameAt: nowMs, stalled: false, playHint: false });
       log.info("screen.live", { pc_id: this.state.pcId, retries: this.state.retries });
       this.startStallWatchdog();
       return;
     }
-    if (this.state.phase === "live" || this.state.phase === "paused") this.set({ lastFrameAt: nowMs, stalled: false });
+    if (this.state.phase !== "live" && this.state.phase !== "paused") return;
+    // ~30 frames a second: the store (and the page) hears about it only when `stalled` flips
+    this.lastFrame = nowMs;
+    if (this.state.stalled) this.set({ lastFrameAt: nowMs, stalled: false });
+  }
+
+  /**
+   * The owner tapped "Tap to show the picture" (the page plays again inside the tap). While no frame has come the
+   * first-frame watchdog counts again from this tap, and its +3 s step may ask once more if the picture still sits paused.
+   */
+  dismissPlayHint(): void {
+    if (this.state.playHint) this.set({ playHint: false });
+    if (this.state.phase === "connecting" && this.pictureFrom !== null) {
+      this.waitingForTap = false;
+      this.heldSince = null;
+      this.pictureFrom = this.now();
+      this.noPictureStep = 0;
+    }
+  }
+
+  /** The page's `<video>` reports its `play()` outcome: refused (true) until a play resolves (false). */
+  notePlayBlocked(blocked: boolean): void {
+    this.playBlocked = blocked;
   }
 
   /** The geometry a tap may use right now on this client's clock (null while held back after a resize), and whether one is held back. */
@@ -621,15 +915,15 @@ export class ScreenSessionClient {
   }
 
   private checkStall(): void {
-    if (this.state.phase !== "live" || this.state.pcState !== "sending" || this.state.lastFrameAt === null) return;
-    const silent = this.now() - this.state.lastFrameAt;
+    if (this.state.phase !== "live" || this.state.pcState !== "sending" || this.lastFrame === null) return;
+    const silent = this.now() - this.lastFrame;
     if (silent >= STALL_RESTART_MS) {
       log.info("screen.stall_restart", { retries: this.state.retries });
       void this.restartFresh("stall");
       return;
     }
     if (silent >= STALL_MS && !this.state.stalled) {
-      this.set({ stalled: true });
+      this.set({ stalled: true, lastFrameAt: this.lastFrame });
       this.requestKeyframe();
     }
   }
@@ -648,8 +942,8 @@ export class ScreenSessionClient {
     }
   }
 
-  /** A fresh signed session after a stall or a lost transport, at most MAX_RETRIES times; then the failure state. */
-  private async restartFresh(cause: "stall" | "transport"): Promise<void> {
+  /** A fresh signed session after a stall, a lost transport or no first frame, at most MAX_RETRIES times; then the failure state. */
+  private async restartFresh(cause: "stall" | "transport" | "no_picture"): Promise<void> {
     const pcId = this.state.pcId;
     const retries = this.state.retries;
     if (!pcId) return;
@@ -666,6 +960,8 @@ export class ScreenSessionClient {
   // ---- the data channel -------------------------------------------------------------------------------
 
   private onChannelOpen(): void {
+    this.mark("dc_open");
+    log.info("screen.dc_open", { ms_since_answer: this.since(this.answerAt) });
     this.sendChannel({ type: "hb" });
     this.stopHeartbeat();
     this.hbTimer = this.timers.setInterval(() => this.sendChannel({ type: "hb" }), HEARTBEAT_MS);
@@ -681,6 +977,7 @@ export class ScreenSessionClient {
     if (!dc || dc.readyState !== "open") return false;
     try {
       dc.send(JSON.stringify(message));
+      if (message.type === "hb") this.hbSent += 1;
       return true;
     } catch (e) {
       log.info("screen.dc_send_failed", errorSummary(e));
@@ -690,6 +987,7 @@ export class ScreenSessionClient {
 
   /** rules.screen_content: the closed inbound vocabulary; anything else is dropped (counted, never shown or run). */
   private onChannelMessage(data: unknown): void {
+    this.dcReceived += 1;
     if (typeof data !== "string") {
       this.dcDropped += 1;
       return;
@@ -708,6 +1006,7 @@ export class ScreenSessionClient {
         return;
       case "state": {
         const paused = msg.state === "paused";
+        if (!paused) this.lastFrame = this.now(); // the stall clock starts again from a resume
         if (paused && msg.reason) this.pauseCauses.add(msg.reason);
         if (!paused) this.pauseCauses.clear(); // the worker sends `sending` only once no cause is left
         const phase = this.state.phase === "live" && paused ? "paused" : this.state.phase === "paused" && !paused ? "live" : this.state.phase;
@@ -754,7 +1053,8 @@ export class ScreenSessionClient {
           this.set({ pauseReason: this.pauseShown(), ...(frame.path ? { path: frame.path } : {}) });
           return true;
         }
-        this.set({ pcState: "sending", pauseReason: null, phase: this.state.phase === "paused" ? "live" : this.state.phase, ...(frame.path ? { path: frame.path } : {}), lastFrameAt: this.now(), stalled: false });
+        this.lastFrame = this.now();
+        this.set({ pcState: "sending", pauseReason: null, phase: this.state.phase === "paused" ? "live" : this.state.phase, ...(frame.path ? { path: frame.path } : {}), lastFrameAt: this.lastFrame, stalled: false });
         return true;
       case "ended":
         this.endSession(frame.reason, frame.live_seconds);
@@ -775,9 +1075,10 @@ export class ScreenSessionClient {
     this.nonce += 1;
     this.resolveIce({ kind: "aborted" });
     this.clearTimers();
+    this.probeMedia(); // the <video>'s last facts, for the diagnostics bundle
     this.closePeer();
     const resume: ScreenResume = NO_RESUME.has(reason) ? "none" : "manual";
-    this.set({ phase: "ended", endReason: reason, liveSeconds, stream: null, verified: false, resume, consentWaiting: false, consentDeadlineAt: null, stalled: false, tryingRelay: false, owned: reason === "takeover" });
+    this.set({ phase: "ended", endReason: reason, liveSeconds, stream: null, verified: false, transportConnected: false, playHint: false, resume, consentWaiting: false, consentDeadlineAt: null, stalled: false, tryingRelay: false, owned: reason === "takeover" });
     log.info("screen.session_ended", { pc_id: this.state.pcId, reason, live_seconds: liveSeconds });
   }
 
@@ -797,6 +1098,7 @@ export class ScreenSessionClient {
     const liveSeconds = startedAt !== null ? Math.max(0, Math.round((this.now() - startedAt) / 1000)) : 0;
     const inSession = phase === "connecting" || phase === "live" || phase === "paused" || phase === "starting";
     if (inSession) this.sendChannel({ type: "bye" });
+    this.probeMedia(); // the <video>'s last facts, for the diagnostics bundle
     this.closePeer();
     const resume: ScreenResume = reason === "hidden" && (inSession || phase === "ice" || phase === "offering") ? (consent === "granted" ? "manual" : "auto") : "none";
     if (reason === "stopped") this.set({ ...EMPTY_SCREEN_STATE, pcId, allowance, otherViewer, phase: "ended", endReason: "stopped", liveSeconds, resume: "none" });
@@ -860,6 +1162,8 @@ export class ScreenSessionClient {
     this.geometry.reset();
     this.offerSdp = null;
     this.pin = null;
+    this.resetFacts();
+    this.codecFallback = null;
     this.set({ ...EMPTY_SCREEN_STATE });
   }
 
@@ -869,10 +1173,11 @@ export class ScreenSessionClient {
     this.nonce += 1;
     this.resolveIce({ kind: "aborted" });
     this.clearTimers();
+    this.probeMedia();
     this.closePeer();
     const resetsAt = typeof detail?.resets_at === "string" ? detail.resets_at : null;
     const allowance = code === "SCREEN_ALLOWANCE_EXHAUSTED" ? { unlimited: false, remainingSeconds: 0, resetsAt, at: this.now() } : this.state.allowance;
-    this.set({ phase: "failed", problem: { code, ...(message ? { message } : {}), ...(detail ? { detail } : {}) }, owned: code === "SCREEN_SESSION_OWNED", stream: null, verified: false, consentWaiting: false, consentDeadlineAt: null, tryingRelay: false, stalled: false, resume: "none", allowance });
+    this.set({ phase: "failed", problem: { code, ...(message ? { message } : {}), ...(detail ? { detail } : {}) }, owned: code === "SCREEN_SESSION_OWNED", stream: null, verified: false, transportConnected: false, playHint: false, consentWaiting: false, consentDeadlineAt: null, tryingRelay: false, stalled: false, resume: "none", allowance });
     log.info("screen.failed", { code, phase: this.state.phase });
     return this.state;
   }
@@ -893,6 +1198,7 @@ export class ScreenSessionClient {
     this.dc = null;
     this.pc = null;
     this.answerApplied = false;
+    this.pendingStream = null;
     this.stopHeartbeat();
     if (dc) {
       dc.onopen = dc.onmessage = dc.onclose = null;
@@ -916,8 +1222,46 @@ export class ScreenSessionClient {
     this.stopHeartbeat();
     for (const h of [this.connectTimer, this.relayHintTimer, this.consentTimer]) if (h !== null) this.timers.clearTimeout(h);
     this.connectTimer = this.relayHintTimer = this.consentTimer = null;
-    if (this.stallTimer !== null) this.timers.clearInterval(this.stallTimer);
-    this.stallTimer = null;
+    for (const h of [this.stallTimer, this.statsTimer, this.pictureTimer]) if (h !== null) this.timers.clearInterval(h);
+    this.stallTimer = this.statsTimer = this.pictureTimer = null;
+  }
+}
+
+/** A stream for a track that came without one (`ev.streams` empty: a sender without `a=msid`), where the browser can. */
+function streamOf(track: TrackEventLike["track"]): MediaStream | null {
+  if (typeof MediaStream !== "function") return null;
+  try {
+    return new MediaStream([track as MediaStreamTrack]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The automatic retry after H.264 arrived but never decoded: VP8 (and RTX for it) only, so the PC answers VP8. Both
+ * offer checks accept a VP8-only offer (rules.screen_signaling (4)). Where the browser cannot say so, nothing changes.
+ */
+function preferVp8Only(transceiver: TransceiverLike): void {
+  const receiver = (globalThis as { RTCRtpReceiver?: { getCapabilities?: (kind: string) => { codecs: RTCRtpCodec[] } | null } }).RTCRtpReceiver;
+  let caps: { codecs: RTCRtpCodec[] } | null | undefined;
+  try {
+    caps = receiver?.getCapabilities?.("video");
+  } catch {
+    caps = null;
+  }
+  const vp8 = (caps?.codecs ?? []).filter((c) => c.mimeType.toLowerCase() === "video/vp8");
+  if (typeof transceiver.setCodecPreferences !== "function" || vp8.length === 0) {
+    log.info("screen.codec_fallback_skipped", { reason: typeof transceiver.setCodecPreferences !== "function" ? "no_codec_preferences" : "no_vp8" });
+    preferCodecs(transceiver, "video");
+    return;
+  }
+  const rtx = (caps?.codecs ?? []).filter((c) => c.mimeType.toLowerCase() === "video/rtx");
+  try {
+    transceiver.setCodecPreferences([...vp8, ...rtx]);
+    log.info("screen.codec_fallback_offered", { to: "vp8" });
+  } catch (e) {
+    log.info("screen.codec_fallback_skipped", { reason: "refused", ...errorSummary(e) });
+    preferCodecs(transceiver, "video");
   }
 }
 

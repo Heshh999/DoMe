@@ -6,7 +6,9 @@
  * Layers, bottom to top: the box (`object-fit: contain`, black letterbox) → the zoom/pan layer (`transform-origin: 0 0`)
  * holding the `<video playsinline muted>` (no controls, `pointer-events: none`, no callout) → the touch layer. The
  * `<video>` is only ever a `srcObject` sink: frame timing comes from `requestVideoFrameCallback` (metadata only), with
- * `timeupdate` as the fallback; nothing here reads a pixel (test/no-pixel-access.test.ts).
+ * `timeupdate` as the fallback; nothing here reads a pixel (test/no-pixel-access.test.ts). `onProbe` hands the session
+ * client a probe of the element's own metadata (ready state, size, the last play() outcome, frame-callback ticks, the
+ * stream's and track's flags; lib/screenStats.ts `probeVideo`) for the diagnostics bundle and the test-build readout.
  *
  * Direct mode feeds `DirectGestureMachine`: taps, the loupe click and two-finger scrolls become signed input events
  * through `lib/screenInput.ts`; pinch and one-finger pan only change the local view. Touchpad mode swaps in the
@@ -18,6 +20,7 @@ import { DirectGestureMachine } from "../lib/directGestures.ts";
 import { GestureMachine, type GestureOutput } from "../lib/gestures.ts";
 import type { InputEvent } from "../lib/input.ts";
 import { directEvents, dropHint, loupeAim, type SurfaceContext } from "../lib/screenInput.ts";
+import { playOutcome, probeVideo, type FrameCounters, type MediaLike, type ScreenMediaFacts } from "../lib/screenStats.ts";
 import { IDENTITY_VIEW, panBy, viewTransform, zoomAt, type Box, type Geometry, type View } from "../lib/screenMap.ts";
 import { ScreenLoupe } from "./ScreenLoupe.tsx";
 
@@ -43,6 +46,8 @@ export interface ScreenSurfaceProps {
   /** Bumped by the page's "Tap to show the picture" button: play() again inside that user gesture. */
   playEpoch: number;
   label: string;
+  /** Registers a probe of the `<video>`'s metadata (never pixels) while mounted; null on unmount. */
+  onProbe?: (probe: (() => ScreenMediaFacts) | null) => void;
 }
 
 function touchpadEvent(o: GestureOutput): InputEvent {
@@ -78,6 +83,21 @@ export function ScreenSurface(props: ScreenSurfaceProps) {
   const [hint, setHint] = useState<string | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** play() outcome and frame-callback ticks for the probe; `attachedAt` is when the current stream was attached. */
+  const counters = useRef<FrameCounters & { attachedAt: number }>({ play: "none", rvfc: false, ticks: 0, firstTickMs: null, attachedAt: 0 });
+
+  // the probe: metadata the element and the stream report about themselves. Registered first, so it is
+  // unregistered before the stream effect below detaches the stream on unmount.
+  const onProbe = props.onProbe;
+  useEffect(() => {
+    if (!onProbe) return;
+    onProbe(() => {
+      const v = videoRef.current;
+      // the stream's flags are read where it already is (the element's srcObject); it is kept nowhere else
+      return probeVideo(v, (v?.srcObject ?? null) as MediaLike | null, counters.current, Date.now());
+    });
+    return () => onProbe(null);
+  }, [onProbe]);
 
   const applyView = useCallback(
     (next: View) => {
@@ -98,15 +118,24 @@ export function ScreenSurface(props: ScreenSurfaceProps) {
     v.srcObject = stream;
     applyView(IDENTITY_VIEW);
     if (!stream) return;
+    const c = counters.current;
+    c.rvfc = typeof v.requestVideoFrameCallback === "function";
+    c.ticks = 0;
+    c.firstTickMs = null;
+    c.attachedAt = Date.now();
     let cancelled = false;
     let handle: number | null = null;
-    const onFrame = () => cb.current.onFrame();
+    const onFrame = () => {
+      c.ticks += 1;
+      if (c.firstTickMs === null) c.firstTickMs = Date.now() - c.attachedAt;
+      cb.current.onFrame();
+    };
     const tick = () => {
       if (cancelled) return;
       onFrame();
       handle = v.requestVideoFrameCallback ? v.requestVideoFrameCallback(tick) : null;
     };
-    if (typeof v.requestVideoFrameCallback === "function") handle = v.requestVideoFrameCallback(tick);
+    if (c.rvfc) handle = v.requestVideoFrameCallback!(tick);
     else v.addEventListener("timeupdate", onFrame);
     const onResize = () => cb.current.onResize();
     v.addEventListener("resize", onResize);
@@ -123,14 +152,28 @@ export function ScreenSurface(props: ScreenSurfaceProps) {
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !stream) return;
+    const c = counters.current;
     let result: Promise<void> | undefined;
     try {
       result = v.play?.();
-    } catch {
+    } catch (e) {
+      c.play = playOutcome("threw", e);
       cb.current.onPlayBlocked(true);
       return;
     }
-    if (result && typeof result.then === "function") result.then(() => cb.current.onPlayBlocked(false), () => cb.current.onPlayBlocked(true));
+    if (result && typeof result.then === "function") {
+      c.play = "pending";
+      result.then(
+        () => {
+          c.play = "resolved";
+          cb.current.onPlayBlocked(false);
+        },
+        (e: unknown) => {
+          c.play = playOutcome("rejected", e);
+          cb.current.onPlayBlocked(true);
+        },
+      );
+    } else c.play = "returned";
   }, [stream, playEpoch]);
 
   const flashHint = useCallback((text: string | null) => {

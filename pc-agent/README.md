@@ -348,6 +348,14 @@ integration-tested on Linux). A build without the media stack refuses every star
   adapter" in the log;
   the diagnostics bundle's `hardware` section lists the monitors, adapters and outputs; Ctrl+Alt+Shift+S; the Job
   object killing the worker when DoMe.exe is ended in Task Manager; the Windows firewall prompt on first use.
+  Device round 2 additions (DECISIONS #97 to #104, KNOWN_ISSUES #39): `source=dda` in "screen capture source running"
+  (the scaler options fixed), or "gave no first frame within 1.5 s" in the fallback warning on a still desktop (then
+  `source=wgc` for that session); one "screen encoder candidate unavailable" line per skipped encoder with FFmpeg's
+  reason; "screen encoder opened" (`mft=`, `low_delay=True`, `open_ms=`, `sps=`, `unused=` empty); "screen transport"
+  (candidate types, `ip=v4|v6`, `packet_max=1200`); "screen first keyframe" with `ms` under 1000 on a still screen
+  (`form=`, `nals=`, `frames_in=`); a "screen media" line every 5 s with `rr=True` and `rtp_packets` growing; a click
+  on a still screen visible within a second; and, if H.264 stalls, "offers VP8 first" then a VP8 picture after the
+  phone's restart. After Stop the bundle keeps `status.screen.last_session_media`.
 
 ## Single instance per Windows user session (spec §10)
 

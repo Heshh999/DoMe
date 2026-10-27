@@ -687,3 +687,98 @@
     tray's and the control channel's `diagnostics` pass the agent's platform; the offline CLI path has no platform and
     writes the Windows items alone. The worker's `--self-test` prints the DXGI adapter and output counts (numbers only).
     Written against the SDK and **not yet verified on a device**.
+97. **Desktop Duplication's scaler options are `width`/`height`, and the graph's options are checked without a desktop**
+    (device round 2, 2026-10-27, build 593d3fd; `capture_dda.ddagrab_graph`, `check_graph_options`). The graph wrote
+    `scale_d3d11=w=..:h=..`; FFmpeg n8.1.3's `vf_scale_d3d11.c` has only `width`, `height` and `format` (`w`/`h` are
+    `scale`'s), so every Desktop Duplication open failed with "Could not set non-existent option 'w'" and every PC ran
+    on the Windows.Graphics.Capture fallback. The graph now says `width=W:height=H`. Three guards: a Linux unit test
+    checks every `key=` of the graph against the n8.1.3 option tables (`tests/ffmpeg_n813.py`, with source lines);
+    the worker's Windows `--self-test` (`ddagrab_graph_options`) creates each filter of the real graph with its
+    options in an `av.filter.Graph` that is never configured (`avfilter_init_str` parses the options; `ddagrab`'s and
+    `scale_d3d11`'s init only allocate, the D3D11 device comes at configuration), so it needs no desktop or GPU; and
+    the licence gate's wheel smoke has the same check as a required row ("ddagrab graph options parse", on its own
+    copy `DDAGRAB_GRAPH`, kept equal to the worker's by a test, because the gate never imports `dome_agent`), plus a
+    required row on the frozen worker's self-test. `ffmpeg_error_lines` became `ffmpeg_log_lines(level)`: the global
+    FFmpeg level is the most verbose one any thread's block asked for, and the error readers skip lines above ERROR.
+98. **`h264_mf` is opened low-delay, without B-frames, and its open is described** (`encode.H264Encoder.open`,
+    `context_flags`). The device's first packet came 5.5 to 9.2 s after the first captured frame: the synchronous
+    software transform held frames, and `mfenc.c` sends `CODECAPI_AVLowLatencyMode` only when
+    `AV_CODEC_FLAG_LOW_DELAY` is set, which it never was. The flag is now set for `h264_mf`, `max_b_frames` is 0 on
+    the context (`mfenc` always passes it to the transform) and the `max_b_frames` option string, which FFmpeg never
+    consumed (its option is `bf`), is gone. After the open the worker records the open time, the transform's friendly
+    name (`mf_utils.c` logs `MFT name: '...'` at INFO, captured around the open, sanitised), any option the codec left
+    unconsumed (PyAV keeps those in `ctx.options`), the extradata length and NAL types and the SPS's
+    profile/constraint/level bytes as 6 hex characters; the track logs them once per open (`screen encoder opened`).
+    Never a parameter set itself: the agent masks 40-character runs and the bundle must stay content-free. The probe
+    runs at the session's real output size (it was 64x64, a size hardware transforms may refuse) and every candidate
+    that fails is logged with FFmpeg's reason (`screen encoder candidate unavailable encoder=... reason=...`; the key is
+    not `candidate`, which the redaction blanks); `--list-encoders` and the self-test carry the reason too.
+    `encoder_candidates` follows the order of the start's `encoder_preference` (it was always H.264 first). The
+    hardware candidate stays on yuv420p this round (KNOWN_ISSUES #35).
+99. **Every IDR still begins with SPS and PPS, from whatever the encoder really used** (`encode.H264Encoder.encode`,
+    `to_annexb`, `parameter_sets_of`). Hardening for transforms never exercised: the last SPS and PPS the encoder
+    put in band are preferred over the extradata when an IDR lacks them, and they are the real guard: `mfenc.c`
+    writes `extradata` only at open (with its 70 ms wait for an asynchronous transform) and after
+    `MF_E_TRANSFORM_STREAM_CHANGE`, so the re-read after each encode while it is empty picks up only a stream
+    change's sets (review of device round 2: an earlier wording promised more). An access unit is read as AVCC with
+    4-byte lengths and converted when the encoder's extradata is an avcC record, or when its lengths chain exactly to
+    the end through plausible NAL headers — tried even when it starts with `00 00 01`, because a first NAL of 256 to
+    511 bytes has exactly that length prefix and was taken for Annex B (the IDR then went unrecognised: no SPS/PPS, a
+    false `encoder_stalled`); a unit of neither form is passed through; both count as `non_annexb` with one warning
+    per encoder (aiortc's packetizer finds nothing to send in AVCC and drops it silently). Counters: frames in, access units out, IDRs, bytes, prepended, frames in before the first
+    packet, and the first access unit's and first IDR's NAL types, size, form and SPS bytes.
+100. **The H.264 drain pump** (`track.ScreenTrack.recv`, `PUMP_MAX_SECONDS`). With an encoder that holds N frames, a
+     still screen fed at the 1 fps floor took N seconds to give up a new picture or a requested IDR. After a newly
+     captured frame or a forced IDR the track keeps that frame's pts; while the screen is still it re-encodes the held
+     raw frame at the capture cadence (new P-frames of the same picture, a few hundred bytes; a packet is never
+     re-sent) until a packet with `pts >= target - 2` comes out (mfenc maps pts to 100 ns sample times and back), for
+     at most 3 s, then the 1 fps floor as before. The latency is about N / fps whatever the transform or the
+     low-latency flag does, so the pump does not depend on #98 working. An IDR that is due (a PLI on a still screen)
+     now re-encodes the held frame at once instead of waiting for the next floor tick (up to a second). VP8 is
+     unchanged: aiortc's libvpx path does not buffer. Tested with a context that holds 7 frames: first packet and a
+     PLI-forced IDR each in under 0.5 s (about 7 s before).
+101. **Keyframe facts, `encoder_stalled`, and an encoder failure stops the track** (`track.ScreenTrack.check_stall`,
+     `_encode_quietly`, `_open_encoder`). The track logs `screen first keyframe` once (ms from the first frame given
+     to the encoder, the IDR's NAL types, form, SPS bytes, whether SPS/PPS were prepended) and keeps the time from each
+     requested IDR (a PLI, the phone's or the agent's `keyframe`, the join) to its packet. No IDR out 5 s after the
+     first submit emits `{"ev": "encoder_stalled", "reason": "no_keyframe", ...}` once (checked by the track's loop and
+     by the peer's 2 s stats loop, in case an encode call never returns). An exception from the encoder, or an open
+     that fails in the track, is logged with FFmpeg's words, reported as `encoder_stalled` (`encode_error`,
+     `open_error`) and stops the track; before, it escaped into aiortc's `_run_rtp`, which logged a traceback and
+     stopped sending while the agent believed the session live.
+102. **What the media path did, in the stats event, the log and the bundle** (`rtc.ScreenPeer.media_snapshot`,
+     `rtp_stats`, `transport_facts`; `session.media_from_stats`). The 2 s stats event now carries the sender's
+     `outbound-rtp` packets and bytes, whether a receiver report from the phone has come (`rr`) with its loss, jitter
+     and round-trip time, the PLIs, the NACKed packets (`sender._retransmit` wrapped on the instance like
+     `_send_keyframe`, left alone if the pinned aiortc lacks it) and the track's counters. The worker logs one
+     `screen media` line every 5 s and a final one at close (never per frame; under the supervisor's 400-character
+     cap with large values, asserted), and one `screen transport` line at `connected`: the path, both candidate types,
+     the protocol, `ip=v4|v6`, the negotiated codec, payload type, `profile-level-id`, `packetization-mode` and the
+     RTP payload limit; never an address. Log keys avoid every redacted word (`local_type`, not `candidate_type`;
+     `pt`, not `payload_type`). The agent keeps a whitelist of those numbers, flags and short words as
+     `status.screen.session.media`, keeps the previous session's as `status.screen.last_session_media` (a bundle taken
+     after Stop still has it) and adds the main ones to `screen session ended`.
+103. **RTP payloads of at most 1200 bytes, and VP8 first for 24 hours after an H.264 stall** (`rtc.limit_rtp_payloads`;
+     `ScreenSessionManager._note_encoder_stalled`, `_start_message`). aiortc packetizes up to its module global
+     `PACKET_MAX` (1300), read at call time; with RTP, SRTP, UDP and an IPv6 tunnel, a VPN or some cellular paths
+     that exceeds the MTU and the packets vanish, so the peer lowers the H.264 and VP8 globals to 1200 before the first
+     send. On `encoder_stalled` from H.264 the agent logs a warning and, for 24 hours of this agent run (in memory),
+     asks starts whose offer has both codecs for `["vp8", "h264"]`; the worker probes in that order and answers VP8.
+     The session itself is not ended: 1.4 signaling has no renegotiation, so the switch happens on the fresh session
+     the phone's no-picture watchdog starts. Design §5.3 already said "A PC where H.264 failed ... offers VP8 first
+     next time"; the contract and the phone support VP8 ("Basic picture").
+104. **Desktop Duplication is relied on only once it has proven itself** (`capture_dda.DdaWithFallback`,
+     `DdagrabSource.proven`; review of device round 2). With the scaler's option names fixed (#97) Desktop Duplication
+     runs before Windows.Graphics.Capture on every PC, and it has never run on a device. `ddagrab`'s
+     `probe_output_format` loops until the desktop produces a frame, so on a still desktop the open stays pending after
+     its 1.5 s wait; that open used to be adopted: reads answered None until someone touched the PC, the track had no
+     frame to encode, the phone's watchdog restarted after 15 s and every new worker did the same, while
+     Windows.Graphics.Capture gives its first frame at once (15 to 148 ms on the founder's PC). A failure of that
+     pending graph, or of `scale_d3d11` on its first frame, went to the reopen back-off and ended `capture_failed`,
+     never to Windows.Graphics.Capture. Now a FIRST open still pending after the wait is abandoned (its helper thread
+     closes the graph when `av.open` returns) and Windows.Graphics.Capture opens for the session ("Desktop Duplication
+     gave no first frame within 1.5 s (a still desktop)" in the fallback warning), and a read that fails before the
+     graph's first frame raises at once instead of rebuilding, which `DdaWithFallback` turns into the same switch.
+     After the first frame nothing changes: access lost and the pending rebuild after a UAC prompt are handled as in
+     #83 and #94. The cost: on a desktop that is still at the start, the session uses Windows.Graphics.Capture (and
+     its border) even where Desktop Duplication would work.

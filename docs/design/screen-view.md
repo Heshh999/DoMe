@@ -365,8 +365,14 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
 ### 5.2 Capture
 
 - **Primary: DXGI Desktop Duplication through FFmpeg `ddagrab`**, opened by PyAV as an `lavfi` graph:
-  `ddagrab=output_idx=N:framerate=30:draw_mouse=1:dup_frames=1, scale_d3d11=w=W:h=H:format=nv12,
-  hwdownload, format=nv12`. GPU colour conversion and scaling, no per-pixel Python. **Revised 2026-10-27
+  `ddagrab=output_idx=N:framerate=30:draw_mouse=1:dup_frames=1, scale_d3d11=width=W:height=H:format=nv12,
+  hwdownload, format=nv12`. GPU colour conversion and scaling, no per-pixel Python. **Revised 2026-10-27 (device
+  round 2):** the graph shipped with `scale_d3d11=w=W:h=H`, option names `vf_scale_d3d11.c` (n8.1.3) does not have
+  (`w`/`h` are `scale`'s), so Desktop Duplication failed on every PC and the Windows.Graphics.Capture fallback ran;
+  the worker's self-test and the licence gate now parse the graph's options without a desktop (pc-agent/DECISIONS.md
+  97). Desktop Duplication is relied on only once it has given a frame: a first open still waiting for a desktop
+  change after 1.5 s, or a graph that fails before its first frame, switches the session to Windows.Graphics.Capture,
+  whose first frame comes at once (pc-agent/DECISIONS.md 104). **Revised 2026-10-27
   (device round 1):** `dup_frames=0` was the design, but in FFmpeg n8.1.3 `ddagrab`'s `request_frame` then loops
   until the desktop changes, so a `lavfi` read *blocks* on a still screen instead of returning `EAGAIN`, and
   `av.open` itself waits for a real frame (`probe_output_format`); the build ships `dup_frames=1` and the worker
@@ -457,6 +463,21 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
 - Phase 2 and 3 quality items, behind device data: a cursor overlay (`draw_mouse=0`, shape and position on
   the data channel, drawn crisp on the phone), a sharpening refresh frame after 300 ms still, and the
   native-resolution region crop for zoom (§8).
+- **Implementation notes (device round 2, 2026-10-27; pc-agent/DECISIONS.md 98 to 103).** On the founder's PC the
+  first encoded packet came 5.5 to 9.2 s after the first captured frame: the synchronous software transform held
+  frames and the still screen fed it at the 1 fps floor. Now: `h264_mf` is opened with the low-delay flag (which is
+  what makes `mfenc.c` send `CODECAPI_AVLowLatencyMode`) and `max_b_frames = 0` on the context; after a new picture
+  or a forced IDR the worker re-encodes the held frame at the capture cadence until that picture's packet comes out
+  (the **drain pump**, at most 3 s), so the latency is about N / fps for an encoder that holds N frames whatever the
+  transform does with the flag, and a due IDR on a still screen is encoded at once; no IDR within 5 s of the first
+  frame, or an encoder error, is reported once (`encoder_stalled`) and the next start asks for VP8 first for 24 hours
+  (the fallback this section already promised; across sessions, because 1.4 has no renegotiation). The probe runs at
+  the real output size and logs FFmpeg's reason per skipped encoder; the bitstream is hardened (in-band SPS/PPS
+  preferred over extradata, AVCC recognised and converted). RTP payloads are capped at 1200 bytes (aiortc's
+  `PACKET_MAX`, 1300). The worker logs what the media path did (the transform's name, open time, SPS
+  profile/level bytes, time to first keyframe, a counters line every 5 s, the transport's candidate types and address
+  family, never an address) and the agent keeps the counters in the diagnostics bundle. Still open: the hardware
+  transform (it needs NV12 input), matching `profile-level-id` to the real SPS, and the CBR budget on a still screen.
 
 ### 5.4 Audio (Phase 2)
 
@@ -611,7 +632,12 @@ Phone lifecycle: `bye` and close on `visibilitychange` to hidden; stall detectio
 (or `framesDecoded` from `getStats`) silent for 2 s while the PC's `state` says `sending`, or black video
 after an app switch (WebKit 231365) [research] → recreate the session, at most twice, then the failure
 state; Wi-Fi ↔ cellular (`iceConnectionState` failed) → the same. A screen wake lock is held while viewing
-(home-screen app from iOS 18.4) [research].
+(home-screen app from iOS 18.4) [research]. **Revised 2026-10-27 (device round 2; mobile-app DECISIONS 80 to 82):**
+the video track arrives inside `setRemoteDescription` and is kept until the answer verified (dropping it was why the
+founder's phone never left "Connecting"); after DTLS a **first-frame watchdog** asks for a keyframe at 3 s and 8 s
+and recreates the session at 15 s (counted with the stall restarts), held while the PC is paused and when the
+picture only waits for the owner's tap; when H.264 arrived but never decoded the fresh session offers VP8 only.
+`getStats()` is read through a whitelist into the phone's diagnostics, and staging builds show it on the stage.
 
 No `pc_state` change in Phase 1: other phones learn of ownership from `SCREEN_SESSION_OWNED` and from the
 `screen_session` lifecycle frames, which the relay broadcasts to the PC's 1.4 subscribers (skipping older
@@ -1058,7 +1084,7 @@ factory):
 | PC locked | `session_locked` | "Your PC is locked. Unlock it to start again." |
 | UAC / secure desktop | `state{paused}` | "Windows is asking for permission on the PC. Someone at the PC must answer." (clock stopped) |
 | Protected content | — | help text and first-use hint: "Some protected videos and windows show as black." |
-| Basic picture mode | `encoder: vp8` | Health note "Basic picture mode (this PC lacks the video encoder)" |
+| Basic picture mode | `encoder: vp8` | Health note "Basic picture mode" (VP8 is also the fallback after H.264 stalled on the PC or never decoded on the phone, so the note names no cause; revised 2026-10-27) |
 | Capture unavailable | `SCREEN_CAPTURE_UNAVAILABLE` | "Your PC can't share its screen right now. Another app may be capturing it, or this display isn't supported yet." |
 | Worker crash | `capture_failed` | "Your PC's screen sharing stopped unexpectedly." [Start again] |
 | Stopped at the PC | `stopped_on_pc` | "Screen view was stopped on the PC. For 10 minutes someone at the PC must allow it again." (no automatic restart; the same copy on any other phone that tries during the cooldown) |

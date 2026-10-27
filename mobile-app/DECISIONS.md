@@ -713,3 +713,106 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
       and schema check, one `sign` per batch (the shared `signPayload` has no way to pass a kid,
       CONTRACT_ISSUES 21). The key stays non-extractable; `test/signing.test.ts` has the shared verifier
       accept the result. Commands and the hello proof keep the shared signer and share the cached pair.
+
+80. **The video track is kept from inside `setRemoteDescription`; DTLS no longer means "wait forever".** (Device
+    round 2, 2026-10-27, build 593d3fd on staging: the founder's PC reported the session `live` and
+    connected direct for 42 s and 217 s while the iPhone stayed on "Connecting to your PC's screen…".)
+    Browsers dispatch `track` inside `setRemoteDescription`, before its promise resolves (webrtc-pc;
+    WebKit `PeerConnectionBackend::setRemoteDescriptionSucceeded`), and `onTrack` returned unless
+    `verified` was already true — which is set only after that promise resolves — so the only video track
+    was dropped and no `<video>` ever existed. The fake peer fired `track` later, from `connect()`, so no
+    test could see it. Now (`lib/screen.ts`, `test/helpers/fakePeer.ts`):
+    - `onTrack` ignores non-video tracks, logs `screen.track {streams, answer_applied, verified}` and drops a
+      track only while `answerApplied` is false. `answerApplied` is set after `verifyScreenAnswer` passed,
+      just before `setRemoteDescription`, so it is the structural guard: a track can only come from the
+      verified answer. The stream (`ev.streams[0]`, else `new MediaStream([track])` where the browser can)
+      is kept privately and published in the same `set()` that writes `verified: true` — nothing is shown
+      before verification. A track after verification is published at once; `start()` and `closePeer()`
+      forget a kept one.
+    - The fake peer follows the browsers' order: `setRemoteDescription` fires `track` before it resolves;
+      `connect()` is DTLS and the data channel only; `fireTrack()` stays for a late or early track. The
+      regression tests replay the founder's sequence (track during SRD → stream with `verified` → one frame
+      → live) and the empty-`streams` case.
+    - **First-frame watchdog.** The connect timer stops at DTLS `connected`, and the stall watchdog runs only
+      once live, so nothing ended "connecting" after DTLS. From DTLS up: +3 s and +8 s with no frame send a
+      data-channel `keyframe` and log `screen.no_picture` with a stats and `<video>` summary; +15 s logs once
+      more and starts a fresh signed session (`restartFresh("no_picture")`), counted toward `MAX_RETRIES`;
+      exhausted, the state is `failed` with `SCREEN_CONNECTION_FAILED {cause: "no_picture"}` and its own
+      copy, "Your PC connected, but no picture arrived." (the network's "Couldn't reach…" would be wrong).
+      15 s leaves room for PC builds without the encoder pump (first packet up to 9.2 s after capture on the
+      founder's PC). While DTLS is up and no frame has come the page says "Connected. Waiting for the
+      picture…" (`transportConnected`), so a screenshot names the stage.
+    - **VP8 retry** (optional P2, built): when the +15 s restart finds H.264 packets received but
+      `framesDecoded` 0, the fresh session's offer carries VP8 + RTX only (`setCodecPreferences`), logged
+      `screen.codec_fallback {from: h264, to: vp8, reason: not_decoded}`; both offer checks accept a
+      VP8-only offer (the phone's is codec-agnostic, the PC's needs H.264 or VP8), and the PC answers VP8.
+      Where the browser cannot prefer VP8 it logs `screen.codec_fallback_skipped` and keeps its usual
+      order. The owner's own start clears the fallback. Encoder failures the phone cannot see are the PC's
+      side (its own VP8-first preference).
+    - **"Tap to show the picture" from the watchdog** (optional, built): at +3 s / +8 s, frames decoded
+      but a paused `<video>` that never ran a frame callback sets `playHint`, which shows the existing tap
+      button; the tap plays again and clears it.
+    - **What holds the watchdog** (review of device round 2). A PC pause before the first frame (a UAC
+      prompt, a missing bar: `pcState` `paused`) holds the steps — no keyframe request, no restart, and the
+      paused time does not count (on resume at least the second step's room is left before a restart) —
+      as the live stall watchdog and the PC's own keyframe deadline already did; a restart there would be
+      refused with `PC_SESSION_LOCKED` and charged. A picture that only waits for the owner's tap is not
+      restarted at +15 s either: when `play()` was refused (the page reports it through
+      `client.notePlayBlocked`), or frames decode into a paused `<video>` with no frame callback, the tap
+      prompt stays and the steps count again from the tap (`dismissPlayHint`); a fresh session would only
+      mount a new `<video>` whose `play()` is refused outside a gesture again. Every hold logs one
+      `screen.no_picture_held {reason: pc_paused | tap}`.
+    - **Live frames are not published one by one** (optional P3, built): `onVideoFrame` keeps the last
+      frame time privately and calls `set()` only when `stalled` flips; ~30 store updates and page renders
+      a second while live are gone. `lastFrameAt` in the state is the last published one.
+
+81. **What the phone can say about a session it cannot see is metadata, read through a whitelist.**
+    (Device round 2: none of the PC's media path or the phone's decode path was observable.)
+    `lib/screenStats.ts`:
+    - `reduceStats` builds a new object from named fields of five `getStats()` entry types — the video
+      inbound-rtp (packets, bytes, loss, jitter, frames received / decoded / key / dropped, fps, size, PLI /
+      FIR / NACK counts, `decoderImplementation`, decode time, the age of the last packet on the report's own
+      clock), its codec (mime, payload type, and from the fmtp line only `profile-level-id` and
+      `packetization-mode`; `sprop-parameter-sets` would carry the stream's SPS and PPS), the selected
+      candidate pair (state, RTT, bytes, and only the TYPE and protocol of its two candidates), the
+      transport (DTLS and ICE states) and the data channel (message counts). Candidate addresses, ports,
+      related addresses, ICE fragments, server URLs and the certificate's fingerprint are never read;
+      strings are cut to closed shapes. Raw stats are never spread or kept.
+    - The session client reads it every 5 s while `connecting`, `live` or `paused` in every build (cheap),
+      every second while the first-frame watchdog waits, and at each watchdog step. A timeline keeps the ms
+      since `screen.start_sent` at which each stage was first reached (`answer_verified`, `track`,
+      `dtls_connected`, `dc_open`, `first_rtp`, `first_decoded`, `first_frame`, `live`); new log lines
+      `screen.track`, `screen.dtls_connected` and `screen.dc_open` (`ms_since_answer`), `screen.first_frame`
+      (`ms_since_dtls`), `screen.no_picture`, `screen.codec_fallback` — nothing per frame or per second
+      (the ring holds 120 entries). Log keys are chosen to pass `log.ts` REDACT_KEY untouched (`fmtp`,
+      `local_type`, never `candidate*`, `url` or `*_text`); a test renders the summaries through `redact`.
+    - `ScreenSurface` hands the client a probe of the `<video>`'s own metadata: ready and network state,
+      paused / ended, size, current time, `MediaError.code`, `getVideoPlaybackQuality` counts, the last
+      `play()` outcome (`pending`, `resolved`, `rejected:<DOMException name>`), the frame-callback tick count
+      and the first tick's delay, and the stream's `active` and the track's `readyState` / `muted` /
+      `enabled`, read from the element's `srcObject` (the stream is kept nowhere else). The client samples
+      it before it closes the peer, so the facts survive Stop.
+    - The diagnostics bundle's `screen` gains `stats`, `media`, `timeline`, `transport_connected` and
+      `codec_fallback`, read from `runtime.screen.facts` rather than React state; they outlive Stop and are
+      reset by the next start. The SDP sentinel test runs with a Safari-shaped report that carries
+      addresses, fragments, a STUN name, the certificate and the SPS, and none of them reaches the log, the
+      facts or the bundle.
+
+82. **Test builds show a readout on the Screen view stage.** `components/ScreenReadout.tsx` renders only
+    when `VITE_DOME_RELEASE_CHANNEL` is one of `dev`, `test`, `ci` or `staging` (the founder's build) — an
+    allow-list (`READOUT_CHANNELS`), so production, a plain `vite build` with no channel and any channel
+    added later show nothing — expanded by default, absolutely positioned in the stage's top-left corner
+    over the picture or over the black stage when there is no picture (the case it exists for), at `z-[5]`:
+    under the status overlay (z-10) and the "Tap to show the picture" overlay (z-20), so neither is ever
+    covered. It lists, once a second and at every
+    stage change, a gate checklist in pipeline order — verified, track seen, stream set, DTLS, data channel
+    and `hb` count, first RTP, track unmuted, key frame decoded, frames decoded, `readyState >= 2`, the
+    `play()` outcome, frame-callback ticks, phase — so the first "no" names the failed stage, then the
+    numbers behind them, in "yes" / "no" words. The panel is `pointer-events-none` except its two buttons,
+    so taps still reach the picture. "Hide readout" is remembered in `localStorage` (every access in
+    try/catch). Copy calls `navigator.clipboard.writeText` inside the tap; a refusal says "Copy failed:
+    press and hold the text below to select it" and opens a small read-only box (80 px high) with the text
+    as it was then, which takes touches until "Done" — the readout itself never captures taps meant for the
+    picture. Production builds render
+    nothing and run no extra timer. `ScreenReadout.tsx` and `screenStats.ts` are in the no-pixel-access
+    test's Screen view list (no canvas, no fetch, no socket, the stream assigned to nothing).

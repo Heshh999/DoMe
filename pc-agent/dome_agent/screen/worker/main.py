@@ -7,9 +7,11 @@ through ``crashguard``. Exits on pipe EOF, on ``stop``, and when the agent's liv
 repaint; the Job object covers an agent that died). The aiortc / aioice loggers are pinned to WARNING here too.
 
 ``--self-test`` (run by the Windows installer workflow on the frozen build) reports the imports, aiortc's version,
-the encoders available, how many decoders this build has, a decoded ``lavfi`` ``testsrc`` frame, whether the
-PLI hook point exists and, on Windows, whether the Windows.Graphics.Capture fallback's native module loads (no capture
-is started); ``--list-encoders`` lists the encoders. Both print JSON lines and never a frame.
+the encoders available (with FFmpeg's reason for each one that is not), how many decoders this build has, a decoded
+``lavfi`` ``testsrc`` frame, whether the PLI hook point exists and, on Windows, whether the Windows.Graphics.Capture
+fallback's native module loads (no capture is started) and whether every option of the Desktop Duplication graph
+parses (``capture_dda.check_graph_options``: the filters are created, the graph is never configured, so no desktop or
+GPU is needed); ``--list-encoders`` lists the encoders. Both print JSON lines and never a frame.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import structlog
 from dome_protocol import ProtocolError
 
 from ...logsetup import pin_media_loggers, redact_event
-from .encode import encoder_candidates, fit_level_31, list_encoders, probe_encoders
+from .encode import ProbeFailure, encoder_candidates, fit_level_31, list_encoders, probe_encoders
 from .pipe import read_message_sync, write_message_sync
 
 log = structlog.get_logger(__name__)
@@ -196,7 +198,7 @@ class WorkerApp:
                 self._send_dc(self._state_message())
         elif op == "keyframe":
             if self._track is not None:
-                self._track.force_keyframe()
+                self._track.force_keyframe(source="op")
         elif op == "allowance":
             self._send_dc(
                 {
@@ -277,7 +279,14 @@ class WorkerApp:
             self._dev_h264 if self._dev_h264 is not None else (kind == "fake" or os.environ.get(DEV_H264_ENV) == "1")
         )
         preference = [c for c in message.get("encoder_preference", ["h264", "vp8"]) if c in ("h264", "vp8")]
-        choice = probe_encoders(encoder_candidates(preference, dev_h264=dev_h264))
+        failures: list[ProbeFailure] = []
+        try:
+            # at the session's real output size: a transform may refuse a size the old 64x64 probe never asked for
+            choice = probe_encoders(encoder_candidates(preference, dev_h264=dev_h264), width, height, failures)
+        finally:
+            for failure in failures:  # FFmpeg's reason per candidate: the diagnostics bundle says why it was skipped
+                # the key is "encoder": any key containing "candidate" is redacted (ICE candidates never reach a log)
+                log.info("screen encoder candidate unavailable", encoder=failure.candidate, reason=failure.reason)
         source = _build_source(kind, source_spec, width, height, fps)
         from .rtc import ScreenPeer  # aiortc is imported only when a session really starts
         from .track import ScreenTrack
@@ -330,7 +339,12 @@ class WorkerApp:
             }
         )
         log.info(
-            "screen worker answered", encoder=choice.label, size=f"{width}x{height}", fps=fps, pli_hook=peer.pli_hook
+            "screen worker answered",
+            encoder=choice.label,
+            size=f"{width}x{height}",
+            fps=fps,
+            pli_hook=peer.pli_hook,
+            preference=",".join(preference),
         )
         # the first geometry and state reach the phone once the channel opens
         asyncio.ensure_future(self._announce_when_open())
@@ -489,6 +503,13 @@ def self_test(*, dev_h264: bool) -> dict[str, Any]:
         native = load_native()  # loads the module only: no capture session, no frame
         return {"classes": sorted(name for name in dir(native) if name.startswith("Native"))}
 
+    def ddagrab_graph_options() -> dict[str, Any]:
+        # the real graph's filters created with their options, never configured: an option name this FFmpeg lacks
+        # fails here ("Option not found"), as scale_d3d11's w/h did on every PC in device round 2
+        from .capture_dda import check_graph_options, ddagrab_graph
+
+        return {"filters": check_graph_options(ddagrab_graph(0, 1280, 720, 30))}
+
     def dxgi_outputs() -> dict[str, Any]:
         # numbers only: how many adapters DXGI lists and how many outputs each has (ddagrab's output_idx counts the
         # first adapter's); a build machine without a desktop shows a software adapter with none
@@ -506,8 +527,9 @@ def self_test(*, dev_h264: bool) -> dict[str, Any]:
     check("decoders", decoders)
     check("lavfi_testsrc_frame", lavfi_frame)
     check("pli_hook", hook)
-    if sys.platform == "win32":  # windows-capture and DXGI are Windows only
+    if sys.platform == "win32":  # windows-capture, DXGI, ddagrab and scale_d3d11 are Windows only
         check("wgc_native", wgc_native)
+        check("ddagrab_graph_options", ddagrab_graph_options)
         check("dxgi_outputs", dxgi_outputs)
     return report
 

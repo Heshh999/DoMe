@@ -192,7 +192,7 @@ def test_h264_encoder_puts_sps_pps_before_every_idr_and_still_frames_differ() ->
             if 5 in t:
                 assert t.index(7) < t.index(8) < t.index(5), t
         assert outputs[1] != outputs[2]  # two still-frame P packets are distinct encoder outputs
-        assert enc.idr_count == 2 and enc.frames_encoded == 5
+        assert enc.idr_count == 2 and enc.frames_in == 5 and enc.packets_out == 5 and enc.pending == 0
         enc.reopen(300)  # a bitrate step reopens the context; the parameter sets survive
         assert enc.bitrate_kbps == 300 and encode.nal_types(enc.parameter_sets) == [7, 8]
     finally:
@@ -929,6 +929,22 @@ async def test_loopback_session_h264_with_heartbeats_vocabulary_pause_pli_and_se
         assert w.app._track.source_size == (480, 270)  # noqa: SLF001
         stats = await w.expect("stats", timeout=8)
         assert stats["relayed_bytes"] == 0 and stats["bytes_sent"] > 0 and stats["bitrate_kbps"] == 1500
+        # device round 2: what the media path did, in every stats event
+        assert stats["rtp_packets"] > 0 and stats["rtp_bytes"] == stats["bytes_sent"] and stats["aus"] > 0
+        assert stats["captured"] > 0 and stats["idr"] >= 2 and stats["encoder_label"] == "libx264 DEV ONLY"
+        assert stats["first_kf_ms"] is not None and stats["pli"] >= 1 and stats["kf_pli"] >= 1 and stats["kf_dc"] >= 1
+        assert stats["stalled"] is None and stats["pending"] == 0 and stats["nack"] == 0
+        # the phone's receiver reports on our SSRC (aiortc sends one about every second); aiortc's sender computes a
+        # round-trip time only from a report that echoes its latest sender report (rtcrtpsender.py: `__lsr ==
+        # report.lsr`), so the first reports may carry rr=True with rtt_ms None: wait for both, bounded
+        for _ in range(10):
+            if stats["rr"] and stats["rtt_ms"] is not None:
+                break
+            stats = await w.expect("stats", timeout=8)
+        assert stats["rr"] is True and stats["rtt_ms"] is not None and stats["lost"] == 0
+        from aiortc.codecs import h264 as aiortc_h264
+
+        assert aiortc_h264.PACKET_MAX == 1200  # lowered before the first send
         phone.channel.send(json.dumps({"type": "bye"}))
         await w.expect("bye", timeout=5)
         w.send({"op": "stop"})
@@ -940,6 +956,8 @@ async def test_loopback_session_h264_with_heartbeats_vocabulary_pause_pli_and_se
     # the sentinel (design §4.4, §17.2): with everything at DEBUG, no address, fingerprint or credential in any sink
     log_text = settings.log_path.read_text(encoding="utf-8")
     assert log_text, "the agent log was written"
+    for line in ("screen encoder opened", "screen first keyframe", "screen transport", "screen media final"):
+        assert line in log_text, line
     bundle = json.dumps(build_bundle(settings, {"screen": {"session": None}}))
     for needle in ("127.0.0.1:", "[::1]", offer_fingerprint, answer_fingerprint, ice_pwd, "a=ice-pwd", "a=candidate"):
         assert needle not in log_text, needle
@@ -1265,12 +1283,16 @@ def test_a_still_desktop_is_not_access_lost_and_a_frame_resets_the_rebuild_count
 
 def test_a_reopen_that_fails_backs_off_and_does_not_end_capture_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """A rebuild while the secure desktop is still up fails to open: the source reports None and retries with a
-    back-off (the agent's secure-desktop pause decides the end), and gives up only after REOPEN_ATTEMPTS."""
+    back-off (the agent's secure-desktop pause decides the end), and gives up only after REOPEN_ATTEMPTS. (All of this
+    after the graph's first frame: before it a failure raises at once and the session switches to
+    Windows.Graphics.Capture, DECISIONS #104.)"""
     from dome_agent.screen.worker import capture_dda
 
+    frame = still_frame(64, 36)
     monkeypatch.setattr(capture_dda, "REOPEN_BACKOFF_SECONDS", (0.0,))
-    source = _scripted_dda(monkeypatch, [[OSError("access lost")]])
+    source = _scripted_dda(monkeypatch, [[frame, OSError("access lost")]])
     source.open()
+    assert source.read() is not None and source.proven
     for _ in range(capture_dda.REOPEN_ATTEMPTS - 1):
         assert source.read() is None  # the first read loses access; reopens then fail and back off
     with pytest.raises(ProtocolError) as exc:
@@ -1279,9 +1301,10 @@ def test_a_reopen_that_fails_backs_off_and_does_not_end_capture_at_once(monkeypa
     assert exc.value.code == "SCREEN_CAPTURE_UNAVAILABLE"
     # three access-lost errors in a row, without a frame in between, still give up
     source = _scripted_dda(
-        monkeypatch, [[OSError("lost")], [OSError("lost")], [OSError("lost")], [OSError("lost")], []]
+        monkeypatch, [[frame, OSError("lost")], [OSError("lost")], [OSError("lost")], [OSError("lost")], []]
     )
     source.open()
+    assert source.read() is not None
     with pytest.raises(ProtocolError):
         for _ in range(10):
             source.read()

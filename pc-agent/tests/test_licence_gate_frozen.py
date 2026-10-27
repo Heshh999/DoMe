@@ -383,6 +383,7 @@ def self_test_report(**overrides: Any) -> dict[str, Any]:
             "ok": True,
             "value": {"classes": ["NativeCaptureControl", "NativeMappedFrame", "NativeWindowsCapture"]},
         },
+        "ddagrab_graph_options": {"ok": True, "value": {"filters": ["ddagrab", "scale_d3d11", "hwdownload", "format"]}},
     }
     checks.update(overrides)
     return {"ok": all(c.get("ok") for c in checks.values()), "checks": checks}
@@ -462,6 +463,51 @@ def test_self_test_needs_the_windows_graphics_capture_fallback(wgc_native: dict[
         report["checks"]["wgc_native"] = wgc_native
     rows = gate.evaluate_screen_self_test(report, 0, expect="present", crash_log=False)
     assert WGC_ROW in failed(rows)
+
+
+GRAPH_ROW = "ddagrab graph options parse (the worker's own Desktop Duplication graph)"
+
+
+@pytest.mark.parametrize(
+    "graph_check",
+    [
+        None,  # a worker that does not run the check
+        {"ok": False, "error": "ValueError: scale_d3d11: No such option: w.; Option not found (errno 1414549496)"},
+    ],
+)
+def test_self_test_needs_the_desktop_duplication_graph_to_parse(graph_check: dict[str, Any] | None) -> None:
+    """Device round 2: an option name FFmpeg does not have made Desktop Duplication fail on every PC; the frozen
+    worker's own graph is now parsed on the build machine (no desktop or GPU needed) and a failure stops the build."""
+    report = self_test_report()
+    if graph_check is None:
+        del report["checks"]["ddagrab_graph_options"]
+    else:
+        report["checks"]["ddagrab_graph_options"] = graph_check
+        report["ok"] = False
+    rows = gate.evaluate_screen_self_test(report, 0 if graph_check is None else 1, expect="present", crash_log=False)
+    assert GRAPH_ROW in failed(rows)
+    [row] = [r for r in rows if r.name == GRAPH_ROW]
+    assert row.status == "FAIL" and ("Option not found" in row.detail if graph_check else "not reported" in row.detail)
+
+
+def test_self_test_shows_ffmpegs_reason_for_an_unavailable_encoder() -> None:
+    report = self_test_report(
+        encoders={
+            "ok": True,
+            "value": [
+                {
+                    "encoder": "h264_mf hw",
+                    "kind": "h264",
+                    "available": False,
+                    "note": "SCREEN_ENCODER_UNAVAILABLE",
+                    "reason": "open: Invalid argument (errno 22)",
+                },
+                {"encoder": "vp8 (aiortc libvpx)", "kind": "vp8", "available": True, "note": ""},
+            ],
+        }
+    )
+    [h264] = [r for r in gate.evaluate_screen_self_test(report, 0, expect="present", crash_log=False) if not r.required]
+    assert "h264_mf hw: open: Invalid argument (errno 22)" in h264.detail
 
 
 def test_self_test_without_screen_view() -> None:

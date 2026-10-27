@@ -565,6 +565,22 @@ straight to Windows.Graphics.Capture); and the diagnostics bundle has a `hardwar
 graphics adapters and their outputs, whether this is a remote session, the Windows build, a per-app GPU preference for
 DoMe.exe and each display's HDR state (no pixels, no addresses). **Not yet verified on a device.**
 
+**Device round 2 (2026-10-27).** On the founder's laptop the PC connected to the phone and captured the screen
+through the fallback, but the phone showed no picture. The cause was in the phone app, which threw away the video it
+received (fixed in the phone app; nothing to change on the PC). On the PC side two more things were wrong: Desktop
+Duplication failed on every PC because DoMe gave FFmpeg's scaler option names it does not have (fixed; the worker's
+self-test on the build machine and the licence gate now check every option of that graph, without needing a screen;
+and Desktop Duplication is now used only once it delivers a first picture within 1.5 seconds, otherwise
+Windows.Graphics.Capture runs for that session), and the video encoder held several frames on a still screen, so the
+first picture left the PC 5 to 9 seconds late. Builds
+after this round ask Windows' encoder for low latency and, while the screen is still, keep feeding it the same
+picture until the waiting one comes out (expected: well under a second instead of several seconds). If the H.264
+encoder produces nothing within 5 seconds, DoMe asks for the simpler VP8 picture on the next Screen view for a day.
+The DoMe log and the diagnostics bundle now say what the video path did: which encoder Windows picked and why any
+other was skipped, how long the first picture took, the connection type (never an address), and every 5 seconds how
+many frames were captured, encoded and sent and whether the phone reported receiving them; after Stop the bundle
+keeps the last session's numbers (`status.screen.last_session_media`). **Not yet verified on a device.**
+
 **Allowing a phone (on the PC only).** A phone can never give itself Screen view, and neither can the
 DoMe service or a pairing (`--yes` included):
 - tray → **Paired phones ▸ ‹phone› ▸ Allow Screen view…** opens DoMe's window, which explains what it

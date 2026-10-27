@@ -5,9 +5,11 @@
  * the PC-signed answer accepted only against the pinned key and applied as exactly the signed string, every §4.3
  * refusal shows nothing; heartbeats, the data-channel vocabulary, lifecycle frames, stall → keyframe → one fresh
  * session (twice at most), the connect timeout, hidden → `bye` + stop, stopped_on_pc → no restart, the relay refusals,
- * takeover, the lost socket, and no SDP in the logs or diagnostics.
+ * takeover, the lost socket, and no SDP in the logs or diagnostics. Device round 2 (2026-10-27): the video track
+ * arrives inside setRemoteDescription and is kept until `verified`; the first-frame watchdog after DTLS (keyframes at
+ * 3 s and 8 s, a fresh session at 15 s, the VP8 retry); the whitelisted stats, the timeline and the readout facts.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { verifyAndParseCommand, exportPublicJwk, kidFromJwk, type relayFrames } from "@dome/protocol";
 
@@ -16,12 +18,13 @@ import { configureApi } from "../src/lib/api.ts";
 import { getOrCreateKeyPair, writePin } from "../src/lib/controllerKey.ts";
 import { buildDiagnostics } from "../src/lib/diagnostics.ts";
 import { clearLogs, recentLogs } from "../src/lib/log.ts";
-import { CONNECT_TIMEOUT_MS, HEARTBEAT_MS, MAX_RETRIES, RELAY_HINT_MS, STALL_MS, STALL_RESTART_MS, type ScreenSessionState } from "../src/lib/screen.ts";
-import { screenStatus } from "../src/lib/screenStatus.ts";
+import { CONNECT_TIMEOUT_MS, HEARTBEAT_MS, MAX_RETRIES, NO_PICTURE_FIRST_MS, NO_PICTURE_RESTART_MS, NO_PICTURE_SECOND_MS, RELAY_HINT_MS, STALL_MS, STALL_RESTART_MS, STATS_INTERVAL_MS, type ScreenSessionState } from "../src/lib/screen.ts";
+import type { ScreenMediaFacts } from "../src/lib/screenStats.ts";
+import { COPY, screenStatus } from "../src/lib/screenStatus.ts";
 import { useDevicesStore } from "../src/store/devices.ts";
 import { useLiveStore } from "../src/store/live.ts";
 import { useScreenStore } from "../src/store/screen.ts";
-import { ANSWER_SDP, FakePcKey, fakePeerFactory, SDP_SENTINEL, type FakePeerConnection } from "./helpers/fakePeer.ts";
+import { ANSWER_SDP, FakePcKey, fakePeerFactory, OFFER_SDP, safariLikeStats, SDP_SENTINEL, STATS_SECRETS, type FakePeerConnection } from "./helpers/fakePeer.ts";
 import { FakeTimers } from "./helpers/fakeTimers.ts";
 import { ACCOUNT, CONTROLLER, FakeSocket, flush, freshStorage, HELLO_ACK, noTimers, OTHER_PC, PC, signedIn, TS } from "./helpers/harness.ts";
 
@@ -582,10 +585,450 @@ describe("ScreenSessionClient: live", () => {
   });
 });
 
+/** Start, the result and the PC-signed answer, up to `verified` (the track arrives inside setRemoteDescription). */
+async function answered(): Promise<{ start: Record<string, unknown>; peer: FakePeerConnection }> {
+  const start = await startAndOffer();
+  socket.receive(result(start.command_id));
+  socket.receive(await answerFor(start));
+  await until(() => rt.screen.snapshot.verified);
+  return { start, peer: peers[peers.length - 1]! };
+}
+
+const events = () => recentLogs().map((l) => l.event);
+const logged = (event: string) => recentLogs().filter((l) => l.event === event);
+const keyframes = (peer: FakePeerConnection) => peer.channel.messages().filter((m) => m.type === "keyframe").length;
+const statusOf = (state: ScreenSessionState) => screenStatus({ state, switchOn: "on", grant: undefined, pin: pcKey.pin(PC), pcName: "Office PC", pcOnline: true, remoteEnabled: true, relayUp: true, now: timers.now });
+
+describe("ScreenSessionClient: the video track in the browsers' order (device round 2)", () => {
+  it("the track fires inside setRemoteDescription, before `verified`: it is kept and shown together with `verified`; one frame then makes it live", async () => {
+    const { peer } = await answered();
+    // the fake dispatched `track` before its setRemoteDescription resolved (the order WebKit and Chromium use)
+    expect(logged("screen.track")[0]?.fields).toEqual({ streams: 1, answer_applied: true, verified: false });
+    expect(events()).not.toContain("screen.track_before_verification_dropped");
+    expect(rt.screen.snapshot.stream).toEqual({ id: "fake-stream" });
+    expect(rt.screen.snapshot.phase).toBe("connecting");
+    // nothing was shown before verification: every published state with a stream is a verified one
+    expect(states.filter((st) => st.stream !== null).every((st) => st.verified)).toBe(true);
+    expect(events().indexOf("screen.track")).toBeLessThan(events().indexOf("screen.answer_verified"));
+    peer.connect();
+    expect(statusOf(rt.screen.snapshot)).toMatchObject({ kind: "waiting_picture", title: COPY.waitingPicture });
+    rt.screen.onVideoFrame(timers.now);
+    expect(rt.screen.snapshot.phase).toBe("live");
+    expect(events()).toEqual(expect.arrayContaining(["screen.dtls_connected", "screen.dc_open", "screen.first_frame", "screen.live"]));
+  });
+
+  it("a track whose `streams` is empty (a sender without a=msid) still becomes a stream of its own", async () => {
+    class FakeMediaStream {
+      constructor(readonly tracks: unknown[]) {}
+    }
+    vi.stubGlobal("MediaStream", FakeMediaStream);
+    try {
+      const start = await startAndOffer();
+      peers[0]!.trackStreams = [];
+      socket.receive(await answerFor(start));
+      await until(() => rt.screen.snapshot.verified);
+      expect(logged("screen.track")[0]?.fields).toMatchObject({ streams: 0 });
+      const shown = rt.screen.snapshot.stream as unknown as FakeMediaStream;
+      expect(shown).toBeInstanceOf(FakeMediaStream);
+      expect(shown.tracks).toEqual([{ kind: "video" }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    // a browser that cannot build one says so, and shows nothing rather than something unverified
+    const start = await startAndOffer();
+    peers[1]!.trackStreams = [];
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    expect(events()).toContain("screen.track_without_stream");
+    expect(rt.screen.snapshot.stream).toBeNull();
+  });
+
+  it("a track before the signed answer was applied is dropped; audio tracks are ignored; the verified answer's track is kept", async () => {
+    const start = await startAndOffer();
+    const peer = peers[0]!;
+    peer.fireTrack(); // no answer applied yet: cannot be ours
+    expect(events()).toContain("screen.track_before_verification_dropped");
+    expect(rt.screen.snapshot.stream).toBeNull();
+    peer.fireTrack([{ id: "audio-stream" } as unknown as MediaStream], "audio");
+    expect(logged("screen.track")).toHaveLength(1); // audio is not even logged
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    expect(rt.screen.snapshot.stream).toEqual({ id: "fake-stream" });
+    // a late video track after verification replaces the stream at once (still only after verification)
+    peer.fireTrack([{ id: "late-stream" } as unknown as MediaStream]);
+    expect(rt.screen.snapshot.stream).toEqual({ id: "late-stream" });
+  });
+
+  it("a stop while setRemoteDescription is pending forgets the kept stream", async () => {
+    const start = await startAndOffer();
+    const peer = peers[0]!;
+    let release: () => void = () => undefined;
+    const original = peer.setRemoteDescription.bind(peer);
+    peer.setRemoteDescription = async (d) => {
+      await original(d); // the track fires here
+      await new Promise<void>((r) => (release = r));
+    };
+    socket.receive(await answerFor(start));
+    await until(() => logged("screen.track").length === 1);
+    await rt.screen.stop("stopped");
+    release();
+    await flush(5);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ended", verified: false, stream: null });
+  });
+});
+
+describe("ScreenSessionClient: the first-frame watchdog after DTLS (device round 2)", () => {
+  it("DTLS up and no frame: 'Connected. Waiting for the picture…', a keyframe request and screen.no_picture at 3 s and 8 s, a fresh session at 15 s", async () => {
+    knobs.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    expect(statusOf(rt.screen.snapshot).title).toBe(COPY.connecting);
+    peer.connect();
+    expect(rt.screen.snapshot.transportConnected).toBe(true);
+    expect(statusOf(rt.screen.snapshot)).toMatchObject({ kind: "waiting_picture", title: COPY.waitingPicture });
+    await timers.advance(NO_PICTURE_FIRST_MS - 100);
+    expect(keyframes(peer)).toBe(0);
+    await timers.advance(200);
+    expect(keyframes(peer)).toBe(1);
+    expect(logged("screen.no_picture")[0]?.fields).toMatchObject({ step: 1, keyframe_sent: true, stream: true, rtp_packets: 0, frames_decoded: 0, codec: "video/H264", pair: "succeeded", local_type: "srflx", remote_type: "host", proto: "udp" });
+    await timers.advance(NO_PICTURE_SECOND_MS - NO_PICTURE_FIRST_MS);
+    expect(keyframes(peer)).toBe(2);
+    expect(logged("screen.no_picture")).toHaveLength(2);
+    expect(rt.screen.snapshot.phase).toBe("connecting");
+    await timers.advance(NO_PICTURE_RESTART_MS - NO_PICTURE_SECOND_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(logged("screen.no_picture")).toHaveLength(3);
+    expect(keyframes(peer)).toBe(2); // the third step restarts instead
+    expect(peer.channel.messages().some((m) => m.type === "bye")).toBe(true);
+    await until(() => commands("screen.session_stop").length === 1);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 1, transportConnected: false });
+    // nothing in the log names an address, a port or the certificate
+    const text = JSON.stringify(recentLogs());
+    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+  });
+
+  it("the fresh sessions count toward MAX_RETRIES; then SCREEN_CONNECTION_FAILED {cause: no_picture} with its own copy", async () => {
+    let { peer } = await answered();
+    peer.connect();
+    for (let n = 1; n <= MAX_RETRIES; n++) {
+      await timers.advance(NO_PICTURE_RESTART_MS);
+      await until(() => frames("screen_ice_request").length === n + 1);
+      socket.receive(iceServers());
+      await until(() => commands("screen.session_start").length === n + 1);
+      const start = commands("screen.session_start")[n]!;
+      socket.receive(result(start.command_id));
+      socket.receive(await answerFor(start));
+      await until(() => rt.screen.snapshot.verified);
+      peer = peers[peers.length - 1]!;
+      peer.connect();
+    }
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => rt.screen.snapshot.phase === "failed");
+    expect(rt.screen.snapshot.problem).toEqual({ code: "SCREEN_CONNECTION_FAILED", detail: { cause: "no_picture" } });
+    expect(frames("screen_ice_request")).toHaveLength(MAX_RETRIES + 1);
+    expect(statusOf(rt.screen.snapshot)).toMatchObject({ kind: "no_picture", title: COPY.noPicture, code: "SCREEN_CONNECTION_FAILED", action: "retry" });
+    expect(logged("screen.retries_exhausted")[0]?.fields).toEqual({ cause: "no_picture" });
+  });
+
+  it("a frame before 15 s ends the watchdog: no keyframe request, no restart", async () => {
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(2_000);
+    rt.screen.onVideoFrame(timers.now);
+    expect(rt.screen.snapshot.phase).toBe("live");
+    expect(logged("screen.first_frame")[0]?.fields).toMatchObject({ ms_since_dtls: 2_000 });
+    await watch(NO_PICTURE_RESTART_MS + 5_000);
+    expect(keyframes(peer)).toBe(0);
+    expect(logged("screen.no_picture")).toHaveLength(0);
+    expect(frames("screen_ice_request")).toHaveLength(1);
+  });
+
+  it("frames decoded but a paused <video> without a frame callback: 'Tap to show the picture' at 3 s; the tap clears it", async () => {
+    knobs.stats = safariLikeStats({ decoded: 12 });
+    const media: ScreenMediaFacts = { at: 0, ready_state: 1, network_state: 2, paused: true, ended: false, width: 0, height: 0, current_time: 0, error: null, total_frames: 0, dropped_frames: 0, play: "rejected:NotAllowedError", rvfc: true, frame_ticks: 0, first_tick_ms: null, stream_active: true, track_state: "live", track_muted: false, track_enabled: true };
+    rt.screen.setMediaProbe(() => media);
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_FIRST_MS);
+    expect(rt.screen.snapshot.playHint).toBe(true);
+    expect(logged("screen.no_picture")[0]?.fields).toMatchObject({ frames_decoded: 12, paused: true, play: "rejected:NotAllowedError", frame_ticks: 0, ready: 1 });
+    rt.screen.dismissPlayHint();
+    expect(rt.screen.snapshot.playHint).toBe(false);
+    rt.screen.onVideoFrame(timers.now);
+    expect(rt.screen.snapshot.phase).toBe("live");
+    rt.screen.setMediaProbe(null);
+  });
+});
+
+describe("ScreenSessionClient: what holds the first-frame watchdog (review of device round 2)", () => {
+  const pausedMedia = (over: Partial<ScreenMediaFacts> = {}): ScreenMediaFacts => ({ at: 0, ready_state: 1, network_state: 2, paused: true, ended: false, width: 0, height: 0, current_time: 0, error: null, total_frames: 0, dropped_frames: 0, play: "rejected:NotAllowedError", rvfc: true, frame_ticks: 0, first_tick_ms: null, stream_active: true, track_state: "live", track_muted: false, track_enabled: true, ...over });
+  afterEach(() => rt.screen.setMediaProbe(null));
+
+  it("a PC pause before the first frame (a UAC prompt, a missing bar) asks for nothing and restarts nothing; the clock goes on after the resume", async () => {
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(1_000);
+    peer.channel.receive({ type: "state", state: "paused", reason: "secure_desktop" });
+    socket.receive(sessionFrame("paused", "secure_desktop"));
+    await flush();
+    expect(rt.screen.snapshot).toMatchObject({ phase: "connecting", pcState: "paused" });
+    await timers.advance(NO_PICTURE_RESTART_MS + 30_000);
+    expect(keyframes(peer)).toBe(0);
+    expect(frames("screen_ice_request")).toHaveLength(1); // no fresh session (the PC would refuse it: PC_SESSION_LOCKED)
+    expect(rt.screen.snapshot).toMatchObject({ phase: "connecting", retries: 0 });
+    expect(logged("screen.no_picture")).toHaveLength(0);
+    expect(logged("screen.no_picture_held")[0]?.fields).toMatchObject({ reason: "pc_paused" });
+    // the prompt is answered: what was counted before the pause (to the 1 s tick that saw it: 2 s) counts on, the
+    // paused time does not
+    peer.channel.receive({ type: "state", state: "sending" });
+    socket.receive(sessionFrame("resumed", "secure_desktop"));
+    await flush();
+    await timers.advance(1_000);
+    expect(keyframes(peer)).toBe(0);
+    await timers.advance(1_000);
+    expect(keyframes(peer)).toBe(1); // 3 s of watching
+    await timers.advance(NO_PICTURE_RESTART_MS - NO_PICTURE_FIRST_MS - 1_000);
+    expect(keyframes(peer)).toBe(2);
+    expect(frames("screen_ice_request")).toHaveLength(1);
+    await timers.advance(1_000);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(rt.screen.snapshot.retries).toBe(1);
+  });
+
+  it("a picture that decodes but waits for the owner's tap is not restarted at 15 s; the watchdog counts again from the tap", async () => {
+    knobs.stats = safariLikeStats({ decoded: 12 });
+    let media = pausedMedia();
+    rt.screen.setMediaProbe(() => media);
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_FIRST_MS);
+    expect(rt.screen.snapshot.playHint).toBe(true);
+    await timers.advance(NO_PICTURE_RESTART_MS + 60_000);
+    // a fresh session would only bring a new <video> whose play() is refused outside a gesture again
+    expect(frames("screen_ice_request")).toHaveLength(1);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "connecting", playHint: true, retries: 0 });
+    expect(logged("screen.no_picture_held")[0]?.fields).toMatchObject({ reason: "tap" });
+    expect(keyframes(peer)).toBe(2);
+    // the tap: the page plays again; here the picture still does not come and nothing decodes any more
+    media = pausedMedia({ paused: false, play: "resolved" });
+    peer.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    rt.screen.dismissPlayHint();
+    expect(rt.screen.snapshot.playHint).toBe(false);
+    await timers.advance(NO_PICTURE_FIRST_MS);
+    expect(keyframes(peer)).toBe(3); // the steps start again from the tap
+    await timers.advance(NO_PICTURE_RESTART_MS - NO_PICTURE_FIRST_MS - 1_000);
+    expect(frames("screen_ice_request")).toHaveLength(1);
+    await timers.advance(1_000);
+    await until(() => frames("screen_ice_request").length === 2);
+  });
+
+  it("play() refused before anything decoded: the tap prompt stays instead of a restart, until the tap", async () => {
+    knobs.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    rt.screen.notePlayBlocked(true); // what the page reports from the <video>'s refused play()
+    peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS + 5_000);
+    expect(frames("screen_ice_request")).toHaveLength(1);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "connecting", playHint: true });
+    rt.screen.dismissPlayHint();
+    rt.screen.notePlayBlocked(false); // the play() inside the tap resolved
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+  });
+
+  it("no tap prompt while nothing decoded, even with a paused <video>: the restart goes ahead", async () => {
+    knobs.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    rt.screen.setMediaProbe(() => pausedMedia({ play: "pending" }));
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_SECOND_MS);
+    expect(rt.screen.snapshot.playHint).toBe(false);
+    await timers.advance(NO_PICTURE_RESTART_MS - NO_PICTURE_SECOND_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(states.every((st) => !st.playHint)).toBe(true);
+  });
+
+  it("a first frame while the +15 s step reads the stats: no restart of the live picture", async () => {
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS - 500);
+    const pending: Array<() => void> = [];
+    const real = peer.getStats.bind(peer);
+    peer.getStats = () => new Promise((resolve) => pending.push(() => void real().then(resolve)));
+    await timers.advance(500);
+    expect(logged("screen.no_picture")).toHaveLength(2); // the third step is waiting for getStats()
+    rt.screen.onVideoFrame(timers.now);
+    expect(rt.screen.snapshot.phase).toBe("live");
+    for (const release of pending) release();
+    await flush(5);
+    await watch(3_000);
+    expect(frames("screen_ice_request")).toHaveLength(1);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "live", retries: 0 });
+    expect(logged("screen.no_picture")).toHaveLength(2);
+  });
+});
+
+describe("ScreenSessionClient: the VP8 retry after H.264 that never decodes (device round 2)", () => {
+  const CAPS: RTCRtpCodec[] = [
+    { mimeType: "video/H264", clockRate: 90000, sdpFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f" },
+    { mimeType: "video/H264", clockRate: 90000, sdpFmtpLine: "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f" },
+    { mimeType: "video/VP8", clockRate: 90000 },
+    { mimeType: "video/rtx", clockRate: 90000 },
+    { mimeType: "video/red", clockRate: 90000 },
+  ];
+  const VP8_ONLY_OFFER = OFFER_SDP.replace("m=video 9 UDP/TLS/RTP/SAVPF 96 97", "m=video 9 UDP/TLS/RTP/SAVPF 97").replace("a=rtpmap:96 H264/90000\r\na=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n", "");
+
+  beforeEach(() => {
+    vi.stubGlobal("RTCRtpReceiver", { getCapabilities: (kind: string) => (kind === "video" ? { codecs: CAPS } : { codecs: [{ mimeType: "audio/opus", clockRate: 48000, channels: 2 }] }) });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("H.264 packets arrive and nothing decodes for 15 s: the fresh session offers VP8 + RTX only (screen.codec_fallback); the owner's own start offers H.264 first again", async () => {
+    knobs.stats = safariLikeStats({ packets: 900, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    expect(peer.transceivers[0]!.codecs!.map((c) => c.mimeType)).toEqual(["video/H264", "video/H264", "video/VP8", "video/rtx", "video/red"]);
+    peer.connect();
+    expect(VP8_ONLY_OFFER).not.toMatch(/H264/);
+    knobs.offerSdp = VP8_ONLY_OFFER; // what Safari writes for VP8-only preferences
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(logged("screen.codec_fallback")[0]?.fields).toEqual({ from: "h264", to: "vp8", reason: "not_decoded" });
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    const retry = peers[1]!;
+    expect(retry.transceivers[0]!.codecs!.map((c) => c.mimeType)).toEqual(["video/VP8", "video/rtx"]);
+    expect(retry.transceivers[1]!.codecs!.map((c) => c.mimeType)).toEqual(["audio/opus"]);
+    // the VP8-only offer passes the phone's strict check and is signed as it is
+    expect((commands("screen.session_start")[1]!.params as { offer_sdp: string }).offer_sdp).toBe(VP8_ONLY_OFFER);
+    expect(rt.screen.facts.codec_fallback).toEqual({ from: "h264", to: "vp8", reason: "not_decoded" });
+    // the owner's Stop and Show screen: H.264 first again
+    await rt.screen.stop("stopped");
+    knobs.offerSdp = OFFER_SDP;
+    await startAndOffer();
+    expect(peers[2]!.transceivers[0]!.codecs!.map((c) => c.mimeType)[0]).toBe("video/H264");
+    expect(rt.screen.facts.codec_fallback).toBeNull();
+  });
+
+  it("no fallback when nothing arrived (a transport or PC problem, not a decoder one), or when VP8 is already in use", async () => {
+    knobs.stats = safariLikeStats({ packets: 0, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(events()).not.toContain("screen.codec_fallback");
+    await rt.screen.stop("stopped");
+    knobs.stats = safariLikeStats({ packets: 900, decoded: 0, mime: "video/VP8", fmtp: "" });
+    const second = await answered();
+    second.peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 4);
+    expect(events()).not.toContain("screen.codec_fallback");
+  });
+
+  it("a browser without VP8 in its capabilities keeps its usual preferences and says so", async () => {
+    vi.stubGlobal("RTCRtpReceiver", { getCapabilities: () => ({ codecs: CAPS.filter((c) => c.mimeType !== "video/VP8") }) });
+    knobs.stats = safariLikeStats({ packets: 900, received: 0, decoded: 0, keyDecoded: 0 });
+    const { peer } = await answered();
+    peer.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS);
+    await until(() => frames("screen_ice_request").length === 2);
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    expect(logged("screen.codec_fallback_skipped")[0]?.fields).toEqual({ reason: "no_vp8" });
+    expect(peers[1]!.transceivers[0]!.codecs!.map((c) => c.mimeType)[0]).toBe("video/H264");
+  });
+});
+
+describe("ScreenSessionClient: stats, timeline and facts (device round 2)", () => {
+  it("getStats every 5 s in session through the whitelist; the timeline marks each stage once, in order; nothing after the session", async () => {
+    knobs.stats = safariLikeStats();
+    const { peer } = await answered();
+    expect(rt.screen.facts.timeline).toMatchObject({ answer_verified: expect.any(Number), track: expect.any(Number), dtls_connected: null, first_rtp: null });
+    await timers.advance(1_000);
+    peer.connect();
+    await timers.advance(1_000); // the watchdog's 1 s tick reads the stats while no frame has come
+    expect(rt.screen.facts.timeline.first_rtp).not.toBeNull();
+    expect(rt.screen.facts.timeline.first_decoded).not.toBeNull();
+    rt.screen.onVideoFrame(timers.now);
+    const t = rt.screen.facts.timeline;
+    expect(t.dtls_connected! - t.answer_verified!).toBe(1_000);
+    const order = [t.answer_verified!, t.track!, t.dtls_connected!, t.dc_open!, t.first_rtp!, t.first_frame!, t.live!];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const before = peer.getStatsCalls;
+    await watch(STATS_INTERVAL_MS * 3);
+    expect(peer.getStatsCalls - before).toBe(3);
+    const facts = rt.screen.facts;
+    expect(facts.stats).toMatchObject({ dtls: "connected", ice: "connected", dc_sent: 12, dc_received: 3, inbound: { packets_received: 400, key_frames_decoded: 1, width: 1280, height: 720, jitter_ms: 3.1, last_packet_age_ms: 40, pli: 1, nack: 3 } });
+    expect(facts.channel).toMatchObject({ open: true, hb_sent: expect.any(Number) });
+    expect(facts.channel.hb_sent).toBeGreaterThan(1);
+    expect(facts.transport_connected).toBe(true);
+    const text = JSON.stringify(facts);
+    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+    await rt.screen.stop("stopped");
+    const after = peer.getStatsCalls;
+    expect(timers.pending).toBe(0); // no interval of the session outlives it
+    await timers.advance(STATS_INTERVAL_MS * 2);
+    expect(peer.getStatsCalls).toBe(after);
+    expect(rt.screen.facts.stats).not.toBeNull(); // kept for the diagnostics bundle until the next start
+    // a second session reads once per interval: nothing left over from the first one reads along
+    const second = await goLive();
+    const base = second.peer.getStatsCalls;
+    await watch(STATS_INTERVAL_MS * 3);
+    expect(second.peer.getStatsCalls - base).toBe(3);
+  });
+
+  it("frames while live are not published one by one: the store hears only of the stall flipping", async () => {
+    await goLive();
+    let published = 0;
+    const unsubscribe = useScreenStore.subscribe(() => (published += 1));
+    try {
+      for (let i = 0; i < 30; i++) rt.screen.onVideoFrame(timers.now);
+      expect(published).toBe(0);
+      await timers.advance(STALL_MS + 100);
+      expect(rt.screen.snapshot.stalled).toBe(true);
+      expect(published).toBe(1);
+      rt.screen.onVideoFrame(timers.now);
+      rt.screen.onVideoFrame(timers.now + 33);
+      expect(published).toBe(2);
+      expect(rt.screen.snapshot).toMatchObject({ stalled: false, lastFrameAt: timers.now });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("a probe of the <video> is read for the facts, kept after Stop, and forgotten at the next start", async () => {
+    let calls = 0;
+    const media = (ticks: number): ScreenMediaFacts => ({ at: 0, ready_state: 4, network_state: 2, paused: false, ended: false, width: 1280, height: 720, current_time: 3.2, error: null, total_frames: 90, dropped_frames: 0, play: "resolved", rvfc: true, frame_ticks: ticks, first_tick_ms: 120, stream_active: true, track_state: "live", track_muted: false, track_enabled: true });
+    rt.screen.setMediaProbe(() => media(++calls));
+    await goLive();
+    expect(rt.screen.facts.media).toMatchObject({ ready_state: 4, frame_ticks: calls });
+    await rt.screen.stop("stopped");
+    rt.screen.setMediaProbe(null); // the page unmounted the <video>
+    const kept = rt.screen.facts.media;
+    expect(kept).toMatchObject({ play: "resolved", width: 1280 });
+    expect(rt.screen.facts.media).toEqual(kept);
+    void rt.screen.start(PC);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(rt.screen.facts.media).toBeNull();
+    expect(rt.screen.facts.stats).toBeNull();
+    expect(rt.screen.facts.timeline.answer_verified).toBeNull();
+  });
+
+  it("readStats without a peer or without getStats returns null, and a failing getStats is logged without its message", async () => {
+    expect(await rt.screen.readStats()).toBeNull();
+    const { peer } = await answered();
+    peer.getStats = () => Promise.reject(new DOMException("secret detail 192.0.2.44", "InvalidStateError"));
+    expect(await rt.screen.readStats()).toBeNull();
+    expect(logged("screen.stats_failed")[0]?.fields).toMatchObject({ name: "InvalidStateError" });
+    expect(JSON.stringify(recentLogs())).not.toContain("192.0.2.44");
+  });
+});
+
 describe("ScreenSessionClient: nothing recorded, nothing leaked", () => {
   it("no SDP, candidate, fingerprint or credential reaches the log buffer or the diagnostics report", async () => {
+    knobs.stats = safariLikeStats(); // with candidate addresses, the certificate's fingerprint and the SPS in the fmtp line
     const { peer } = await goLive();
     peer.channel.receive({ type: "nonsense", sdp: "v=0 leaked" });
+    await watch(STATS_INTERVAL_MS); // frames keep coming; a stats snapshot is kept
     await rt.screen.stop("stopped");
     const text = JSON.stringify(recentLogs());
     expect(text).not.toContain(SDP_SENTINEL);
@@ -593,13 +1036,18 @@ describe("ScreenSessionClient: nothing recorded, nothing leaked", () => {
     expect(text).not.toContain("a=fingerprint");
     expect(text).not.toContain("0.0.0.0");
     expect(text).not.toContain("turn.example.net");
-    const report = buildDiagnostics({ relayStatus: "open", controllerBound: true, keyAvailable: true, selectedPcId: PC, pcs: [], commands: useLiveStore.getState().commands, sessionPresent: true, plan: "free", screen: states[states.length - 1]! });
+    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+    const report = buildDiagnostics({ relayStatus: "open", controllerBound: true, keyAvailable: true, selectedPcId: PC, pcs: [], commands: useLiveStore.getState().commands, sessionPresent: true, plan: "free", screen: states[states.length - 1]!, screenFacts: rt.screen.facts });
     const json = JSON.stringify(report);
     expect(json).not.toContain(SDP_SENTINEL);
     expect(json).not.toContain("never-logged-credential");
     expect(json).not.toContain("a=fingerprint");
-    expect(report.screen).toMatchObject({ phase: "ended", pc_id: PC, end_reason: "stopped" });
-    expect(Object.keys(report.screen!).sort()).toEqual(["encoder", "end_reason", "live_seconds", "path", "pc_id", "phase", "problem_code", "retries", "stalled", "turn", "verified"]);
+    for (const secret of STATS_SECRETS) expect(json, secret).not.toContain(secret);
+    expect(report.screen).toMatchObject({ phase: "ended", pc_id: PC, end_reason: "stopped", transport_connected: true, codec_fallback: null });
+    expect(Object.keys(report.screen!).sort()).toEqual(["codec_fallback", "encoder", "end_reason", "live_seconds", "media", "path", "pc_id", "phase", "problem_code", "retries", "stalled", "stats", "timeline", "transport_connected", "turn", "verified"]);
+    // what survived Stop: the last snapshot (whitelisted) and the stages the attempt reached
+    expect(report.screen!.stats).toMatchObject({ inbound: { packets_received: 400, frames_decoded: 28, decoder: "VideoToolbox" }, codec: { mime: "video/H264", pt: 98, fmtp: "profile-level-id=42e01f;packetization-mode=1" }, pair: { state: "succeeded", local_type: "srflx", remote_type: "host", proto: "udp", rtt_ms: 12 } });
+    expect(report.screen!.timeline).toMatchObject({ answer_verified: expect.any(Number), track: expect.any(Number), dtls_connected: expect.any(Number), dc_open: expect.any(Number), first_rtp: expect.any(Number), first_decoded: expect.any(Number), first_frame: expect.any(Number), live: expect.any(Number) });
   });
 
   it("the store keeps the last allowance per PC for the Remote tile and remembers an incompatible PC", async () => {

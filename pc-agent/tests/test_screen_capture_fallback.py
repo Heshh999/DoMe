@@ -246,9 +246,11 @@ def test_the_running_source_is_logged_once_with_its_size(monkeypatch: pytest.Mon
 
 def test_read_errors_keep_ffmpegs_lines_too(monkeypatch: pytest.MonkeyPatch) -> None:
     """An access-lost error at read time ("AcquireNextFrame failed: 887a0026") is logged by ddagrab, not said by PyAV:
-    the lines are captured around every read as well, and the fourth error in a row carries them."""
+    the lines are captured around every read as well, and the fourth error in a row carries them. (The graph gave a
+    frame first: before that a failure is not access lost, see the next test.)"""
     source = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
     source.open()
+    assert next(f for f in (source.read() for _ in range(100)) if f is not None) is not None and source.proven
     frames = source._frames  # noqa: SLF001
 
     class Failing:
@@ -275,6 +277,33 @@ def test_read_errors_keep_ffmpegs_lines_too(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert "output_idx" not in caught.value.message and av.logging.get_level() is None
     source.close()
+
+
+def test_a_read_that_fails_before_the_first_frame_raises_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A graph that opened but never gave a frame (scale_d3d11's first frame, an end of stream) is not "access lost":
+    no rebuild and no back-off, the classified error at once, so DdaWithFallback opens Windows.Graphics.Capture."""
+    source = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
+    source.open()
+    assert not source.proven and not source.pending
+
+    class Failing:
+        def __next__(self) -> Any:
+            av.logging.log(av.logging.ERROR, "Parsed_scale_d3d11_1", "Failed to create video processor\n")
+            raise av.error.ExternalError(EXT, EXTERNAL, GRAPH)
+
+        def close(self) -> None:
+            return None
+
+    source._frames = Failing()  # noqa: SLF001
+    opened: list[int] = []
+    monkeypatch.setattr(source, "open", lambda: opened.append(1))
+    with pytest.raises(ProtocolError) as caught:
+        source.read()
+    # (PyAV may first flush a "repeated N more times" line left by an earlier test's identical messages)
+    assert caught.value.message.startswith("Desktop Duplication failed before its first frame: ")
+    assert "Failed to create video processor; " in caught.value.message
+    assert caught.value.detail == {"detail": "driver"} and opened == [] and source.rebuilds == 0
+    assert source._frames is None and source._container is None  # noqa: SLF001  # closed, nothing left open
 
 
 def test_a_still_desktop_leaves_the_open_pending_and_the_opener_closes_an_abandoned_graph(
@@ -478,6 +507,111 @@ def test_dda_with_fallback_aims_or_skips_desktop_duplication_before_opening_it()
     assert primary.opened == 0 and built == [1] and asked == []
     assert fell[0].detail == {"detail": "busy"}
     assert fell[0].message == "Desktop Duplication skipped: the pre-flight answered DXGI_ERROR_NOT_CURRENTLY_AVAILABLE"
+
+
+def test_dda_with_fallback_relies_on_desktop_duplication_only_once_it_has_proven_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Device round 2 review: with the scaler's option names right, Desktop Duplication now runs first on the founder's
+    PC. A first open still pending after the wait (a still desktop: ddagrab's probe waits for a change) used to be
+    adopted, so the phone waited without a picture and restarted after 15 s, and a failure of that graph went to the
+    reopen back-off and ended capture_failed, never Windows.Graphics.Capture. Both now open Windows.Graphics.Capture
+    for the session; a primary that has given a frame keeps today's handling."""
+    import threading
+
+    from dome_agent.screen.worker.capture_dda import DdaWithFallback
+
+    class Wgc:
+        def __init__(self) -> None:
+            self.width, self.height, self.opened = 64, 36, 0
+
+        def open(self) -> None:
+            self.opened += 1
+
+        def read(self) -> str:
+            return "wgc frame"
+
+        def close(self) -> None:
+            return None
+
+    built: list[Wgc] = []
+
+    def wgc() -> Wgc:
+        built.append(Wgc())
+        return built[-1]
+
+    fell: list[ProtocolError] = []
+    # a graph that opens within the wait and gives frames: Desktop Duplication runs, proven by its first frame
+    quick = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
+    source = DdaWithFallback(quick, wgc, on_fallback=fell.append)
+    source.open()
+    assert next(f for f in (source.read() for _ in range(100)) if f is not None) is not None
+    assert quick.proven and built == [] and fell == []
+    source.close()
+    # still pending after the wait: abandoned (its helper closes the graph), WGC for the session
+    made: list[Any] = []
+
+    class Recording(capture_dda._PendingOpen):  # noqa: SLF001
+        def __init__(self, graph: str) -> None:
+            super().__init__(graph)
+            made.append(self)
+
+    release = threading.Event()
+    real_open = av.open
+
+    def slow_open(graph: str, **kw: Any) -> Any:
+        release.wait(10)
+        return real_open(graph, **kw)
+
+    monkeypatch.setattr(capture_dda, "_PendingOpen", Recording)
+    monkeypatch.setattr(av, "open", slow_open)
+    still = dda(monkeypatch, "testsrc=size=64x36:rate=30,format=nv12")
+    still.open_wait = 0.1
+    source = DdaWithFallback(still, wgc, on_fallback=fell.append)
+    source.open()
+    assert [e.message for e in fell] == ["Desktop Duplication gave no first frame within 0.1 s (a still desktop)"]
+    assert fell[0].code == "SCREEN_CAPTURE_UNAVAILABLE" and len(built) == 1 and built[0].opened == 1
+    assert source.read() == "wgc frame" and not still.pending
+    release.set()
+    made[0].thread.join(10)
+    assert made[0].done.is_set() and made[0].collect() is None  # the helper closed what it opened
+    # a read that fails before the first frame: WGC from then on; once proven, a failure is the primary's to handle
+
+    class Primary:
+        proven = False
+
+        def __init__(self) -> None:
+            self.width, self.height, self.closed = 64, 36, 0
+
+        def open(self) -> None:
+            return None
+
+        def read(self) -> Any:
+            raise ProtocolError(
+                "SCREEN_CAPTURE_UNAVAILABLE",
+                "Desktop Duplication failed before its first frame: Failed to create video processor",
+                detail={"detail": "driver"},
+            )
+
+        def close(self) -> None:
+            self.closed += 1
+
+    fell, built[:] = [], []
+    unproven = Primary()
+    source = DdaWithFallback(unproven, wgc, on_fallback=fell.append)
+    source.open()
+    assert source.read() is None and unproven.closed == 1 and len(built) == 1
+    assert [e.message for e in fell] == [
+        "Desktop Duplication failed before its first frame: Failed to create video processor"
+    ]
+    assert source.read() == "wgc frame"
+    proven = Primary()
+    proven.proven = True
+    source = DdaWithFallback(proven, wgc, on_fallback=fell.append)
+    source.open()
+    with pytest.raises(ProtocolError):
+        source.read()
+    assert len(built) == 1 and len(fell) == 1 and proven.closed == 0
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,48 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-27 — Device round 2: touchpad fixed on the founder's devices; Screen view's missing picture found on the phone
+
+- **Founder's result (build 593d3fd, staging; hybrid laptop: Intel UHD owns both outputs, RTX 4060 without outputs;
+  Windows 11 26200; iPhone, Safari).** Touchpad: "works great"; the bundle's session shows 468 batches accepted, 0 dropped,
+  0 stale, max phone age 320 ms, max relay age 98 ms (30–60 % dropped two days earlier). Screen view: the PC session was
+  `live` and connected peer to peer, the Windows.Graphics.Capture fallback captured 1920×1080 frames, Desktop Duplication
+  failed with "Could not set non-existent option 'w'", and the phone stayed on "Connecting to your PC screen" for minutes.
+- **Investigation (three analysts, a judge, two builders, two adversarial reviewers, a fixer).** Root cause, verified
+  against WebKit's source: Safari dispatches the `track` event *inside* `setRemoteDescription`, before its promise
+  resolves, and the phone's `onTrack` ignored any track that arrived before `verified` was set (which happened only after
+  that promise). The track was dropped, no `<video>` was ever created, and nothing could leave "connecting" because the
+  phone had no first-frame watchdog once DTLS was up. The PC was sending a decodable picture the whole time (a
+  Microsoft-shaped SPS+PPS+IDR access unit round-trips through the worker's encoder path and aiortc's packetizer: 4 of 4
+  decoded). Secondary, measured from the bundle: the first encoded packet came 5–9 s after the first captured frame
+  because `h264_mf` holds frames and the still-screen floor fed it at 1 fps; the hardware encoder never opened (every
+  candidate opens with yuv420p; GPU MFTs take NV12), so the software MFT encoded; the scaler options were `w`/`h` instead
+  of `width`/`height`.
+- **Phone (mobile-app):** the track is kept once the PC's answer has verified (held privately until `verified`, published
+  in the same state write), with regression tests that fire `ontrack` inside the fake `setRemoteDescription` as browsers
+  do; a first-frame watchdog (keyframe requests, then one restart at 15 s, VP8 offered first on the retry; held while
+  the PC reports a pause or the picture only waits for "Tap to show the picture"); a whitelisted `getStats` reduction
+  (`screenStats.ts`) and a copyable on-page readout in dev/test/ci/staging builds only (allow-list), no pixel access; a
+  start-up timeline in the phone's diagnostics. 1499 passed; `pnpm check` clean.
+- **PC (pc-agent):** `scale_d3d11=width=..:height=..:format=nv12`, pinned by a test against the n8.1.3 option names, the
+  worker self-test and a licence-gate row; `h264_mf` opens with the low-delay flag and `max_b_frames=0`; a bounded drain
+  pump re-encodes the held frame until the first packet or a PLI keyframe comes out (under 0.5 s with an encoder holding
+  7 frames; 7 s before); `encoder_stalled` after 3 s without a keyframe, after which the next session on this PC offers
+  VP8 first; AVCC output converted to Annex B if an encoder ever produces it; RTP payloads capped at 1200 bytes; a
+  `screen media` line every 5 s (RTP packets/bytes, receiver reports, loss, jitter, RTT, PLI/NACK counts, keyframes;
+  no content or address) kept in `status.screen.session.media` and the last session's; the encoder's SPS
+  profile/level logged once per open; Desktop Duplication counts as working only after its first frame (a still desktop
+  at start hands over to WGC after 1.5 s, KNOWN_ISSUES 39). 1241 passed, both mypy configurations, lock checks;
+  `tests/test_e2e_screen.py` 14 passed.
+- 13 review findings (1 major: a pending Desktop Duplication open never fell back to WGC) all fixed; 25 of 25 mutants
+  killed by the new tests.
+- **Deferred (KNOWN_ISSUES 35–38):** the hardware H.264 encoder (needs NV12/D3D11 input and the async MFT path),
+  profile-level-id matching the real SPS, bitrate on a still screen, `live_seconds` counting from the first packet.
+- **Next (founder):** Deploy staging, install the new build over the current one (no unlink), start Screen view; the
+  staging page now shows a readout with frames received/decoded and the step timeline, so a second failure is named.
+- Evidence: unit-, integration- and end-to-end-tested on Linux; the phone fix is against WebKit's documented event
+  order, not yet seen on the iPhone.
+
 ## 2026-10-27 — Device round 1 answered: touchpad latency and Screen view capture, from the founder's diagnostics
 
 - **What the founder saw (2026-10-26, Windows 11, build fa8de22, iPhone, staging).** Pairing failed until both devices

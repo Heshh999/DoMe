@@ -3,17 +3,18 @@
  * redirect. Each flow navigates exactly once, to "/", after the runtime has finished — and for
  * Forget, after the signing key is gone from IndexedDB. The connection check stays available while
  * the state is stale or remote control is off, and is withheld only when the socket is down or the
- * relay says the PC is not online.
+ * relay says the PC is not online. The diagnostics download carries the Screen view client's own facts (device round 2).
  */
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RequireSession } from "../../src/app/AppShell.tsx";
 import { setNavigationForTests, type Navigation } from "../../src/app/navigation.ts";
 import { configureApi } from "../../src/lib/api.ts";
 import { getExistingKeyPair, getOrCreateKeyPair, getStoredControllerId, setStoredControllerId } from "../../src/lib/controllerKey.ts";
+import { emptyTimeline, type ScreenClientFacts } from "../../src/lib/screenStats.ts";
 import { SettingsPage } from "../../src/pages/app/SettingsPage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { STATE_FRESH_MS, useLiveStore } from "../../src/store/live.ts";
@@ -189,5 +190,33 @@ describe("Connection check gating", () => {
     useLiveStore.getState().setRelay("reconnecting");
     renderSettings();
     expect(screen.getByRole("button", { name: "Check connection to Office PC" })).toBeDisabled();
+  });
+});
+
+describe("Settings: diagnostics", () => {
+  it("the download carries the Screen view client's facts (last stats, the <video> facts, the timeline, DTLS, the codec fallback) from the runtime, not from React state", async () => {
+    const facts: ScreenClientFacts = {
+      stats: { at: 1, inbound: null, codec: { mime: "video/H264", pt: 98, fmtp: "profile-level-id=42e01f;packetization-mode=1" }, pair: null, dtls: "connected", ice: null, dc_sent: 4, dc_received: 1 },
+      media: null,
+      timeline: { ...emptyTimeline(), answer_verified: 900, track: 905, dtls_connected: 1300 },
+      channel: { open: false, hb_sent: 4, received: 1, dropped: 0 },
+      transport_connected: true,
+      codec_fallback: { from: "h264", to: "vp8", reason: "not_decoded" },
+    };
+    vi.spyOn(h.rt.screen, "facts", "get").mockReturnValue(facts);
+    const blobs: Blob[] = [];
+    const createObjectURL = vi.fn((b: Blob) => {
+      blobs.push(b);
+      return "blob:diagnostics";
+    });
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: () => undefined });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Download diagnostics" }));
+    expect(click).toHaveBeenCalledTimes(1);
+    const report = JSON.parse(await blobs[0]!.text()) as { screen: Record<string, unknown> };
+    expect(report.screen).toMatchObject({ phase: "idle", stats: facts.stats, media: null, timeline: facts.timeline, transport_connected: true, codec_fallback: { from: "h264", to: "vp8", reason: "not_decoded" } });
+    vi.restoreAllMocks();
   });
 });

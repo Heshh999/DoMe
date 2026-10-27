@@ -17,6 +17,16 @@
   5 s steps 1500 → 800 → 500 kbps with an IDR. No REMB wiring in Phase 1.
 * **Data channel** ``dome-screen-v1``: inbound messages validated with ``parse_screen_dc_message(text, "phone_to_pc")``
   (unknown or malformed dropped and counted), outbound ones with ``"pc_to_phone"`` before sending.
+* **What the media path did** (device round 2: the PC was ``live`` for 217 s and nothing showed which stage failed):
+  the 2 s ``stats`` event carries the sender's ``outbound-rtp`` counts, whether a receiver report from the phone has
+  come (``rr``), its loss, jitter and round-trip time, the PLIs and NACKed packets (``sender._retransmit`` counted on
+  the instance) and the track's counters (:meth:`ScreenTrack.stats`); one ``screen media`` line is logged every
+  :data:`MEDIA_LOG_SECONDS` and a final one at close (never per frame), and one ``screen transport`` line at
+  ``connected`` (candidate types, protocol, address family, the negotiated codec and RTP payload limit; never an
+  address). Log keys avoid every redacted word (``sig``, ``payload``, ``sdp``, ``candidate``, ...).
+* **RTP payloads of at most 1200 bytes** (:data:`RTP_PAYLOAD_MAX`): aiortc packetizes H.264 and VP8 up to its module
+  global ``PACKET_MAX`` (1300), which with headers, SRTP and an IPv6 tunnel, a VPN or some cellular paths exceeds the
+  path MTU; both globals are lowered before the first send.
 """
 
 from __future__ import annotations
@@ -28,19 +38,99 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import structlog
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
+from aiortc.codecs import h264 as aiortc_h264
+from aiortc.codecs import vpx as aiortc_vpx
 from aiortc.rtcrtpsender import RTCRtpSender
 from dome_protocol import ProtocolError, dumps_compact, parse_screen_dc_message
 
 from ..sdp_check import check_offer
 from .track import ScreenTrack
 
+log = structlog.get_logger(__name__)
+
 Emit = Callable[[dict[str, Any]], None]
 BITRATE_STEPS_KBPS = (1500, 800, 500)
 LOSS_THRESHOLD = 0.10
 LOSS_SUSTAIN_SECONDS = 5.0
 STATS_INTERVAL_SECONDS = 2.0
+MEDIA_LOG_SECONDS = 5.0  # one "screen media" line this often while connected (never per frame)
 PERIODIC_IDR_SECONDS = 2.0  # the fallback when the PLI hook point is missing
+RTP_PAYLOAD_MAX = 1200  # bytes of RTP payload per packet (aiortc's PACKET_MAX is 1300)
+# the "screen media" line's fields, in the stats event's names (au_bytes and rtp_bytes are logged in KiB)
+MEDIA_LOG_FIELDS = (
+    "captured",
+    "refreshed",
+    "pumped",
+    "encoded",
+    "aus",
+    "idr",
+    "au_bytes",
+    "pending",
+    "rtp_packets",
+    "rtp_bytes",
+    "rr",
+    "lost",
+    "rtt_ms",
+    "pli",
+    "kf_req",
+    "nack",
+    "first_kf_ms",
+    "stalled",
+)
+
+
+def limit_rtp_payloads(size: int = RTP_PAYLOAD_MAX) -> None:
+    """aiortc's H.264 and VP8 packetizers read their module global ``PACKET_MAX`` at call time: lower both."""
+    aiortc_h264.PACKET_MAX = int(size)
+    aiortc_vpx.PACKET_MAX = int(size)
+
+
+def rtp_stats(stats: Any) -> dict[str, Any]:
+    """The sender's report reduced to numbers: ``outbound-rtp`` packets and bytes; from ``remote-inbound-rtp`` (the
+    phone's receiver reports on our SSRC) ``rr`` (one has come), ``lost``, ``jitter_ms`` (RTCP jitter is in 90 kHz
+    units for video), ``rtt_ms`` and ``loss`` (the fraction of the last report)."""
+    out: dict[str, Any] = {
+        "rtp_packets": 0,
+        "rtp_bytes": 0,
+        "rr": False,
+        "lost": 0,
+        "jitter_ms": None,
+        "rtt_ms": None,
+        "loss": None,
+    }
+    for stat in stats:
+        kind = getattr(stat, "type", None)
+        if kind == "outbound-rtp":
+            out["rtp_packets"] = int(getattr(stat, "packetsSent", 0) or 0)
+            out["rtp_bytes"] = int(getattr(stat, "bytesSent", 0) or 0)
+        elif kind == "remote-inbound-rtp":
+            out["rr"] = True
+            out["lost"] = int(getattr(stat, "packetsLost", 0) or 0)
+            jitter = getattr(stat, "jitter", None)
+            out["jitter_ms"] = round(float(jitter) / 90.0, 1) if isinstance(jitter, int | float) else None
+            rtt = getattr(stat, "roundTripTime", None)
+            out["rtt_ms"] = int(float(rtt) * 1000) if isinstance(rtt, int | float) else None
+            out["loss"] = round(float(getattr(stat, "fractionLost", 0) or 0) / 256.0, 3)
+    return out
+
+
+def media_log_fields(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """The ``screen media`` line from a stats snapshot: short keys, byte counts in KiB."""
+    fields: dict[str, Any] = {}
+    for key in MEDIA_LOG_FIELDS:
+        value = snapshot.get(key)
+        if key == "au_bytes":
+            fields["au_kb"] = int(value or 0) // 1024
+        elif key == "rtp_bytes":
+            fields["rtp_kb"] = int(value or 0) // 1024
+        elif key == "stalled":
+            if value:
+                fields["stalled"] = value
+        else:
+            fields[key] = value
+    return fields
 
 
 def pli_hook_available() -> bool:
@@ -76,10 +166,12 @@ class ScreenPeer:
         self._relayed_max_kbps = relayed_max_kbps
         self.pc: RTCPeerConnection | None = None
         self.sender: RTCRtpSender | None = None
+        self.transceiver: Any | None = None
         self.channel: Any | None = None
         self.path: str | None = None
         self.pli_hook = False
         self.pli_count = 0
+        self.nack_count = 0  # packets the phone NACKed (each retransmission request)
         self.dc_dropped = 0
         self.dc_received = 0
         self.data_saver = False
@@ -92,6 +184,7 @@ class ScreenPeer:
     # ----- signaling -----
     async def answer(self) -> str:
         check_offer(self._offer_sdp)  # the worker never trusts that the agent checked (it did): SCREEN_OFFER_INVALID
+        limit_rtp_payloads()  # before anything is sent
         config = RTCConfiguration(iceServers=[RTCIceServer(urls=self._stun_urls)] if self._stun_urls else [])
         pc = RTCPeerConnection(config)
         self.pc = pc
@@ -102,8 +195,10 @@ class ScreenPeer:
         # video section with this transceiver by kind.
         transceiver = pc.addTransceiver(self.track, direction="sendonly")
         transceiver.setCodecPreferences(self._preferred_codecs())
+        self.transceiver = transceiver
         sender = transceiver.sender
         self.sender = sender
+        self._count_nacks(sender)
         try:
             await pc.setRemoteDescription(RTCSessionDescription(sdp=self._offer_sdp, type="offer"))
         except Exception as exc:  # noqa: BLE001 - aiortc refused the offer the strict check let through
@@ -145,6 +240,19 @@ class ScreenPeer:
         sender._send_keyframe = hooked  # type: ignore[method-assign]
         self.pli_hook = True
 
+    def _count_nacks(self, sender: RTCRtpSender) -> None:
+        """Count the packets the phone NACKs: aiortc's RTCP dispatch awaits ``self._retransmit(seq)`` for each one,
+        so the instance's method is wrapped (left alone when the pinned aiortc lacks it)."""
+        original = getattr(sender, "_retransmit", None)
+        if not callable(original) or not inspect.iscoroutinefunction(original):
+            return
+
+        async def counted(sequence_number: int) -> None:
+            self.nack_count += 1
+            await original(sequence_number)
+
+        sender._retransmit = counted  # type: ignore[method-assign]
+
     # ----- connection -----
     async def _on_connection_state(self) -> None:
         pc = self.pc
@@ -157,24 +265,68 @@ class ScreenPeer:
             self._apply_initial_bitrate()
             self._capture_allowed.set()  # capture may start now: DTLS connected to the certificate the phone signed
             self._emit({"ev": "connected", "path": self.path})
-            self._tasks.append(asyncio.get_running_loop().create_task(self._stats_loop(), name="dome-screen-stats"))
+            log.info("screen transport", **self.transport_facts())
+            loop = asyncio.get_running_loop()
+            self._tasks.append(loop.create_task(self._stats_loop(), name="dome-screen-stats"))
+            self._tasks.append(loop.create_task(self._media_log_loop(), name="dome-screen-media-log"))
         elif state in ("failed", "closed") or (state == "disconnected" and self._connected_reported):
             if not self._closed:
                 self._emit({"ev": "disconnected", "reason": state})
 
-    def _detect_path(self) -> str:
-        """``relayed`` when the nominated pair has a relay candidate on either side (aioice internals, guarded)."""
+    def _nominated_pairs(self) -> list[Any]:
+        """The nominated ICE pairs (aioice internals, guarded): none when they cannot be read."""
         try:
             assert self.sender is not None
             connection = self.sender.transport.transport._connection  # RTCDtlsTransport → RTCIceTransport → aioice
-            nominated = getattr(connection, "_nominated", {})
-            for pair in nominated.values():
+            return list(getattr(connection, "_nominated", {}).values())
+        except Exception:  # noqa: BLE001 - unknown pair
+            return []
+
+    def _detect_path(self) -> str:
+        """``relayed`` when the nominated pair has a relay candidate on either side (aioice internals, guarded)."""
+        try:
+            for pair in self._nominated_pairs():
                 for candidate in (pair.local_candidate, pair.remote_candidate):
                     if getattr(candidate, "type", "") == "relay":
                         return "relayed"
         except Exception:  # noqa: BLE001 - unknown pair: report direct (the agent's figures are informational)
             return "direct"
         return "direct"
+
+    def transport_facts(self) -> dict[str, Any]:
+        """The ``screen transport`` line: the path, both candidates' types (host, srflx, prflx, relay), the protocol,
+        the address family of the nominated pair (never an address), the negotiated codec, its payload type,
+        ``profile-level-id`` and ``packetization-mode``, and the RTP payload limit."""
+        facts: dict[str, Any] = {
+            "path": self.path,
+            "local_type": None,
+            "remote_type": None,
+            "protocol": None,
+            "ip": None,
+        }
+        try:
+            pairs = self._nominated_pairs()
+            if pairs:
+                local, remote = pairs[0].local_candidate, pairs[0].remote_candidate
+                facts["local_type"] = str(getattr(local, "type", "") or "")[:8] or None
+                facts["remote_type"] = str(getattr(remote, "type", "") or "")[:8] or None
+                facts["protocol"] = str(getattr(local, "transport", "") or "").lower()[:4] or None
+                host = str(getattr(local, "host", "") or "")
+                facts["ip"] = ("v6" if ":" in host else "v4") if host else None
+        except Exception:  # noqa: BLE001, S110 - aioice internals: the line still says what is known
+            pass
+        codecs = list(getattr(self.transceiver, "_codecs", None) or [])
+        if codecs:
+            codec = codecs[0]
+            parameters = dict(getattr(codec, "parameters", {}) or {})
+            facts["codec"] = str(getattr(codec, "mimeType", "")).split("/")[-1][:8] or None
+            facts["pt"] = getattr(codec, "payloadType", None)
+            profile = parameters.get("profile-level-id")
+            facts["profile_level_id"] = str(profile)[:6] if profile is not None else None
+            mode = parameters.get("packetization-mode")
+            facts["packetization_mode"] = str(mode)[:2] if mode is not None else None
+        facts["packet_max"] = aiortc_h264.PACKET_MAX if self.track.choice.kind == "h264" else aiortc_vpx.PACKET_MAX
+        return facts
 
     def _apply_initial_bitrate(self) -> None:
         if self.path == "relayed":
@@ -201,7 +353,7 @@ class ScreenPeer:
             if kind == "hb":
                 self._emit({"ev": "hb"})
             elif kind == "keyframe":
-                self.track.force_keyframe()
+                self.track.force_keyframe(source="dc")
                 self._emit({"ev": "keyframe"})
             elif kind == "bye":
                 self._emit({"ev": "bye"})
@@ -221,22 +373,36 @@ class ScreenPeer:
         return True
 
     # ----- stats and bitrate steps -----
+    async def media_snapshot(self) -> dict[str, Any] | None:
+        """The sender's numbers (:func:`rtp_stats`), the PLI and NACK counts, the encoder's label and bitrate and the
+        track's counters; None when the sender has no report (a transport mid-teardown)."""
+        sender = self.sender
+        if sender is None:
+            return None
+        report = await self._stats(sender)
+        if report is None:
+            return None
+        snapshot = rtp_stats(report.values())
+        snapshot.update(
+            pli=self.pli_count,
+            nack=self.nack_count,
+            bitrate_kbps=self.track.bitrate_kbps,
+            encoder_label=self.track.choice.label,
+        )
+        snapshot.update(self.track.stats())
+        return snapshot
+
     async def _stats_loop(self) -> None:
-        bytes_sent = 0
         while not self._closed:
             await asyncio.sleep(STATS_INTERVAL_SECONDS)
-            sender = self.sender
-            if sender is None:
-                return
-            report = await self._stats(sender)
-            if report is None:
+            self.track.check_stall()  # also when an encode call never returns to the track's own loop
+            snapshot = await self.media_snapshot()
+            if snapshot is None:
+                if self.sender is None:
+                    return
                 continue
-            loss: float | None = None
-            for stat in report.values():
-                if stat.type == "remote-inbound-rtp":
-                    loss = float(getattr(stat, "fractionLost", 0) or 0) / 256.0
-                elif stat.type == "outbound-rtp":
-                    bytes_sent = int(getattr(stat, "bytesSent", 0) or 0)
+            loss: float | None = snapshot["loss"]
+            bytes_sent = int(snapshot["rtp_bytes"])
             now = time.monotonic()
             if loss is not None and loss > LOSS_THRESHOLD:
                 if self._lossy_since is None:
@@ -248,6 +414,7 @@ class ScreenPeer:
                 self._lossy_since = None
             self._emit(
                 {
+                    **snapshot,
                     "ev": "stats",
                     "relayed_bytes": bytes_sent if self.path == "relayed" else 0,
                     "bytes_sent": bytes_sent,
@@ -255,6 +422,19 @@ class ScreenPeer:
                     "loss": round(loss, 3) if loss is not None else None,
                 }
             )
+
+    async def _media_log_loop(self) -> None:
+        while not self._closed:
+            await asyncio.sleep(MEDIA_LOG_SECONDS)
+            await self._log_media("screen media")
+
+    async def _log_media(self, event: str) -> None:
+        try:
+            snapshot = await asyncio.wait_for(self.media_snapshot(), 1.0)
+        except Exception:  # noqa: BLE001 - a transport mid-teardown: no line this time
+            return
+        if snapshot is not None:
+            log.info(event, **media_log_fields(snapshot))
 
     @staticmethod
     async def _stats(sender: RTCRtpSender) -> Any | None:
@@ -273,10 +453,12 @@ class ScreenPeer:
     async def _periodic_idr(self) -> None:
         while not self._closed:
             await asyncio.sleep(PERIODIC_IDR_SECONDS)
-            self.track.force_keyframe()
+            self.track.force_keyframe(source="periodic")
 
     # ----- close -----
     async def close(self) -> None:
+        if not self._closed and self._connected_reported:
+            await self._log_media("screen media final")
         self._closed = True
         for task in self._tasks:
             if not task.done():
@@ -290,4 +472,14 @@ class ScreenPeer:
             self.pc = None
 
 
-__all__ = ["BITRATE_STEPS_KBPS", "PERIODIC_IDR_SECONDS", "ScreenPeer", "pli_hook_available"]
+__all__ = [
+    "BITRATE_STEPS_KBPS",
+    "MEDIA_LOG_SECONDS",
+    "PERIODIC_IDR_SECONDS",
+    "RTP_PAYLOAD_MAX",
+    "ScreenPeer",
+    "limit_rtp_payloads",
+    "media_log_fields",
+    "pli_hook_available",
+    "rtp_stats",
+]

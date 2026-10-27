@@ -160,7 +160,10 @@ Items from the review that were recorded rather than fully closed, plus residual
     tap precision with zoom and the loupe, pinch vs scroll on glass, the black picture after an app switch
     (WebKit 231365), WebRTC under the CSP (`connect-src 'self'`) and NAT behaviour are tested in jsdom
     with a fake `RTCPeerConnection` only. Label: **unit-/component-tested; not yet verified on a device**.
-    The README's Screen view checklist is open.
+    The README's Screen view checklist is open. Device round 2 (2026-10-27, the founder's iPhone and
+    Windows 11 laptop on staging) got as far as a verified answer and DTLS / SCTP up for 217 s, then
+    showed no picture because the phone dropped the video track (DECISIONS 80, fixed); nothing after the
+    `<video>` has been seen on a device yet.
 
 29. **Phase 2 parts are not built.** No mini view (leaving the Screen page stops the session), no PC sound
     (the audio transceiver is offered but `audio: false` is sent), no second monitor ("Next screen"), no
@@ -214,3 +217,20 @@ Items from the review that were recorded rather than fully closed, plus residual
     the floor is zero, so a PC more than ~250 ms away (round trip plus the ack cadence) may see one brief
     halving at the start of a session; a relay notice every second keeps the rate halved for as long as the
     drops last plus 1.5 s. The pill does not show the flag; it is in the diagnostics bundle (`input.congested`).
+
+40. **The no-picture watchdog, the VP8 retry and the stats fields are tested against fakes only.**
+    (DECISIONS 80–82.) The 3 s / 8 s / 15 s steps come from the founder's bundle (first encoded packet up to
+    9.2 s after capture on a PC without the encoder pump), not from a run of the fixed phone; a PC that
+    needs longer than 15 s for a first frame is restarted, at most twice, then "Your PC connected, but no
+    picture arrived." The VP8 retry depends on Safari honouring a VP8-only `setCodecPreferences` and on the
+    PC answering VP8; neither has been seen. The whitelist reads libwebrtc's field names
+    (`keyFramesDecoded`, `decoderImplementation`, `lastPacketReceivedTimestamp`, `framesPerSecond`, the
+    transport's `iceState`, `selectedCandidatePairId`); a field Safari does not report shows as "-"
+    (null) rather than a guess. The "Tap to show the picture" hint from the watchdog needs frames decoded,
+    a paused `<video>` and no frame callback at once, which no device has produced yet; a session waiting
+    for that tap is not restarted, so if the owner never taps it waits (as before this round) while the PC
+    counts the minutes. The watchdog's holds are checked on its 1 s tick, so up to a second around a pause
+    is counted either way. The readout covers the top-left of the picture in staging builds (hide it with
+    "Hide readout"), and the clipboard copy is unverified in the Home Screen app (the select box is the way
+    out). `transport_connected`
+    in a bundle downloaded after Stop means "the last attempt's DTLS came up", not "connected now".

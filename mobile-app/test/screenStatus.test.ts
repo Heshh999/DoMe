@@ -54,6 +54,10 @@ describe("screenStatus: during a session", () => {
     expect(screenStatus(input({ phase: "ice" }))).toMatchObject({ kind: "connecting", title: COPY.connecting });
     expect(screenStatus(input({ phase: "starting" }))).toMatchObject({ kind: "connecting" });
     expect(screenStatus(input({ phase: "connecting", tryingRelay: true }))).toMatchObject({ kind: "relay", title: COPY.tryingRelay });
+    // DTLS is up and no frame yet (device round 2): the copy names the stage that is being waited for
+    expect(screenStatus(input({ phase: "connecting", verified: true, transportConnected: true }))).toMatchObject({ kind: "waiting_picture", title: COPY.waitingPicture, code: null, action: "none" });
+    expect(COPY.waitingPicture).toBe("Connected. Waiting for the picture…");
+    expect(screenStatus(input({ phase: "connecting", verified: true, transportConnected: false })).title).toBe(COPY.connecting);
     expect(screenStatus(input({ phase: "starting", consentWaiting: true, consentDeadlineAt: NOW + 30_000 })).title).toBe("Waiting for someone at the PC to allow this… (30)");
     expect(screenStatus(input({ phase: "starting", consentWaiting: true, consentDeadlineAt: NOW + 7_400 })).title).toBe("Waiting for someone at the PC to allow this… (8)");
     // a Windows prompt: on Free, what the relay really does (up to two minutes per window are not counted)
@@ -121,6 +125,9 @@ describe("screenStatus: after a session", () => {
     expect(failed("SCREEN_SESSION_OWNED")).toMatchObject({ kind: "owned", title: COPY.owned, action: "takeover" });
     expect(failed("SCREEN_CONNECTION_FAILED")).toMatchObject({ kind: "no_path", text: COPY.noPath, action: "retry" });
     expect(failed("SCREEN_CONNECTION_FAILED", { turn: "disabled" }).text).toBe(`${COPY.noPath} ${COPY.turnDisabled}`);
+    // the first-frame watchdog gave up: the connection worked, so the network's copy would be wrong
+    expect(failed("SCREEN_CONNECTION_FAILED", {}, { cause: "no_picture" })).toMatchObject({ kind: "no_picture", title: COPY.noPicture, text: null, code: "SCREEN_CONNECTION_FAILED", action: "retry" });
+    expect(failed("SCREEN_CONNECTION_FAILED", {}, { cause: "stall" })).toMatchObject({ kind: "no_path" });
     expect(failed("SCREEN_CAPTURE_UNAVAILABLE")).toMatchObject({ kind: "capture_unavailable", text: COPY.captureUnavailable });
     expect(failed("PC_REMOTE_DISABLED")).toMatchObject({ kind: "remote_off" });
     expect(failed("PC_SESSION_LOCKED")).toMatchObject({ kind: "locked" });
@@ -179,5 +186,12 @@ describe("screenStatus: review round (2026-10-22)", () => {
     expect(free.text).toContain(COPY.consentFreeNote);
     const pro = screenStatus(input({ phase: "starting", consentWaiting: true, consentDeadlineAt: NOW + 30_000, allowance: { unlimited: true, remainingSeconds: null, resetsAt: null, at: NOW } }));
     expect(pro.text).not.toContain("minutes");
+  });
+});
+
+describe("screenStatus: review of device round 2 (2026-10-27)", () => {
+  it("the VP8 badge names no cause: VP8 is also the fallback after H.264 stalled on the PC or never decoded on the phone", () => {
+    expect(COPY.basicPicture).toBe("Basic picture mode");
+    expect(COPY.basicPicture).not.toMatch(/lacks|encoder/);
   });
 });

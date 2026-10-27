@@ -105,7 +105,9 @@
     (libswscale's BT.601 conversion of the BGRA frame), the CPU cost of a full-resolution copy per changed frame at the
     desktop's refresh rate, and Windows' yellow border. Why Desktop Duplication failed on the founder's PC is still
     unknown: the next diagnostics bundle names FFmpeg's reason (DECISIONS #90, #92), the pre-flight's raw HRESULT
-    (#95) and the display hardware — adapters, outputs, remote session, GPU preference (#96).
+    (#95) and the display hardware — adapters, outputs, remote session, GPU preference (#96). **Update (device round
+    2, 2026-10-27):** WGC captured 1920×1080 frames on the founder's hybrid laptop; Desktop Duplication failed on
+    every PC because of the scaler's option names (DECISIONS #97), so it has still never run on a device.
 22. **Bar placement on scaled and multi-monitor PCs is written against the documentation only** (DECISIONS #79): the
     Tk thread is made per-monitor DPI aware (v2) so bar geometry is physical pixels, each bar's real rectangle is read
     with `GetWindowRect` / `MonitorFromWindow` and must lie on its monitor (else the start is refused and a live
@@ -192,3 +194,43 @@
     device bundle (`hardware.dxgi_adapters` next to `hardware.monitors`) are the checks. Not device-tested either: the
     `UserGpuPreferences` value format and whether the advanced-colour query needs a newer Windows than the probe's
     `IDXGIOutput5` (Windows 10 1703).
+35. **The hardware H.264 transform is not used yet** (deferred; DECISIONS #98). Device round 2 encoded with the
+    synchronous Microsoft software transform: every candidate asks for `yuv420p`, and `mfenc`'s input scoring refuses
+    any transform input type that is not exactly `avctx->pix_fmt` (`mfenc.c` `mf_encv_input_score`), while GPU
+    transforms offer NV12. Enabling it (a per-candidate `pix_fmt="nv12"`, converting in the sources, or `AV_PIX_FMT_D3D11`
+    input) brings the asynchronous transform path into play: output fetched only on the next input, extradata that
+    some Quick Sync transforms never fill, and an Intel-or-NVIDIA choice on a hybrid laptop, none of it exercised.
+    Decide after the next bundle shows the hardware probe's failure reason (`screen encoder candidate unavailable`)
+    and the software transform's real latency (`screen first keyframe ms=...`, `frames_in=...`). If it is enabled,
+    keep the drain pump (#100) and test still-screen time to first packet on Intel and NVIDIA.
+36. **The low-latency flag may be ignored by the transform** (DECISIONS #98). `mfenc.c` sends
+    `CODECAPI_AVLowLatencyMode` as `VT_UI4` and ignores the HRESULT, while Microsoft documents `VT_BOOL` for its H.264
+    encoder ("All other implementations, including the H.264 encoder, use the type VT_BOOL"). Whether the software
+    or a hardware transform accepts it is unknown; the drain pump (#100) bounds the latency either way, and the next
+    bundle's `frames_in` in `screen first keyframe` (frames given before the first packet) shows how many frames the
+    transform holds. A fix would need a patched FFmpeg or setting the property ourselves, which PyAV cannot.
+37. **The VP8 fallback after an H.264 stall is per agent run and needs a fresh session** (DECISIONS #103). The 24-hour
+    preference lives in memory (an agent restart forgets it and tries H.264 again), applies only to offers that carry
+    both codecs, and switches nothing inside the stalled session (1.4 signaling has no renegotiation): the phone's
+    no-picture watchdog has to start a new session. A decode failure the PC cannot see (H.264 arrives but Safari does
+    not decode it) is the phone's side to detect. `profile-level-id` is not matched to the real SPS: Safari offers
+    Constrained Baseline 3.1 (`42e01f`) while `mfenc` requests Baseline with CABAC and lets the transform pick the
+    level; the SPS bytes are logged now (`sps=` in `screen encoder opened` and `screen first keyframe`) and the
+    decision waits for them.
+38. **Long sessions push the start lines out of the bundle's log tail.** `screen media` is logged every 5 s (12 lines
+    a minute) and the diagnostics bundle keeps the last 200 log lines, so after about a quarter of an hour the
+    session's `screen encoder opened`, `screen transport` and `screen first keyframe` lines are no longer in the
+    bundle; the counters are (`status.screen.session.media` while live, `status.screen.last_session_media` after),
+    and the final `screen media final` and `screen session ended` lines are at the end. `live_seconds` (and the Free
+    minutes) still start at the PC's first encoded packet, not at the phone's first shown frame, so a session that
+    shows nothing is counted as live: that is the contract's semantics and is raised separately.
+39. **What only a Windows PC and an iPhone can verify from device round 2** (DECISIONS #97 to #104): that
+    `ddagrab ... scale_d3d11=width=..:height=..` now opens on the founder's Intel adapter and gives its first frame
+    within 1.5 s (`screen capture source running source=dda`), or fails with a DXGI reason, or stays pending on a still
+    desktop; the last two, and a failure before its first frame, now open Windows.Graphics.Capture for the session
+    (DECISIONS #104), so how often a still desktop at the start costs Desktop Duplication is also to be seen; what `h264_mf` really emits (Annex B or AVCC, SPS/PPS in band or only in extradata, IDR
+    flags, profile and level: the `form=`, `nals=` and `sps=` fields), whether it honours forced keyframes and the
+    low-latency flag, and its async latency (`first_kf_ms`, `frames_in`, `pumped`); that the first picture appears
+    within about a second of "Connecting" and a click on a still screen within a second; whether Safari's receiver
+    reports arrive (`rr=True`, `rtt_ms`) and packets are lost (`lost`, `nack`) on Wi-Fi, cellular and an IPv6 or VPN
+    path at 1200-byte payloads; and that an H.264 stall leads to a VP8 picture on the phone's automatic restart.

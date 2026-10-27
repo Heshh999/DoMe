@@ -400,10 +400,12 @@ founder-driven; then:
       devices), Screen view ended `capture_failed` (Desktop Duplication refused the display, the WGC fallback was
       not shipped) and the touchpad dropped 30–60 % of batches as stale (the relay's five database reads per batch,
       the phone's 60/s send rate, a lease that a stale batch did not renew); all fixed on 2026-10-26/27 (PROGRESS).
-      **Device round 2 (next):** Deploy staging, install the newest `DoMe-Setup-0.1.0+<commit>` from the Windows
-      installer run of the latest push over the current one (no unlink needed: the link and pairing stay), then
-      re-test the touchpad and Screen view and send tray → Diagnostics… (it now lists the graphics adapters and
-      monitors, and names the capture failure if one remains). Then the rest of the device round on your own PC and
+      **Device round 2 (2026-10-27) done:** touchpad fixed (0 dropped batches); Screen view connected and captured but
+      the phone showed nothing: Safari delivers the video track before the phone's verification step finished, and the
+      phone dropped it (fixed, with a 15 s watchdog and a staging-only readout; PROGRESS 2026-10-27). **Device round 3
+      (next):** Deploy staging, install the newest `DoMe-Setup-0.1.0+<commit>` over the current one (no unlink: the link
+      and pairing stay), start Screen view; read the page's readout (frames received/decoded, the step timeline) and send
+      tray → Diagnostics… if there is still no picture. Then the rest of the device round on your own PC and
       iPhone against staging (`docs/LAUNCH_SETUP.md` §11B "Testing it on your own PC": unlink, install with
       `/ApiUrl=https://staging.domeremote.com`, link, pair, allow) with `docs/design/screen-view.md` §18
       checklist items 1–11 and 13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, GPU,

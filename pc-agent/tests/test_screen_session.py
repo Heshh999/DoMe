@@ -1554,3 +1554,122 @@ async def test_a_build_without_the_media_stack_refuses_honestly_before_any_bar(
         monkeypatch.undo()
         screen_pkg.media_stack_available.cache_clear()
     assert screen_pkg.media_stack_available() is True  # this development environment has the PyPI wheels
+
+
+# ----- device round 2 (2026-10-27): what the media path did, and VP8 first after an H.264 stall -----------------------------
+H264_ONLY_OFFER = OFFER.replace("UDP/TLS/RTP/SAVPF 96 97\r\n", "UDP/TLS/RTP/SAVPF 96\r\n").replace(
+    "a=rtpmap:97 VP8/90000\r\n", ""
+)
+
+
+async def test_media_stats_are_whitelisted_and_outlive_the_session_in_the_status(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """The worker's 2 s stats are kept as `session.media` (numbers, flags and short words from a fixed list; nothing
+    else, never an address), shown in `status.screen.session.media`, kept as `last_session_media` once the session has
+    ended (a bundle downloaded after Stop still has it), and summarised in the `screen session ended` line."""
+    _res, worker = await live(fast, controller)
+    await worker.emit(
+        {
+            "ev": "stats",
+            "relayed_bytes": 0,
+            "bytes_sent": 45000,
+            "captured": 3,
+            "pumped": 7,
+            "encoded": 10,
+            "aus": 7,
+            "idr": 1,
+            "rtp_packets": 52,
+            "rtp_bytes": 45000,
+            "rr": True,
+            "pli": 2,
+            "first_kf_ms": 120,
+            "loss": 0.0123456,
+            "encoder_label": "h264_mf\nhw " + "x" * 64,
+            "stalled": None,
+            "address": "192.168.1.5",  # not on the list: dropped
+            "candidate": "candidate:1 1 udp 2122260223 10.1.2.3 50000 typ host",
+            "nested": {"a": 1},
+        }
+    )
+    media = fast.agent.screen.summary()["session"]["media"]
+    assert media["captured"] == 3 and media["aus"] == 7 and media["rr"] is True and media["first_kf_ms"] == 120
+    assert media["loss"] == 0.012 and media["stalled"] is None and len(media["encoder_label"]) == 32
+    assert media["encoder_label"].startswith("h264_mf hw x")  # one printable line
+    from dome_agent.screen.session import media_from_stats
+
+    assert media_from_stats({"encoder_label": "h264\x1b[31m\x00mf", "stalled": "\x07\x00"}) == {
+        "encoder_label": "h264 [31m mf"  # control characters become spaces; a value of nothing but them is dropped
+    }
+    assert not {"address", "candidate", "nested", "bytes_sent"} & set(media)
+    assert "192.168" not in json.dumps(fast.agent.status()) and "10.1.2.3" not in json.dumps(fast.agent.status())
+    with structlog.testing.capture_logs() as logs:
+        await fast.agent.screen.end("stopped")
+        await expect_screen_event(fast, "ended", "stopped")
+    [ended] = [e for e in logs if e["event"] == "screen session ended"]
+    assert (ended["aus"], ended["idr"], ended["rtp_packets"], ended["rtp_kb"], ended["rr"], ended["pli"]) == (
+        7,
+        1,
+        52,
+        43,
+        True,
+        2,
+    )
+    assert ended["encoded"] == 10 and ended["first_kf_ms"] == 120
+    summary = fast.agent.screen.summary()
+    assert summary["session"] is None
+    last = summary["last_session_media"]
+    assert last["reason"] == "stopped" and last["captured"] == 3 and last["rtp_packets"] == 52
+    assert fast.agent.status()["screen"]["last_session_media"]["aus"] == 7
+    # the diagnostics bundle (redacted by key name) keeps every media field: no key contains a redacted word
+    from dome_agent.diagnostics import build_bundle
+
+    bundled = build_bundle(fast.settings, fast.agent.status())["status"]["screen"]["last_session_media"]
+    assert bundled == last and "[redacted]" not in json.dumps(bundled)
+
+
+async def test_an_h264_stall_keeps_the_session_and_makes_the_next_start_ask_for_vp8_first(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Design §5.3 "A PC where H.264 failed ... offers VP8 first next time": the stall is logged and kept in the media
+    facts, the session is not ended (the phone's no-picture watchdog starts a fresh one; 1.4 has no renegotiation),
+    and for 24 hours starts whose offer has both codecs ask the worker for VP8 first."""
+    _res, worker = await live(fast, controller)
+    assert worker.start_message is not None and worker.start_message["encoder_preference"] == ["h264", "vp8"]
+    with structlog.testing.capture_logs() as logs:
+        await worker.emit({"ev": "encoder_stalled", "encoder": "h264", "reason": "no_keyframe", "encoded": 9, "aus": 0})
+    [warning] = [e for e in logs if e["event"].startswith("screen H.264 encoder stalled")]
+    assert warning["log_level"] == "warning" and (warning["reason"], warning["encoded"], warning["aus"]) == (
+        "no_keyframe",
+        9,
+        0,
+    )
+    session = fast.agent.screen.current
+    assert session is not None and session.state == "live" and session.media["stalled"] == "no_keyframe"
+    assert fast.agent.screen.summary()["vp8_first"] is True
+    await fast.agent.screen.end("stopped")
+    await expect_screen_event(fast, "ended", "stopped")
+    with structlog.testing.capture_logs() as logs:
+        _res, again = await live(fast, controller)
+    assert again.start_message is not None and again.start_message["encoder_preference"] == ["vp8", "h264"]
+    [pref] = [e for e in logs if e["event"] == "screen encoder preference"]
+    assert pref["order"] == "vp8,h264" and pref["reason"] == "h264_stalled"
+    await fast.agent.screen.end("stopped")
+    await expect_screen_event(fast, "ended", "stopped")
+    # an offer without VP8 keeps H.264: there is nothing else to fall back to
+    _res, h264_only = await live(fast, controller, offer=H264_ONLY_OFFER)
+    assert h264_only.start_message is not None and h264_only.start_message["encoder_preference"] == ["h264"]
+    await fast.agent.screen.end("stopped")
+    await expect_screen_event(fast, "ended", "stopped")
+    # the preference expires after 24 hours: H.264 first again
+    assert fast.agent.screen.vp8_first_active(time.monotonic() + 24 * 3600 + 1) is False
+    _res, later = await live(fast, controller)
+    assert later.start_message is not None and later.start_message["encoder_preference"] == ["h264", "vp8"]
+    assert fast.agent.screen.summary()["vp8_first"] is False
+
+
+async def test_a_vp8_stall_does_not_change_the_preference(fast: AgentHarness, controller: Controller) -> None:
+    _res, worker = await live(fast, controller)
+    await worker.emit({"ev": "encoder_stalled", "encoder": "vp8", "reason": "no_keyframe", "encoded": 3, "aus": 0})
+    assert fast.agent.screen.vp8_first_active() is False
+    assert fast.agent.screen.summary()["session"]["media"]["stalled"] == "no_keyframe"

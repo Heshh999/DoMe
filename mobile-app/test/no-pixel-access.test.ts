@@ -24,7 +24,7 @@ const ALLOW: Record<string, string> = {
 };
 
 /** The Screen view modules: stricter still, not even a canvas. */
-const SCREEN_FILES = ["lib/screen.ts", "lib/screenMap.ts", "lib/screenInput.ts", "lib/screenStatus.ts", "lib/directGestures.ts", "lib/pcKeyPins.ts", "lib/wakeLock.ts", "store/screen.ts", "components/ScreenSurface.tsx", "components/ScreenLoupe.tsx", "components/ScreenViewTile.tsx", "pages/app/ScreenPage.tsx"];
+const SCREEN_FILES = ["lib/screen.ts", "lib/screenMap.ts", "lib/screenInput.ts", "lib/screenStatus.ts", "lib/directGestures.ts", "lib/pcKeyPins.ts", "lib/wakeLock.ts", "store/screen.ts", "components/ScreenSurface.tsx", "components/ScreenLoupe.tsx", "components/ScreenViewTile.tsx", "components/ScreenReadout.tsx", "lib/screenStats.ts", "pages/app/ScreenPage.tsx"];
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

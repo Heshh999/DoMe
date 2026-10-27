@@ -81,6 +81,7 @@ export function SettingsPage() {
       plan: session?.plan ?? null,
       input: useInputStore.getState().session,
       screen: useScreenStore.getState().session,
+      screenFacts: getRuntime().screen.facts,
     });
     downloadJson(`dome-diagnostics-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`, report);
   };

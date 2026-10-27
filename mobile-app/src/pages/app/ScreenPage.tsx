@@ -11,7 +11,8 @@
  * picture is live, only when the grant includes the touchpad or keyboard, and ends with the picture.
  *
  * The picture is a `<video>` fed by `srcObject` only; this page never reads a pixel, records nothing and logs no SDP,
- * address or credential (rules.screen_content; test/no-pixel-access.test.ts).
+ * address or credential (rules.screen_content; test/no-pixel-access.test.ts). Builds other than production add the
+ * readout in the stage's corner (`ScreenReadout`): which stage a picture got to, from metadata only.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
@@ -21,6 +22,7 @@ import { FailureLinks } from "../../components/FailureLinks.tsx";
 import { Icon } from "../../components/icons.tsx";
 import { KeyboardPanel } from "../../components/KeyboardPanel.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
+import { ScreenReadout } from "../../components/ScreenReadout.tsx";
 import { ScreenSurface, type SurfaceMode } from "../../components/ScreenSurface.tsx";
 import { Button, Card, Notice, PageHeader, Pill, Spinner, Steps, type Tone } from "../../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES } from "../../content/plans.ts";
@@ -29,6 +31,7 @@ import type { InputEvent } from "../../lib/input.ts";
 import { recoverySteps, SCREEN_SCOPE_EXPLANATION } from "../../lib/labels.ts";
 import { EMPTY_SCREEN_STATE } from "../../lib/screen.ts";
 import { allowanceLow, allowanceText, COPY, inputNotice, remainingSeconds, SCREEN_BETA_LABEL, screenStatus, type ScreenStatus } from "../../lib/screenStatus.ts";
+import type { ScreenMediaFacts } from "../../lib/screenStats.ts";
 import { WakeLockHolder } from "../../lib/wakeLock.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useLiveStore } from "../../store/live.ts";
@@ -197,6 +200,16 @@ export function ScreenPage() {
     setDragMode(false);
     void client.stop("stopped");
   }, [client]);
+  // the <video>'s metadata probe goes to the session client (diagnostics bundle, readout)
+  const onProbe = useCallback((probe: (() => ScreenMediaFacts) | null) => client.setMediaProbe(probe), [client]);
+  // a refused play() shows the tap button, and tells the client not to restart a picture that only needs the tap
+  const onPlayBlocked = useCallback(
+    (blocked: boolean) => {
+      setPlayBlocked(blocked);
+      client.notePlayBlocked(blocked);
+    },
+    [client],
+  );
 
   // a click goes out at once (no tap delay); scroll and touchpad motion ride the per-frame flush, coalesced
   const sendInput = useCallback(
@@ -283,9 +296,10 @@ export function ScreenPage() {
               onViewOnlyTap={() => setViewOnlyAt(Date.now())}
               onFrame={() => client.onVideoFrame()}
               onResize={() => client.onVideoResize()}
-              onPlayBlocked={setPlayBlocked}
+              onPlayBlocked={onPlayBlocked}
               playEpoch={playEpoch}
               label={`Picture of ${pcName ?? "the PC"}'s screen. Tap to click.`}
+              onProbe={onProbe}
             />
           ) : null}
           {overlay ? (
@@ -297,13 +311,21 @@ export function ScreenPage() {
               </div>
             </div>
           ) : null}
-          {playBlocked && state.stream ? (
+          {(playBlocked || state.playHint) && state.stream ? (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60">
-              <Button variant="primary" size="lg" onClick={() => setPlayEpoch((n) => n + 1)}>
+              <Button
+                variant="primary"
+                size="lg"
+                onClick={() => {
+                  setPlayEpoch((n) => n + 1);
+                  client.dismissPlayHint();
+                }}
+              >
                 {COPY.tapToPlay}
               </Button>
             </div>
           ) : null}
+          <ScreenReadout source={client} state={state} />
           {notice || viewOnly || flashViewOnly ? (
             <p role="status" className="pointer-events-none absolute inset-x-3 bottom-3 z-10 rounded-2xl bg-black/75 px-4 py-2 text-center text-xs text-white" data-testid="screen-input-notice">
               {notice ? notice.text : COPY.viewOnly}

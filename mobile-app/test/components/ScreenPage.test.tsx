@@ -5,7 +5,10 @@
  * `pointer_move_to` + click in a batch stamped 1.4, a pinch sends nothing, a two-finger slide becomes `pointer_wheel`;
  * a view-only grant sends nothing; Stop, leaving the page and the app going to the background each send `bye` and the
  * signed stop, and the background case starts one fresh session on return; a refused `play()` asks for a tap; a wake
- * lock is held only while a session runs. Then every §16 row the page can show, with its exact copy.
+ * lock is held only while a session runs. Then every §16 row the page can show, with its exact copy. Device round 2
+ * (2026-10-27): the track that arrives inside setRemoteDescription reaches the `<video>`; the stage carries the
+ * test-build readout (never in production); "Connected. Waiting for the picture…" once DTLS is up; the client's
+ * play hint asks for one tap.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -62,6 +65,8 @@ function setVisibility(state: "visible" | "hidden") {
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
   document.dispatchEvent(new Event("visibilitychange"));
 }
+
+const client = () => rt.screen;
 
 function renderPage() {
   return render(
@@ -210,6 +215,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup(); // unmount before the runtime stops, so the page never reacts to the teardown itself
+  vi.unstubAllEnvs();
   rt.stop();
   setRuntimeForTests(null);
   setVisibility("visible");
@@ -397,16 +403,51 @@ describe("ScreenPage: the live path", () => {
     expect(screen.getByRole("button", { name: "Drag" })).toBeEnabled();
   });
 
+  it("the stage carries the test-build readout from the first moment, before any stream; it follows the picture to live", async () => {
+    vi.stubEnv("VITE_DOME_RELEASE_CHANNEL", "staging");
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show screen" }));
+    const readout = await screen.findByTestId("screen-readout");
+    expect(readout).toHaveTextContent("verified: no");
+    expect(readout).toHaveTextContent("stream set: no");
+    expect(screen.queryByTestId("screen-surface")).toBeNull(); // no <video> yet: the readout is what says so
+    await act(async () => {
+      await client().stop("stopped");
+    });
+    await goLive();
+    await waitFor(() => expect(screen.getByTestId("screen-readout")).toHaveTextContent("phase: live"));
+    expect(screen.getByTestId("screen-readout")).toHaveTextContent("verified: yes");
+    expect(screen.getByTestId("screen-readout")).toHaveTextContent("stream set: yes");
+    expect(screen.getByTestId("screen-readout")).toHaveTextContent(/track seen: yes \+\d+ ms/);
+    expect(screen.getByTestId("screen-readout")).toHaveTextContent(/rVFC ticks: 1 \(timeupdate\)/); // the first frame, through the probe
+  });
+
+  it("a production build has no readout on the stage", async () => {
+    vi.stubEnv("VITE_DOME_RELEASE_CHANNEL", "production");
+    try {
+      show({ phase: "connecting", verified: true });
+      expect(await screen.findByTestId("screen-overlay")).toHaveTextContent(COPY.connecting);
+      expect(screen.queryByTestId("screen-readout")).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a refused play() (Low Power Mode) asks for one tap, which plays again", async () => {
     const play = vi.fn().mockRejectedValueOnce(new DOMException("needs a gesture", "NotAllowedError")).mockResolvedValue(undefined);
     HTMLMediaElement.prototype.play = play;
+    const noted = vi.spyOn(client(), "notePlayBlocked");
     renderPage();
     await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
     await goLive();
     const tap = await screen.findByRole("button", { name: COPY.tapToPlay });
+    // the client hears of the refusal too, so its first-frame watchdog does not restart a picture that needs this tap
+    expect(noted).toHaveBeenCalledWith(true);
     await userEvent.click(tap);
     await waitFor(() => expect(screen.queryByRole("button", { name: COPY.tapToPlay })).toBeNull());
     expect(play.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(noted).toHaveBeenLastCalledWith(false);
   });
 });
 
@@ -518,6 +559,17 @@ describe("ScreenPage: every §16 state, with its copy", () => {
     const relay = show({ phase: "connecting", verified: true, tryingRelay: true });
     expect(await screen.findByTestId("screen-overlay")).toHaveTextContent(COPY.tryingRelay);
     relay.unmount();
+
+    // DTLS is up and the picture has not come yet: the copy names that stage
+    const waiting = show({ phase: "connecting", verified: true, transportConnected: true, stream });
+    expect(await screen.findByTestId("screen-overlay")).toHaveTextContent(COPY.waitingPicture);
+    expect(screen.getByTestId("screen-surface")).toBeInTheDocument();
+    waiting.unmount();
+
+    // frames decode but the <video> sits paused: the client's hint asks for one tap
+    const hint = show({ phase: "connecting", verified: true, transportConnected: true, stream, playHint: true });
+    expect(await screen.findByRole("button", { name: COPY.tapToPlay })).toBeInTheDocument();
+    hint.unmount();
 
     const consent = show({ phase: "starting", consentWaiting: true, consentDeadlineAt: Date.now() + 25_000 });
     expect(await screen.findByTestId("screen-overlay")).toHaveTextContent(/^Waiting for someone at the PC to allow this… \(2[45]\)/);

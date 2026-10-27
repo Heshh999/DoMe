@@ -62,6 +62,10 @@ export const COPY = {
   timeout: "No one answered at the PC.",
   owned: "Another phone is viewing this PC.",
   connecting: "Connecting to your PC's screen…",
+  /** DTLS is up and no frame yet: says which stage is being waited for (device round 2). */
+  waitingPicture: "Connected. Waiting for the picture…",
+  /** The first-frame watchdog gave up after its fresh sessions: the connection worked, the picture never came. */
+  noPicture: "Your PC connected, but no picture arrived.",
   tryingRelay: "Trying the relay server…",
   tapToPlay: "Tap to show the picture.",
   noPath: "Couldn't reach your PC's picture from this network. The touchpad and remote still work.",
@@ -78,7 +82,8 @@ export const COPY = {
   secureDesktopFree: `Up to two minutes of Windows permission prompts in each ${WINDOW_HOURS}-hour window don't count toward your Free minutes.`,
   indicatorPaused: "A screen on the PC changed. The picture comes back when DoMe's bar is on every screen.",
   protectedContent: "Some protected videos and windows show as black.",
-  basicPicture: "Basic picture mode (this PC lacks the video encoder)",
+  // neutral: VP8 is also the fallback after H.264 stalled on the PC or never decoded here, not only a missing encoder
+  basicPicture: "Basic picture mode",
   captureUnavailable: "Your PC can't share its screen right now. Another app may be capturing it, or this display isn't supported yet.",
   crashed: "Your PC's screen sharing stopped unexpectedly.",
   stoppedOnPc: "Screen view was stopped on the PC. Starting it again may need someone at the PC to allow it.",
@@ -180,6 +185,7 @@ export function screenStatus(input: ScreenStatusInput): ScreenStatus {
       }
       return status("connecting", COPY.connecting, null, "info", null, "none");
     case "connecting":
+      if (state.transportConnected) return status("waiting_picture", COPY.waitingPicture, null, "info", null, "none");
       return status(state.tryingRelay ? "relay" : "connecting", state.tryingRelay ? COPY.tryingRelay : COPY.connecting, null, "info", null, "none");
     case "paused":
       // Only a Windows permission prompt is ever discounted, and only up to two minutes per window: a missing bar
@@ -275,6 +281,8 @@ function failedStatus(state: ScreenSessionState, now: Date, timeZone?: string): 
     case "SCREEN_SESSION_OWNED":
       return status("owned", COPY.owned, "You can take over; the other phone's view ends.", "info", code, "takeover");
     case "SCREEN_CONNECTION_FAILED":
+      // the transport worked every time and the picture never came: not a network problem, so not the network's copy
+      if (p?.detail?.cause === "no_picture") return status("no_picture", COPY.noPicture, null, "warning", code, "retry");
       return status("no_path", "Couldn't connect", state.turn === "disabled" ? `${COPY.noPath} ${COPY.turnDisabled}` : COPY.noPath, "warning", code, "retry");
     case "ACTION_UNAVAILABLE":
       if (p?.detail?.reason === SCREEN_VIEW_NOT_INCLUDED) return status("not_included", "Screen view isn't in DoMe on your PC yet", COPY.notIncluded, "warning", code, "none");

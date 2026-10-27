@@ -52,8 +52,10 @@ network off, the exact decoder/encoder/indev lists, every requested filter prese
 muxers, parsers, bitstream filters, hwaccels or outdevs, no external library beyond libvpx, libopus and
 Media Foundation, and no ``WARNING: Option --enable-… did not match anything``: configure only warns about an
 option it ignores, so an ignored flag is a gate failure, never a quiet no-op). ``smoke`` runs inside the venv that has the wheel installed and proves the wheel works:
-a ``lavfi`` ``testsrc`` frame decoded as NV12, a VP8 frame encoded, aiortc importable; the hardware H.264
-encoder and Desktop Duplication are reported only, because the CI runner has no GPU or desktop session.
+a ``lavfi`` ``testsrc`` frame decoded as NV12, a VP8 frame encoded, aiortc importable, and every option of the
+worker's Desktop Duplication graph parsing (``DDAGRAB_GRAPH``: its filters created, the graph never configured, so no
+GPU or desktop is needed); the hardware H.264 encoder and a Desktop Duplication frame are reported only, because the
+CI runner has no GPU or desktop session.
 
 The frozen app. Screen view is in a Windows build only when ``pyproject.toml`` resolves ``av`` on Windows to
 the shipping LGPL wheel (``shipping-av``: a ``[tool.uv.sources]`` entry with ``marker = "sys_platform ==
@@ -181,6 +183,15 @@ CONFIGURE_FILTERS = frozenset(
 )
 # Filters DoMe's graphs need at run time (av.filter.filters_available), the always-built endpoints included.
 RUNTIME_FILTERS = frozenset({"buffer", "buffersink", "abuffer", "abuffersink", "ddagrab", "scale", "format", "testsrc"})
+# The worker's Desktop Duplication graph (dome_agent/screen/worker/capture_dda.ddagrab_graph(0, 1280, 720, 30); this
+# tool never imports dome_agent, and a unit test keeps the two equal). The smoke creates each filter with its options
+# in a graph that is never configured: an option name this FFmpeg lacks fails ("Option not found") without a desktop
+# or a GPU. Device round 2 (2026-10-27): scale_d3d11 was given w/h, which only scale has, and Desktop Duplication
+# failed on every PC.
+DDAGRAB_GRAPH = (
+    "ddagrab=output_idx=0:framerate=30:draw_mouse=1:dup_frames=1,"
+    "scale_d3d11=width=1280:height=720:format=nv12,hwdownload,format=nv12"
+)
 # configure's only sign that it ignored an option it was given
 _IGNORED_OPTION = re.compile(r"^WARNING: Option (--\S+) did not match anything")
 _HEADINGS = {
@@ -739,6 +750,15 @@ def smoke_checks(av: Any, expect_version: str, import_aiortc: Callable[[], objec
             raise RuntimeError(f"not among the filters: {missing}")
         return " ".join(sorted(RUNTIME_FILTERS))
 
+    def ddagrab_options() -> str:
+        graph = av.filter.Graph()  # never configured: no D3D11 device, no duplication
+        names = []
+        for part in DDAGRAB_GRAPH.split(","):
+            name, _, args = part.partition("=")
+            graph.add(name, args or None)
+            names.append(name)
+        return " -> ".join(names)
+
     def lavfi_nv12() -> str:
         frame = _first_frame(av, "testsrc=size=64x64:rate=5,format=nv12")
         if frame.format.name != "nv12":
@@ -765,6 +785,7 @@ def smoke_checks(av: Any, expect_version: str, import_aiortc: Callable[[], objec
         ("decoders == {wrapped_avframe}", True, decoders),
         ("encoders include h264_mf libvpx libopus", True, encoders),
         ("graph filters listed (buffer, buffersink, abuffer, abuffersink, ddagrab, ...)", True, filters_listed),
+        ("ddagrab graph options parse", True, ddagrab_options),
         ("lavfi testsrc -> one NV12 frame", True, lavfi_nv12),
         ("libvpx (VP8) encodes one frame", True, vp8),
         ("import aiortc", True, aiortc),
@@ -1014,7 +1035,8 @@ def evaluate_screen_self_test(
         encoders = check("encoders")
         listed = [r for r in encoders.get("value") or [] if isinstance(r, dict)] if encoders.get("ok") else []
         summary = ", ".join(
-            f"{r.get('encoder')}: {'yes' if r.get('available') else r.get('note') or 'no'}" for r in listed
+            f"{r.get('encoder')}: {'yes' if r.get('available') else r.get('reason') or r.get('note') or 'no'}"
+            for r in listed
         )
         vp8 = any(r.get("kind") == "vp8" and r.get("available") is True for r in listed)
         rows.append(SmokeRow("VP8 encoder available", True, vp8, summary or shown(encoders)))
@@ -1028,6 +1050,15 @@ def evaluate_screen_self_test(
                 True,
                 wgc.get("ok") is True and isinstance(classes, list) and "NativeWindowsCapture" in classes,
                 shown(wgc),
+            )
+        )
+        graph = check("ddagrab_graph_options")
+        rows.append(
+            SmokeRow(
+                "ddagrab graph options parse (the worker's own Desktop Duplication graph)",
+                True,
+                graph.get("ok") is True,
+                shown(graph),
             )
         )
         rows.append(

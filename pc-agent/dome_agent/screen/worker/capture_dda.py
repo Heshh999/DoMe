@@ -1,8 +1,13 @@
 """Desktop Duplication through FFmpeg's ``ddagrab`` (design §5.2; the primary Windows source).
 
 Opened by PyAV as an ``lavfi`` graph: ``ddagrab=output_idx=N:framerate=30:draw_mouse=1:dup_frames=1,
-scale_d3d11=w=W:h=H:format=nv12,hwdownload,format=nv12``. GPU colour conversion and scaling; the ``lavfi`` device emits
-``wrapped_avframe`` packets that PyAV's ``decode()`` unwraps (the one decoder the shipping build enables).
+scale_d3d11=width=W:height=H:format=nv12,hwdownload,format=nv12``. GPU colour conversion and scaling; the ``lavfi``
+device emits ``wrapped_avframe`` packets that PyAV's ``decode()`` unwraps (the one decoder the shipping build enables).
+``scale_d3d11``'s options are ``width``, ``height`` and ``format`` (``vf_scale_d3d11.c``, n8.1.3): the ``w``/``h``
+this graph carried until device round 2 do not exist there ("Could not set non-existent option 'w'"), so Desktop
+Duplication failed on every PC and Windows.Graphics.Capture ran instead. :func:`check_graph_options` creates each
+filter of the graph with its arguments, unconfigured, which needs no desktop or GPU: the worker's ``--self-test`` and
+the licence gate's smoke run it, and a unit test checks every option name against the n8.1.3 sources.
 
 What ``vsrc_ddagrab.c`` (FFmpeg n8.1.3) really does, and what follows from it here:
 
@@ -24,6 +29,13 @@ What ``vsrc_ddagrab.c`` (FFmpeg n8.1.3) really does, and what follows from it he
   answer None meanwhile (bounded waits) and the source adopts the graph once the helper has it. The container is
   closed only by the thread that created it or by the thread that reads it: a pending open abandoned by :meth:`close`
   is closed by the helper when ``av.open`` returns, never from another thread while it is still inside.
+* **Desktop Duplication must prove itself before the session relies on it** (device round 2 review): a FIRST open still
+  pending after the wait is unproven (no frame may come until someone touches the PC, and the phone gives up on a
+  session without a picture after 15 s), so :class:`DdaWithFallback` abandons it and opens Windows.Graphics.Capture,
+  whose first frame comes at once, for the rest of the session. Likewise a read that fails before the graph ever gave
+  a frame (``scale_d3d11``'s first frame, a graph that ends) raises at once instead of rebuilding, and
+  :class:`DdaWithFallback` switches to Windows.Graphics.Capture. Once a frame has come, access lost and a pending
+  rebuild (every UAC prompt) are handled here as below.
 * **PyAV's decode iterator is a generator**: an exception raised through it finishes it, and every later ``next`` is
   StopIteration. After EAGAIN (no frame yet) :meth:`DdagrabSource.read` takes a fresh iterator over the same container;
   an iterator that ends (EOF: the graph is over) counts as a failure and rebuilds the graph like access lost.
@@ -101,16 +113,50 @@ _ROW_BYTES: dict[str, tuple[Callable[[int], int], ...]] = {
     "yuv420p": (lambda w: w, lambda w: (w + 1) // 2, lambda w: (w + 1) // 2),
     "bgra": (lambda w: w * 4,),
 }
+# libavutil/log.h levels (PyAV's av.logging uses the same numbers; a larger number is more verbose)
+AV_LOG_ERROR = 16
+AV_LOG_INFO = 32
 _level_lock = threading.Lock()
-_level_users = 0
+_level_users: dict[int, int] = {}  # level asked for -> blocks inside ffmpeg_log_lines at that level
 _level_was_set = False
 
 
 def ddagrab_graph(output_idx: int, width: int, height: int, fps: int) -> str:
+    """The Desktop Duplication graph: ``ddagrab``'s own options, then ``scale_d3d11``'s ``width``/``height``/``format``
+    (FFmpeg n8.1.3 option names; ``w``/``h`` are ``scale``'s, not ``scale_d3d11``'s)."""
     return (
         f"ddagrab=output_idx={int(output_idx)}:framerate={int(fps)}:draw_mouse=1:dup_frames=1,"
-        f"scale_d3d11=w={int(width)}:h={int(height)}:format=nv12,hwdownload,format=nv12"
+        f"scale_d3d11=width={int(width)}:height={int(height)}:format=nv12,hwdownload,format=nv12"
     )
+
+
+def graph_filters(graph: str) -> list[tuple[str, str | None]]:
+    """The filters of a linear ``lavfi`` chain (no labels, no ``;``), in order, as ``(name, arguments or None)``."""
+    filters: list[tuple[str, str | None]] = []
+    for part in graph.split(","):
+        name, sep, args = part.strip().partition("=")
+        filters.append((name, args if sep else None))
+    return filters
+
+
+def check_graph_options(graph: str) -> list[str]:
+    """Create each filter of ``graph`` with its arguments in an ``av.filter.Graph`` that is never configured: FFmpeg
+    parses the options there (``avfilter_init_str``), so a name the filter does not have fails as it would inside
+    ``av.open`` ("Option not found"), while nothing is opened: ``ddagrab``'s and ``scale_d3d11``'s init only allocate
+    (the D3D11 device and the duplication come at configuration), so no desktop and no GPU are needed. The filter
+    names, in order; a ``ValueError`` naming the filter and FFmpeg's words otherwise."""
+    import av.filter
+
+    created: list[str] = []
+    graph_ = av.filter.Graph()
+    for name, args in graph_filters(graph):
+        with ffmpeg_error_lines() as logged:
+            try:
+                graph_.add(name, args)
+            except Exception as exc:  # noqa: BLE001 - an unknown filter or option: FFmpeg's own words
+                raise ValueError(f"{name}: {ffmpeg_error_text(exc, logged)}") from None
+        created.append(name)
+    return created
 
 
 def _remote_session_now() -> bool:
@@ -129,7 +175,9 @@ def _logged_text(exc: BaseException, logged: Iterable[tuple[int, str, str]]) -> 
     """FFmpeg's ERROR lines for this failure: the ones captured on this thread, else the one PyAV kept in ``exc.log``
     (its ``(level, name, message)`` tuple, None at PyAV's default log level). Deduplicated, stripped."""
     lines: list[str] = []
-    for _level, _name, message in logged:
+    for level, _name, message in logged:
+        if isinstance(level, int) and level > AV_LOG_ERROR:
+            continue  # a more verbose line, captured while another block asked for INFO (ffmpeg_log_lines)
         line = str(message).strip()
         if line and line not in lines:
             lines.append(line)
@@ -184,31 +232,45 @@ def sanitise_reason(text: str, limit: int = REASON_MAX_CHARS) -> str:
 
 
 @contextlib.contextmanager
-def ffmpeg_error_lines() -> Iterator[list[tuple[int, str, str]]]:
-    """FFmpeg's ERROR log lines raised on this thread inside the block, as PyAV's ``(level, name, message)``.
+def ffmpeg_log_lines(level: int) -> Iterator[list[tuple[int, str, str]]]:
+    """FFmpeg's log lines at ``level`` or more severe (``AV_LOG_ERROR``, ``AV_LOG_INFO``) raised on this thread inside
+    the block, as PyAV's ``(level, name, message)``.
 
     PyAV's default log level (None) installs a no-op callback that drops FFmpeg's log, and with it the only place
-    ``ddagrab`` names the DXGI cause. The level is ERROR while any thread is inside such a block (counted under a lock:
-    the helper thread opening a graph and the reader thread never undo each other) and only if nobody set a level
-    (one someone set is left alone); ``av.logging.Capture`` keeps this thread's lines out of Python logging. Lines
-    another thread logs meanwhile go to the ``libav.*`` loggers (the worker's stderr), which the agent relogs redacted."""
+    ``ddagrab`` names the DXGI cause and ``h264_mf`` names the Media Foundation transform it picked. While any thread is
+    inside such a block the global level is the most verbose one asked for (counted under a lock: the helper thread
+    opening a graph, the reader thread and the encoder thread never undo each other), and only if nobody set a level
+    (one someone set is left alone); ``av.logging.Capture`` keeps this thread's lines out of Python logging. A block
+    that asked for ERROR may therefore hold more verbose lines while another thread asks for INFO: the readers of
+    error lines (:func:`_logged_text`) skip them. Lines another thread logs meanwhile go to the ``libav.*`` loggers
+    (the worker's stderr), which the agent relogs redacted."""
     import av.logging
 
-    global _level_users, _level_was_set
+    global _level_was_set
     with _level_lock:
-        if _level_users == 0:
+        if not _level_users:
             _level_was_set = av.logging.get_level() is not None
-            if not _level_was_set:
-                av.logging.set_level(av.logging.ERROR)
-        _level_users += 1
+        _level_users[level] = _level_users.get(level, 0) + 1
+        if not _level_was_set:
+            av.logging.set_level(max(_level_users))
     try:
         with av.logging.Capture() as lines:
             yield lines
     finally:
         with _level_lock:
-            _level_users -= 1
-            if _level_users == 0 and not _level_was_set:
-                av.logging.set_level(None)
+            _level_users[level] -= 1
+            if not _level_users[level]:
+                del _level_users[level]
+            if not _level_was_set:
+                av.logging.set_level(max(_level_users) if _level_users else None)
+
+
+@contextlib.contextmanager
+def ffmpeg_error_lines() -> Iterator[list[tuple[int, str, str]]]:
+    """FFmpeg's ERROR log lines raised on this thread inside the block (:func:`ffmpeg_log_lines` at ERROR): the
+    Desktop Duplication open and every read run inside one."""
+    with ffmpeg_log_lines(AV_LOG_ERROR) as lines:
+        yield lines
 
 
 def ffmpeg_error_text(exc: BaseException, logged: Iterable[tuple[int, str, str]] = ()) -> str:
@@ -411,6 +473,7 @@ class DdagrabSource:
     _reported_running: bool
     _failure_lines: list[tuple[int, str, str]]
     frames_repeated: int
+    proven: bool
 
     def __init__(self, output_idx: int, width: int, height: int, fps: int) -> None:
         if sys.platform != "win32":
@@ -433,6 +496,7 @@ class DdagrabSource:
         self._reported_running = False
         self._failure_lines = []  # FFmpeg's lines over a run of read failures (PyAV skips repeated lines)
         self.frames_repeated = 0  # re-sent frames dropped (dup_frames=1): the still-desktop evidence in the log
+        self.proven = False  # a graph of this source gave a frame: from then on failures rebuild instead of raising
 
     def open(self) -> None:
         """Start the graph on a helper thread and wait up to ``open_wait``: a failure in that time is raised as the
@@ -452,6 +516,11 @@ class DdagrabSource:
     @property
     def size_text(self) -> str:
         return f"{self.width}x{self.height}"
+
+    @property
+    def pending(self) -> bool:
+        """An open is still waiting for its first desktop frame (``probe_output_format``)."""
+        return self._pending is not None
 
     def _adopt(self) -> bool:
         """Take the graph from a finished pending open: True once frames can be read, False while still pending;
@@ -490,6 +559,13 @@ class DdagrabSource:
                 self._failure_lines.extend(logged)  # across the run: PyAV logs an identical repeated line once
             else:
                 failure = None
+                self.proven = True
+        if failure is not None and not self.proven:
+            # the graph never gave a frame: not "access lost" but a graph that does not work (the scaler's first
+            # frame, an end of stream); raised at once so DdaWithFallback opens Windows.Graphics.Capture instead
+            lines, self._failure_lines = self._failure_lines, []
+            self.close()
+            raise capture_error("Desktop Duplication failed before its first frame", failure, lines) from None
         if failure is not None:
             self.rebuilds += 1
             self.close()
@@ -577,7 +653,12 @@ class DdaWithFallback:
     DTLS connected. ``skip`` (:func:`preflight_skip`: the agent's pre-flight found Desktop Duplication failing) skips
     it outright; else ``locate`` (:func:`locate_ddagrab_output`) runs first and may change the primary's ``output_idx``
     or skip Desktop Duplication altogether; ``on_fallback`` gets Desktop Duplication's error (its message carries
-    FFmpeg's reason, or why it was skipped)."""
+    FFmpeg's reason, or why it was skipped).
+
+    Desktop Duplication is used only once it has proven itself: an open still pending after the primary's wait (a
+    still desktop: no frame until something on it changes) is abandoned for Windows.Graphics.Capture, and so is a
+    primary whose read fails before its first frame (``proven`` False); either way the session stays on
+    Windows.Graphics.Capture."""
 
     def __init__(
         self,
@@ -601,12 +682,28 @@ class DdaWithFallback:
         if skipped is None:
             try:
                 self._primary.open()
-                self._active = self._primary
-                return
             except ProtocolError as exc:
                 self._on_fallback(exc)
+            else:
+                if not getattr(self._primary, "pending", False):
+                    self._active = self._primary
+                    return
+                # no first frame within the wait: unproven, and nothing may come until the desktop changes while the
+                # phone waits for a picture; the helper closes the abandoned graph when its open returns
+                wait = float(getattr(self._primary, "open_wait", OPEN_WAIT_SECONDS))
+                self._primary.close()
+                self._on_fallback(
+                    ProtocolError(
+                        "SCREEN_CAPTURE_UNAVAILABLE",
+                        f"Desktop Duplication gave no first frame within {wait:g} s (a still desktop)",
+                        detail={"detail": "driver"},
+                    )
+                )
         else:
             self._on_fallback(skipped)
+        self._open_fallback()
+
+    def _open_fallback(self) -> None:
         source = self._fallback()
         source.open()
         self._active = source
@@ -639,11 +736,22 @@ class DdaWithFallback:
         return None
 
     def read(self) -> Any | None:
-        if self._active is None:
+        active = self._active
+        if active is None:
             raise ProtocolError(
                 "SCREEN_CAPTURE_UNAVAILABLE", "the capture source is not open", detail={"detail": "driver"}
             )
-        return self._active.read()
+        if active is not self._primary or getattr(active, "proven", True):
+            return active.read()
+        try:
+            return active.read()
+        except ProtocolError as exc:  # Desktop Duplication failed before its first frame: Windows.Graphics.Capture
+            self._active = None
+            with contextlib.suppress(Exception):
+                active.close()
+            self._on_fallback(exc)
+            self._open_fallback()
+            return None
 
     def close(self) -> None:
         active, self._active = self._active, None
@@ -654,6 +762,8 @@ class DdaWithFallback:
 __all__ = [
     "AVERROR_EXTERNAL",
     "AVERROR_UNKNOWN",
+    "AV_LOG_ERROR",
+    "AV_LOG_INFO",
     "OPEN_WAIT_SECONDS",
     "REASON_MAX_CHARS",
     "REBUILD_LIMIT",
@@ -662,11 +772,14 @@ __all__ = [
     "DdagrabSource",
     "OutputChoice",
     "capture_error",
+    "check_graph_options",
     "classify_capture_failure",
     "ddagrab_graph",
     "ffmpeg_error_lines",
     "ffmpeg_error_text",
+    "ffmpeg_log_lines",
     "frame_signature",
+    "graph_filters",
     "locate_ddagrab_output",
     "preflight_skip",
     "sanitise_reason",
