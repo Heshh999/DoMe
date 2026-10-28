@@ -403,11 +403,11 @@ founder-driven; then:
       **Device round 2 (2026-10-27) done:** touchpad fixed (0 dropped batches); Screen view connected and captured but
       the phone showed nothing: Safari delivers the video track before the phone's verification step finished, and the
       phone dropped it (fixed, with a 15 s watchdog and a staging-only readout; PROGRESS 2026-10-27). **Device round 3
-      (next):** Deploy staging, install the newest `DoMe-Setup-0.1.0+<commit>` over the current one (no unlink: the link
-      and pairing stay), start Screen view; read the page's readout (frames received/decoded, the step timeline) and send
-      tray → Diagnostics… if there is still no picture. Then the rest of the device round on your own PC and
-      iPhone against staging (`docs/LAUNCH_SETUP.md` §11B "Testing it on your own PC": unlink, install with
-      `/ApiUrl=https://staging.domeremote.com`, link, pair, allow) with `docs/design/screen-view.md` §18
+      (2026-10-28) done:** staging deployed at c78dc1a and build `DoMe-Setup-0.1.0+c78dc1a` installed over the old one;
+      **Screen view shows the PC's screen on the iPhone** (owner-reported; ACCEPTANCE Scenario 26). Send tray →
+      Diagnostics… from a session with a picture so the capture path, codec and frame rate can be recorded. Then
+      the rest of the device round on your own PC and iPhone against staging (the PC already points at staging and
+      stays linked and paired; `docs/LAUNCH_SETUP.md` §11B) with `docs/design/screen-view.md` §18
       checklist items 1–11 and 13, recorded in `docs/ACCEPTANCE.md` Scenario 26 with the Windows build, GPU,
       iOS version and Safari / home-screen mode. Afterwards deploy production (Screen view off there) and
       point the PC back.

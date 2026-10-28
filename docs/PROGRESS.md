@@ -2,6 +2,25 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-28 — Device round 3: Screen view shows the PC's screen on the founder's iPhone
+
+- **Deploy.** The founder ran Deploy for staging at c78dc1a (run 40681752325, about 5½ minutes including the approval):
+  the release command (migrations) completed, `/healthz` on domeremote-staging.fly.dev reported status ok, database ok and
+  this commit, staging.domeremote.com served this commit, the Stripe check matched the sandbox (5 prices, webhook endpoint,
+  customer portal) and Screen view reported ON with no relay server. The founder's "nothing is happening" was the
+  approval wait and the four-minute deploy job, which shows only a spinner until its summary appears at the end.
+- **Founder's result.** With `DoMe-Setup-0.1.0+c78dc1a` (`windows-installer.yml` run 40491292097) installed over the
+  round-2 build, Screen view shows the PC's screen on the iPhone in Safari: "screenviewing works". This is the first
+  picture on a real device and confirms the round-2 root cause (Safari's `track` event before the answer verified) and
+  the 2026-10-27 phone and PC fixes together.
+- **Not yet known.** Time to first picture, the capture path (Desktop Duplication with the fixed scaler options, or the
+  Windows.Graphics.Capture fallback), the codec, frame rate, latency and tap accuracy. A diagnostics bundle from a session
+  with a picture records the first four (`status.screen.session.media`, `last_session_media`).
+- **Evidence:** owner-reported (ACCEPTANCE Scenario 26, device round 3). Docs only in this entry; no code changed.
+- **Next:** the PC diagnostics bundle from a working session; the rest of the device round (design §18 items 1–11 and
+  13); the remaining Stripe checks (webhook deliveries answered 200, Billing shows Pro, cancel in the portal); then
+  production deploy with Screen view off and the PC pointed back.
+
 ## 2026-10-27 — Device round 2: touchpad fixed on the founder's devices; Screen view's missing picture found on the phone
 
 - **Founder's result (build 593d3fd, staging; hybrid laptop: Intel UHD owns both outputs, RTX 4060 without outputs;
