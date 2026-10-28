@@ -85,7 +85,10 @@ Non-goals, stated in the product where a customer could expect otherwise:
 - Capturing the lock screen, UAC prompts or any secure desktop. DoMe never tries.
 - Not built unless data asks for it: an SFU or media server, video over the WebSocket relay, WebCodecs or
   WebTransport, trickle ICE, renegotiation, PC-side TURN, server-signed allowance tokens, region-crop zoom,
-  a warm pre-spawned worker, signed input over the data channel (§19 Phase 3).
+  a warm pre-spawned worker (§19 Phase 3).
+- Not built at all (founder decision, 2026-10-28): input over the data channel. Every touch, click and key
+  keeps going through the relay, where revocation, grant checks and rate limits apply; the felt delay is
+  addressed by the phone-drawn pointer instead (§19 Phase 2, cursor overlay).
 
 ## 2. User flows
 
@@ -1298,7 +1301,7 @@ on staging and, behind the switch, on production.
 | 1080p "sharp text" (level 4.0 negotiation) on direct paths | complaints about small text |
 | PC-side TURN over TLS 443 | support tickets from UDP-blocked PCs |
 | Safari-tab PiP experiment with `getStats()` liveness | device test passes |
-| Private input: signed `input_batch` envelopes over the data channel, verified identically by the agent, accepted only while the PC's relay socket is up and past its first snapshot | typed-text privacy, or ≥ 50 ms p50 tap-to-photon gain outside US-East |
+| ~~Private input: signed `input_batch` envelopes over the data channel~~ | **Dropped** (founder decision, 2026-10-28): a second input path that skips the relay's revocation, grant and rate-limit checks is not worth the gain; input stays on the relay |
 | Finer per-account TURN limits (relayed hours, per-controller GB) beyond the Phase 1 daily GB and monthly mint caps; raising the caps for paid plans | TURN usage passes 50 % of the free tier, or paid plans launch |
 | Warm worker | spawn plus import above ≈ 1.5 s |
 | `pc_state.screen_session` with per-version stripping (`PC_STATE_1_1_FIELDS` → a per-version map) | the Health page wants it |
