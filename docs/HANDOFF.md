@@ -461,7 +461,7 @@ founder-driven; then:
    the default branch only, the update key; a first run without publishing), then step 7.
    **Status (2026-10-30):** the Artifact Signing account is named `domeremote` (resource group
    `dome-signing`, created 2026-10-20), so `ARTIFACT_SIGNING_ACCOUNT` is `domeremote`, not the guide's
-   example; its endpoint is still to be read from the account's Overview. Identity validation (individual,
+   example; its Account URI (Overview, region East US, SKU Basic) is `https://eus.codesigning.azure.net/`. Identity validation (individual,
    Public): the first request (4991617b…) ended **Failed** on 2026-10-30 after Authenticator's face check
    failed; a second request (8066812a…) was created the same day, the founder's share showed success and its
    link is used up, but the list still showed **Action Required** at last check (the first request also showed
