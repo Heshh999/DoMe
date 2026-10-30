@@ -475,9 +475,8 @@ founder-driven; then:
    `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ACCOUNT` (`domeremote`) and `ARTIFACT_SIGNING_ENDPOINT`; required
    reviewer `Heshh999`, prevent self-review off, administrator bypass off, 1 branch and 0 tags allowed
    (screenshot, 2026-10-30). Update key (step 5) made on the founder's PC on 2026-10-30 outside OneDrive; its
-   public half `6945ea3e…37a5974` is pinned in `UPDATE_PUBLIC_KEYS` and `WINDOWS_RELEASE_PUBLIC_KEYS` (read off a
-   screenshot: the release run's signing step refuses a key that is not pinned, so a misread shows up in
-   step 6 before anything is published). First release version: 0.1.0. Still open: the secret
+   public half `6945ea3e…37a5974` is pinned in `UPDATE_PUBLIC_KEYS` and `WINDOWS_RELEASE_PUBLIC_KEYS` (confirmed
+   against the founder's pasted text; the release run's signing step also refuses a key that is not pinned). First release version: 0.1.0. Still open: the secret
    `DOME_UPDATE_SIGNING_KEY` (founder pasting it now), immutable releases (not yet confirmed), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
    `DOME_SIGNING_PUBLISHER`.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
