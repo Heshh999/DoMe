@@ -484,8 +484,9 @@ founder-driven; then:
    L=Hillside, S=nj, C=US`, so `DOME_SIGNING_PUBLISHER` is `Justin Gaskins` (Azure's per-run certificates last
    3 days; the timestamp keeps signatures valid). All seven variables and the secret are set (screenshot,
    2026-10-30). Step 6, first try (run 41114062039): stopped at the strict licence gate on 43 bundled Universal
-   C Runtime DLLs before signing; the spec now leaves them out (PROGRESS 2026-10-30). Next: a green
-   windows-installer.yml run with that change, then step 6 again (version 0.1.0, publish off), then step 7.
+   C Runtime DLLs before signing; the spec now leaves them out (065836b, PROGRESS 2026-10-30). windows-installer.yml
+   run 41116520480 on 065836b: green, no licence-gate warnings (43 before), all 167 smoke checks. Next: step 6
+   again (version 0.1.0, publish off), then step 7 only when DoMe is ready for the public.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;

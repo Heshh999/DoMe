@@ -27,9 +27,9 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   Universal C Runtime. Tests: `test_the_spec_leaves_out_windows_universal_c_runtime` (the spec's pattern equals
   the gate's), `test_the_universal_c_runtime_is_named_as_such_and_fails_when_strict`,
   `test_import_tables_naming_the_universal_c_runtime_are_fine`.
-- **Evidence:** unit-tested on Linux; the Windows proof is the next windows-installer.yml run (licence gate with 0
-  warnings, the worker self-test and the installer smoke test without the bundled UCRT), then the founder's second
-  release run.
+- **Evidence:** unit-tested on Linux (pc-agent 1246 passed); integration-tested on Windows: windows-installer.yml
+  run 41116520480 on 065836b is green with no licence-gate warnings (43 before), the Screen view worker self-test
+  and all 167 installer smoke checks. Next: the founder's second release run.
 
 ## 2026-10-28 — Device round 3: Screen view shows the PC's screen on the founder's iPhone
 
