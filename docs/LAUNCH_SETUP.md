@@ -829,23 +829,25 @@ Open https://github.com/Heshh999/DoMe/settings/environments.
 
 This key signs the small file that describes each release. It never goes to Azure.
 
-1. On your own PC, open the **DoMe folder that holds both `testkit` and `pc-agent`** (the folder you
-   extracted the test-kit ZIP into; `testkit` and `pc-agent` sit side by side in it). Open Windows
-   PowerShell right there: in File Explorer, open that folder, click the address bar at the top, type
-   `powershell` and press **Enter** (a blue window opens in that folder; not as administrator). Then run
-   this one line:
+1. On your own PC, download a fresh copy of DoMe while signed in to GitHub:
+   https://github.com/Heshh999/DoMe/archive/refs/heads/claude/stoic-heisenberg-txq6ja.zip (an older test-kit
+   copy may not have the script). Extract it, open the extracted folder (the one that holds `pc-agent`), click
+   the address bar, type `powershell` and press **Enter** (not as administrator). Then run this one line:
 
    ```powershell
-   cd pc-agent; uv run python packaging/release/make_update_key.py --out "$env:USERPROFILE\Desktop\dome-key"
+   uv run --no-project --with cryptography python pc-agent\packaging\release\make_update_key.py --out "$env:LOCALAPPDATA\dome-key"
    ```
 
-   If it says "Cannot find path ... pc-agent", the window is in the wrong folder (for example inside
-   `testkit`): close it and open PowerShell again from the folder that holds both.
+   The key goes to a folder on this PC only (`%LOCALAPPDATA%\dome-key`), **never the Desktop or Documents**:
+   on many PCs those are synced to OneDrive, which would upload the private key. If it says "can't open
+   file", the window is in the wrong folder; if `uv` is not recognized, run
+   `winget install --id=astral-sh.uv -e`, close the window and open it again.
 
-2. Open the new file `dome-update-key.pem` on your Desktop (folder `dome-key`) with Notepad, copy
-   **everything**, and paste it into GitHub > Settings > Environments > **release** > **Environment
-   secrets** > **Add environment secret**, name `DOME_UPDATE_SIGNING_KEY`. Never paste it anywhere else.
-3. Delete the `dome-key` folder (and empty the Recycle Bin).
+2. Run `notepad "$env:LOCALAPPDATA\dome-key\dome-update-key.pem"`, copy **everything** (Ctrl+A, Ctrl+C), and
+   paste it into GitHub > Settings > Environments > **release** > **Environment secrets** > **Add environment
+   secret**, name `DOME_UPDATE_SIGNING_KEY`. Never paste it anywhere else. Close Notepad without saving.
+3. Delete the key for good: `Remove-Item -Recurse "$env:LOCALAPPDATA\dome-key"` (this skips the Recycle
+   Bin). The downloaded copy of DoMe can be deleted too; it holds no secret.
 4. Send the engineer the 64-character line the command printed (the **public** key; it is not a secret).
    The engineer pins it in DoMe and sets the release's version number. Releases cannot start before that.
 
