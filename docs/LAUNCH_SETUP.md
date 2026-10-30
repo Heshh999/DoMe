@@ -780,8 +780,18 @@ stored in GitHub.
 1. In the Azure portal: **Microsoft Entra ID** > **App registrations** > **New registration**, name it
    `dome-github-release`, **Register**.
 2. In that app: **Certificates & secrets** > **Federated credentials** > **Add credential** > scenario
-   **GitHub Actions deploying Azure resources**: organization `Heshh999`, repository `DoMe`, entity type
-   **Environment**, environment name `release`. Save.
+   **GitHub Actions deploying Azure resources**. Leave **Issuer** and **Audience** as they are and fill in:
+   **Organization** `Heshh999`, **Organization ID** `71295698`, **Repository** `DoMe`, **Repository ID**
+   `1409912011`, **Entity type** **Environment**, environment name `release`, **Name** `github-release`.
+   The **Subject identifier** then reads exactly
+   `repo:Heshh999@71295698/DoMe@1409912011:environment:release`. **Add**.
+   *Why the numbers (checked 2026-10-30):* GitHub gives repositories created after mid-2026 an OIDC
+   subject that carries the owner's and the repository's permanent numeric ids, so a renamed or
+   re-created repository with the same name can never sign as DoMe; DoMe was created on 2026-10-08, and
+   Entra's form now builds that format. The ids come from `gh api repos/Heshh999/DoMe` (`owner.id`, `id`);
+   they are not secrets. If the first release run's Azure sign-in fails with "No matching federated
+   identity record found for presented assertion subject …", the error names the subject GitHub actually
+   sent: add a second credential for exactly that subject and run again.
 3. Back on your signing account: **Access control (IAM)** > **Add role assignment** > role **Artifact
    Signing Certificate Profile Signer** > assign it to the app `dome-github-release`.
 4. Copy three values (none of them is a secret): from the app's **Overview**, the **Directory (tenant)
@@ -885,4 +895,6 @@ signing integrations https://learn.microsoft.com/en-us/azure/artifact-signing/ho
 FAQ (no pro-rata) https://learn.microsoft.com/en-us/azure/artifact-signing/faq;
 GitHub's guide to signing in to Azure without a password https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure;
 immutable releases https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases;
+immutable OIDC subjects https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens
+and https://learn.microsoft.com/en-us/entra/workload-id/workload-identities-github-immutable-subjects (read 2026-10-30);
 SmartScreen reputation https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation.
