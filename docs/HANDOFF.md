@@ -478,8 +478,9 @@ founder-driven; then:
    public half `6945ea3e…37a5974` is pinned in `UPDATE_PUBLIC_KEYS` and `WINDOWS_RELEASE_PUBLIC_KEYS` (confirmed
    against the founder's pasted text; the release run's signing step also refuses a key that is not pinned). First release version: 0.1.0. Still open: the secret
    `DOME_UPDATE_SIGNING_KEY` (pasted by the founder; the local key file was deleted, `Test-Path` False, so the
-   GitHub secret is now its only copy), immutable releases (not yet confirmed), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
-   `DOME_SIGNING_PUBLISHER`.
+   GitHub secret is now its only copy) and release immutability turned on (founder, 2026-10-30). Still open,
+   after **Completed**: the certificate profile `dome-windows`, the variables `ARTIFACT_SIGNING_PROFILE` and
+   `DOME_SIGNING_PUBLISHER`, then step 6 (first run without publishing, version 0.1.0) and step 7.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
