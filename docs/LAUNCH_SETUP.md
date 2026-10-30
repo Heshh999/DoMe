@@ -717,12 +717,15 @@ This section makes DoMe for Windows downloadable as a **signed** program: Window
 the publisher instead of "Unknown publisher". Until you do it, domeremote.com/download keeps saying
 "not yet published", and only the team's unsigned test builds exist.
 
-> **Honest status (2026-10-20).** The release workflow on GitHub ("Release (signed Windows app)") and
-> everything behind it are written and checked by automated tests, but **have never run**: there is no
-> signing account, identity check or update key yet. Your first run (step 6) is the real test. The
-> Microsoft and GitHub screens below come from their documentation, read on 2026-10-20 through the
-> public copies of those pages on github.com; nobody has clicked through them for DoMe yet, and Azure's
-> pages move often. If a button has moved, look for the same words nearby.
+> **Status (2026-10-30): steps 1 to 6 done and proven.** The founder set up the signing account, the identity
+> (Completed), the profile `dome-windows`, the GitHub connection, the `release` environment and the update
+> key. The third run of "Release (signed Windows app)" (run 41127340896, version 0.1.0, publish off) built,
+> signed and verified DoMe-Setup and the three programs inside it as **Justin Gaskins**, then installed and
+> tested the signed Setup on a clean Windows machine: all 183 checks passed, including a Valid, timestamped
+> signature on each file. The first two runs found two problems in DoMe's own build and test scripts, both
+> fixed (PROGRESS 2026-10-30). Step 7 (publishing) waits until DoMe is ready for the public. The Microsoft
+> and GitHub screens below were written from their documentation on 2026-10-20; where the founder found them
+> different (the GitHub credential form now asks for ID numbers), the steps were corrected.
 
 **Words you will see**
 

@@ -2,7 +2,7 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
-## 2026-10-30 — Code signing set up end to end; the first signed run stopped at the licence gate (fixed)
+## 2026-10-30 — Code signing works end to end: a signed DoMe-Setup built, installed and tested (not published)
 
 - **Founder's setup (LAUNCH_SETUP section 17, steps 2 to 5).** Artifact Signing account `domeremote` (East US,
   Basic, created 2026-10-20); individual identity validation **Completed** on 2026-10-30 after one failed face
@@ -40,7 +40,12 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   PowerShell call its own two module folders (case-insensitive, as Windows names are); tests
   `test_windows_powershell_gets_its_own_module_path_not_powershell_7s`,
   `test_windows_powershell_env_ignores_case_like_windows`, `test_every_powershell_call_uses_that_environment`.
-  Next: the founder's third release run.
+- **Third signed run (41127340896): green.** Every job passed; publishing was off, so nothing was released. The
+  signed Setup's install test passed all 183 checks on a clean Windows machine, including Valid, timestamped
+  signatures with CN=Justin Gaskins on DoMe-Setup-0.1.0.exe, DoMe.exe, dome-native-host.exe and unins000.exe,
+  and a release build that ignores /ApiUrl= and /ExtensionId=. **Evidence:** integration-tested on GitHub's
+  Windows runner; not yet installed on the founder's PC (it would point that PC at production). Next: publishing
+  (LAUNCH_SETUP section 17 step 7) once DoMe is ready for the public.
 
 ## 2026-10-28 — Device round 3: Screen view shows the PC's screen on the founder's iPhone
 

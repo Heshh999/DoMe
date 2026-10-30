@@ -488,8 +488,10 @@ founder-driven; then:
    run 41116520480 on 065836b: green, no licence-gate warnings (43 before), all 167 smoke checks. Second try
    (run 41118873683): **signing works** (Azure sign-in, Artifact Signing, `signtool verify` on all four files);
    the signed Setup's install test failed at its own signature check because Windows PowerShell inherited
-   PowerShell 7's module path (fixed in the smoke test). Next: step 6 a third time (version 0.1.0, publish off),
-   then step 7 only when DoMe is ready for the public.
+   PowerShell 7's module path (fixed in the smoke test). Third try (run 41127340896, 2026-10-30): **green**:
+   signed as Justin Gaskins, `signtool verify` on all four files, and the signed Setup's install test passed all
+   183 checks (Valid, timestamped signatures; release build ignores /ApiUrl= and /ExtensionId=). Step 6 is done.
+   Step 7 (publish, then the Download page and a production deploy) waits until DoMe is ready for the public.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
