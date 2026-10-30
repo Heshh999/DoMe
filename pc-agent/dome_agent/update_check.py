@@ -20,9 +20,9 @@ user asks for it in the tray; the user starts the downloaded Setup.
 Every request is HTTPS to ``github.com``, following at most three redirects, each only to
 ``github.com`` or a ``*.githubusercontent.com`` host (where GitHub serves release files from).
 
-:data:`UPDATE_PUBLIC_KEYS` is empty in source until the founder's update key exists (the same pattern as
-``PRODUCTION_EXTENSION_IDS``): a build without a pinned key answers "not set up in this build" and never
-fetches anything. ``mobile-app/src/content/windowsRelease.ts`` pins the same keys (a test checks both).
+:data:`UPDATE_PUBLIC_KEYS` holds the founder's update key, made on 2026-10-30 (docs/LAUNCH_SETUP.md section 17
+step 5); a build without a pinned key answers "not set up in this build" and never fetches anything.
+``mobile-app/src/content/windowsRelease.ts`` pins the same keys (a test checks both).
 """
 
 from __future__ import annotations
@@ -63,9 +63,10 @@ DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
 ALLOWED_HOSTS: tuple[str, ...] = ("github.com",)
 # GitHub answers release downloads with a redirect to its file servers under this domain.
 ALLOWED_HOST_SUFFIX = ".githubusercontent.com"
-# Raw Ed25519 public keys, 64 hex characters each. Filled when the founder's update key exists
-# (docs/LAUNCH_SETUP.md section 17); empty in source.
-UPDATE_PUBLIC_KEYS: tuple[str, ...] = ()
+# Raw Ed25519 public keys, 64 hex characters each: the founder's update key, made on 2026-10-30 on the
+# founder's PC (docs/LAUNCH_SETUP.md section 17 step 5); its private half lives only in the GitHub secret
+# DOME_UPDATE_SIGNING_KEY of the `release` environment. A rotation adds the new key here first.
+UPDATE_PUBLIC_KEYS: tuple[str, ...] = ("6945ea3e568ea103ab96cd3567e12494e0995bd639f0b872e53580c3537a5974",)
 MAX_MANIFEST_BYTES = 16 * 1024
 MAX_INSTALLER_BYTES = 300_000_000
 MAX_REDIRECTS = 3

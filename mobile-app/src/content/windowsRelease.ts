@@ -18,8 +18,9 @@ import releaseJson from "./windows-release.json";
 
 export const REPO = "Heshh999/DoMe";
 
-/** Raw Ed25519 public keys, 64 hex characters each; empty until the founder's update key exists. */
-export const WINDOWS_RELEASE_PUBLIC_KEYS: readonly string[] = [];
+/** Raw Ed25519 public keys, 64 hex characters each: the founder's update key (2026-10-30), the same list as
+ * UPDATE_PUBLIC_KEYS in pc-agent/dome_agent/update_check.py. */
+export const WINDOWS_RELEASE_PUBLIC_KEYS: readonly string[] = ["6945ea3e568ea103ab96cd3567e12494e0995bd639f0b872e53580c3537a5974"];
 
 const MAX_INSTALLER_BYTES = 300_000_000;
 const VERSION_RE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
