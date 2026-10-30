@@ -472,9 +472,9 @@ founder-driven; then:
    federated credential for the immutable subject `repo:Heshh999@71295698/DoMe@1409912011:environment:release`
    and the role **Artifact Signing Certificate Profile Signer** on `domeremote`; GitHub environment `release`
    with the branch rule `claude/stoic-heisenberg-txq6ja` and the variables `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
-   `AZURE_SUBSCRIPTION_ID` (required reviewer and bypass-off not yet confirmed by screenshot). Still open:
-   `ARTIFACT_SIGNING_ACCOUNT` (`domeremote`), `ARTIFACT_SIGNING_ENDPOINT`, immutable releases, the update key
-   (step 5), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
+   `AZURE_SUBSCRIPTION_ID`, `ARTIFACT_SIGNING_ACCOUNT` (`domeremote`) and `ARTIFACT_SIGNING_ENDPOINT`; required
+   reviewer `Heshh999`, prevent self-review off, administrator bypass off, 1 branch and 0 tags allowed
+   (screenshot, 2026-10-30). Still open: immutable releases (not yet confirmed), the update key (step 5), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
    `DOME_SIGNING_PUBLISHER`.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
