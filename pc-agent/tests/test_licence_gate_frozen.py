@@ -187,6 +187,28 @@ def test_an_unknown_runtime_dll_warns_and_fails_only_when_strict() -> None:
     assert rules(fail) == {"F2"} and warn == []
 
 
+@pytest.mark.parametrize(
+    "name", ["ucrtbase.dll", "api-ms-win-crt-runtime-l1-1-0.dll", "API-MS-WIN-CORE-CONSOLE-L1-1-0.dll"]
+)
+def test_the_universal_c_runtime_is_named_as_such_and_fails_when_strict(name: str) -> None:
+    """The first signed release run (2026-10-30) refused 43 of these: the spec now leaves them out, and the gate says
+    why if one comes back."""
+    report = frozen_report(screen=False)
+    report["dlls"].append(pe(f"_internal/{name}"))
+    fail, warn = gate.evaluate_frozen(report, screen="absent")
+    assert fail == [] and rules(warn) == {"F2"} and "Universal C Runtime" in warn[0].detail
+    fail, warn = gate.evaluate_frozen(report, screen="absent", strict=True)
+    assert rules(fail) == {"F2"} and warn == [] and "without_ucrt" in fail[0].detail
+
+
+def test_import_tables_naming_the_universal_c_runtime_are_fine() -> None:
+    """Every PE file imports api-ms-win-* sets (Windows resolves them itself); only a bundled copy is flagged."""
+    report = frozen_report(screen=True)
+    fail, warn = gate.evaluate_frozen(report, screen="present", strict=True)
+    assert fail == [] and warn == []
+    assert any(imp.startswith("api-ms-win-crt-") for imp in WGC_IMPORTS)
+
+
 def test_screen_view_must_match_what_was_built() -> None:
     fail, _warn = gate.evaluate_frozen(frozen_report(screen=True), screen="absent")
     assert rules(fail) == {"F3"}

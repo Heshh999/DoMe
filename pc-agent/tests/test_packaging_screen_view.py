@@ -122,6 +122,24 @@ def test_windows_capture_is_pinned_for_windows_and_opencv_and_numpy_never_resolv
         ]
 
 
+def test_the_spec_leaves_out_windows_universal_c_runtime() -> None:
+    """Windows 10 and 11 always load their own UCRT; the spec drops the copies PyInstaller collects, from both programs,
+    with the same pattern the licence gate uses (the first signed release run refused 43 of them, 2026-10-30)."""
+    ucrt = bi.licence_gate().UCRT_DLL_STEM
+    spec_pattern = re.search(r'UCRT_DLL_STEM = re\.compile\(r"([^"]+)", re\.IGNORECASE\)', SPEC)
+    assert spec_pattern is not None and spec_pattern.group(1) == ucrt.pattern
+    assert ucrt.flags & re.IGNORECASE
+    assert "agent.binaries = without_ucrt(agent.binaries)" in SPEC
+    assert "host.binaries = without_ucrt(host.binaries)" in SPEC
+    # both filters run before the programs and the folder are assembled from those lists
+    assert SPEC.index("host.binaries = without_ucrt(host.binaries)") < SPEC.index("agent_exe = EXE(")
+    for stem in ("ucrtbase", "api-ms-win-crt-runtime-l1-1-0", "API-MS-WIN-CORE-FILE-L1-1-0"):
+        assert ucrt.fullmatch(stem)
+    for stem in ("vcruntime140", "python312", "msvcp140", "libcrypto-3"):
+        assert not ucrt.fullmatch(stem)
+    assert "MinVersion=10.0" in (PACKAGING / "installer" / "DoMe.iss").read_text(encoding="utf-8")
+
+
 def test_every_dome_agent_module_the_spec_names_exists() -> None:
     names = [n for n in spec_list("agent_hidden") if n.startswith("dome_agent.")]
     names += re.findall(r'"(dome_agent\.screen\.worker\.\w+)"', SPEC)

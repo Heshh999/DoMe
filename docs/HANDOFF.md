@@ -482,9 +482,10 @@ founder-driven; then:
    validation 8066812a… **Completed** on 2026-10-30 (expires 2027-10-30). Certificate profile `dome-windows`
    created the same day without street address or postal code: subject `CN=Justin Gaskins, O=Justin Gaskins,
    L=Hillside, S=nj, C=US`, so `DOME_SIGNING_PUBLISHER` is `Justin Gaskins` (Azure's per-run certificates last
-   3 days; the timestamp keeps signatures valid). Still open: the variables `ARTIFACT_SIGNING_PROFILE` and
-   `DOME_SIGNING_PUBLISHER` (founder adding them), then step 6 (first run without publishing, version 0.1.0)
-   and step 7.
+   3 days; the timestamp keeps signatures valid). All seven variables and the secret are set (screenshot,
+   2026-10-30). Step 6, first try (run 41114062039): stopped at the strict licence gate on 43 bundled Universal
+   C Runtime DLLs before signing; the spec now leaves them out (PROGRESS 2026-10-30). Next: a green
+   windows-installer.yml run with that change, then step 6 again (version 0.1.0, publish off), then step 7.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;

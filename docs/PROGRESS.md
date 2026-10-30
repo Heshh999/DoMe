@@ -2,6 +2,35 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-10-30 — Code signing set up end to end; the first signed run stopped at the licence gate (fixed)
+
+- **Founder's setup (LAUNCH_SETUP section 17, steps 2 to 5).** Artifact Signing account `domeremote` (East US,
+  Basic, created 2026-10-20); individual identity validation **Completed** on 2026-10-30 after one failed face
+  check (expires 2027-10-30); certificate profile `dome-windows` with subject `CN=Justin Gaskins, O=Justin Gaskins,
+  L=Hillside, S=nj, C=US` (no street address or postal code); Entra app `dome-github-release` with a federated
+  credential for GitHub's immutable subject `repo:Heshh999@71295698/DoMe@1409912011:environment:release` (Entra's
+  form now builds this format; DoMe was created after GitHub made it the default for new repositories) and the
+  role Artifact Signing Certificate Profile Signer; GitHub environment `release` with the founder as required
+  reviewer, administrator bypass off, the default branch only, seven variables and the secret
+  `DOME_UPDATE_SIGNING_KEY`; release immutability on. The update key was made on the founder's PC in
+  `%LOCALAPPDATA%` (the Desktop is synced to OneDrive), pasted into the secret and deleted; its public half is
+  pinned in `UPDATE_PUBLIC_KEYS` and `WINDOWS_RELEASE_PUBLIC_KEYS` (0404b44, checked against the founder's text).
+- **First signed run (release.yml run 41114062039, version 0.1.0, publish off).** The version, branch and key check
+  and the Windows tests passed; the PyInstaller folder built with Screen view; then the licence gate, strict in
+  release builds, refused 43 DLLs: `ucrtbase.dll` and 42 `api-ms-win-core-*` / `api-ms-win-crt-*` forwarders. They
+  were the 43 warnings every windows-installer.yml run had reported (strict mode turns warnings into failures).
+  Nothing reached the signing job or the founder's approval.
+- **Fix.** They are Windows' Universal C Runtime, which Windows 10 and 11 always load from System32 even when an app
+  ships its own copy (Microsoft Learn, "Universal CRT deployment"); DoMe requires Windows 10 (`DoMe.iss`
+  MinVersion=10.0). `packaging/dome-agent.spec` now drops them from both programs (`without_ucrt`) instead of the
+  gate allowing them with licence paperwork for files that are never used; the gate names a returning copy as the
+  Universal C Runtime. Tests: `test_the_spec_leaves_out_windows_universal_c_runtime` (the spec's pattern equals
+  the gate's), `test_the_universal_c_runtime_is_named_as_such_and_fails_when_strict`,
+  `test_import_tables_naming_the_universal_c_runtime_are_fine`.
+- **Evidence:** unit-tested on Linux; the Windows proof is the next windows-installer.yml run (licence gate with 0
+  warnings, the worker self-test and the installer smoke test without the bundled UCRT), then the founder's second
+  release run.
+
 ## 2026-10-28 — Device round 3: Screen view shows the PC's screen on the founder's iPhone
 
 - **Deploy.** The founder ran Deploy for staging at c78dc1a (run 40681752325, about 5½ minutes including the approval):

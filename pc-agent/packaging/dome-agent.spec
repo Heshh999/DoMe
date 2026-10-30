@@ -38,6 +38,7 @@
 # or packaging\installer\build_installer.py, which also writes the notices, checks the folder and compiles the
 # installer.
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -110,6 +111,21 @@ host = Analysis(
               "websockets", "httpx", "dome_agent.screen", "aiortc", "aioice", "av", "pylibsrtp", "google_crc32c"],
     noarchive=False,
 )
+# The Universal C Runtime (ucrtbase.dll and its api-ms-win-* forwarder DLLs) is part of Windows 10 and 11, which
+# always load the copy in System32 even when an app ships its own (Microsoft Learn, "Universal CRT deployment").
+# DoMe needs Windows 10 or later (installer/DoMe.iss MinVersion=10.0), so the copies PyInstaller collects next to the
+# Python runtime would never be used: they are left out. The licence gate's F2 rule (strict in release.yml) refuses
+# them by name; licence_gate.UCRT_DLL_STEM is the same pattern, and a unit test keeps the two equal.
+UCRT_DLL_STEM = re.compile(r"ucrtbase|api-ms-win-.+", re.IGNORECASE)
+
+
+def without_ucrt(binaries):
+    return [entry for entry in binaries if not UCRT_DLL_STEM.fullmatch(Path(entry[0]).stem)]
+
+
+agent.binaries = without_ucrt(agent.binaries)
+host.binaries = without_ucrt(host.binaries)
+
 agent_exe = EXE(
     PYZ(agent.pure),
     agent.scripts,

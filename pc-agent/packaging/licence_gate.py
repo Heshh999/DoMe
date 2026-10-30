@@ -240,6 +240,10 @@ FROZEN_DLL_STEMS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"crc32c", "Part 2 (google-crc32c, Screen view)"),
     )
 )
+# Windows' Universal C Runtime: part of Windows 10 and 11, which always load the System32 copy, so dome-agent.spec
+# leaves these out (its UCRT_DLL_STEM is the same pattern; a unit test keeps the two equal). Found in a build, they
+# get their own F2 message.
+UCRT_DLL_STEM = re.compile(r"ucrtbase|api-ms-win-.+", re.IGNORECASE)
 # FFmpeg and the codec libraries it links: allowed only inside av.libs (F1).
 FFMPEG_FAMILY = re.compile(r"(avcodec|avdevice|avfilter|avformat|avutil|swresample|swscale|libvpx|libopus)-\d+")
 SCREEN_LIBRARIES = (
@@ -863,6 +867,15 @@ def evaluate_frozen(
                 fail.append(Violation("F1 av.libs", where, f"stem {dll_stem(name)!r} is not on the FFmpeg allow-list"))
         elif FFMPEG_FAMILY.fullmatch(dll_stem(name)) or "ffmpeg" in dll_stem(name):
             fail.append(Violation("F1 av.libs", where, "an FFmpeg or codec library outside _internal/av.libs"))
+        elif UCRT_DLL_STEM.fullmatch(dll_stem(name)):
+            (fail if strict else warn).append(
+                Violation(
+                    "F2 runtime-dlls",
+                    where,
+                    "Windows' Universal C Runtime: Windows 10 and 11 always load their own copy, so "
+                    "dome-agent.spec leaves it out (without_ucrt); a copy here means that filter did not run",
+                )
+            )
         elif _frozen_dll_covered(name) is None:
             target = fail if strict else warn
             target.append(
