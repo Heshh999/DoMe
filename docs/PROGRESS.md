@@ -29,7 +29,18 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   `test_import_tables_naming_the_universal_c_runtime_are_fine`.
 - **Evidence:** unit-tested on Linux (pc-agent 1246 passed); integration-tested on Windows: windows-installer.yml
   run 41116520480 on 065836b is green with no licence-gate warnings (43 before), the Screen view worker self-test
-  and all 167 installer smoke checks. Next: the founder's second release run.
+  and all 167 installer smoke checks.
+- **Second signed run (41118873683).** Every job up to signing passed: the Azure sign-in through the federated
+  credential, Artifact Signing with the `dome-windows` profile, and `signtool verify /pa` ("Successfully
+  verified") on DoMe-Setup, DoMe.exe, dome-native-host.exe and unins000.exe. The install test of the signed Setup
+  then installed it cleanly and failed at its own signature check: Windows PowerShell 5.1, started by the smoke
+  test from a PowerShell 7 step, inherited PowerShell 7's PSModulePath and could not load
+  Microsoft.PowerShell.Security ("the module could not be loaded"), so Get-AuthenticodeSignature never ran. The
+  development builds never run that check. Fix: `smoke_test.windows_powershell_env` gives every Windows
+  PowerShell call its own two module folders (case-insensitive, as Windows names are); tests
+  `test_windows_powershell_gets_its_own_module_path_not_powershell_7s`,
+  `test_windows_powershell_env_ignores_case_like_windows`, `test_every_powershell_call_uses_that_environment`.
+  Next: the founder's third release run.
 
 ## 2026-10-28 — Device round 3: Screen view shows the PC's screen on the founder's iPhone
 

@@ -347,6 +347,25 @@ def reg_set(key: str, name: str, value: str | bytes) -> None:
             winreg.SetValueEx(handle, name, 0, winreg.REG_SZ, value)
 
 
+def windows_powershell_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for Windows PowerShell 5.1 (``powershell``). The workflows run this script from a PowerShell 7
+    step (``pwsh``), which hands down a PSModulePath listing PowerShell 7's own modules first; 5.1 then finds PowerShell
+    7's Microsoft.PowerShell.Security and cannot load it, so Get-AuthenticodeSignature fails ("the module could not be
+    loaded": release run 41118873683, the first signed build). 5.1 gets only its own two module folders."""
+    env = dict(os.environ if environ is None else environ)
+    # Windows names are case-insensitive and os.environ upper-cases them: look up and replace without regard to case,
+    # so the child never gets two PSModulePath entries
+    by_upper = {key.upper(): value for key, value in env.items()}
+    system_root = by_upper.get("SYSTEMROOT") or r"C:\Windows"
+    program_files = by_upper.get("PROGRAMFILES") or r"C:\Program Files"
+    for key in [key for key in env if key.upper() == "PSMODULEPATH"]:
+        del env[key]
+    env["PSModulePath"] = ";".join(
+        [program_files + r"\WindowsPowerShell\Modules", system_root + r"\system32\WindowsPowerShell\v1.0\Modules"]
+    )
+    return env
+
+
 def powershell(command: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],  # noqa: S607 - on every Windows 10/11
@@ -355,6 +374,7 @@ def powershell(command: str) -> subprocess.CompletedProcess[str]:
         text=True,
         errors="replace",
         timeout=120,
+        env=windows_powershell_env(),
     )
 
 

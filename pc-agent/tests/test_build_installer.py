@@ -391,3 +391,44 @@ def test_release_smoke_plan_checks_signatures_and_skips_development_phases() -> 
 )
 def test_signer_matches_the_cn_exactly(subject: str, publisher: str, ok: bool) -> None:
     assert smoke.signer_matches(subject, publisher) is ok
+
+
+def test_windows_powershell_gets_its_own_module_path_not_powershell_7s() -> None:
+    """The first signed run (41118873683) failed because Windows PowerShell 5.1, started from a PowerShell 7 step,
+    inherited PowerShell 7's PSModulePath and could not load Get-AuthenticodeSignature's module."""
+    from_pwsh = {
+        "SystemRoot": r"C:\Windows",
+        "ProgramFiles": r"C:\Program Files",
+        "PSModulePath": r"C:\Users\runner\Documents\PowerShell\Modules;C:\Program Files\PowerShell\7\Modules",
+        "PATH": r"C:\Windows\system32",
+    }
+    env = smoke.windows_powershell_env(from_pwsh)
+    assert env["PSModulePath"] == (
+        r"C:\Program Files\WindowsPowerShell\Modules;C:\Windows\system32\WindowsPowerShell\v1.0\Modules"
+    )
+    assert "PowerShell\\7" not in env["PSModulePath"] and env["PATH"] == from_pwsh["PATH"]
+    assert from_pwsh["PSModulePath"].endswith(r"7\Modules")  # the caller's mapping is left alone
+
+
+def test_windows_powershell_env_ignores_case_like_windows() -> None:
+    """os.environ on Windows holds upper-case names: the old value must go, not sit next to the new one."""
+    env = smoke.windows_powershell_env(
+        {"SYSTEMROOT": r"D:\Win", "PROGRAMFILES": r"D:\Apps", "PSMODULEPATH": r"C:\Program Files\PowerShell\7\Modules"}
+    )
+    assert [key for key in env if key.upper() == "PSMODULEPATH"] == ["PSModulePath"]
+    assert env["PSModulePath"] == r"D:\Apps\WindowsPowerShell\Modules;D:\Win\system32\WindowsPowerShell\v1.0\Modules"
+
+
+def test_every_powershell_call_uses_that_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(args=args, **kwargs)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(smoke.subprocess, "run", fake_run)
+    monkeypatch.setenv("PSModulePath", r"C:\Program Files\PowerShell\7\Modules")
+    smoke.powershell("Get-AuthenticodeSignature -LiteralPath 'x'")
+    assert seen["args"][0] == "powershell"
+    assert "PowerShell\\7" not in seen["env"]["PSModulePath"]
+    assert seen["env"]["PSModulePath"].endswith(r"\system32\WindowsPowerShell\v1.0\Modules")
