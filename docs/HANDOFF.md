@@ -477,7 +477,8 @@ founder-driven; then:
    (screenshot, 2026-10-30). Update key (step 5) made on the founder's PC on 2026-10-30 outside OneDrive; its
    public half `6945ea3e…37a5974` is pinned in `UPDATE_PUBLIC_KEYS` and `WINDOWS_RELEASE_PUBLIC_KEYS` (confirmed
    against the founder's pasted text; the release run's signing step also refuses a key that is not pinned). First release version: 0.1.0. Still open: the secret
-   `DOME_UPDATE_SIGNING_KEY` (founder pasting it now), immutable releases (not yet confirmed), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
+   `DOME_UPDATE_SIGNING_KEY` (pasted by the founder; the local key file was deleted, `Test-Path` False, so the
+   GitHub secret is now its only copy), immutable releases (not yet confirmed), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
    `DOME_SIGNING_PUBLISHER`.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
