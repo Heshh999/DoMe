@@ -459,6 +459,12 @@ founder-driven; then:
    verified** (the bundled libraries are unsigned; `docs/SECURITY.md` T12). **Next (founder):**
    `docs/LAUNCH_SETUP.md` section 17 steps 1 to 6 (signing account, OIDC, the `release` environment with
    the default branch only, the update key; a first run without publishing), then step 7.
+   **Status (2026-10-30):** the Artifact Signing account is named `domeremote` (resource group
+   `dome-signing`, created 2026-10-20), so `ARTIFACT_SIGNING_ACCOUNT` is `domeremote`, not the guide's
+   example; its endpoint is still to be read from the account's Overview. The individual Public identity
+   validation was finished on 2026-10-30 (the first share failed Authenticator's face check; a fresh request
+   succeeded) and waits for Microsoft's review (1 to 20 business days). Steps 3 to 5 do not depend on it;
+   the certificate profile (step 2.8) and the publisher name wait for **Completed**.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
