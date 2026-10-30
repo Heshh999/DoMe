@@ -44,7 +44,7 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   signed Setup's install test passed all 183 checks on a clean Windows machine, including Valid, timestamped
   signatures with CN=Justin Gaskins on DoMe-Setup-0.1.0.exe, DoMe.exe, dome-native-host.exe and unins000.exe,
   and a release build that ignores /ApiUrl= and /ExtensionId=. **Evidence:** integration-tested on GitHub's
-  Windows runner; not yet installed on the founder's PC (it would point that PC at production). Next: publishing
+  Windows runner; not yet installed on the founder's PC. Next: publishing
   (LAUNCH_SETUP section 17 step 7) once DoMe is ready for the public.
 
 ## 2026-10-28 — Device round 3: Screen view shows the PC's screen on the founder's iPhone
