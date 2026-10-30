@@ -468,6 +468,14 @@ founder-driven; then:
    Action Required for a while before it turned Failed). Wait for the status to change; open a third request
    only if it turns Failed. Microsoft's review takes 1 to 20 business days. Steps 3 to 5 do not depend on it; the certificate profile (step 2.8)
    and the publisher name wait for **Completed**.
+   **Done 2026-10-30 (founder, steps 3 and 4 in part):** app registration `dome-github-release` with the
+   federated credential for the immutable subject `repo:Heshh999@71295698/DoMe@1409912011:environment:release`
+   and the role **Artifact Signing Certificate Profile Signer** on `domeremote`; GitHub environment `release`
+   with the branch rule `claude/stoic-heisenberg-txq6ja` and the variables `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+   `AZURE_SUBSCRIPTION_ID` (required reviewer and bypass-off not yet confirmed by screenshot). Still open:
+   `ARTIFACT_SIGNING_ACCOUNT` (`domeremote`), `ARTIFACT_SIGNING_ENDPOINT`, immutable releases, the update key
+   (step 5), then after **Completed** the profile `dome-windows`, `ARTIFACT_SIGNING_PROFILE` and
+   `DOME_SIGNING_PUBLISHER`.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
