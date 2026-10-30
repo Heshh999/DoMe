@@ -463,9 +463,10 @@ founder-driven; then:
    `dome-signing`, created 2026-10-20), so `ARTIFACT_SIGNING_ACCOUNT` is `domeremote`, not the guide's
    example; its endpoint is still to be read from the account's Overview. Identity validation (individual,
    Public): the first request (4991617b…) ended **Failed** on 2026-10-30 after Authenticator's face check
-   failed; a second request (8066812a…) was created the same day and still showed **Action Required** at
-   last check, i.e. its Verified ID share has not reached Artifact Signing yet. After the share, Microsoft's
-   review takes 1 to 20 business days. Steps 3 to 5 do not depend on it; the certificate profile (step 2.8)
+   failed; a second request (8066812a…) was created the same day, the founder's share showed success and its
+   link is used up, but the list still showed **Action Required** at last check (the first request also showed
+   Action Required for a while before it turned Failed). Wait for the status to change; open a third request
+   only if it turns Failed. Microsoft's review takes 1 to 20 business days. Steps 3 to 5 do not depend on it; the certificate profile (step 2.8)
    and the publisher name wait for **Completed**.
 5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
    certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
