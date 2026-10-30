@@ -769,8 +769,11 @@ DoMe release uses 4. GitHub stays free.
 7. Wait: Microsoft says **1 to 20 business days**. (Older forum answers from 2025 said individuals could
    not do this; Microsoft's current quickstart says they can.)
 8. When the status says **Completed**: **Certificate profiles** > **Create** > **Public Trust**, name it
-   `dome-windows`, and pick the identity you just validated. The name shown on the profile is what
-   Windows will show; write it down exactly.
+   `dome-windows`, and pick the identity you just validated. If the form offers to include your street
+   address or postal code, leave both **off**: whatever the profile includes is printed into every signed
+   file, where anyone can read it under Properties > Digital Signatures. The name shown on the profile
+   (its CN) is what Windows will show; write it down exactly: `DOME_SIGNING_PUBLISHER` must match it
+   letter for letter, because the release run's install test compares the signer's name with it.
 
 ### Step 3. Let GitHub sign without a password
 
