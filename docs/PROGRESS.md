@@ -2,6 +2,27 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-09 — Screen view round 2a: designed, built and tested, then lost before it was saved
+
+- **What was done (2026-11-02 to 2026-11-05).** The founder's four additions (Next screen, the pointer drawn
+  by the phone, zoom in Touchpad mode, hardware H.264) were designed as protocol 1.5 by a judge panel and four
+  adversarial reviewers (25 findings, all accepted), then built across the contract, cloud-api, pc-agent and
+  mobile-app, with all suites green on Linux: shared/python 368, shared/ts 207, cloud-api 610 (7 skipped),
+  pc-agent 1354 (3 skipped), mobile-app 1614 (1 skipped), e2e 50 of 50. The e2e run caught one real
+  compatibility bug (a 1.5 phone opening the second data channel to a 1.4 PC loses that PC's state messages).
+  A ten-lens review had finished; its findings were not yet verified or fixed.
+- **What was lost.** The cloud build machine was cleared during the break before the work was committed. None
+  of the code survives. **Evidence tag: none of the round 2a code exists; nothing is unit-tested any more.**
+- **What survived.** The design, reconstructed from the session record: `docs/design/screen-view-2a.md` (the
+  surviving final sections, the review log, the full pre-review text and the builders' brief). The rebuild
+  starts from it without a new design phase.
+- **Lesson, now the working rule.** Work in progress is saved to GitHub after every stage that ends green, not
+  only at the end of a round.
+- Also recorded: `docs/design/assistant-step2-ideas.md`, the founder's wish list for butler step 2 (click by
+  name, typing, Search Netflix, Store apps, a help system), not built.
+- Next: rebuild round 2a from the saved design (contract, components, e2e, review, fixes), saving after each
+  stage; then the founder's device test.
+
 ## 2026-10-30 — Code signing works end to end: a signed DoMe-Setup built, installed and tested (not published)
 
 - **Founder's setup (LAUNCH_SETUP section 17, steps 2 to 5).** Artifact Signing account `domeremote` (East US,
