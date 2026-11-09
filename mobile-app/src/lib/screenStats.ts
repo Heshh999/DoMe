@@ -12,7 +12,8 @@
  * The keys are chosen to pass `log.ts` REDACT_KEY untouched (`fmtp`, `local_type`; never `url`, `candidate*` or
  * `*_text`), so a summary can be logged as it is. `readoutLines` is the test-build readout's text (ScreenReadout).
  * Protocol 1.5 adds three counts-only fact groups (the phone-drawn pointer, the screens and the zoom): numbers and short
- * words, never a position, a shape bitmap or anything else from the picture (rules.screen_content).
+ * words, never a position, a shape bitmap or anything else from the picture (rules.screen_content). The offer facts
+ * (DECISIONS 91) are the signed offer's size and candidate counts after compaction: never the SDP or a candidate.
  */
 import type { ScreenSessionState } from "./screen.ts";
 
@@ -428,6 +429,13 @@ export interface ScreenZoomFacts {
   followPans: number;
 }
 
+/** The offer as signed (lib/sdpCompact.ts): its size in bytes, the candidates it carries and how many compaction dropped. */
+export interface ScreenOfferFacts {
+  bytes: number;
+  candidates: number;
+  dropped: number;
+}
+
 export interface ScreenClientFacts {
   stats: ScreenStatsSnapshot | null;
   media: ScreenMediaFacts | null;
@@ -436,6 +444,8 @@ export interface ScreenClientFacts {
   /** DTLS came up in the current (or last) attempt. */
   transport_connected: boolean;
   codec_fallback: CodecFallback | null;
+  /** The signed offer's sizes and counts; null before one was built (optional so facts built elsewhere stay valid). */
+  offer?: ScreenOfferFacts | null;
   /** 1.5 groups; the client always fills them (optional so facts built elsewhere stay valid). */
   pointer?: ScreenPointerFacts;
   surfaces?: ScreenSurfaceFacts;
@@ -467,6 +477,10 @@ const mark = (v: number | null): string => (v === null ? "no" : `yes +${v} ms`);
 /** "yes (4)" / "no (1)" for a count or level against a threshold; "-" when unknown. */
 const atLeast = (v: number | null | undefined, min: number): string => (v === null || v === undefined ? "-" : `${yesNo(v >= min)} (${v})`);
 const size = (w: number | null | undefined, h: number | null | undefined): string => (w === null || w === undefined || h === null || h === undefined ? "-" : `${w}x${h}`);
+/** "offer: 9.8 KB · 14 candidates · 6 dropped" (DECISIONS 91), or "offer: -" before an offer exists. */
+export function offerLine(o: ScreenOfferFacts | null | undefined): string {
+  return o ? `offer: ${(o.bytes / 1024).toFixed(1)} KB · ${o.candidates} candidates · ${o.dropped} dropped` : "offer: -";
+}
 
 /** The readout's lines: a gate checklist in pipeline order (the first "no" is the stage that failed), then the numbers. */
 export function readoutLines(state: Pick<ScreenSessionState, "phase" | "verified" | "stream" | "retries" | "stalled" | "encoder" | "path">, f: ScreenClientFacts): string[] {
@@ -490,6 +504,7 @@ export function readoutLines(state: Pick<ScreenSessionState, "phase" | "verified
     `play(): ${m?.play ?? "-"}`,
     `rVFC ticks: ${m ? `${m.frame_ticks}${m.rvfc ? "" : " (timeupdate)"}` : "-"}`,
     `phase: ${state.phase}`,
+    offerLine(f.offer),
     `rtp pkts ${num0(i?.packets_received)} bytes ${num0(i?.bytes_received)} lost ${num0(i?.packets_lost)} jitter ${num0(i?.jitter_ms)} ms age ${num0(i?.last_packet_age_ms)} ms`,
     `frames recv ${num0(i?.frames_received)} dec ${num0(i?.frames_decoded)} key ${num0(i?.key_frames_decoded)} drop ${num0(i?.frames_dropped)} fps ${num0(i?.fps)} ${size(i?.width, i?.height)}`,
     `codec ${c?.mime ?? "-"} pt ${num0(c?.pt)} ${c?.fmtp ?? "-"} decoder ${i?.decoder ?? "-"}`,

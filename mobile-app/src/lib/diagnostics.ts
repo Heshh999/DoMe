@@ -9,7 +9,7 @@ import type { CommandRecord } from "./commands.ts";
 import type { InputSessionState } from "./input.ts";
 import { recentLogs, type LogEntry } from "./log.ts";
 import type { ScreenSessionState } from "./screen.ts";
-import type { CodecFallback, ScreenClientFacts, ScreenMediaFacts, ScreenStatsSnapshot, ScreenTimeline } from "./screenStats.ts";
+import type { CodecFallback, ScreenClientFacts, ScreenMediaFacts, ScreenOfferFacts, ScreenStatsSnapshot, ScreenTimeline } from "./screenStats.ts";
 import { detectQrSupport } from "./qr.ts";
 import type { RelayStatus } from "./relay.ts";
 
@@ -63,6 +63,8 @@ export interface DiagnosticsReport {
     timeline: ScreenTimeline | null;
     transport_connected: boolean;
     codec_fallback: CodecFallback | null;
+    /** The signed offer's size and candidate counts after compaction (DECISIONS 91); never the SDP. */
+    offer: ScreenOfferFacts | null;
   } | null;
   log: LogEntry[];
 }
@@ -153,6 +155,7 @@ export function buildDiagnostics(input: DiagnosticsInput): DiagnosticsReport {
           timeline: input.screenFacts?.timeline ?? null,
           transport_connected: input.screenFacts?.transport_connected ?? input.screen.transportConnected,
           codec_fallback: input.screenFacts?.codec_fallback ?? null,
+          offer: input.screenFacts?.offer ?? null,
         }
       : null,
     log: recentLogs(),

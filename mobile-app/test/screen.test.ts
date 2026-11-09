@@ -8,13 +8,15 @@
  * takeover, the lost socket, and no SDP in the logs or diagnostics. Device round 2 (2026-10-27): the video track
  * arrives inside setRemoteDescription and is kept until `verified`; the first-frame watchdog after DTLS (keyframes at
  * 3 s and 8 s, a fresh session at 15 s, the VP8 retry); the whitelisted stats, the timeline and the readout facts.
+ * 2026-11-09 (DECISIONS 91): the peer is created with bundlePolicy max-bundle and the gathered offer is compacted
+ * before signing; an offer still above screen_sdp_max_bytes fails locally with reason too_long and plain words.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { verifyAndParseCommand, exportPublicJwk, kidFromJwk, type relayFrames } from "@dome/protocol";
+import { verifyAndParseCommand, exportPublicJwk, kidFromJwk, LIMITS, screenSdpAcceptable, type relayFrames } from "@dome/protocol";
 
 import { Runtime, setRuntimeForTests } from "../src/app/runtime.ts";
 import { configureApi } from "../src/lib/api.ts";
@@ -22,14 +24,15 @@ import { getOrCreateKeyPair, writePin } from "../src/lib/controllerKey.ts";
 import { buildDiagnostics } from "../src/lib/diagnostics.ts";
 import { clearLogs, recentLogs } from "../src/lib/log.ts";
 import { CONNECT_TIMEOUT_MS, HEARTBEAT_MS, MAX_RETRIES, NO_PICTURE_FIRST_MS, NO_PICTURE_RESTART_MS, NO_PICTURE_SECOND_MS, RELAY_HINT_MS, STALL_MS, STALL_RESTART_MS, STATS_INTERVAL_MS, type ScreenSessionState } from "../src/lib/screen.ts";
-import type { ScreenMediaFacts } from "../src/lib/screenStats.ts";
-import { COPY, screenStatus } from "../src/lib/screenStatus.ts";
+import { readoutLines, type ScreenMediaFacts } from "../src/lib/screenStats.ts";
+import { COPY, OFFER_COPY, screenStatus } from "../src/lib/screenStatus.ts";
 import { useDevicesStore } from "../src/store/devices.ts";
 import { useLiveStore } from "../src/store/live.ts";
 import { useScreenStore } from "../src/store/screen.ts";
 import { ANSWER_SDP, FakePcKey, fakePeerFactory, OFFER_SDP, safariLikeStats, SDP_SENTINEL, STATS_SECRETS, type FakePeerConnection } from "./helpers/fakePeer.ts";
 import { FakeTimers } from "./helpers/fakeTimers.ts";
 import { ACCOUNT, CONTROLLER, FakeSocket, flush, freshStorage, HELLO_ACK, noTimers, OFFICE_PC, OTHER_PC, PC, signedIn, TS } from "./helpers/harness.ts";
+import { candidatesPerSection, OFFER_SECRETS, safariLikeOffer } from "./helpers/sdpOffers.ts";
 
 const SESSION_ID = "U2NyZWVuU2Vzc2lvbjAyVF";
 const OTHER_CONTROLLER = "77777777-7777-4777-8777-777777777777";
@@ -164,7 +167,7 @@ describe("ScreenSessionClient: starting", () => {
     const start = await startAndOffer();
     expect(frames("screen_ice_request")[0]).toEqual({ type: "screen_ice_request", pc_id: PC });
     const peer = peers[0]!;
-    expect(peer.config.iceServers).toEqual([STUN, TURN]);
+    expect(peer.config).toEqual({ iceServers: [STUN, TURN], bundlePolicy: "max-bundle" }); // DECISIONS 91: candidates in the first section only
     expect(peer.transceivers.map((t) => `${t.kind}:${t.direction}`)).toEqual(["video:recvonly", "audio:recvonly"]);
     expect(peer.channels[0]!.label).toBe("dome-screen-v1");
     expect(peer.channels[0]!.init).toEqual({ ordered: true });
@@ -214,7 +217,55 @@ describe("ScreenSessionClient: starting", () => {
     socket.receive(iceServers());
     await until(() => rt.screen.snapshot.phase === "failed");
     expect(rt.screen.snapshot.problem?.code).toBe("SCREEN_OFFER_INVALID");
+    expect(rt.screen.snapshot.problem?.detail).toEqual({ origin: "phone", reason: "shape" });
     expect(commands("screen.session_start")).toHaveLength(0);
+  });
+
+  it("Safari's offer with TURN (every candidate in all three sections, ICE-TCP) is compacted before signing: the signed start carries the compact string and the PC's answer verifies against it; facts, readout and log say sizes and counts only", async () => {
+    knobs.offerSdp = safariLikeOffer({ endOfCandidates: true });
+    const gatheredBytes = new TextEncoder().encode(knobs.offerSdp).length;
+    expect(screenSdpAcceptable(knobs.offerSdp)).toBe(false); // over screen_sdp_max_bytes: what failed on 2026-11-09
+    const start = await startAndOffer();
+    const sent = (start.params as { offer_sdp: string }).offer_sdp;
+    expect(screenSdpAcceptable(sent)).toBe(true);
+    expect(peers[0]!.localDescription!.sdp).toBe(knobs.offerSdp); // the phone's own description stays the full one
+    expect(candidatesPerSection(sent).map((s) => s.length)).toEqual([15, 0, 0]);
+    expect(sent).not.toMatch(/ tcp | tcptype /);
+    expect(sent.split("\r\n").filter((l) => l === "a=end-of-candidates")).toHaveLength(3);
+    const offer = rt.screen.facts.offer!;
+    expect(offer).toEqual({ bytes: new TextEncoder().encode(sent).length, candidates: 15, dropped: 36 });
+    expect(offer.bytes).toBeLessThanOrEqual(LIMITS.screen_sdp_max_bytes);
+    expect(readoutLines(rt.screen.snapshot, rt.screen.facts)).toContain(`offer: ${(offer.bytes / 1024).toFixed(1)} KB · 15 candidates · 36 dropped`);
+    expect(logged("screen.offer_built")[0]?.fields).toEqual({ bytes: offer.bytes, bytes_gathered: gatheredBytes, kept: 15, gathered: 51, dropped_bundled: 34, dropped_tcp: 2, dropped_low: 0, limit: LIMITS.screen_sdp_max_bytes });
+    for (const secret of OFFER_SECRETS) expect(JSON.stringify(recentLogs()), secret).not.toContain(secret);
+    // the PC answers the compact string (its digest is what the signed answer names): the answer verifies
+    socket.receive(result(start.command_id));
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    expect(rt.screen.snapshot.verified).toBe(true);
+    expect(rt.screen.facts.offer).toEqual(offer);
+  });
+
+  it("an offer still above the limit after compaction fails locally as SCREEN_OFFER_INVALID {origin: phone, reason: too_long, bytes} with the plain-words copy; nothing is signed", async () => {
+    knobs.offerSdp = safariLikeOffer({ extraLines: 260 }); // about 7 KB of lines that are not candidates: nothing may drop them
+    void rt.screen.start(PC);
+    await until(() => frames("screen_ice_request").length === 1);
+    socket.receive(iceServers());
+    await until(() => rt.screen.snapshot.phase === "failed");
+    const problem = rt.screen.snapshot.problem!;
+    expect(problem.code).toBe("SCREEN_OFFER_INVALID");
+    expect(problem.detail).toEqual({ origin: "phone", reason: "too_long", bytes: expect.any(Number) });
+    const bytes = problem.detail!.bytes as number;
+    expect(bytes).toBeGreaterThan(LIMITS.screen_sdp_max_bytes);
+    expect(bytes).toBeLessThan(new TextEncoder().encode(knobs.offerSdp).length); // compaction ran first, as far as it may
+    expect(commands("screen.session_start")).toHaveLength(0);
+    expect(peers[0]!.closed).toBe(true);
+    const status = statusOf(rt.screen.snapshot);
+    expect(status).toMatchObject({ kind: "offer_too_long", title: "Couldn't connect", text: OFFER_COPY.tooLong(bytes), code: "SCREEN_OFFER_INVALID", action: "retry" });
+    expect(status.text).toMatch(/^The connection request was too large \(\d+\.\d KB; the PC accepts 12 KB\)\. Try again; if it repeats, turn off Wi-Fi or mobile data so the phone has one network\.$/);
+    expect(logged("screen.offer_too_long")[0]?.fields).toEqual({ bytes, limit: LIMITS.screen_sdp_max_bytes });
+    expect(rt.screen.facts.offer).toEqual({ bytes, candidates: 5, dropped: 46 }); // one of each kind and address family stayed
+    for (const secret of OFFER_SECRETS) expect(JSON.stringify(recentLogs()), secret).not.toContain(secret);
   });
 
   it("SCREEN_SESSION_OWNED marks the session as owned; Take over sends takeover: true", async () => {
@@ -1130,8 +1181,8 @@ describe("ScreenSessionClient: nothing recorded, nothing leaked", () => {
     expect(json).not.toContain("never-logged-credential");
     expect(json).not.toContain("a=fingerprint");
     for (const secret of STATS_SECRETS) expect(json, secret).not.toContain(secret);
-    expect(report.screen).toMatchObject({ phase: "ended", pc_id: PC, end_reason: "stopped", transport_connected: true, codec_fallback: null });
-    expect(Object.keys(report.screen!).sort()).toEqual(["codec_fallback", "encoder", "end_reason", "live_seconds", "media", "path", "pc_id", "phase", "problem_code", "retries", "stalled", "stats", "timeline", "transport_connected", "turn", "verified"]);
+    expect(report.screen).toMatchObject({ phase: "ended", pc_id: PC, end_reason: "stopped", transport_connected: true, codec_fallback: null, offer: { bytes: new TextEncoder().encode(OFFER_SDP).length, candidates: 0, dropped: 0 } });
+    expect(Object.keys(report.screen!).sort()).toEqual(["codec_fallback", "encoder", "end_reason", "live_seconds", "media", "offer", "path", "pc_id", "phase", "problem_code", "retries", "stalled", "stats", "timeline", "transport_connected", "turn", "verified"]);
     // what survived Stop: the last snapshot (whitelisted) and the stages the attempt reached
     expect(report.screen!.stats).toMatchObject({ inbound: { packets_received: 400, frames_decoded: 28, decoder: "VideoToolbox" }, codec: { mime: "video/H264", pt: 98, fmtp: "profile-level-id=42e01f;packetization-mode=1" }, pair: { state: "succeeded", local_type: "srflx", remote_type: "host", proto: "udp", rtt_ms: 12 } });
     expect(report.screen!.timeline).toMatchObject({ answer_verified: expect.any(Number), track: expect.any(Number), dtls_connected: expect.any(Number), dc_open: expect.any(Number), first_rtp: expect.any(Number), first_decoded: expect.any(Number), first_frame: expect.any(Number), live: expect.any(Number) });

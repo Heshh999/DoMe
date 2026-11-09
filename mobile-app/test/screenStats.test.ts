@@ -144,6 +144,13 @@ describe("readoutLines: the gate checklist, then the numbers", () => {
     expect(lines.join("\n")).not.toMatch(/✓|✗|true|false/);
   });
 
+  it("the offer line (DECISIONS 91) right after the gate checklist: size in KB, candidates kept, candidates dropped; '-' before an offer exists", () => {
+    expect(readoutLines({ ...EMPTY_SCREEN_STATE, phase: "starting" }, facts({ offer: { bytes: 10035, candidates: 14, dropped: 6 } }))[13]).toBe("offer: 9.8 KB · 14 candidates · 6 dropped");
+    expect(readoutLines({ ...EMPTY_SCREEN_STATE, phase: "starting" }, facts({ offer: { bytes: 12288, candidates: 3, dropped: 48 } }))[13]).toBe("offer: 12.0 KB · 3 candidates · 48 dropped");
+    expect(readoutLines({ ...EMPTY_SCREEN_STATE, phase: "idle" }, facts())[13]).toBe("offer: -");
+    expect(readoutLines({ ...EMPTY_SCREEN_STATE, phase: "idle" }, facts({ offer: null }))[13]).toBe("offer: -");
+  });
+
   it("a live picture: every gate yes, with the stage times and the numbers behind them", () => {
     const timeline = { ...emptyTimeline(), answer_verified: 900, track: 905, dtls_connected: 1300, dc_open: 1350, first_rtp: 1400, first_decoded: 1500, first_frame: 1520, live: 1520 };
     const stats = reduceStats(report(safariLikeStats()), 1);

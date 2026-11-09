@@ -277,3 +277,19 @@ Items from the review that were recorded rather than fully closed, plus residual
     from the PC's real pointer from the start, and drift further with Windows' "Enhance pointer precision" or after a
     batch the PC dropped. The pointer itself is in the picture there and stays where the PC puts it; only the zoomed
     view can lead away from it, and 1× shows the whole picture again. Not yet verified on a device.
+
+48. **Not yet verified on a device: Safari with TURN on Wi-Fi + cellular.** (DECISIONS 91.) The 2026-11-09 failure
+    ("The phone's connection request was not valid. Try again." at every start once the relay handed out TURN
+    servers) was diagnosed from the symptom and from measurements with Chromium on Linux, not from an offer the
+    founder's phone built (the phone never logs one). The fix (max-bundle, the compaction) is unit-tested on a
+    synthetic Safari-shaped offer and integration-tested through the session client with the fake peer, and the PC's
+    aiortc was seen to accept a max-bundle offer here, but on a device three things remain to be seen: that Safari
+    writes its candidates into the first section only under `bundlePolicy: "max-bundle"`, how large a real Safari
+    offer with TURN is after compaction (the readout's "offer:" line and `screen.offer_built` in the diagnostics
+    bundle say so), and that the PC's answer to it reaches a picture over the relay. If a real offer is still too
+    long after compaction the page says so in KB and suggests one network (Wi-Fi or mobile data off); if the PC
+    refuses a compact offer instead, the failure is `SCREEN_OFFER_INVALID` from the PC (its reason, `shape` or
+    another check's name, is in the result the phone received, not in the bundle), not the phone's `too_long`. The
+    bundle's `problem_code` is `SCREEN_OFFER_INVALID` in both cases, so the two are told apart by the bundle's log:
+    the phone's case has a `screen.offer_too_long` line (bytes and limit); a PC refusal has none and a
+    `screen.start_refused` line with `origin: "agent"` instead.

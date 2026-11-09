@@ -77,7 +77,7 @@ export class FakePeerConnection implements PeerConnectionLike {
   onconnectionstatechange: ((ev: unknown) => void) | null = null;
   oniceconnectionstatechange: ((ev: unknown) => void) | null = null;
   ontrack: ((ev: TrackEventLike) => void) | null = null;
-  constructor(readonly config: { iceServers: RTCIceServer[] }) {}
+  constructor(readonly config: { iceServers: RTCIceServer[]; bundlePolicy: RTCBundlePolicy }) {}
   addTransceiver(kind: "video" | "audio", init: { direction: "recvonly" }): TransceiverLike {
     const entry = { kind, direction: init.direction, codecs: null as RTCRtpCodec[] | null };
     this.transceivers.push(entry);

@@ -6,9 +6,12 @@
  *   1. the pin: no PC key pinned at pairing for this PC → SCREEN_PC_UNVERIFIED, nothing is sent ("pair again");
  *   2. `screen_ice_request` on the bound socket → `screen_ice_servers` (ICE servers minted for THIS phone, the Free
  *      allowance, whether a relay server is available) or an `error` frame (SCREEN_VIEW_DISABLED, allowance, …);
- *   3. a receive-only `RTCPeerConnection` from the injected factory (video + audio transceivers, the `dome-screen-v1`
- *      data channel), `createOffer`, wait for ICE gathering to complete or 3 s (vanilla ICE: no candidate travels on its
- *      own), the strict SDP check (`screenSdpAcceptable`);
+ *   3. a receive-only `RTCPeerConnection` from the injected factory (bundlePolicy max-bundle; video + audio
+ *      transceivers, the `dome-screen-v1` data channel), `createOffer`, wait for ICE gathering to complete or 3 s
+ *      (vanilla ICE: no candidate travels on its own), then `compactOffer` (lib/sdpCompact.ts, DECISIONS 91: the
+ *      candidates of the bundled sections and every TCP candidate go, the lowest priorities last, down to
+ *      screen_sdp_max_bytes; sizes and counts are logged, never a candidate) and the strict SDP check
+ *      (`screenSdpAcceptable`); an offer still too long fails here with detail {origin: phone, reason: too_long, bytes};
  *   4. the offer inside the signed `screen.session_start` command (60 s lifetime, so a 30 s consent wait fits); the
  *      PC's `screen_session_result` and its `screen_answer` frame arrive in either order;
  *   5. the answer is accepted ONLY when `verifyScreenAnswer` passes against the pinned key for this account, controller,
@@ -46,7 +49,7 @@
  *     kept for a restore);
  *   - the last screen watched per PC is remembered for the app run (restarts and resumes go back to it).
  */
-import { LIMITS, parseScreenDcMessage, protocolCompatible, ProtocolError, SCREEN_CURSOR_CHANNEL_LABEL, SCREEN_DATA_CHANNEL_LABEL, screenSdpAcceptable, verifyScreenAnswer, type relayFrames, type results, type ScreenDcPcToPhone } from "@dome/protocol";
+import { LIMITS, parseScreenDcMessage, protocolCompatible, ProtocolError, SCREEN_CURSOR_CHANNEL_LABEL, SCREEN_DATA_CHANNEL_LABEL, screenSdpAcceptable, utf8ByteLength, verifyScreenAnswer, type relayFrames, type results, type ScreenDcPcToPhone } from "@dome/protocol";
 
 import type { CommandRecord, Identity } from "./commands.ts";
 import type { PcKeyPin } from "./controllerKey.ts";
@@ -55,7 +58,8 @@ import { SCREEN_UNSUPPORTED_BROWSER } from "./labels.ts";
 import { errorSummary, log } from "./log.ts";
 import { PointerModel, type PointerReport } from "./pointer.ts";
 import { GeometryTracker, type Geometry } from "./screenMap.ts";
-import { emptyTimeline, mediaSummary, reduceStats, statsSummary, type CodecFallback, type ScreenClientFacts, type ScreenMediaFacts, type ScreenStatsSnapshot, type ScreenTimeline, type StatsReportLike, type TimelineMark } from "./screenStats.ts";
+import { compactOffer } from "./sdpCompact.ts";
+import { emptyTimeline, mediaSummary, reduceStats, statsSummary, type CodecFallback, type ScreenClientFacts, type ScreenMediaFacts, type ScreenOfferFacts, type ScreenStatsSnapshot, type ScreenTimeline, type StatsReportLike, type TimelineMark } from "./screenStats.ts";
 
 export type ScreenPhase = "idle" | "ice" | "offering" | "starting" | "connecting" | "live" | "paused" | "ended" | "failed";
 export type ScreenEndReason = relayFrames.AgentScreenSession["reason"];
@@ -235,7 +239,15 @@ export interface TrackEventLike {
   track: MediaStreamTrack | { kind: string };
 }
 
-export type PeerFactory = (config: { iceServers: RTCIceServer[] }) => PeerConnectionLike;
+export type PeerFactory = (config: { iceServers: RTCIceServer[]; bundlePolicy: RTCBundlePolicy }) => PeerConnectionLike;
+
+/**
+ * Every media section bundles onto the first one's transport, so the browser writes its candidates into the first
+ * section only (DECISIONS 91: with the default "balanced" policy Safari repeated every candidate in all three sections
+ * and, once TURN servers were handed out, the offer went past screen_sdp_max_bytes). The PC's aiortc answers a
+ * max-bundle offer with `a=group:BUNDLE 0 1 2` as before.
+ */
+export const BUNDLE_POLICY: RTCBundlePolicy = "max-bundle";
 
 /** The browser's own RTCPeerConnection, or null where WebRTC does not exist (jsdom, a very old browser). */
 export function defaultPeerFactory(): PeerFactory | null {
@@ -361,6 +373,7 @@ interface PreviousSession {
   dcReceived: number;
   dcDropped: number;
   lastStats: ScreenStatsSnapshot | null;
+  offer: ScreenOfferFacts | null;
 }
 
 export class ScreenSessionClient {
@@ -407,6 +420,8 @@ export class ScreenSessionClient {
   private waitingForTap = false;
   private timeline: ScreenTimeline = emptyTimeline();
   private lastStats: ScreenStatsSnapshot | null = null;
+  /** The offer as signed: sizes and counts after compaction (never the SDP; lib/sdpCompact.ts). */
+  private offerFacts: ScreenOfferFacts | null = null;
   private lastMedia: ScreenMediaFacts | null = null;
   private mediaProbe: (() => ScreenMediaFacts) | null = null;
   /** The next automatic retry offers VP8 only (H.264 arrived but never decoded); a start by the owner clears it. */
@@ -547,7 +562,13 @@ export class ScreenSessionClient {
       return this.fail("SCREEN_OFFER_INVALID");
     }
     if (nonce !== this.nonce) return this.state;
-    if (!screenSdpAcceptable(offerSdp)) return this.fail("SCREEN_OFFER_INVALID");
+    // the compacted offer is still above the PC's limit (nothing more may go): fail here, plainly, before any signing
+    const offerBytes = utf8ByteLength(offerSdp);
+    if (offerBytes > LIMITS.screen_sdp_max_bytes) {
+      log.warn("screen.offer_too_long", { bytes: offerBytes, limit: LIMITS.screen_sdp_max_bytes });
+      return this.fail("SCREEN_OFFER_INVALID", undefined, { origin: "phone", reason: "too_long", bytes: offerBytes });
+    }
+    if (!screenSdpAcceptable(offerSdp)) return this.fail("SCREEN_OFFER_INVALID", undefined, { origin: "phone", reason: "shape" });
     this.offerSdp = offerSdp;
     // 4. the signed start command, with the lifetime a consent wait needs
     let record: CommandRecord;
@@ -593,6 +614,7 @@ export class ScreenSessionClient {
       dcReceived: this.dcReceived,
       dcDropped: this.dcDropped,
       lastStats: this.lastStats,
+      offer: this.offerFacts,
     };
     detach(this.pc, this.dc, this.cdc);
     this.pc = this.dc = this.cdc = null;
@@ -659,12 +681,14 @@ export class ScreenSessionClient {
   /**
    * The receive-only offer (§4.2 step 2). The peer connection and data channels stay in this client. With
    * `cursorChannel` (the same flag that puts `cursor: "overlay"` into the params) the 1.5 cursor channel is opened too,
-   * unordered and without retransmits, after the main one in the same offer (no renegotiation).
+   * unordered and without retransmits, after the main one in the same offer (no renegotiation). What comes back is the
+   * COMPACTED offer (DECISIONS 91): the full description stays on this peer, the signed start carries the compact
+   * string and the PC's answer names that string's digest.
    */
   private async buildOffer(iceServers: RTCIceServer[], cursorChannel: boolean): Promise<string> {
     const factory = this.deps.peerFactory;
     if (!factory) throw new ProtocolError(SCREEN_UNSUPPORTED_BROWSER, "no WebRTC");
-    const pc = factory({ iceServers });
+    const pc = factory({ iceServers, bundlePolicy: BUNDLE_POLICY });
     this.pc = pc;
     const video = pc.addTransceiver("video", { direction: "recvonly" });
     // audio always, even in Phase 1 without sound: adding it later would pause an unmuted video on iOS (§2.2)
@@ -680,9 +704,13 @@ export class ScreenSessionClient {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await this.waitForGathering(pc);
-    const sdp = pc.localDescription?.sdp ?? offer.sdp;
-    if (typeof sdp !== "string") throw new ProtocolError("SCREEN_OFFER_INVALID", "no local description");
-    return sdp;
+    const gathered = pc.localDescription?.sdp ?? offer.sdp;
+    if (typeof gathered !== "string") throw new ProtocolError("SCREEN_OFFER_INVALID", "no local description");
+    const compact = compactOffer(gathered, LIMITS.screen_sdp_max_bytes);
+    this.offerFacts = { bytes: compact.bytesAfter, candidates: compact.candidatesAfter, dropped: compact.droppedBundled + compact.droppedTcp + compact.droppedLow };
+    // sizes and counts only: never a candidate, an address or a credential (rules.screen_content)
+    log.info("screen.offer_built", { bytes: compact.bytesAfter, bytes_gathered: compact.bytesBefore, kept: compact.candidatesAfter, gathered: compact.candidatesBefore, dropped_bundled: compact.droppedBundled, dropped_tcp: compact.droppedTcp, dropped_low: compact.droppedLow, limit: LIMITS.screen_sdp_max_bytes });
+    return compact.sdp;
   }
 
   /** Every handler checks that its peer or channel is still the current one: an old object's late event changes nothing. */
@@ -1134,6 +1162,7 @@ export class ScreenSessionClient {
       channel: { open: this.dc?.readyState === "open", hb_sent: this.hbSent, received: this.dcReceived, dropped: this.dcDropped },
       transport_connected: this.timeline.dtls_connected !== null,
       codec_fallback: this.codecFallback ? { ...this.codecFallback } : null,
+      offer: this.offerFacts ? { ...this.offerFacts } : null,
       pointer: { mode: this.state.cursorMode, ...this.pointerFacts, predErrMaxPx: this.pointer.predErrMaxPx },
       surfaces: { count: this.state.surfaces.length, showing: this.state.surfaces.length > 0 && this.state.surfaceIndex !== null ? humanSurface(this.state.surfaces, this.state.surfaceIndex) : null, ...this.surfaceFacts },
       zoom: { maxScale: Math.round(this.zoomFacts.maxScale * 10) / 10, followPans: this.zoomFacts.followPans },
@@ -1159,6 +1188,7 @@ export class ScreenSessionClient {
   private resetFacts(): void {
     this.timeline = emptyTimeline();
     this.lastStats = null;
+    this.offerFacts = null;
     this.lastMedia = null;
     this.answerAt = null;
     this.dtlsAt = null;
@@ -1721,6 +1751,7 @@ export class ScreenSessionClient {
     this.dcReceived = previous.dcReceived;
     this.dcDropped = previous.dcDropped;
     this.lastStats = previous.lastStats;
+    this.offerFacts = previous.offer;
     this.latestCursorPos = null;
     if (this.pointer.pointerMode !== previous.state.cursorMode) this.pointer.setMode(previous.state.cursorMode);
     if (previous.state.pcId && previous.surfaceIndex !== null) this.lastSurfaceByPc.set(previous.state.pcId, previous.surfaceIndex);

@@ -414,7 +414,14 @@ founder-driven; then:
    3. The Cloudflare TURN key per design §20 (`docs/LAUNCH_SETUP.md` §11B: `DOME_TURN_KEY_ID` as a variable,
       `DOME_TURN_API_TOKEN` and `DOME_TURN_ANALYTICS_TOKEN` as secrets, staging first; check whether
       Cloudflare asks for a payment method and turn on its usage notifications). Without it Screen view works
-      only where a direct connection exists, with an honest message elsewhere.
+      only where a direct connection exists, with an honest message elsewhere. **Done on staging 2026-11-09, and
+      at first it broke every start:** with the TURN servers in the phone's list, the phone's connection request
+      outgrew the 12 KB the PC accepts, on Wi-Fi and on mobile data alike ("The phone's connection request was not
+      valid"); fixed the same day by sending a compacted request (`docs/PROGRESS.md` 2026-11-09; design §4.2 "The
+      offer's size"), tested on Linux, not yet tried on a device. **What to try after the next staging deploy:**
+      start Screen view on Wi-Fi, then once more on mobile data (Wi-Fi off on the phone), and send us the readout's
+      `offer:` line each time. If the phone says the connection request was too large, try again; if it repeats,
+      turn off Wi-Fi or mobile data so the phone has one network, try once more, and tell us which network was on.
    4. Counsel's answer on H.264 (design §20 step 4, §22 item 7; also the LGPL notice and source offer). If the
       answer is no, Screen view ships VP8 only: an engineer adds that switch (today the agent uses VP8 only when
       `h264_mf` is unavailable on the PC).
@@ -611,7 +618,11 @@ BUILD-INFO.txt says "screen view: included", and the readout must be showing on 
    at the PC), while your own mouse at the PC can still go anywhere. Tell us the `screens:` line, how many seconds
    the switch took, and whether the old picture stayed visible under "Switching to screen 2…" or went black.
    Try it once on mobile data (Wi-Fi off on the phone) too: the old picture should keep playing until the new
-   one appears, and if the switch fails you should be back on the first screen, still moving.
+   one appears, and if the switch fails you should be back on the first screen, still moving. If the phone says
+   the connection request was too large, try again; if it repeats, turn off Wi-Fi or mobile data so the phone has
+   one network and try once more (since staging has TURN servers the request can grow past the PC's limit; the
+   phone now sends a compacted one, fixed 2026-11-09 and not yet tried on a device; send us the readout's `offer:`
+   line).
 4. **Zoom with Touchpad on.** Pinch to zoom in, then slide one finger: the view should follow the pointer. Tap
    "1×" (bottom left) to see the whole screen again. Tell us the `zoom:` line.
 5. **The video encoder.** After the session, on the PC: tray → Diagnostics…, and send us the file. We read which

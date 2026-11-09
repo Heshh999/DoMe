@@ -61,6 +61,44 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
 - Next: read `encoder_hw`/`mft` from a diagnostics file when convenient; then the launch steps (production deploy,
   payment checks, publishing the signed installer, TURN relay, legal).
 
+## 2026-11-09 — Screen view failed on the founder's iPhone once staging had TURN servers: the offer outgrew the limit
+
+- **What happened (owner-reported).** Screen view worked on the founder's iPhone over Wi-Fi all day. Then the staging
+  relay got the Cloudflare TURN servers (`docs/HANDOFF.md` §7 item 2, founder step 3) and handed them to the phone in
+  `screen_ice_servers`; from that moment every start failed on the phone with "The phone's connection request was
+  not valid. Try again." (`SCREEN_OFFER_INVALID`), on mobile data and on Wi-Fi. Nothing else changed: the deploy
+  (0b4fd39) differs from the working one (94d3c01) by docs only.
+- **Cause: diagnosed from the symptom and from measurements, not from the device's own error detail.** With TURN
+  servers Safari gathers a relay candidate for each of the three URL variants on every interface (Wi-Fi and cellular,
+  IPv4 and IPv6) plus TCP host candidates, and with the default bundle policy it repeats every candidate in all three
+  media sections, so the connection request (the SDP offer) exceeds `screen_sdp_max_bytes` (12288 bytes) and the
+  phone's own check before sending fails it (the PC would refuse it the same way). Measured here with Chromium (no
+  network, host candidates only): a balanced offer with one candidate per section is 6759 bytes and a max-bundle one
+  6501 bytes, so about 5.5 KB, roughly 40 candidate lines, remain for candidates, and 3 sections × (4 host + 4 srflx
+  + up to 12 relay) lines exceed that.
+- **The fix.** The phone creates its connection with `bundlePolicy: "max-bundle"` and compacts the offer before
+  signing it (`mobile-app/src/lib/sdpCompact.ts`; design `docs/design/screen-view.md` §4.2 "The offer's size"):
+  candidates only in the first media section, no TCP candidates (the PC's aiortc has no ICE-TCP), then, only while
+  the offer is still above the limit, the lowest-priority candidates dropped while one of each kind and address
+  family stays (the PC pairs only candidates of its own IP version); nothing
+  else in the offer changes. The start's facts and the staging readout carry the offer's size and candidate counts
+  (never an SDP, a candidate, an address or a credential). An offer still too large fails on the phone in plain
+  words: the connection request was too large (N KB; the PC accepts 12 KB); try again, and if it repeats turn off
+  Wi-Fi or mobile data so the phone has one network. The Python phone of `tests/` mirrors the first rule
+  (`tests/screen_phone.py::compact_offer`), so the end-to-end suite proves the PC accepts a compact offer:
+  `tests/test_e2e_screen.py::test_a_compact_offer_with_candidates_only_in_the_first_section_connects` (the offer it
+  sent had candidates in the first section only and nothing else changed, the PC answered it bundled, the picture
+  arrived on the direct path).
+- **What was run (Linux, 2026-11-09):** `tests/test_e2e_screen.py` 18 passed in 271 s (the new case alone: 1 passed
+  in 14 s); `tests/test_e2e_versions.py` 5 passed in 51 s (one file at a time, `tests/README.md`). The phone's own unit tests are the mobile-app suite.
+- **Evidence tag:** unit-tested (the phone's `sdpCompact`); integration-tested (Linux, fakes) for the PC accepting
+  and answering a compact offer; **not yet verified on a device** (Safari with TURN on Wi-Fi + cellular:
+  `mobile-app/KNOWN_ISSUES.md`). The diagnosis rests on the symptom and the measurements above, not on the device's
+  own error detail, which the old build did not show.
+- Next: deploy staging, then the founder tries Screen view again on Wi-Fi and on mobile data and sends the readout's
+  `offer:` line (`docs/HANDOFF.md` §7 item 2, founder step 3; §10.4 item 3); record the result in
+  `docs/ACCEPTANCE.md` Scenario 26.
+
 ## 2026-11-09 — Screen view round 2a: designed, built and tested, then lost before it was saved
 
 - **What was done (2026-11-02 to 2026-11-05).** The founder's four additions (Next screen, the pointer drawn

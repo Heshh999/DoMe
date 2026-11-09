@@ -954,3 +954,51 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     through). In Touchpad mode the Drag row stays through a switch, so the kept picture is not laid out again and End
     Drag stays reachable while the button is held. A mode switch and a new picture also start from the whole picture.
     Unit-tested (jsdom, the fake peer); not yet verified on a device.
+91. **The offer is compacted before signing: max-bundle, no TCP, lowest priority dropped last.** Why: TURN made
+    Safari's offer exceed `screen_sdp_max_bytes` on 2026-11-09. Screen view had worked on the founder's iPhone over
+    Wi-Fi all day; the moment the staging relay began handing the phone TURN servers (three URL variants: udp, tcp,
+    tls) every start failed with "The phone's connection request was not valid. Try again.", on mobile data and on
+    Wi-Fi alike, and nothing else had changed (the deploy differed from the working one by docs only). Diagnosed
+    from measurements and the symptom, not from an offer the phone built (the phone never logs one, by design):
+    with TURN servers Safari gathers relay candidates for every URL variant on every interface (Wi-Fi and cellular,
+    IPv4 and IPv6) plus ICE-TCP host candidates, and with the default `bundlePolicy` ("balanced") it repeats every
+    candidate in all three media sections (video, audio, application), so the offer went past the 12288-byte limit
+    both devices enforce (rules.screen_signaling (4)) and the phone's own pre-send check refused it before anything
+    was signed. Measured here with Chromium (no network, host candidates only): a balanced offer with the two
+    transceivers and two data channels is 6759 bytes with one candidate per section, a max-bundle one 6501 bytes
+    with one candidate, so about 5.5 KB remain for candidates, roughly 40 lines of 130–150 bytes, and 3 sections
+    times (4 host + 4 srflx + up to 12 relay) lines exceed it. Now: (1) the `RTCPeerConnection` is created with
+    `bundlePolicy: "max-bundle"` (`BUNDLE_POLICY`), so the browser writes its candidates into the first section
+    only and everything bundles onto that transport; the PC's aiortc accepts such an offer (Chromium keeps port 9 on
+    the bundled sections, no `a=bundle-only`) and answers it with `a=group:BUNDLE 0 1 2` as before. (2) After
+    gathering, the pure `compactOffer(sdp, limit)` (`lib/sdpCompact.ts`) drops, in this order: every `a=candidate`
+    line in a media section after the first (bundled sections never use them); every TCP candidate (transport `tcp`
+    or a `tcptype` token: the PC's aiortc 1.15 / aioice 0.10 gathers UDP only and `Candidate.can_pair_with` pairs
+    only candidates of the same transport, so ours could never form a pair there; a relay reached through TURN over
+    TCP or TLS is still a `udp` candidate and stays); then, only while the offer is still above the limit, the
+    remaining candidate with the lowest priority (the priority field; among equals the later line), one at a time,
+    keeping at least one candidate of every kind AND address family present (host, srflx, prflx, relay; IPv4, IPv6,
+    an mDNS name): the PC's aioice pairs a remote candidate only with a local one of the same IP version
+    (`Candidate.can_pair_with`), and libwebrtc ranks an IPv6 candidate above the IPv4 one of the same kind on the
+    same interface, so a guard by kind alone could leave a PC without a global IPv6 address nothing to pair with.
+    `a=end-of-candidates` stays and every other line stays byte for byte and in order: the DTLS fingerprint,
+    ice-ufrag and ice-pwd, the m-lines.
+    The full description stays applied to the phone's own peer; the signed start carries the compact string and the
+    PC's answer names that string's digest (the remote side only needs a subset of our candidates). (3) When the
+    compacted offer is STILL above the limit (nothing more may go) the start fails locally, before any signing, with
+    `SCREEN_OFFER_INVALID` and detail `{origin: "phone", reason: "too_long", bytes}`; the page says "The connection
+    request was too large (N KB; the PC accepts 12 KB). Try again; if it repeats, turn off Wi-Fi or mobile data so
+    the phone has one network." (`OFFER_COPY.tooLong`; N is rounded up to a tenth of a KB, so an offer one byte
+    over the 12288-byte limit reads 12.1 KB, never "12.0 KB; the PC accepts 12 KB"). A compact offer that fails
+    the shape check carries
+    `{origin: "phone", reason: "shape"}` and the existing copy. (4) Only sizes and counts are logged
+    (`screen.offer_built`: bytes before and after, candidates gathered and kept, how many went as bundled, TCP and
+    low priority; `screen.offer_too_long`: bytes and the limit), never an SDP, a candidate, an address or a
+    credential (`log.ts` redacts those keys as before; the log keys avoid the word "candidate" so they are not
+    redacted to nothing). The client's facts gain `offer: {bytes, candidates, dropped}` (in the diagnostics bundle
+    as `screen.offer`, surviving Stop) and the staging readout a line right after the gate checklist:
+    "offer: 9.8 KB · 14 candidates · 6 dropped" ("offer: -" before one exists). Unit-tested against a synthetic
+    Safari-shaped offer (3 sections × (4 host incl. 2 TCP, 4 srflx, 9 relay incl. the TCP and TLS variants),
+    12.9 KB → under the limit with 15 candidates in section 0) and through the session client with the fake peer
+    (the signed start carries the compact string and the PC's answer verifies against it); the PC side's acceptance
+    of a max-bundle offer was checked here with aiortc on Linux. Not yet verified on a device: KNOWN_ISSUES 48.

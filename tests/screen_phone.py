@@ -14,12 +14,15 @@ on this host.
   same offer, as the app does; a viewer for a 1.4 start opens only the first channel, because the shipped 1.4 worker
   sends on whichever channel the phone announced last (design 2a Part 0). Every message from either channel is kept
   in memory with its channel's label, its length on the wire and when it arrived; nothing is written anywhere.
-* :class:`ScreenClient` is the session logic: ``screen_ice_request``, the offer inside the signed 60 s
-  ``screen.session_start`` (``surface`` "primary" or a monitor index; ``cursor`` only when asked, so the start is
-  stamped 1.4 without it and 1.5 with it: the harness stamps by content, rules.command_version_stamping), the
-  PC-signed answer verified against the key PINNED AT PAIRING (``verify_screen_answer_payload``; anything else is
-  SCREEN_ANSWER_INVALID and nothing is applied), then exactly the signed ``answer_sdp`` applied. A start while a
-  session is live is the app's "Next screen": no ``bye`` and no stop, the PC replaces the session.
+* :class:`ScreenClient` is the session logic: ``screen_ice_request``, the offer COMPACTED (:func:`compact_offer`:
+  every ``a=candidate`` line in a media section after the first removed before signing, as the app's
+  ``compactOffer`` does since the 2026-11-09 incident, design §4.2 "The offer's size"; sizes and counts kept on the
+  client, never a line) inside the signed 60 s ``screen.session_start`` (``surface`` "primary" or a monitor index;
+  ``cursor`` only when asked, so the start is stamped 1.4 without it and 1.5 with it: the harness stamps by content,
+  rules.command_version_stamping), the PC-signed answer verified against the key PINNED AT PAIRING
+  (``verify_screen_answer_payload``; anything else is SCREEN_ANSWER_INVALID and nothing is applied), then exactly the
+  signed ``answer_sdp`` applied. A start while a session is live is the app's "Next screen": no ``bye`` and no stop,
+  the PC replaces the session.
 
 Only the STUN entries of ``screen_ice_servers`` are used: the fake TURN provider's URLs name no real server, so media
 here always takes the direct path between this host's interfaces. Nothing here writes a frame anywhere.
@@ -326,16 +329,86 @@ class Viewer:
         await self.pc.close()
 
 
+# ----- the offer's size (design §4.2 "The offer's size", 2026-11-09) ----------------------------------------------------
+@dataclass(frozen=True)
+class OfferCompaction:
+    """What :func:`compact_offer` did to one offer: sizes and counts only, never a line of it."""
+
+    bytes_before: int
+    bytes_after: int
+    candidates_before: int
+    candidates_after: int
+    dropped_bundled: int  # candidate lines removed from the media sections after the first
+
+
+def candidate_counts(sdp: str) -> list[int]:
+    """How many ``a=candidate`` lines each media section carries, in m-line order."""
+    counts: list[int] = []
+    for line in sdp.split("\r\n"):
+        if line.startswith("m="):
+            counts.append(0)
+        elif line.startswith("a=candidate:") and counts:
+            counts[-1] += 1
+    return counts
+
+
+def candidate_shapes(sdp: str) -> list[list[tuple[str, str, str]]]:
+    """What each media section's ``a=candidate`` lines name, in m-line order: the (transport, address, type) of each,
+    sorted, so two sections that gathered the same addresses on transports of their own compare equal although their
+    ports and foundations differ. The tuples carry addresses: for a test's comparison, never for its output."""
+    shapes: list[list[tuple[str, str, str]]] = []
+    for line in sdp.split("\r\n"):
+        if line.startswith("m="):
+            shapes.append([])
+        elif line.startswith("a=candidate:") and shapes:
+            fields = line.split(" ")
+            shapes[-1].append((fields[2].lower(), fields[4], fields[7]))
+    return [sorted(shape) for shape in shapes]
+
+
+def compact_offer(sdp: str) -> tuple[str, OfferCompaction]:
+    """The first rule of the app's ``compactOffer`` (mobile-app ``lib/sdpCompact.ts``): every ``a=candidate`` line in a
+    media section after the first is removed before the offer is signed. aiortc's offer asks to bundle all three
+    sections on the first one's transport (``a=group:BUNDLE 0 1 2``), but until the answer each section still has a
+    transport of its own (the default "balanced" policy: one per media kind and one for the data channel), so each
+    section carries its own transport's candidates: the same addresses and types, different ports and foundations.
+    The PC's aiortc discards the bundled sections' transports, their candidates with them, when it applies the offer
+    (``rtcpeerconnection.py`` "remove bundled transports"), so those lines could never help. ``a=end-of-candidates`` stays in every section; every other line, the DTLS fingerprint,
+    the ICE credentials, the m-lines and their order, stays byte for byte, and so does the trailing CRLF. Returns the
+    compacted SDP and the sizes and counts."""
+    kept: list[str] = []
+    section = -1
+    before = after = 0
+    for line in sdp.split("\r\n"):
+        if line.startswith("m="):
+            section += 1
+        elif line.startswith("a=candidate:"):
+            before += 1
+            if section > 0:
+                continue
+            after += 1
+        kept.append(line)
+    out = "\r\n".join(kept)
+    return out, OfferCompaction(
+        bytes_before=len(sdp.encode("utf-8")),
+        bytes_after=len(out.encode("utf-8")),
+        candidates_before=before,
+        candidates_after=after,
+        dropped_bundled=before - after,
+    )
+
+
 # ----- the session client ---------------------------------------------------------------------------------------------
 @dataclass
 class Started:
     command_id: str
-    offer_sdp: str  # what the phone signed
+    offer_sdp: str  # what the phone signed (compacted; or what ``sign_offer`` made of it)
     result: dict[str, Any]
     viewer: Viewer
     command_envelope: dict[str, Any] | None = None  # the signed start as it went on the wire
     answer: VerifiedScreenAnswer | None = None
     answer_envelope: dict[str, Any] | None = None
+    compaction: OfferCompaction | None = None  # what compacting the offer did (sizes and counts)
 
     @property
     def session_id(self) -> str:
@@ -358,6 +431,7 @@ class ScreenClient:
         self.pinned_jwk = pinned_jwk
         self.ice: dict[str, Any] | None = None
         self.viewers: list[Viewer] = []
+        self.compactions: list[OfferCompaction] = []  # one per start, sizes and counts only
 
     async def ice_servers(self) -> dict[str, Any]:
         """``screen_ice_request`` → ``screen_ice_servers``, or the relay's ``error`` frame naming this PC."""
@@ -387,24 +461,34 @@ class ScreenClient:
         surface: str | int = "primary",
         cursor: str | None = None,
     ) -> Started:
-        """ICE servers, the offer, the signed start, then the result and the PC-signed answer in either order. With the
-        pin the answer is verified before anything is applied; ``sign_offer`` lets a test change what gets signed.
-        ``surface`` is the monitor to watch ("primary" or its index); ``cursor`` ("overlay" | "drawn") goes into the
-        params only when given, and only then does the viewer open the cursor channel (2a Part 0)."""
+        """ICE servers, the offer (gathered in full, applied in full to the viewer's own peer, then COMPACTED: the
+        signed start carries candidates in the first media section only), the signed start, then the result and the
+        PC-signed answer in either order. With the pin the answer is verified before anything is applied;
+        ``sign_offer`` lets a test change what gets signed (it sees the compacted offer). ``surface`` is the monitor to
+        watch ("primary" or its index); ``cursor`` ("overlay" | "drawn") goes into the params only when given, and
+        only then does the viewer open the cursor channel (2a Part 0)."""
         assert self.pinned_jwk is not None, "no pin, no picture: the phone never asks without a pinned PC key"
         ice = await self.ice_servers()
         assert ice["type"] == "screen_ice_servers", ice
         viewer = Viewer(self.stun_urls(), cursor_channel=cursor is not None)
         self.viewers.append(viewer)
-        offer = await viewer.offer()
-        signed = sign_offer(offer) if sign_offer is not None else offer
+        compact, compaction = compact_offer(await viewer.offer())
+        self.compactions.append(compaction)
+        signed = sign_offer(compact) if sign_offer is not None else compact
         params: dict[str, Any] = {"offer_sdp": signed, "surface": surface, "audio": True, "takeover": takeover}
         if cursor is not None:
             params["cursor"] = cursor
         cid, envelope = self.ctrl.envelope(self.pc_id, "screen.session_start", params, None, lifetime=60)
         await self.ctrl.send_envelope(self.pc_id, envelope)
         result = await self.log.wait("result", timeout=START_TIMEOUT, command_id=cid)
-        started = Started(command_id=cid, offer_sdp=signed, result=result, viewer=viewer, command_envelope=envelope)
+        started = Started(
+            command_id=cid,
+            offer_sdp=signed,
+            result=result,
+            viewer=viewer,
+            command_envelope=envelope,
+            compaction=compaction,
+        )
         if result["state"] != "succeeded":
             return started
         REGISTRY.validate_result("screen.session_start", result["result"])
@@ -438,4 +522,15 @@ class ScreenClient:
         self.viewers.clear()
 
 
-__all__ = ["FrameLog", "ScreenClient", "Started", "StunServer", "Viewer", "h264_nal_types", "start_stun_server"]
+__all__ = [
+    "FrameLog",
+    "OfferCompaction",
+    "ScreenClient",
+    "Started",
+    "StunServer",
+    "Viewer",
+    "candidate_counts",
+    "compact_offer",
+    "h264_nal_types",
+    "start_stun_server",
+]

@@ -275,6 +275,46 @@ that is a credential-phishing path and it steers the owner's taps. Pinning close
    worker. The journal records only the result frame, which holds no SDP and no address **[repo:
    `journal.frame_json`]**.
 
+**The offer's size (added 2026-11-09).** The day the staging relay began handing the phone Cloudflare TURN servers
+(`turn:` over UDP and TCP, `turns:` over TLS) in `screen_ice_servers`, every start on the founder's iPhone failed
+`SCREEN_OFFER_INVALID` ("The phone's connection request was not valid. Try again."), on Wi-Fi and on mobile data,
+with nothing else deployed (the deploy differed from the working one by docs only). The cause was diagnosed from the
+symptom and from measurements, not from the device's own error detail: with TURN servers Safari gathers a relay
+candidate for each URL variant on every interface (Wi-Fi and cellular, IPv4 and IPv6) plus TCP host candidates, and
+with the default `bundlePolicy` ("balanced") it repeats every candidate in all three media sections, so the offer
+outgrows `limits.screen_sdp_max_bytes` (12288) and the phone's own check before sending fails it (step 5 would refuse
+it with reason `shape` otherwise). Measured with Chromium here (no network, host candidates only): a balanced offer
+with the two transceivers and two data channels is 6759 bytes with one candidate per section and a max-bundle one
+6501 bytes with one candidate, so about 5.5 KB, roughly 40 candidate lines of 130–150 bytes, remain for candidates,
+and 3 sections × (4 host + 4 srflx + up to 12 relay) lines exceed that. Therefore the phone creates the
+`RTCPeerConnection` with `bundlePolicy: "max-bundle"` and, after gathering, runs the pure `compactOffer(sdp, limit)`
+(`mobile-app/src/lib/sdpCompact.ts`) on the offer before signing it: every `a=candidate` line in a media section
+after the first is dropped (bundled sections never use them: the PC's aiortc discards the bundled sections'
+transports, their candidates with them, when it applies the offer, `rtcpeerconnection.py` "remove bundled
+transports" **[inspected]**); every TCP candidate (`tcp` transport or `tcptype`) is dropped (the PC's aioice has no
+ICE-TCP: its host candidates are UDP datagram endpoints, `ice.py::get_component_candidates`, its server-reflexive and
+relay candidates derive from them, and `turn.py`'s TCP is TURN over TCP to the TURN server, never a candidate
+**[inspected]**); then, only while the offer is still above the limit, the lowest-priority remaining candidates go,
+keeping at least one of each kind and address family present (host, srflx, relay; IPv4, IPv6: aioice pairs a remote
+candidate only with a local one of the same IP version, `candidate.py::Candidate.can_pair_with` **[inspected]**, and
+libwebrtc ranks IPv6 above IPv4 within a kind, so a guard by kind alone could leave an IPv4-only PC nothing to pair
+with). `a=end-of-candidates` stays, and nothing else
+changes: the DTLS fingerprint, the ICE credentials, the m-lines and their order are byte for byte the gathered
+offer's. The phone applied the full description to its own connection, which is fine: the PC needs only a usable
+subset of the phone's candidates, and `offer_digest` is over the compacted string the PC received. The start's facts
+gain `offer: {bytes, candidates, dropped}` and the staging readout a line such as "offer: 9.8 KB · 14 candidates ·
+6 dropped"; logs carry sizes and counts only, never an SDP, a candidate, an address or a credential. An offer still
+above the limit after compaction fails on the phone, `SCREEN_OFFER_INVALID` with `detail{origin: "phone", reason:
+"too_long", bytes}`, and the copy says in plain words that the connection request was too large (N KB, rounded up
+so that an offer just over the limit never reads as 12.0 KB; the PC accepts 12 KB), to try again, and if it repeats
+to turn off Wi-Fi or mobile data so the phone has one network. The Python phone of `tests/` mirrors the first rule
+(`screen_phone.compact_offer`: aiortc's own offer asks to bundle the three sections, and until the answer each
+section carries its own transport's candidates, the same addresses on different ports, which the PC discards with
+those transports), so the end-to-end suite proves the PC accepts a compact offer and
+answers it bundled (`test_e2e_screen.py::test_a_compact_offer_with_candidates_only_in_the_first_section_connects`).
+Evidence: unit-tested (the phone's `sdpCompact` tests); integration-tested (Linux, fakes); **not yet verified on a
+device** (Safari with TURN on Wi-Fi + cellular: `mobile-app/KNOWN_ISSUES.md`).
+
 ### 4.3 The answer, signed by the PC's identity key
 
 The worker produces a send-only answer with a fresh per-session DTLS certificate. The **agent** signs:

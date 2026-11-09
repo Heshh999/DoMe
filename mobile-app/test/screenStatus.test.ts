@@ -133,6 +133,14 @@ describe("screenStatus: after a session", () => {
     expect(failed("PC_SESSION_LOCKED")).toMatchObject({ kind: "locked" });
     expect(failed("GRANT_MISSING")).toMatchObject({ kind: "no_grant" });
     expect(failed("SCREEN_UNSUPPORTED_BROWSER")).toMatchObject({ kind: "unsupported" });
+    // the phone's own pre-send check: the compacted offer was still above screen_sdp_max_bytes (DECISIONS 91)
+    expect(failed("SCREEN_OFFER_INVALID", {}, { origin: "phone", reason: "too_long", bytes: 13722 })).toMatchObject({ kind: "offer_too_long", title: "Couldn't connect", text: "The connection request was too large (13.5 KB; the PC accepts 12 KB). Try again; if it repeats, turn off Wi-Fi or mobile data so the phone has one network.", tone: "warning", code: "SCREEN_OFFER_INVALID", action: "retry" });
+    // the size is rounded up: one byte over the 12288-byte limit never reads "12.0 KB; the PC accepts 12 KB"
+    expect(failed("SCREEN_OFFER_INVALID", {}, { origin: "phone", reason: "too_long", bytes: 12289 }).text).toMatch(/^The connection request was too large \(12\.1 KB; the PC accepts 12 KB\)\. /);
+    expect(failed("SCREEN_OFFER_INVALID", {}, { origin: "phone", reason: "too_long", bytes: 12339 }).text).toContain("(12.1 KB; the PC accepts 12 KB)");
+    expect(failed("SCREEN_OFFER_INVALID", {}, { origin: "phone", reason: "too_long", bytes: 13312 }).text).toContain("(13.0 KB; the PC accepts 12 KB)"); // a whole number of KB stays whole
+    expect(failed("SCREEN_OFFER_INVALID", {}, { origin: "phone", reason: "shape" })).toMatchObject({ kind: "failed", title: "The phone's connection request was not valid. Try again.", text: null, action: "retry" });
+    expect(failed("SCREEN_OFFER_INVALID", {}, { origin: "agent", reason: "shape" })).toMatchObject({ kind: "failed", title: "The phone's connection request was not valid. Try again." });
     expect(failed("NO_ANSWER")).toMatchObject({ kind: "failed", title: "The PC did not answer in time. Nothing is known to have run.", action: "retry" });
     // the copy never names a browser or phone maker
     for (const text of Object.values(COPY)) expect(text).not.toMatch(/safari|apple|iphone|chrome|android|google|cloudflare/i);

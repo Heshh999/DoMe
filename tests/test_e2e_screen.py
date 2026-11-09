@@ -42,12 +42,22 @@ from dome_protocol import (
     kid_from_jwk,
     load_registry,
     loads_strict,
+    offer_digest,
     sdp_fingerprints,
     sign_payload,
     verify_pc_key_mac,
     verify_screen_answer_payload,
 )
-from screen_phone import FrameLog, ScreenClient, Started, StunServer, Viewer, start_stun_server
+from screen_phone import (
+    FrameLog,
+    ScreenClient,
+    Started,
+    StunServer,
+    Viewer,
+    candidate_counts,
+    candidate_shapes,
+    start_stun_server,
+)
 
 from conftest import (
     REGISTRY,
@@ -933,6 +943,76 @@ async def test_a_tampered_offer_fingerprint_never_gets_a_picture(
     assert ended["reason"] == "connection_failed", ended
     row = await settled(env, started.command_id)
     assert row["charged_seconds"] == 0 and window(env, alice.account_id)["zero_charged_attempts"] == 1, row
+
+
+async def test_a_compact_offer_with_candidates_only_in_the_first_section_connects(
+    env: Env, alice: Browser, agent: RealAgent, screen_on: Any, phones: list[Phone]
+) -> None:
+    """Design §4.2 "The offer's size" (2026-11-09: with TURN servers Safari's offer outgrew screen_sdp_max_bytes and
+    every start failed SCREEN_OFFER_INVALID; the app now signs a compacted offer: max-bundle, candidates in the first
+    media section only). This phone mirrors that first rule (screen_phone.compact_offer): the offer it signed carries
+    candidates in section 0 only, keeps a=end-of-candidates in every section and differs from the offer it applied to
+    its own peer by exactly the removed lines. The PC's strict check accepts it, aiortc answers it bundled on the
+    first section's transport, the PC-signed answer verifies against the pin (offer_digest over the compacted
+    string), and the picture arrives on the direct path."""
+    phone = await pair_phone(env, alice, agent, phones, "Alice's iPhone")
+    await allow_screen_on_the_pc(agent, phone)
+    started = await stream(phone)
+    sent = started.offer_sdp
+    full = str(started.viewer.pc.localDescription.sdp)  # what the viewer applied to its own peer: every candidate
+    compaction = started.compaction
+    assert compaction is not None and phone.client.compactions == [compaction]
+
+    # 1. The sent offer: candidates in the first media section only, end-of-candidates kept in all three.
+    per_section = candidate_counts(sent)
+    assert len(per_section) == 3 and per_section[0] >= 1 and per_section[1:] == [0, 0], per_section
+    assert sent.count("\r\na=end-of-candidates\r\n") == 3
+    assert "a=group:BUNDLE 0 1 2" in sent
+
+    # 2. Nothing else changed: in the full offer each section carries its own transport's candidates (the same
+    #    addresses and types, different ports), which the PC discards with those transports when it bundles (so the
+    #    removed lines could never help), and line by line the sent offer is the full one without the candidate lines
+    #    of sections 1 and 2.
+    full_per_section = candidate_counts(full)
+    assert full_per_section == [per_section[0]] * 3, full_per_section
+    shapes = candidate_shapes(full)
+    assert all(shape == shapes[0] for shape in shapes[1:]), [len(shape) for shape in shapes]  # counts only on failure
+    full_lines, sent_lines = full.split("\r\n"), sent.split("\r\n")
+    assert [line for line in full_lines if not line.startswith("a=candidate:")] == [
+        line for line in sent_lines if not line.startswith("a=candidate:")
+    ]
+    first_section = full.split("\r\nm=")[1]  # the video section of the full offer
+    assert [line for line in sent_lines if line.startswith("a=candidate:")] == [
+        line for line in first_section.split("\r\n") if line.startswith("a=candidate:")
+    ]
+    assert sent.endswith("\r\n") and sent != full
+    assert sdp_fingerprints(sent) == sdp_fingerprints(full)
+    assert "a=candidate" not in dumps_compact(started.result)  # still no SDP in any result
+
+    # 3. Sizes and counts, as the app's facts/readout would carry them, and under the limit the PC enforces.
+    limit = int(REGISTRY.limits["screen_sdp_max_bytes"])
+    assert compaction.candidates_before == sum(full_per_section) and compaction.candidates_after == per_section[0]
+    assert compaction.dropped_bundled == 2 * per_section[0]
+    assert compaction.bytes_before == len(full.encode("utf-8")) and compaction.bytes_after == len(sent.encode("utf-8"))
+    assert compaction.bytes_before > compaction.bytes_after, compaction
+    assert compaction.bytes_after <= limit, compaction
+
+    # 4. The PC accepted the compact offer and answered it bundled (the answer's offer_digest, over the compacted
+    #    string, already verified in start()); the picture is on the direct path at the stream size.
+    assert started.answer is not None
+    assert "a=group:BUNDLE 0 1 2" in started.answer.answer_sdp
+    assert started.answer.payload["offer_digest"] == offer_digest(sent)
+    status = await screen_status(agent)
+    assert status["session"]["connected"] is True and status["session"]["path"] == "direct", status
+    started_frame = await phone.log.wait(
+        "screen_session", timeout=10, screen_session_id=started.session_id, event="started"
+    )
+    assert started_frame["path"] == "direct"
+    assert {(f.width, f.height) for f in started.viewer.frames} == {STREAM_SIZE}
+
+    res = await phone.log.command(agent.pc_id, "screen.session_stop", {"screen_session_id": started.session_id})
+    assert res["state"] == "succeeded", res
+    assert (await ended_frame(phone, started.session_id))["reason"] == "stopped"
 
 
 # ----- the operator switch --------------------------------------------------------------------------------------------

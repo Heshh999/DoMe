@@ -4,7 +4,7 @@
  * of the §16 table has a unit test and the page only renders what comes out. Time wording reuses `lib/billing.ts`
  * (`refreshText`: "Refreshes today at 4:12 pm"), so nothing on the phone invents a second way of saying when.
  */
-import type { rest } from "@dome/protocol";
+import { LIMITS, type rest } from "@dome/protocol";
 
 import type { Tone } from "../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES, WINDOW_HOURS } from "../content/plans.ts";
@@ -116,6 +116,21 @@ export const SWITCH_COPY = {
   screenGone: (n: number) => `Screen ${n} isn't connected any more. Showing screen 1.`,
   switchFailed: (n: number) => `Couldn't switch screens. Still showing screen ${n}.`,
 } as const;
+
+/**
+ * The offer was still above the PC's limit after compaction (DECISIONS 91; lib/sdpCompact.ts): the size in plain
+ * words and the one thing that shrinks it (one network instead of two). A function, so it lives beside `COPY`.
+ * The size is rounded UP to a tenth of a KB (integer arithmetic, so a whole number of KB stays whole): the limit is
+ * exactly 12.0 KB, and an offer just over it, 12289 to 12339 bytes, is the most likely size after compaction; rounded
+ * down it would read "12.0 KB; the PC accepts 12 KB", which contradicts itself.
+ */
+export const OFFER_COPY = {
+  tooLong: (bytes: number) => `The connection request was too large (${kbRoundedUp(bytes)} KB; the PC accepts ${Math.floor(LIMITS.screen_sdp_max_bytes / 1024)} KB). Try again; if it repeats, turn off Wi-Fi or mobile data so the phone has one network.`,
+} as const;
+
+function kbRoundedUp(bytes: number): string {
+  return (Math.ceil((bytes * 10) / 1024) / 10).toFixed(1);
+}
 
 export const SCREEN_BETA_LABEL = "Screen view (beta)";
 /** `ACTION_UNAVAILABLE{reason}` from a PC whose DoMe build has no media stack (every build until the screen extra). */
@@ -299,6 +314,10 @@ function failedStatus(state: ScreenSessionState, now: Date, timeZone?: string): 
       // the transport worked every time and the picture never came: not a network problem, so not the network's copy
       if (p?.detail?.cause === "no_picture") return status("no_picture", COPY.noPicture, null, "warning", code, "retry");
       return status("no_path", "Couldn't connect", state.turn === "disabled" ? `${COPY.noPath} ${COPY.turnDisabled}` : COPY.noPath, "warning", code, "retry");
+    case "SCREEN_OFFER_INVALID":
+      // the phone's own pre-send check: the compacted offer was still too long (nothing more could go)
+      if (reason === "too_long" && typeof p?.detail?.bytes === "number") return status("offer_too_long", "Couldn't connect", OFFER_COPY.tooLong(p.detail.bytes), "warning", code, "retry");
+      return status("failed", errorMessage(p, { action: "screen.session_start" }), null, "warning", code, "retry");
     case "ACTION_UNAVAILABLE":
       if (p?.detail?.reason === SCREEN_VIEW_NOT_INCLUDED) return status("not_included", "Screen view isn't in DoMe on your PC yet", COPY.notIncluded, "warning", code, "none");
       return status("failed", errorMessage(p, { action: "screen.session_start" }), null, "warning", code, "retry");
