@@ -304,6 +304,12 @@ class ScreenAdapter(Protocol):
         released at once). Never raises: a probe that cannot run answers ``hresult=None``."""
         ...
 
+    def cursor_capture_configurable(self) -> bool:
+        """Whether Windows.Graphics.Capture can leave the pointer out of the picture here (its
+        ``GraphicsCaptureSession.IsCursorCaptureEnabled``, Windows 10 build 18362 and later; protocol 1.5,
+        ``rules.screen_cursor`` (1)). The start's ``result.cursor`` guess uses it; the worker reports what happened."""
+        ...
+
 
 class NoScreen:
     """The default when a platform set names no screen adapter: nothing can be enumerated, so Screen view
@@ -314,6 +320,9 @@ class NoScreen:
 
     def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
         return DuplicationProbe(None, reason="no screen adapter")
+
+    def cursor_capture_configurable(self) -> bool:
+        return False
 
 
 class InputAdapter(Protocol):

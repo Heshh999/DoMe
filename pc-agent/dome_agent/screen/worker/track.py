@@ -14,6 +14,13 @@
   is coalesced into the next allowed slot (Safari repeats PLIs under loss; an IDR storm would only add bytes to a
   lossy, possibly relayed path). Join, resume, a new geometry and an encoder reopen are never delayed.
 * A bitrate step reopens the encoder in the worker thread and forces an IDR.
+* **The encoder's pixel format** (2a §3.8): a frame whose format is not the encoder's (``EncoderChoice.pix_fmt``:
+  NV12 for H.264, yuv420p for VP8) is converted in the worker thread just before it is encoded; the held still frame
+  stays in the source's format. Desktop Duplication delivers NV12, so on the shipping H.264 path nothing is converted.
+* **The source says what it captured** (2a §3.6): after each successful ``open()`` (and when a fallback inside the
+  source changed what it is, Desktop Duplication → Windows.Graphics.Capture) ``on_source_open`` gets
+  ``{"source": "dda" | "wgc" | "fake", "cursor_drawn": bool}`` (on the worker thread), so the worker knows whether
+  the pointer is in the picture.
 * **H.264 drain pump** (device round 2): an encoder that holds N frames (a Media Foundation transform outside
   low-latency mode) fed at the 1 fps floor on a still screen took N seconds to give up a new picture or a requested
   IDR (5.5 to 9.2 s to the first packet on the founder's PC). After a newly captured frame or a forced IDR the track
@@ -70,10 +77,15 @@ class ScreenTrack(MediaStreamTrack):
         capture_allowed: asyncio.Event,
         emit: Emit,
         floor_seconds: float = FLOOR_SECONDS,
+        on_source_open: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__()
         self._source = source
         self.choice = choice
+        self._encoder_pix_fmt = choice.pix_fmt if choice.kind == "h264" else "yuv420p"
+        self._on_source_open = on_source_open
+        self._source_reported: tuple[str, bool] | None = None  # what on_source_open was last told
+        self.frames_converted = 0  # frames converted to the encoder's pixel format
         self.width, self.height = width, height
         self.fps = max(1, int(fps))
         self.bitrate_kbps = int(bitrate_kbps)
@@ -281,6 +293,10 @@ class ScreenTrack(MediaStreamTrack):
             self._last_sent_at = now
             force = self._take_idr(now)
             if self.choice.kind == "vp8":
+                if frame.format.name != self._encoder_pix_fmt:
+                    frame = await self._in_thread(self._convert, frame)
+                    if self.readyState == "ended":
+                        raise asyncio.CancelledError
                 if force and self.vp8_keyframe is not None:
                     self.vp8_keyframe()  # aiortc's libvpx encoder reads the flag for this frame
                 self.frames_sent += 1
@@ -430,15 +446,45 @@ class ScreenTrack(MediaStreamTrack):
             self.stop()
             return False
         self._opened = True
+        self._report_source(force=True)
         return True
 
     def _read_quietly(self) -> Any | None:
         try:
-            return self._source.read()
+            frame = self._source.read()
         except Exception as exc:  # noqa: BLE001 - the source is gone: the peer reports capture_failed
             self._emit(_error_event(exc))
             self.stop()
             return None
+        self._report_source(force=False)  # a fallback inside the source (DDA -> WGC) may have changed it
+        return frame
+
+    def source_facts(self) -> dict[str, Any]:
+        """``{"source": "dda" | "wgc" | "fake", "cursor_drawn": bool}`` of the current source."""
+        source = self._source
+        kind = str(getattr(source, "kind", "fake"))
+        return {"source": kind if kind in ("dda", "wgc", "fake") else "fake", "cursor_drawn": _cursor_drawn(source)}
+
+    def _report_source(self, *, force: bool) -> None:
+        """Worker thread: tell ``on_source_open`` what the source is, after an open and whenever that changed."""
+        if self._on_source_open is None:
+            return
+        facts = self.source_facts()
+        current = (str(facts["source"]), bool(facts["cursor_drawn"]))
+        if not force and current == self._source_reported:
+            return
+        self._source_reported = current
+        try:
+            self._on_source_open(facts)
+        except Exception as exc:  # noqa: BLE001 - the worker's bookkeeping never stops the capture
+            log.warning("screen source report failed", error=exc.__class__.__name__)
+
+    def _convert(self, frame: Any) -> Any:
+        """Worker thread: ``frame`` in the encoder's pixel format (libswscale), pts and time base kept."""
+        out = frame.reformat(format=self._encoder_pix_fmt)
+        out.pts, out.time_base = frame.pts, frame.time_base
+        self.frames_converted += 1
+        return out
 
     def _open_encoder(self) -> bool:
         """Worker thread: the H.264 encoder at the current size and bitrate, its open facts logged; one that cannot
@@ -475,6 +521,8 @@ class ScreenTrack(MediaStreamTrack):
             return None
         with ffmpeg_error_lines() as logged:
             try:
+                if frame.format.name != self._encoder_pix_fmt:
+                    frame = self._convert(frame)  # the held still frame stays in the source's format
                 return encoder.encode(frame, force_idr=force)
             except Exception as exc:  # noqa: BLE001 - every encoder failure is reported, never re-raised
                 self._encoder_failed("H.264 encode failed", "encode_error", exc, ffmpeg_error_text(exc, logged))
@@ -491,6 +539,14 @@ class ScreenTrack(MediaStreamTrack):
         if not self._first_frame_reported:
             self._first_frame_reported = True
             self._emit({"ev": "first_frame"})
+
+
+def _cursor_drawn(source: Any) -> bool:
+    """Whether the source paints the pointer into its frames (True unless it says otherwise)."""
+    try:
+        return bool(getattr(source, "cursor_drawn", True))
+    except Exception:  # noqa: BLE001 - a source that cannot say draws it, as before 1.5
+        return True
 
 
 def _detail(exc: BaseException) -> str | None:

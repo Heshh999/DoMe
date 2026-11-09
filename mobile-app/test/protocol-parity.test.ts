@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 // Through the package (registry substituted by the Vite plugin — the code path the app ships).
 import * as viaPackage from "@dome/protocol";
-import { buildCommandPayload, generateControllerKeyPair, signCommand, verifyAndParseCommand, exportPublicJwk, kidFromJwk, ProtocolError, type JsonValue } from "@dome/protocol";
+import { buildCommandPayload, commandProtocolVersion, dumpsCompact, generateControllerKeyPair, minVersion, parseScreenDcMessage, signCommand, signPayload, verifyAndParseCommand, exportPublicJwk, kidFromJwk, ProtocolError, type JsonValue } from "@dome/protocol";
 // The real module, imported by path (the plugin only redirects imports made from inside shared/ts/src).
 import * as realRegistry from "../../shared/ts/src/registry.ts";
 import * as pwaRegistry from "../src/protocol/registry.ts";
@@ -261,6 +261,19 @@ describe("protocol facade parity", () => {
       { type: "roi", gen_seen: 1 },
       { type: "input", events: [] },
       {},
+      // protocol 1.5: the pointer messages (the custom shape's png must be base64 of a valid length) and state.cursor
+      { type: "state", state: "sending", encoder: "h264", cursor: "overlay" },
+      { type: "state", state: "sending", cursor: "video" },
+      { type: "cursor_pos", gen: 1, x: 32768, y: 0, visible: true },
+      { type: "cursor_pos", gen: 1, x: 32768, y: 0 },
+      { type: "cursor_pos", gen: 0, x: 65536, y: 0, visible: true },
+      { type: "cursor_shape", kind: "ibeam" },
+      { type: "cursor_shape", kind: "pointer" },
+      { type: "cursor_shape", kind: "custom", width: 1, height: 1, hotspot_x: 0, hotspot_y: 0, png: "A".repeat(32) },
+      { type: "cursor_shape", kind: "custom", width: 1, height: 1, hotspot_x: 0, hotspot_y: 0, png: "A".repeat(32) + "=" },
+      { type: "cursor_shape", kind: "custom", width: 1, height: 1, hotspot_x: 0, hotspot_y: 0, png: "A".repeat(30) + "-A" },
+      { type: "cursor_shape", kind: "custom", width: 65, height: 1, hotspot_x: 0, hotspot_y: 0, png: "A".repeat(32) },
+      { type: "cursor_shape", kind: "custom", width: 1, height: 1, hotspot_x: 0, hotspot_y: 0 },
     ];
     for (const dir of ["pc_to_phone", "phone_to_pc"] as const) {
       for (const m of messages) expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage(dir, m)), `${dir} ${JSON.stringify(m)}`).toBe(codeOf(() => realRegistry.schemas.validateScreenDcMessage(dir, m)));
@@ -268,6 +281,27 @@ describe("protocol facade parity", () => {
     // a message no side may ever accept: the vocabulary is closed in both directions
     expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage("pc_to_phone", { type: "input", events: [] }))).toBe("MALFORMED_MESSAGE");
     expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage("phone_to_pc", { type: "geometry", gen: 1, surface_index: 0, width: 1, height: 1, rotation: 0, reserved: [] }))).toBe("MALFORMED_MESSAGE");
+    expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage("phone_to_pc", { type: "cursor_pos", gen: 1, x: 0, y: 0, visible: true }))).toBe("MALFORMED_MESSAGE");
+    expect(codeOf(() => pwaRegistry.schemas.validateScreenDcMessage("pc_to_phone", { type: "cursor_pos", gen: 1, x: 0, y: 0, visible: true }))).toBe("OK");
+    // 1.5: the per-type size cap works through the swapped library (its LIMITS carry screen_dc_cursor_shape_max_bytes)
+    const big = dumpsCompact({ type: "cursor_shape", kind: "custom", width: 1, height: 1, hotspot_x: 0, hotspot_y: 0, png: "A".repeat(8192) });
+    expect(pwaRegistry.LIMITS.screen_dc_cursor_shape_max_bytes).toBe(12288);
+    expect(parseScreenDcMessage(big, "pc_to_phone")).toMatchObject({ type: "cursor_shape", kind: "custom" });
+    expect(codeOf(() => parseScreenDcMessage(big.slice(0, -1) + " ".repeat(12289 - big.length) + "}", "pc_to_phone"))).toBe("MALFORMED_MESSAGE");
+    expect(codeOf(() => parseScreenDcMessage('{"type":"state","state":"sending"' + " ".repeat(1000) + "}", "pc_to_phone"))).toBe("MALFORMED_MESSAGE");
+  });
+
+  it("agrees on the 1.5 result and REST additions (result.cursor, pc.protocol_versions)", () => {
+    const result = { screen_session_id: "S".repeat(22), surfaces: [{ index: 0, width: 1920, height: 1080, primary: true }], surface_index: 0, gen: 1, audio: false, lease_seconds: 8, allowance: { unlimited: false, remaining_seconds: 600, resets_at: null }, consent: "not_required" };
+    for (const r of [result, { ...result, cursor: "overlay" }, { ...result, cursor: "drawn" }, { ...result, cursor: "video" }]) {
+      expect(codeOf(() => pwaRegistry.registry.validateResult("screen.session_start", r)), JSON.stringify(r).slice(-40)).toBe(codeOf(() => realRegistry.registry.validateResult("screen.session_start", r)));
+    }
+    const pc = { id: UUID, name: "Office", enabled: true, connection: "online", last_seen: null, created_at: TS, platform: "windows" };
+    for (const versions of [undefined, [], ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"], ["1.5\n"], ["v1.5"], Array(9).fill("1.0")]) {
+      const body = { pcs: [versions === undefined ? pc : { ...pc, protocol_versions: versions }] };
+      expect(codeOf(() => pwaRegistry.schemas.validateRest("pcs_response", body)), JSON.stringify(versions)).toBe(codeOf(() => realRegistry.schemas.validateRest("pcs_response", body)));
+    }
+    expect(codeOf(() => pwaRegistry.schemas.validateRest("pcs_response", { pcs: [{ ...pc, protocol_versions: ["1.0", "1.5"] }] }))).toBe("OK");
   });
 
   it("protocolCompatible matches", () => {
@@ -289,6 +323,29 @@ describe("protocol facade parity", () => {
     expect(pwaRegistry.registry.get("app.list").since).toBe("1.0");
   });
 
+  it("stamps by content (1.5): the facade's minVersion and paramSince match the real registry and drive buildCommandPayload", () => {
+    for (const [name, spec] of realRegistry.registry.actions()) {
+      expect(pwaRegistry.registry.get(name).paramSince, name).toEqual(spec.paramSince);
+      expect(pwaRegistry.registry.minVersion(name, {}), name).toBe(realRegistry.registry.minVersion(name, {}));
+      expect(pwaRegistry.registry.minVersion(name), name).toBe(realRegistry.registry.minVersion(name));
+      expect(pwaRegistry.registry.minVersion(name, { cursor: "overlay" }), name).toBe(realRegistry.registry.minVersion(name, { cursor: "overlay" }));
+    }
+    expect(pwaRegistry.registry.get("screen.session_start").paramSince).toEqual({ cursor: "1.5" });
+    for (const reg of [pwaRegistry.registry, realRegistry.registry]) {
+      expect(reg.minVersion("screen.session_start", { cursor: "overlay" })).toBe("1.5");
+      expect(reg.minVersion("screen.session_start", { cursor: "drawn" })).toBe("1.5");
+      expect(reg.minVersion("screen.session_start", reg.validateParams("screen.session_start", SAMPLE_PARAMS["screen.session_start"]))).toBe("1.4"); // defaults never raise it
+    }
+    // the code path the app ships: the package's commands module stamps through the facade
+    const startParams = SAMPLE_PARAMS["screen.session_start"]!;
+    expect(minVersion("screen.session_start", { ...startParams, cursor: "overlay" })).toBe("1.5");
+    expect(commandProtocolVersion("screen.session_start", startParams)).toBe("1.4");
+    const overlay = buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: "screen.session_start", params: { ...startParams, surface: 1, cursor: "overlay" }, lifetimeSeconds: 60 });
+    expect([overlay.protocol_version, overlay.params.cursor]).toEqual(["1.5", "overlay"]);
+    const plain = buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: "screen.session_start", params: { ...startParams, surface: 1 }, lifetimeSeconds: 60 });
+    expect([plain.protocol_version, "cursor" in plain.params]).toEqual(["1.4", false]);
+  });
+
   it("commands built and signed through the swapped library verify with the real verifier", async () => {
     const pair = await generateControllerKeyPair();
     const jwk = await exportPublicJwk(pair.publicKey);
@@ -307,5 +364,12 @@ describe("protocol facade parity", () => {
     const resolve = (k: string) => (k === kid ? { controllerId: UUID, accountId: UUID2, jwk } : null);
     expect((await verifyAndParseCommand(await signCommand(pair.privateKey, pair.publicKey, search), resolve)).payload.protocol_version).toBe("1.2");
     await expect(verifyAndParseCommand(await signCommand(pair.privateKey, pair.publicKey, { ...search, protocol_version: "1.1" }), resolve)).rejects.toThrow(/PROTOCOL_INCOMPATIBLE/);
+
+    // 1.5: a start carrying `cursor` is stamped 1.5 through the facade and verifies; stamped 1.4 it is refused after the schema
+    const start = buildCommandPayload({ accountId: UUID2, controllerId: UUID, targetPcId: UUID, action: "screen.session_start", params: { ...SAMPLE_PARAMS["screen.session_start"]!, cursor: "overlay" }, lifetimeSeconds: 60 });
+    const verifiedStart = await verifyAndParseCommand(await signCommand(pair.privateKey, pair.publicKey, start), resolve);
+    expect([verifiedStart.payload.protocol_version, verifiedStart.params.cursor]).toEqual(["1.5", "overlay"]);
+    const below = await verifyAndParseCommand(await signPayload(pair.privateKey, pair.publicKey, dumpsCompact({ ...start, protocol_version: "1.4" } as unknown as JsonValue)), resolve).catch((e: unknown) => e);
+    expect(below instanceof ProtocolError ? [below.code, below.detail] : below).toEqual(["PROTOCOL_INCOMPATIBLE", { peer: "1.4", required: "1.5" }]);
   });
 });

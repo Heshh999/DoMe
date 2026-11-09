@@ -1,9 +1,12 @@
 """The PC-signed screen answer (dome_agent/screen/signing.py) against the shared fixture vectors: an answer built by this
 agent verifies with the phone-side verifier under the PC's own pinned key, matches the fixture's byte-exact payload when
-signed by the fixture's test PC key at the fixture's time, and every tampered fixture case is still refused."""
+signed by the fixture's test PC key at the fixture's time, and every tampered fixture case is still refused. Since 1.5
+the answer carries the stamp of the start it answers (rules.screen_signaling (5)): a 1.4-stamped start gets a 1.4
+answer that a 1.4 phone (a registry whose protocol_version is 1.4) accepts."""
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -11,6 +14,7 @@ import pytest
 from dome_protocol import (
     ProtocolError,
     kid_from_jwk,
+    load_registry,
     loads_strict,
     parse_rfc3339,
     verify_screen_answer_payload,
@@ -48,9 +52,11 @@ def test_agent_answer_matches_the_fixture_vector_byte_for_byte(settings: Setting
         screen_session_id=SCREEN["screen_session_id"],
         offer_sdp=SCREEN["offer_sdp"],
         answer_sdp=SCREEN["answer_sdp"],
+        protocol_version=load_registry().protocol_version,  # the fixture's accepted answer is a 1.5 one
         now=parse_rfc3339("2026-10-21T12:00:00.000Z"),
     )
     valid = next(c for c in SCREEN["cases"] if c["expect"] == "valid")
+    assert loads_strict(valid["envelope"]["payload"])["protocol_version"] == "1.5"
     assert envelope["kid"] == valid["envelope"]["kid"] == SCREEN["pc_kid"]
     assert (
         envelope["payload"] == valid["envelope"]["payload"]
@@ -80,6 +86,7 @@ def test_a_fresh_pc_key_verifies_only_when_pinned(settings: Settings) -> None:
         screen_session_id=SCREEN["screen_session_id"],
         offer_sdp=SCREEN["offer_sdp"],
         answer_sdp=SCREEN["answer_sdp"],
+        protocol_version="1.4",
     )
     payload = loads_strict(envelope["payload"])
     assert payload["protocol_version"] == "1.4" and payload["type"] == "screen_answer"
@@ -113,8 +120,64 @@ def test_signing_refuses_a_malformed_answer_sdp(settings: Settings) -> None:
             screen_session_id=SCREEN["screen_session_id"],
             offer_sdp=SCREEN["offer_sdp"],
             answer_sdp="v=0\n",  # bare LF
+            protocol_version="1.5",
         )
     assert exc.value.code == "MALFORMED_MESSAGE"
+
+
+@pytest.mark.parametrize("stamp", ["1.4", "1.5"])
+def test_the_answer_carries_the_start_stamp_and_a_1_4_answer_verifies_on_a_1_4_phone(
+    settings: Settings, stamp: str
+) -> None:
+    identity = Identity(settings.state_dir)
+    identity.ensure_key()
+    envelope = sign_screen_answer(
+        identity,
+        account_id=SCREEN["account_id"],
+        pc_id=SCREEN["pc_id"],
+        controller_id=SCREEN["controller_id"],
+        command_id=SCREEN["command_id"],
+        screen_session_id=SCREEN["screen_session_id"],
+        offer_sdp=SCREEN["offer_sdp"],
+        answer_sdp=SCREEN["answer_sdp"],
+        protocol_version=stamp,
+    )
+    assert loads_strict(envelope["payload"])["protocol_version"] == stamp
+    kwargs = dict(
+        pinned_jwk=identity.public_jwk,
+        account_id=SCREEN["account_id"],
+        controller_id=SCREEN["controller_id"],
+        pc_id=SCREEN["pc_id"],
+        command_id=SCREEN["command_id"],
+        offer_sdp=SCREEN["offer_sdp"],
+    )
+    assert verify_screen_answer_payload(envelope, **kwargs).answer_sdp == SCREEN["answer_sdp"]  # a 1.5 phone
+    phone_1_4 = copy.copy(load_registry())
+    phone_1_4.protocol_version = "1.4"  # a 1.4 phone (a stale PWA bundle, the 1.4 Python phone)
+    if stamp == "1.4":
+        assert verify_screen_answer_payload(envelope, registry=phone_1_4, **kwargs).answer_sdp == SCREEN["answer_sdp"]
+    else:  # a 1.4 phone never gets a 1.5 answer: it never sends `cursor`, so its start is 1.4-stamped
+        with pytest.raises(ProtocolError) as exc:
+            verify_screen_answer_payload(envelope, registry=phone_1_4, **kwargs)
+        assert exc.value.code == "PROTOCOL_INCOMPATIBLE"
+
+
+def test_signing_refuses_a_stamp_this_library_does_not_speak(settings: Settings) -> None:
+    identity = Identity(settings.state_dir)
+    identity.ensure_key()
+    with pytest.raises(ProtocolError) as exc:
+        sign_screen_answer(
+            identity,
+            account_id=SCREEN["account_id"],
+            pc_id=SCREEN["pc_id"],
+            controller_id=SCREEN["controller_id"],
+            command_id=SCREEN["command_id"],
+            screen_session_id=SCREEN["screen_session_id"],
+            offer_sdp=SCREEN["offer_sdp"],
+            answer_sdp=SCREEN["answer_sdp"],
+            protocol_version="1.6",
+        )
+    assert exc.value.code == "PROTOCOL_INCOMPATIBLE"
 
 
 @pytest.mark.parametrize("case", [c for c in SCREEN["cases"] if c["expect"] != "valid"], ids=lambda c: c["name"])

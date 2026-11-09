@@ -4,11 +4,20 @@
 * Encoder order (:func:`encoder_candidates`, in the order of the start's ``encoder_preference``): on Windows
   ``h264_mf`` with ``hw_encoding=1`` (Media Foundation reaches NVIDIA, Intel and AMD hardware: no vendor SDK encoders),
   then ``h264_mf`` in software, then VP8 through aiortc's own libvpx encoder ("Basic picture mode"); a start whose
-  preference names VP8 first (the agent's fallback after an H.264 stall) gets VP8 first. Off Windows there is no
+  preference names VP8 first (the agent's fallback after an H.264 stall) gets VP8 first. The start's ``hw_encoding``
+  false (the agent's ``DOME_SCREEN_H264_HW=0``) leaves the hardware candidate out. Off Windows there is no
   ``h264_mf``: with ``dev_h264`` the worker may use ``libx264`` from the stock PyPI PyAV wheel, which is **development
-  and test only and never ships** (the licence gate refuses it; ``KNOWN_ISSUES.md``). :func:`probe_encoders` opens
-  each candidate at the session's real output size and encodes one black frame; a candidate that fails is recorded
-  with FFmpeg's reason (the worker logs one line per failed candidate).
+  and test only and never ships** (the licence gate refuses it; ``KNOWN_ISSUES.md``).
+* **NV12 in** (2a §3.8, DECISIONS #105): both ``h264_mf`` candidates and the development ``libx264`` take NV12
+  (:attr:`EncoderChoice.pix_fmt`), because ``mfenc.c`` accepts only an input type that is exactly the context's
+  ``pix_fmt`` and GPU transforms offer NV12 (with yuv420p the hardware candidate never opened, KNOWN_ISSUES #35).
+  Desktop Duplication delivers NV12 natively; the track converts any other source frame (VP8 stays yuv420p).
+* **The probe** (:func:`probe_candidate`, at the session's real output size): the HARDWARE candidate is fed up to
+  :data:`PROBE_MAX_FRAMES` black frames within :data:`PROBE_BUDGET_SECONDS` and used only when a slice packet came out
+  and SPS and PPS exist (in band or in extradata) — a transform that opens and then gives nothing is skipped with
+  that reason (``gated``). The software candidate, the only one verified on a device, keeps the acceptance it had
+  (open and one encoded frame, no packet required); the probe records its facts too (``gated`` false). Every
+  candidate's :class:`ProbeResult` is logged (``screen encoder probed``) and goes to the agent (``encoders``).
 * ``h264_mf`` is opened with ``AV_CODEC_FLAG_LOW_DELAY`` (``mfenc.c`` then asks the transform for
   ``CODECAPI_AVLowLatencyMode``: one input sample, one output sample) and ``max_b_frames = 0`` on the context (FFmpeg
   has no ``max_b_frames`` private option; the old option string was never consumed). An option the codec did not
@@ -54,7 +63,14 @@ VIDEO_TIME_BASE = fractions.Fraction(1, 90000)
 LEVEL_31_LONG = 1280
 LEVEL_31_SHORT = 720
 DEV_H264_CODECS = ("libx264",)  # development only: the stock PyAV wheel's GPL encoder, never in a shipping build
+H264_PIX_FMT = "nv12"  # what the h264_mf candidates (and the development libx264) are fed
+# DECISIONS #98: the software MFT held 6-9 frames on the founder's PC (first packet 5.5-9.2 s at 1 fps): 8 would
+# demote a transform that buffers like it to VP8
+PROBE_MAX_FRAMES = 16
+PROBE_BUDGET_SECONDS = 3.0
+NAL_SLICE = 1
 FACT_NALS_MAX = 16  # NAL types kept per access unit in the logged facts
+REOPEN_RETRY_SECONDS = 0.1
 _MFT_NAME = re.compile(r"MFT name: '(.*)'")
 
 
@@ -236,6 +252,7 @@ class EncoderChoice:
     hardware: bool = False
     options: dict[str, str] = field(default_factory=dict)
     development_only: bool = False
+    pix_fmt: str = "yuv420p"  # the frames the encoder is fed (the track converts to it)
 
     @property
     def label(self) -> str:
@@ -252,20 +269,53 @@ class ProbeFailure:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProbeResult:
+    """What :func:`probe_candidate` found (numbers and short words; never a parameter set or a frame). ``gated``: the
+    slice-and-parameter-sets test decided (the hardware candidate); ``parameter_sets``: ``inband``, ``extradata`` or
+    empty."""
+
+    encoder: str  # EncoderChoice.label (the key is "encoder": any key with "candidate" in it is redacted)
+    ok: bool
+    reason: str = ""
+    frames_in: int = 0
+    open_ms: int = 0
+    mft: str | None = None
+    parameter_sets: str = ""
+    gated: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "encoder": self.encoder,
+            "ok": self.ok,
+            "gated": self.gated,
+            "reason": self.reason,
+            "frames_in": self.frames_in,
+            "open_ms": self.open_ms,
+            "mft": self.mft,
+            "parameter_sets": self.parameter_sets,
+        }
+
+
 class EncoderOpenError(RuntimeError):
     """The codec context did not open; the message is FFmpeg's reason, sanitised (``capture_dda.ffmpeg_error_text``)."""
 
 
-def _h264_candidates(*, dev_h264: bool, platform: str) -> list[EncoderChoice]:
+def _h264_candidates(*, dev_h264: bool, platform: str, hw: bool = True) -> list[EncoderChoice]:
     if platform == "win32":
         # no "max_b_frames" here: FFmpeg's option is "bf", the string was never consumed; the context's
-        # max_b_frames is set to 0 in H264Encoder.open (mfenc always passes it to the transform)
+        # max_b_frames is set to 0 in H264Encoder.open (mfenc always passes it to the transform). No vendor is forced:
+        # Media Foundation picks the transform by merit (the name is logged).
         mf = {"scenario": "display_remoting", "rate_control": "cbr"}
-        # the hardware candidate stays on yuv420p this round (KNOWN_ISSUES: GPU transforms take NV12)
-        return [
-            EncoderChoice("h264", "h264_mf", hardware=True, options={**mf, "hw_encoding": "1"}),
-            EncoderChoice("h264", "h264_mf", hardware=False, options={**mf, "hw_encoding": "0"}),
-        ]
+        software = EncoderChoice(
+            "h264", "h264_mf", hardware=False, options={**mf, "hw_encoding": "0"}, pix_fmt=H264_PIX_FMT
+        )
+        if not hw:
+            return [software]
+        hardware = EncoderChoice(
+            "h264", "h264_mf", hardware=True, options={**mf, "hw_encoding": "1"}, pix_fmt=H264_PIX_FMT
+        )
+        return [hardware, software]
     if dev_h264:
         return [
             EncoderChoice(
@@ -280,19 +330,23 @@ def _h264_candidates(*, dev_h264: bool, platform: str) -> list[EncoderChoice]:
                     "x264-params": "repeat-headers=0:bframes=0:keyint=600:annexb=1",
                 },
                 development_only=True,
+                pix_fmt=H264_PIX_FMT,
             )
             for name in DEV_H264_CODECS
         ]
     return []
 
 
-def encoder_candidates(preference: list[str], *, dev_h264: bool, platform: str = sys.platform) -> list[EncoderChoice]:
+def encoder_candidates(
+    preference: list[str], *, dev_h264: bool, platform: str = sys.platform, hw: bool = True
+) -> list[EncoderChoice]:
     """The ordered candidates for this platform. ``preference`` is what the phone offered (h264 and/or vp8) in the
-    order the agent wants them tried: ``["vp8", "h264"]`` puts VP8 first (the fallback after an H.264 stall)."""
+    order the agent wants them tried: ``["vp8", "h264"]`` puts VP8 first (the fallback after an H.264 stall).
+    ``hw`` False leaves the hardware candidate out (the start's ``hw_encoding``)."""
     out: list[EncoderChoice] = []
     for kind in dict.fromkeys(preference):  # ordered, without repeats
         if kind == "h264":
-            out.extend(_h264_candidates(dev_h264=dev_h264, platform=platform))
+            out.extend(_h264_candidates(dev_h264=dev_h264, platform=platform, hw=hw))
         elif kind == "vp8":
             out.append(EncoderChoice("vp8", ""))
     return out
@@ -348,7 +402,7 @@ class H264Encoder:
 
         ctx: Any = av.CodecContext.create(self.choice.codec_name, "w")  # a VideoCodecContext at runtime
         ctx.width, ctx.height = self.width, self.height
-        ctx.pix_fmt = "yuv420p"
+        ctx.pix_fmt = self.choice.pix_fmt  # mfenc takes only an input type that is exactly this format
         ctx.time_base = VIDEO_TIME_BASE
         ctx.framerate = fractions.Fraction(self.fps, 1)
         ctx.bit_rate = self.bitrate_kbps * 1000
@@ -391,6 +445,13 @@ class H264Encoder:
         return self._inband_sets or self._extradata_sets
 
     @property
+    def parameter_sets_source(self) -> str:
+        """Where the SPS and PPS come from: ``inband`` (seen in the stream), ``extradata``, or empty (none yet)."""
+        if self._inband_sets:
+            return "inband"
+        return "extradata" if self._extradata_sets else ""
+
+    @property
     def pending(self) -> int:
         """Frames given to the encoder that have not come out yet (one access unit per frame for H.264)."""
         return max(0, self.frames_in - self.packets_out)
@@ -399,8 +460,9 @@ class H264Encoder:
         """The ``screen encoder opened`` line's fields (no parameter set: its NAL types and the SPS's three bytes)."""
         return {
             "label": self.choice.label,
+            "hw": self.choice.hardware,
             "mft": self.mft,
-            "pix_fmt": "yuv420p",
+            "pix_fmt": self.choice.pix_fmt,
             "size": f"{self.width}x{self.height}",
             "fps": self.fps,
             "kbps": self.bitrate_kbps,
@@ -414,13 +476,21 @@ class H264Encoder:
 
     def reopen(self, bitrate_kbps: int) -> None:
         """A bitrate step: ``h264_mf`` cannot change mid-stream, so the context is reopened (≈ 100 ms) and the next
-        frame is an IDR (the caller forces it)."""
+        frame is an IDR (the caller forces it). A reopen that fails is retried once after :data:`REOPEN_RETRY_SECONDS`
+        (a hardware transform may still be releasing the old session); a second failure raises (the track's
+        ``encoder_stalled`` ``open_error``)."""
         self.close()
         self.bitrate_kbps = int(bitrate_kbps)
-        self.open()
+        try:
+            self.open()
+        except Exception as exc:  # noqa: BLE001 - one more try, then the caller reports it
+            log.warning("H.264 encoder reopen failed; retrying once", error=exc.__class__.__name__)
+            self.close()
+            time.sleep(REOPEN_RETRY_SECONDS)
+            self.open()
 
     def encode(self, frame: Any, *, force_idr: bool) -> list[Any]:
-        """Encode one ``av.VideoFrame`` (yuv420p, pts in the 90 kHz time base) into ``av.Packet``s whose IDR access
+        """Encode one ``av.VideoFrame`` (the choice's ``pix_fmt``, pts in the 90 kHz time base) into ``av.Packet``s whose IDR access
         units begin with SPS and PPS. Frames from ``lavfi`` arrive flagged I: the flag is reset unless an IDR is
         wanted, or every frame would be a keyframe."""
         from av.video.frame import PictureType
@@ -489,74 +559,120 @@ def probe_encoders(
     width: int = LEVEL_31_LONG,
     height: int = LEVEL_31_SHORT,
     failures: list[ProbeFailure] | None = None,
+    results: list[ProbeResult] | None = None,
 ) -> EncoderChoice:
-    """Open each candidate at ``width`` x ``height`` (the session's real output size) and encode one black frame;
-    the first that works wins. Every candidate that does not is appended to ``failures`` with FFmpeg's reason.
-    ``SCREEN_ENCODER_UNAVAILABLE`` when none works."""
-    import av
-
-    def failed(choice: EncoderChoice, reason: str) -> None:
-        if failures is not None:
-            failures.append(ProbeFailure(choice.label, reason))
-
+    """:func:`probe_candidate` on each candidate in order at ``width`` x ``height`` (the session's real output size);
+    the first that works wins. Every candidate that does not is appended to ``failures`` with its reason, and every
+    probed candidate's :class:`ProbeResult` to ``results``. ``SCREEN_ENCODER_UNAVAILABLE`` when none works."""
     for choice in candidates:
-        if choice.kind == "vp8":
-            if "libvpx" in av.codecs_available:
-                return choice
-            failed(choice, "libvpx is not in this build")
-            continue
-        if choice.codec_name not in av.codecs_available:
-            failed(choice, f"{choice.codec_name} is not in this build")
-            continue
-        reason = _encode_one_frame(choice, width, height)
-        if reason is None:
+        result = probe_candidate(choice, width, height)
+        if results is not None:
+            results.append(result)
+        if result.ok:
             return choice
-        failed(choice, reason)
+        if failures is not None:
+            failures.append(ProbeFailure(choice.label, result.reason))
     raise ProtocolError("SCREEN_ENCODER_UNAVAILABLE", "Your PC has no video encoder DoMe can use for Screen view.")
 
 
-def _encode_one_frame(choice: EncoderChoice, width: int, height: int) -> str | None:
-    """Open the candidate and encode one black frame: None when it works, else why not (FFmpeg's words)."""
+def probe_candidate(choice: EncoderChoice, width: int, height: int) -> ProbeResult:
+    """Whether ``choice`` can encode here at ``width`` x ``height``, and the facts: VP8 needs libvpx in this build;
+    an H.264 candidate needs its codec, then :func:`_probe_h264`."""
     import av
 
+    if choice.kind == "vp8":
+        if "libvpx" in av.codecs_available:
+            return ProbeResult(choice.label, True)
+        return ProbeResult(choice.label, False, reason="libvpx is not in this build")
+    if choice.codec_name not in av.codecs_available:
+        return ProbeResult(
+            choice.label, False, reason=f"{choice.codec_name} is not in this build", gated=choice.hardware
+        )
+    return _probe_h264(choice, width, height)
+
+
+def _black_frame(width: int, height: int, pix_fmt: str, index: int) -> Any:
+    import av
+
+    frame = av.VideoFrame(width, height, pix_fmt)
+    frame.planes[0].update(bytes([16]) * frame.planes[0].buffer_size)
+    for plane in frame.planes[1:]:
+        plane.update(bytes([128]) * plane.buffer_size)
+    frame.pts = index * 3000  # 30 fps in the 90 kHz time base
+    frame.time_base = VIDEO_TIME_BASE
+    return frame
+
+
+def _probe_h264(choice: EncoderChoice, width: int, height: int) -> ProbeResult:
+    """Open the candidate, then feed black frames of its ``pix_fmt`` (an IDR first). The hardware candidate is
+    ``gated``: it is accepted only when a packet carrying a slice (NAL 5 or 1) came out within
+    :data:`PROBE_MAX_FRAMES` frames and :data:`PROBE_BUDGET_SECONDS` and the encoder has SPS and PPS (in band or in
+    extradata). Any other candidate keeps the acceptance it had before (2a review #20): it opened and one frame
+    encoded; its facts are recorded all the same. Always closed again."""
     from .capture_dda import AV_LOG_ERROR, ffmpeg_error_text, ffmpeg_log_lines
 
+    gated = choice.hardware
     try:
         enc = H264Encoder(choice, width, height, 30, 500)
     except EncoderOpenError as exc:
-        return f"open: {exc}"
+        return ProbeResult(choice.label, False, reason=f"open: {exc}", gated=gated)
     except Exception as exc:  # noqa: BLE001 - an unknown codec, a size the context refuses
-        return f"open: {ffmpeg_error_text(exc)}"
+        return ProbeResult(choice.label, False, reason=f"open: {ffmpeg_error_text(exc)}", gated=gated)
+    frames_in = 0
+    reason = f"no packet within {PROBE_MAX_FRAMES} frames"
+    ok = False
+    started = time.monotonic()
     try:
-        frame = av.VideoFrame(width, height, "yuv420p")
-        for plane in frame.planes:
-            plane.update(bytes(plane.buffer_size))
-        frame.pts = 0
-        frame.time_base = VIDEO_TIME_BASE
-        with ffmpeg_log_lines(AV_LOG_ERROR) as logged:
-            try:
-                enc.encode(frame, force_idr=True)
-            except Exception as exc:  # noqa: BLE001 - opened but cannot encode
-                return f"encode: {ffmpeg_error_text(exc, logged)}"
+        for index in range(PROBE_MAX_FRAMES if gated else 1):
+            if gated and time.monotonic() - started > PROBE_BUDGET_SECONDS:
+                reason = f"no packet within {PROBE_BUDGET_SECONDS} s"
+                break
+            frame = _black_frame(width, height, choice.pix_fmt, index)
+            with ffmpeg_log_lines(AV_LOG_ERROR) as logged:
+                try:
+                    packets = enc.encode(frame, force_idr=index == 0)
+                except Exception as exc:  # noqa: BLE001 - opened but cannot encode
+                    reason = f"encode: {ffmpeg_error_text(exc, logged)}"
+                    break
+            frames_in = index + 1
+            if not gated:
+                ok, reason = True, ""  # today's acceptance: opened and one frame encoded
+                break
+            if any(NAL_IDR in nal_types(bytes(p)) or NAL_SLICE in nal_types(bytes(p)) for p in packets):
+                ok = bool(enc.parameter_sets)
+                reason = "" if ok else "packet without SPS/PPS"
+                break
+        return ProbeResult(
+            choice.label,
+            ok,
+            reason=reason,
+            frames_in=frames_in,
+            open_ms=enc.open_ms,
+            mft=enc.mft,
+            parameter_sets=enc.parameter_sets_source,
+            gated=gated,
+        )
     finally:
         enc.close()
-    return None
 
 
 def list_encoders(*, dev_h264: bool) -> list[dict[str, Any]]:
-    """``--list-encoders``: every candidate and whether it works here at 1280x720 (never any frame content); a
-    candidate that does not work carries FFmpeg's reason."""
+    """``--list-encoders`` and ``--self-test``: every candidate and whether it works here at 1280x720 (never any
+    frame content), with the probe's ``frames_in`` and the transform's name; a candidate that does not work carries
+    its reason."""
     rows: list[dict[str, Any]] = []
     for choice in encoder_candidates(["h264", "vp8"], dev_h264=dev_h264):
-        failures: list[ProbeFailure] = []
-        try:
-            probe_encoders([choice], failures=failures)
-            ok, why = True, ""
-        except ProtocolError as exc:
-            ok, why = False, exc.code
-        row: dict[str, Any] = {"encoder": choice.label, "kind": choice.kind, "available": ok, "note": why}
-        if failures:
-            row["reason"] = failures[0].reason
+        result = probe_candidate(choice, LEVEL_31_LONG, LEVEL_31_SHORT)
+        row: dict[str, Any] = {
+            "encoder": choice.label,
+            "kind": choice.kind,
+            "available": result.ok,
+            "note": "" if result.ok else "SCREEN_ENCODER_UNAVAILABLE",
+            "frames_in": result.frames_in,
+            "mft": result.mft,
+        }
+        if not result.ok:
+            row["reason"] = result.reason
         rows.append(row)
     return rows
 
@@ -571,7 +687,10 @@ __all__ = [
     "EncoderChoice",
     "EncoderOpenError",
     "H264Encoder",
+    "PROBE_BUDGET_SECONDS",
+    "PROBE_MAX_FRAMES",
     "ProbeFailure",
+    "ProbeResult",
     "avcc_to_annexb",
     "context_flags",
     "encoder_candidates",
@@ -583,6 +702,7 @@ __all__ = [
     "nal_types",
     "parameter_sets_of",
     "plausible_nal_header",
+    "probe_candidate",
     "probe_encoders",
     "split_nals",
     "sps_triple",

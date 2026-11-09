@@ -169,6 +169,8 @@ class Agent:
             permission_ui=self.permission_ui,
             screen_target=lambda controller_id, gen: self.screen.screen_target(controller_id, gen),
             on_restricted=lambda restricted, reason: self.screen.notify_restricted(restricted, reason),
+            # rules.screen_cursor (5): injected relative moves stay on the monitor that phone is watching
+            streamed_monitor=lambda controller_id: self.screen.streamed_monitor(controller_id),
         )
         self.state.input = self.input
         self.screen = ScreenSessionManager(

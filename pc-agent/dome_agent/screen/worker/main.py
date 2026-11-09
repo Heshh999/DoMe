@@ -6,6 +6,19 @@ through ``crashguard``. Exits on pipe EOF, on ``stop``, and when the agent's liv
 ``tick_timeout_seconds`` (so a frozen agent UI thread cannot leave an unattended stream behind bars that no longer
 repaint; the Job object covers an agent that died). The aiortc / aioice loggers are pinned to WARNING here too.
 
+**The pointer drawn by the phone** (protocol 1.5, design 2a §3.5-§3.7): a ``start`` carrying ``cursor`` (``drawn`` or
+``overlay``; absent for a 1.4-stamped start) builds the source with the pointer left out when ``overlay`` was asked;
+once the source opened, the worker knows the mode in effect (Windows.Graphics.Capture on an old Windows keeps it
+drawn), tells the agent (``{"ev": "cursor", "mode", "source"}``), repeats it in every ``state`` message and, in
+``overlay``, runs the cursor poller (:mod:`cursor`), whose ``cursor_shape`` / ``cursor_pos`` messages reach the phone
+from the worker's loop (``cursor_pos`` of an older geometry generation is dropped and counted). A session whose start
+carried no ``cursor`` never sends a 1.5 key or message (:meth:`WorkerApp._shape_for_vocabulary`): a 1.4 phone
+validates with ``additionalProperties: false``.
+
+**Hardware H.264** (2a §3.8): the ``start``'s ``hw_encoding`` false drops the hardware candidate; every probed
+candidate is logged (``screen encoder probed``) and sent to the agent after the answer (``{"ev": "encoders",
+"probed": [...]}``); the source delivers the chosen encoder's pixel format where it can.
+
 ``--self-test`` (run by the Windows installer workflow on the frozen build) reports the imports, aiortc's version,
 the encoders available (with FFmpeg's reason for each one that is not), how many decoders this build has, a decoded
 ``lavfi`` ``testsrc`` frame, whether the PLI hook point exists and, on Windows, whether the Windows.Graphics.Capture
@@ -18,6 +31,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
+import contextlib
 import json
 import logging
 import os
@@ -31,7 +46,8 @@ import structlog
 from dome_protocol import ProtocolError
 
 from ...logsetup import pin_media_loggers, redact_event
-from .encode import ProbeFailure, encoder_candidates, fit_level_31, list_encoders, probe_encoders
+from .cursor import CursorPoller, CursorReader
+from .encode import ProbeFailure, ProbeResult, encoder_candidates, fit_level_31, list_encoders, probe_encoders
 from .pipe import read_message_sync, write_message_sync
 
 log = structlog.get_logger(__name__)
@@ -40,6 +56,15 @@ EXIT_OK = 0
 EXIT_START_FAILED = 2
 EXIT_TICKS_STOPPED = 3
 DEV_H264_ENV = "DOME_SCREEN_DEV_H264"  # "1": allow libx264 from the PyPI PyAV wheel (development and tests only)
+CURSOR_MODES = ("drawn", "overlay")
+# the worker's cursor counters in every stats event (numbers and the kind word; no key contains "png")
+CURSOR_COUNTERS = (
+    "cursor_pos_sent",
+    "cursor_shape_sent",
+    "cursor_custom_sent",
+    "cursor_bitmap_max_chars",
+    "cursor_dropped_gen",
+)
 
 
 def configure_worker_logging(level: str = "INFO") -> None:
@@ -96,6 +121,21 @@ class WorkerApp:
         self._exit_code: int | None = None
         self._exit_reason = ""
         self._stop_event = asyncio.Event()
+        # the pointer (1.5): what the start asked (None: a 1.4 session), what is in effect (the guess until the source
+        # opened), the poller and the messages it handed over from its thread
+        self._cursor_requested: str | None = None
+        self._cursor_effective: str | None = None
+        self._cursor_drawn_asked = True  # the source keeps the pointer in the picture (anything but overlay)
+        self._pix_fmt = "yuv420p"  # what the chosen encoder is fed (sources deliver it where they can)
+        self._cursor_poller: CursorPoller | None = None
+        self._cursor_lock = threading.Lock()
+        self._cursor_pending_pos: dict[str, Any] | None = None  # one slot: the latest position wins
+        self._cursor_pending_shapes: collections.deque[dict[str, Any]] = collections.deque(maxlen=4)
+        self._cursor_flush_scheduled = False
+        self.cursor_counts: dict[str, int] = dict.fromkeys(CURSOR_COUNTERS, 0)
+        self.cursor_last_kind: str | None = None
+        self._cursor_retired = {"bitmap_too_large": 0, "poll_errors": 0}  # of pollers stopped meanwhile
+        self.dropped_1_4 = 0  # 1.5 messages refused in a session whose start carried no cursor
 
     # ----- plumbing -----
     def emit(self, event: dict[str, Any]) -> None:
@@ -187,15 +227,20 @@ class WorkerApp:
         elif op == "pause":
             if self._track is not None:
                 self._track.pause()
+                if self._cursor_poller is not None:
+                    self._cursor_poller.pause()  # one visible: false, then nothing while paused
+                    self._cursor_flush()
                 reason = message.get("reason")
                 state: dict[str, Any] = {"type": "state", "state": "paused"}
                 if reason in ("secure_desktop", "indicator"):
                     state["reason"] = reason
-                self._send_dc(state)
+                self._send_dc(self._with_cursor_mode(state))
         elif op == "resume":
             if self._track is not None:
                 self._track.resume()
                 self._send_dc(self._state_message())
+                if self._cursor_poller is not None:
+                    self._cursor_poller.resume()  # shape and position again at once
         elif op == "keyframe":
             if self._track is not None:
                 self._track.force_keyframe(source="op")
@@ -231,6 +276,9 @@ class WorkerApp:
         data channel's ``geometry``, and the next access unit is an IDR."""
         self._gen += 1
         self._geometry = {**self._geometry, **update, "gen": self._gen}
+        if self._cursor_poller is not None:
+            # before the geometry goes out: positions of the new generation only, shape and position sent again
+            self._cursor_poller.set_surface(self._monitor_rect(), self._gen)
         self.emit({"ev": "geometry", **self._geometry})
         self._send_dc({"type": "geometry", **self._geometry})
         if self._track is not None:
@@ -249,7 +297,15 @@ class WorkerApp:
         # tries Desktop Duplication again (a failure falls back to Windows.Graphics.Capture as before)
         spec.pop("preflight", None)
         width, height = fit_level_31(int(spec.get("width", 1280)), int(spec.get("height", 720)))
-        source = _build_source(str(spec.get("kind", "ddagrab")), spec, width, height, int(spec.get("fps", 30)))
+        source = _build_source(
+            str(spec.get("kind", "ddagrab")),
+            spec,
+            width,
+            height,
+            int(spec.get("fps", 30)),
+            cursor_drawn=self._cursor_drawn_asked,
+            pix_fmt=self._pix_fmt,
+        )
         self._source_spec = spec
         track.replace_source(source, width, height)
         rotation = int(spec.get("rotation", 0))
@@ -279,15 +335,38 @@ class WorkerApp:
             self._dev_h264 if self._dev_h264 is not None else (kind == "fake" or os.environ.get(DEV_H264_ENV) == "1")
         )
         preference = [c for c in message.get("encoder_preference", ["h264", "vp8"]) if c in ("h264", "vp8")]
+        cursor = message.get("cursor")
+        self._cursor_requested = cursor if cursor in CURSOR_MODES else None
+        self._cursor_effective = self._cursor_requested  # the guess until the source opened
+        self._cursor_drawn_asked = self._cursor_requested != "overlay"
+        hw = bool(message.get("hw_encoding", True))  # the agent's DOME_SCREEN_H264_HW=0 sends false
         failures: list[ProbeFailure] = []
+        results: list[ProbeResult] = []
         try:
             # at the session's real output size: a transform may refuse a size the old 64x64 probe never asked for
-            choice = probe_encoders(encoder_candidates(preference, dev_h264=dev_h264), width, height, failures)
+            choice = probe_encoders(
+                encoder_candidates(preference, dev_h264=dev_h264, hw=hw), width, height, failures, results
+            )
         finally:
             for failure in failures:  # FFmpeg's reason per candidate: the diagnostics bundle says why it was skipped
                 # the key is "encoder": any key containing "candidate" is redacted (ICE candidates never reach a log)
                 log.info("screen encoder candidate unavailable", encoder=failure.candidate, reason=failure.reason)
-        source = _build_source(kind, source_spec, width, height, fps)
+            for result in results:  # never a parameter set's bytes: where they came from, in one word
+                log.info(
+                    "screen encoder probed",
+                    encoder=result.encoder,
+                    ok=result.ok,
+                    gated=result.gated,
+                    frames_in=result.frames_in,
+                    open_ms=result.open_ms,
+                    mft=result.mft,
+                    parameter_sets=result.parameter_sets,
+                    reason=result.reason,
+                )
+        self._pix_fmt = choice.pix_fmt
+        source = _build_source(
+            kind, source_spec, width, height, fps, cursor_drawn=self._cursor_drawn_asked, pix_fmt=self._pix_fmt
+        )
         from .rtc import ScreenPeer  # aiortc is imported only when a session really starts
         from .track import ScreenTrack
 
@@ -301,6 +380,7 @@ class WorkerApp:
             bitrate_kbps=bitrate.get("direct", 1500),
             capture_allowed=self._capture_allowed,
             emit=self.emit,
+            on_source_open=self._on_source_open,
         )
         peer = ScreenPeer(
             offer_sdp=str(message.get("offer_sdp", "")),
@@ -312,6 +392,7 @@ class WorkerApp:
             relayed_max_kbps=message.get("relayed_max_kbps")
             if isinstance(message.get("relayed_max_kbps"), int)
             else None,
+            extra_stats=self._cursor_stats,
         )
         try:
             answer_sdp = await peer.answer()
@@ -338,6 +419,7 @@ class WorkerApp:
                 "pli_hook": "present" if peer.pli_hook else "missing",
             }
         )
+        self.emit({"ev": "encoders", "probed": [result.as_dict() for result in results]})
         log.info(
             "screen worker answered",
             encoder=choice.label,
@@ -358,6 +440,8 @@ class WorkerApp:
             if channel is not None and channel.readyState == "open":
                 self._send_dc({"type": "geometry", **self._geometry})
                 self._send_dc(self._state_message())
+                if self._cursor_poller is not None:
+                    self._cursor_poller.resend()  # what it reported before the channel opened was not delivered
                 return
             await asyncio.sleep(0.05)
 
@@ -367,20 +451,172 @@ class WorkerApp:
             state["encoder"] = self._track.choice.kind
         if self._peer is not None and self._peer.data_saver:
             state["data_saver"] = True
+        return self._with_cursor_mode(state)
+
+    def _with_cursor_mode(self, state: dict[str, Any]) -> dict[str, Any]:
+        """``cursor`` in EVERY state message (sending and paused) of a session whose start carried it, once the mode
+        in effect is known (rules.screen_cursor (2))."""
+        if self._cursor_requested is not None and self._cursor_effective in CURSOR_MODES:
+            state["cursor"] = self._cursor_effective
         return state
 
-    def _send_dc(self, message: dict[str, Any]) -> None:
+    def _shape_for_vocabulary(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        """The message as this session's phone may receive it (rules.screen_cursor (6)): in a session whose start
+        carried no ``cursor`` (a 1.4 phone, which validates with additionalProperties:false) ``state`` loses its
+        ``cursor`` key and ``cursor_pos`` / ``cursor_shape`` are not sent at all (None; counted ``dropped_1_4``)."""
+        if self._cursor_requested is not None:
+            return message
+        kind = message.get("type")
+        if kind in ("cursor_pos", "cursor_shape"):
+            self.dropped_1_4 += 1
+            return None
+        if kind == "state" and "cursor" in message:
+            return {key: value for key, value in message.items() if key != "cursor"}
+        return message
+
+    def _send_dc(self, message: dict[str, Any]) -> bool:
+        """Every outbound data-channel message: shaped for the session's vocabulary, validated by the peer, a
+        ``cursor_pos`` on the cursor channel when the phone opened it. True when it was sent."""
         peer = self._peer
         if peer is None:
-            return
+            return False
+        shaped = self._shape_for_vocabulary(message)
+        if shaped is None:
+            return False
         try:
-            peer.send_dc(message)
+            if shaped.get("type") == "cursor_pos":
+                return bool(peer.send_cursor_pos(shaped))
+            return bool(peer.send_dc(shaped))
         except ProtocolError as exc:
             log.error("outbound data-channel message failed the vocabulary check; not sent", code=exc.code)
         except Exception as exc:  # noqa: BLE001
             log.debug("data channel send failed", error=exc.__class__.__name__)
+        return False
+
+    # ----- the pointer (1.5) -----
+    def _monitor_rect(self) -> tuple[int, int, int, int]:
+        """The streamed monitor in physical pixels (the source spec's rectangle, as the agent maps taps)."""
+        spec = self._source_spec
+        return (
+            int(spec.get("left", 0)),
+            int(spec.get("top", 0)),
+            int(spec.get("width", 1280)),
+            int(spec.get("height", 720)),
+        )
+
+    def _on_source_open(self, info: dict[str, Any]) -> None:
+        """The track's worker thread, after a source opened (or a fallback inside it changed what it is)."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(self._source_opened, dict(info))
+
+    def _source_opened(self, info: dict[str, Any]) -> None:
+        """The loop: the mode in effect is known now (rules.screen_cursor (2)); the agent hears it, the phone gets it
+        in a state message, and the poller runs in overlay only."""
+        if self._cursor_requested is None or self._track is None or self._peer is None:
+            return
+        drawn = self._cursor_requested == "drawn" or bool(info.get("cursor_drawn", True))
+        self._cursor_effective = "drawn" if drawn else "overlay"
+        source = str(info.get("source", "fake"))
+        self.emit({"ev": "cursor", "mode": self._cursor_effective, "source": source})
+        if not self._track.paused:
+            self._send_dc(self._state_message())
+        if self._cursor_effective == "overlay":
+            self._start_cursor_poller()
+        else:
+            self._stop_cursor_poller()
+
+    def _start_cursor_poller(self) -> None:
+        if self._cursor_poller is not None:
+            return
+        try:
+            reader = _cursor_reader(self._source_spec, self._monitor_rect())
+        except Exception as exc:  # noqa: BLE001 - a malformed test script, a reader that cannot load
+            log.warning("cursor reporting unavailable", error=exc.__class__.__name__)
+            return
+        poller = CursorPoller(reader, on_pos=self._cursor_on_pos, on_shape=self._cursor_on_shape)
+        poller.set_surface(self._monitor_rect(), self._gen)
+        if self._track is not None and self._track.paused:
+            poller.pause()
+        self._cursor_poller = poller
+        poller.start()
+
+    def _stop_cursor_poller(self) -> None:
+        poller, self._cursor_poller = self._cursor_poller, None
+        if poller is None:
+            return
+        poller.stop()
+        self._cursor_retired["bitmap_too_large"] += poller.bitmap_too_large
+        self._cursor_retired["poll_errors"] += poller.poll_errors
+        with self._cursor_lock:
+            self._cursor_pending_pos = None
+            self._cursor_pending_shapes.clear()
+
+    def _cursor_on_pos(self, message: dict[str, Any]) -> None:
+        """The poller's thread (or the loop, for a pause): one slot, the latest position wins."""
+        with self._cursor_lock:
+            self._cursor_pending_pos = message
+        self._schedule_cursor_flush()
+
+    def _cursor_on_shape(self, message: dict[str, Any]) -> None:
+        with self._cursor_lock:
+            self._cursor_pending_shapes.append(message)
+        self._schedule_cursor_flush()
+
+    def _schedule_cursor_flush(self) -> None:
+        with self._cursor_lock:
+            if self._cursor_flush_scheduled:
+                return
+            self._cursor_flush_scheduled = True
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        with contextlib.suppress(RuntimeError):  # the loop closed meanwhile: the worker is exiting
+            loop.call_soon_threadsafe(self._cursor_flush)
+
+    def _cursor_flush(self) -> None:
+        """The loop: shapes before the position; a position of an older geometry generation is dropped."""
+        with self._cursor_lock:
+            self._cursor_flush_scheduled = False
+            shapes = list(self._cursor_pending_shapes)
+            self._cursor_pending_shapes.clear()
+            position, self._cursor_pending_pos = self._cursor_pending_pos, None
+        if self._cursor_effective != "overlay":
+            return
+        counts = self.cursor_counts
+        for shape in shapes:
+            if not self._send_dc(shape):
+                continue
+            counts["cursor_shape_sent"] += 1
+            self.cursor_last_kind = str(shape.get("kind"))
+            if shape.get("kind") == "custom":
+                counts["cursor_custom_sent"] += 1
+                counts["cursor_bitmap_max_chars"] = max(counts["cursor_bitmap_max_chars"], len(str(shape["png"])))
+        if position is None:
+            return
+        if position.get("gen") != self._gen:
+            counts["cursor_dropped_gen"] += 1
+            return
+        if self._send_dc(position):
+            counts["cursor_pos_sent"] += 1
+
+    def _cursor_stats(self) -> dict[str, Any]:
+        """The cursor counters for the stats event (numbers and the last kind word; never a position or a bitmap)."""
+        poller = self._cursor_poller
+        too_large = self._cursor_retired["bitmap_too_large"] + (poller.bitmap_too_large if poller else 0)
+        poll_errors = self._cursor_retired["poll_errors"] + (poller.poll_errors if poller else 0)
+        return {
+            **self.cursor_counts,
+            "cursor_bitmap_too_large": too_large,
+            "cursor_poll_errors": poll_errors,
+            "cursor_last_kind": self.cursor_last_kind,
+            "dropped_1_4": self.dropped_1_4,
+        }
 
     async def _shutdown(self) -> None:
+        self._stop_cursor_poller()
         peer, self._peer = self._peer, None
         track, self._track = self._track, None
         if peer is not None:
@@ -389,15 +625,33 @@ class WorkerApp:
             await track.aclose()
 
 
-def _build_source(kind: str, spec: dict[str, Any], width: int, height: int, fps: int) -> Any:
+def _cursor_reader(spec: dict[str, Any], rect: tuple[int, int, int, int]) -> CursorReader:
+    """The pointer behind the poller: the fake source's (its ``cursor_script``, else a walk) or Windows'."""
+    if str(spec.get("kind", "ddagrab")) == "fake":
+        from .fake import FakeCursorReader
+
+        return FakeCursorReader(spec.get("cursor_script"), rect=rect)
+    from .cursor_win import Win32CursorReader
+
+    return Win32CursorReader()
+
+
+def _build_source(
+    kind: str, spec: dict[str, Any], width: int, height: int, fps: int, *, cursor_drawn: bool, pix_fmt: str
+) -> Any:
     """Construct the capture source for ``kind`` WITHOUT opening it (rules.screen_sessions, design §5.1: no frame
     exists for an unauthenticated peer). The only ``open()`` is the track's, once ``capture_allowed`` is set by DTLS
     connecting to the certificate the phone signed; a rebuild's source is handed over unopened the same way. A
-    source that cannot open then is reported as the worker's ``error`` and the agent ends ``capture_failed``."""
+    source that cannot open then is reported as the worker's ``error`` and the agent ends ``capture_failed``.
+
+    ``cursor_drawn`` False (an overlay session) leaves the pointer out: ``ddagrab`` ``draw_mouse=0``,
+    Windows.Graphics.Capture ``cursor_capture=False``. ``pix_fmt`` is the chosen encoder's: Windows.Graphics.Capture
+    converts to it; Desktop Duplication delivers NV12 anyway; the fakes stay yuv420p (their spec's ``pix_fmt`` may say
+    ``nv12``) so the track's conversion is exercised on Linux."""
     if kind == "fake":
         from .fake import build_fake_source
 
-        return build_fake_source(spec, width, height, fps)
+        return build_fake_source(spec, width, height, fps, cursor_drawn=cursor_drawn)
     if kind in ("ddagrab", "wgc"):
         if sys.platform != "win32":
             raise ProtocolError(
@@ -411,7 +665,17 @@ def _build_source(kind: str, spec: dict[str, Any], width: int, height: int, fps:
         def wgc() -> Any:
             from .capture_wgc import WgcSource
 
-            return WgcSource(index, width, height, fps, primary=primary, expected_size=expected, origin=origin)
+            return WgcSource(
+                index,
+                width,
+                height,
+                fps,
+                primary=primary,
+                expected_size=expected,
+                origin=origin,
+                cursor_capture=None if cursor_drawn else False,
+                pix_fmt=pix_fmt,
+            )
 
         if kind == "wgc":
             return wgc()
@@ -436,7 +700,7 @@ def _build_source(kind: str, spec: dict[str, Any], width: int, height: int, fps:
 
         # the agent's pre-flight may have found Desktop Duplication failing (spec["preflight"]): skipped, WGC at once
         return DdaWithFallback(
-            DdagrabSource(index, width, height, fps),
+            DdagrabSource(index, width, height, fps, draw_mouse=cursor_drawn),
             wgc,
             on_fallback=fell_back,
             locate=locate,

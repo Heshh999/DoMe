@@ -6,6 +6,11 @@ answer SDP (or a scripted error), "connects" and sends the first frame after the
 lease alive with ``hb`` events unless told to stop, records every message (ticks included) and, like the real
 worker, exits when the agent's ticks stop for ``tick_timeout_seconds`` or when ``stop`` arrives. Scripts are
 attributes of :class:`FakeScreenWorkerLauncher`; the spawned :class:`FakeScreenWorker` is observable through it.
+
+Protocol 1.5: the ``start`` may carry ``cursor`` (``drawn`` | ``overlay``) and ``hw_encoding`` (kept as
+:attr:`FakeScreenWorker.cursor_requested` / :attr:`FakeScreenWorker.hw_encoding`). When it carried ``cursor`` the fake
+reports the mode in effect after ``connected``, like the real worker after its source opened:
+``{"ev": "cursor", "mode": script.cursor_mode or the requested mode, "source": "fake"}``.
 """
 
 from __future__ import annotations
@@ -48,6 +53,9 @@ class FakeScreenWorkerLauncher:
     exit_on_tick_timeout: bool = True
     exit_on_stop: bool = True  # False: ignore `stop` so the supervisor has to terminate
     announce_geometry: bool = True  # answer `rebuild` / `reserved` with a new `geometry` (False: never, a stuck worker)
+    # the mode the `cursor` event reports (a start that carried `cursor` only); None: the mode the start asked for.
+    # "drawn" models Windows.Graphics.Capture on a Windows 10 before 1903 keeping the pointer in the picture
+    cursor_mode: str | None = None
     spawned: list[FakeScreenWorker] = field(default_factory=list)
     spawn_fail: Exception | None = None
 
@@ -94,6 +102,8 @@ class FakeScreenWorker:
         self._tick_timeout: float = 10.0
         self.gen = 1
         self.geometry: dict[str, Any] = {}
+        self.cursor_requested: str | None = None  # the start's `cursor` (None: a 1.4-stamped start)
+        self.hw_encoding: bool | None = None  # the start's `hw_encoding`
 
     # ----- WorkerProcess -----
     @property
@@ -111,6 +121,9 @@ class FakeScreenWorker:
         op = message.get("op")
         if op == "start":
             self.start_message = message
+            cursor = message.get("cursor")
+            self.cursor_requested = cursor if cursor in ("drawn", "overlay") else None
+            self.hw_encoding = bool(message["hw_encoding"]) if "hw_encoding" in message else None
             self._tick_timeout = float(message.get("tick_timeout_seconds", 10.0))
             self.last_tick_at = time.monotonic()
             self._spawn_task(self._run_start())
@@ -214,6 +227,8 @@ class FakeScreenWorker:
         if not self.alive:
             return
         await self.emit({"ev": "connected", "path": script.path})
+        if self.cursor_requested is not None:
+            await self.emit({"ev": "cursor", "mode": script.cursor_mode or self.cursor_requested, "source": "fake"})
         await asyncio.sleep(script.first_frame_delay)
         if not self.alive:
             return

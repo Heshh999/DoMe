@@ -51,6 +51,9 @@ SENSITIVE_KEY_PARTS: tuple[str, ...] = (
     "candidate",
     "ice_servers",
     "username",
+    # A cursor bitmap is screen content (rules.screen_cursor (4), protocol 1.5): the `png` of cursor_shape never
+    # reaches a log line or the diagnostics bundle (which uses this rule). Counters and log keys say "bitmap" instead.
+    "png",
 )
 _ALLOWED_EXACT_KEYS = frozenset({"challenge_id", "code", "error_code", "close_code", "status_code"})
 _BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}")

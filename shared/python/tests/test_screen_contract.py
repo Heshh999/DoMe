@@ -1,6 +1,8 @@
 """Protocol 1.4, Screen view (docs/PROTOCOL.md §20; docs/design/screen-view.md §11): the registry additions, every new
 frame, def, result and REST shape (accept the example, refuse unknown fields and out-of-range values), the content-based
-input-batch stamp and the 1.4 check order, the PC-signed answer, PC key pinning and the data-channel vocabulary."""
+input-batch stamp and the 1.4 check order, the PC-signed answer, PC key pinning and the data-channel vocabulary.
+Protocol 1.5 (docs/design/screen-view-2a.md §1): content-based command stamping (`param_since`), the answer carrying the
+start's stamp, the pointer messages and the per-type size cap of the data channel."""
 
 from __future__ import annotations
 
@@ -13,12 +15,14 @@ import pytest
 
 from dome_protocol import (
     INPUT_BATCH_PROTOCOL_VERSION,
+    SCREEN_CURSOR_CHANNEL_LABEL,
     SCREEN_DATA_CHANNEL_LABEL,
     SCREEN_INPUT_PROTOCOL_VERSION,
     KeyRecord,
     ProtocolError,
     build_input_batch_payload,
     build_screen_answer_payload,
+    command_protocol_version,
     dumps_compact,
     format_rfc3339,
     generate_private_key,
@@ -52,6 +56,10 @@ OTHER = "44444444-4444-4444-8444-444444444444"
 SID = "U2NyZWVuU2Vzc2lvbjAxQQ"
 TS = "2026-10-21T12:00:00.000Z"
 FIXTURE = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "fixtures" / "es256-python.json").read_text(encoding="utf-8"))
+DC_CASES = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "fixtures" / "screen-dc-cases.json").read_text(encoding="utf-8"))
+# the real 1x1 RGBA test PNG of the shared data-channel cases (1.5)
+CURSOR_PNG = next(json.loads(c["text"])["png"] for c in DC_CASES["accepted"] if c["name"] == "custom cursor_shape with a real 1x1 RGBA PNG")
+CURSOR_KINDS = ("arrow", "ibeam", "hand", "wait", "appstarting", "cross", "no", "sizeall", "sizens", "sizewe", "sizenesw", "sizenwse", "uparrow", "help")
 OFFER = FIXTURE["screen"]["offer_sdp"]
 ANSWER = FIXTURE["screen"]["answer_sdp"]
 ENVELOPE = {"v": 1, "alg": "ES256", "kid": "A" * 43, "payload": "{}", "sig": "B" * 86}
@@ -146,9 +154,9 @@ def _with(base: dict, path: tuple, value: object) -> dict:
 # ----- registry: version, capabilities, actions, limits, rules, errors, plans ----------------------------------------
 
 
-def test_registry_is_1_4_with_the_screen_capabilities_and_actions() -> None:
+def test_registry_is_1_5_with_the_screen_capabilities_and_actions() -> None:
     reg = load_registry()
-    assert reg.protocol_version == "1.4" and reg.registry_version == "1.4"
+    assert reg.protocol_version == "1.5" and reg.registry_version == "1.5"
     assert {"screen", "screen_audio"} <= set(reg.capabilities)
     assert "DoMe window on the PC" in reg.capabilities["screen"] and "never given to an AI" in reg.capabilities["screen"]
     assert "Only together with `screen`" in reg.capabilities["screen_audio"]
@@ -385,6 +393,18 @@ def test_result_shapes() -> None:
     ):
         with pytest.raises(ProtocolError):
             reg.validate_result("screen.session_start", bad)
+    # 1.5: `cursor` only when the start carried it; the REST pc row may name the agent's protocol versions
+    for mode in ("drawn", "overlay"):
+        reg.validate_result("screen.session_start", {**result, "cursor": mode})
+    with pytest.raises(ProtocolError):
+        reg.validate_result("screen.session_start", {**result, "cursor": "video"})
+    pc = {"id": PC, "name": "Office", "enabled": True, "connection": "online", "last_seen": None, "created_at": TS, "platform": "windows"}
+    for row in (pc, {**pc, "protocol_versions": []}, {**pc, "protocol_versions": ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"]}):
+        load_schemas().validate_rest("pc", row)
+    for versions in (["1.5\n"], ["v1.5"], ["1"], [15], ["1.0"] * 9, "1.5"):
+        with pytest.raises(ProtocolError) as ei:
+            load_schemas().validate_rest("pc", {**pc, "protocol_versions": versions})
+        assert ei.value.code == "MALFORMED_MESSAGE", versions
     reg.validate_result("screen.session_stop", {"stopped": True, "live_seconds": 192})
     reg.validate_result("screen.session_stop", {"stopped": False, "live_seconds": 0})
     with pytest.raises(ProtocolError):
@@ -417,7 +437,7 @@ def test_data_channel_vocabulary_is_closed_per_direction() -> None:
         ('{"type":"pointer_button","button":"left","action":"click"}', "phone_to_pc"),
         ('{"type":"text","text":"rm -rf"}', "phone_to_pc"),
         ('{"type":"roi","gen_seen":1,"rect":{"x":0,"y":0,"w":1,"h":1}}', "phone_to_pc"),  # Phase 3
-        ('{"type":"cursor_pos","x":1,"y":1}', "pc_to_phone"),  # Phase 2
+        ('{"type":"cursor_pos","x":1,"y":1}', "pc_to_phone"),  # 1.5 needs gen and visible
         ('{"type":"hb","extra":1}', "phone_to_pc"),
         ('{"type":"geometry","gen":0,"surface_index":0,"width":1,"height":1,"rotation":0,"reserved":[]}', "pc_to_phone"),
         ('{"type":"geometry","gen":1,"surface_index":0,"width":1,"height":1,"rotation":45,"reserved":[]}', "pc_to_phone"),
@@ -428,13 +448,179 @@ def test_data_channel_vocabulary_is_closed_per_direction() -> None:
         with pytest.raises(ProtocolError) as ei:
             parse_screen_dc_message(text, direction)
         assert ei.value.code == "MALFORMED_MESSAGE", text
-    with pytest.raises(ProtocolError) as ei:
+    with pytest.raises(ProtocolError) as ei:  # 1.5: an over-long message is refused before parsing, as MALFORMED_MESSAGE
         parse_screen_dc_message('{"type":"hb","pad":"' + "x" * 1100 + '"}', "phone_to_pc")
-    assert ei.value.code == "PAYLOAD_TOO_LARGE"
+    assert ei.value.code == "MALFORMED_MESSAGE"
     with pytest.raises(ProtocolError):
         parse_screen_dc_message(b"\xff\xfe", "phone_to_pc")
     with pytest.raises(ValueError):
         load_schemas().validate_screen_dc_message("sideways", {"type": "hb"})
+
+
+def test_1_5_limit_rules_and_the_cursor_channel_label() -> None:
+    reg = load_registry()
+    assert reg.limits["screen_dc_cursor_shape_max_bytes"] == 12288 and reg.limits["screen_dc_message_max_bytes"] == 1024
+    assert SCREEN_CURSOR_CHANNEL_LABEL == "dome-screen-cursor-v1" and SCREEN_DATA_CHANNEL_LABEL == "dome-screen-v1"
+    rules = _load_json("version.json")["rules"]
+    assert "screen_cursor" in rules and len(rules["screen_cursor"]) > 200
+    stamping = rules["command_version_stamping"]
+    assert "param_since" in stamping and "command_protocol_version" in stamping and "checked after schema validation" in stamping
+    assert "INVALID_PARAMETERS" in stamping and "ANY command whose stamp" in stamping
+    assert "protocol_version: 1.4" not in rules["screen_signaling"] and "1.4 for a 1.4-stamped start" in rules["screen_signaling"]
+    assert "dome-screen-cursor-v1" in rules["screen_signaling"] and "only in a start that carries `cursor`" in rules["screen_signaling"]
+    assert "(1b) Surface switch" in rules["screen_sessions"] and "screen_session_max_seconds" in rules["screen_sessions"]
+    assert "A surface switch is a new session" in rules["screen_metering"]
+    content = rules["screen_content"]
+    assert "cursor_pos and cursor_shape (1.5)" in content and "screen_dc_cursor_shape_max_bytes" in content and "screen_cursor (4)" in content
+    cursor = rules["screen_cursor"]
+    assert "no clip rectangle is ever set" in cursor and "before and after each injected relative `pointer_move`" in cursor
+    assert "a 1.4 phone never receives them" in cursor and "kinds, sizes and counts only" in cursor
+    assert "since 1.5, any command whose stamp" in reg.errors["PROTOCOL_INCOMPATIBLE"]["description"]
+
+
+def test_the_cursor_param_has_no_default_and_raises_the_stamp() -> None:
+    """rules.command_version_stamping (1.5): the stamp follows the params PRESENT, never the defaults validation fills in."""
+    reg = load_registry()
+    start = reg.get("screen.session_start")
+    assert start.since == "1.4" and start.param_since == {"cursor": "1.5"}
+    cursor = start.params_schema["properties"]["cursor"]
+    assert cursor["enum"] == ["drawn", "overlay"] and "default" not in cursor
+    plain = {"offer_sdp": OFFER, "surface": 1}
+    assert command_protocol_version("screen.session_start", plain) == "1.4" == reg.min_version("screen.session_start", plain)
+    for mode in ("overlay", "drawn"):
+        assert command_protocol_version("screen.session_start", {**plain, "cursor": mode}) == "1.5"
+        assert command_protocol_version("screen.session_start", {**plain, "cursor": mode}, registry=reg) == "1.5"
+    assert reg.min_version("screen.session_start") == "1.4" and reg.min_version("screen.session_start", None) == "1.4"
+    filled = reg.validate_params("screen.session_start", {"offer_sdp": OFFER})
+    assert "cursor" not in filled and reg.min_version("screen.session_start", filled) == "1.4"  # defaults never raise it
+    assert reg.validate_params("screen.session_start", {"offer_sdp": OFFER, "cursor": "overlay"})["cursor"] == "overlay"
+    for bad in ("video", "", 1, None, True):
+        with pytest.raises(ProtocolError) as ei:
+            reg.validate_params("screen.session_start", {"offer_sdp": OFFER, "cursor": bad})
+        assert ei.value.code == "INVALID_PARAMETERS", bad
+    # no other action has a param_since, so a `cursor` key never moves their stamp
+    for name, spec in reg.actions.items():
+        if name != "screen.session_start":
+            assert command_protocol_version(name, {"cursor": "overlay"}) == spec.since == reg.min_version(name, {}), name
+    with pytest.raises(ProtocolError) as ei:
+        command_protocol_version("app.nope", {})
+    assert ei.value.code == "UNKNOWN_ACTION"
+
+
+def _start_command(**overrides) -> dict:
+    now = now_utc()
+    command = {
+        "type": "command",
+        "protocol_version": "1.4",
+        "command_id": COMMAND,
+        "account_id": ACCOUNT,
+        "controller_id": CONTROLLER,
+        "target_pc_id": PC,
+        "action": "screen.session_start",
+        "params": {"offer_sdp": OFFER, "cursor": "overlay"},
+        "target": None,
+        "issued_at": format_rfc3339(now),
+        "expires_at": format_rfc3339(now + timedelta(seconds=60)),
+        "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+    }
+    command.update(overrides)
+    return command
+
+
+def test_a_start_is_refused_below_what_its_present_params_need() -> None:
+    """A 1.4-stamped start carrying `cursor` is PROTOCOL_INCOMPATIBLE {peer, required: 1.5}, judged AFTER the schema and
+    the params check on the RAW signed params; without `cursor` a 1.4 stamp passes and nothing adds the key."""
+    key, kid, record = _controller()
+    resolve = lambda k: record if k == kid else None
+
+    def verify(payload):
+        return verify_and_parse_command(sign_payload(key, dumps_compact(payload)).to_dict(), resolve)  # type: ignore[arg-type]
+
+    with pytest.raises(ProtocolError) as ei:
+        verify(_start_command())
+    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.4", "required": "1.5"}
+    with pytest.raises(ProtocolError) as ei:  # the schema runs first: an unknown top-level field stays MALFORMED_MESSAGE
+        verify(_start_command(priority="high"))
+    assert ei.value.code == "MALFORMED_MESSAGE"
+    with pytest.raises(ProtocolError) as ei:  # and the params check runs first: a bad value is INVALID_PARAMETERS
+        verify(_start_command(params={"offer_sdp": OFFER, "cursor": "video"}))
+    assert ei.value.code == "INVALID_PARAMETERS"
+    verified = verify(_start_command(protocol_version="1.5"))
+    assert verified.params["cursor"] == "overlay" and verified.params["surface"] == "primary"
+    assert verified.payload["params"] == {"offer_sdp": OFFER, "cursor": "overlay"}  # the raw object the agent reads presence from
+    old = verify(_start_command(params={"offer_sdp": OFFER, "surface": 1}))
+    assert old.payload["protocol_version"] == "1.4" and "cursor" not in old.params and old.payload["params"] == {"offer_sdp": OFFER, "surface": 1}
+    assert verify(_start_command(protocol_version="1.5", params={"offer_sdp": OFFER})).payload["params"] == {"offer_sdp": OFFER}
+
+
+def test_cursor_messages_are_pc_to_phone_only_and_bounded() -> None:
+    pos = {"type": "cursor_pos", "gen": 3, "x": 0, "y": 65535, "visible": False}
+    custom = {"type": "cursor_shape", "kind": "custom", "width": 64, "height": 64, "hotspot_x": 63, "hotspot_y": 0, "png": CURSOR_PNG}
+    state = {"type": "state", "state": "sending", "encoder": "vp8", "data_saver": False, "cursor": "drawn"}
+    for msg in (pos, custom, state, {**state, "cursor": "overlay"}, {**custom, "png": "A" * 8192}, *({"type": "cursor_shape", "kind": k} for k in CURSOR_KINDS)):
+        assert parse_screen_dc_message(dumps_compact(msg), "pc_to_phone") == msg
+        if msg["type"] != "state":
+            with pytest.raises(ProtocolError) as ei:  # the phone never sends pointer messages
+                parse_screen_dc_message(dumps_compact(msg), "phone_to_pc")
+            assert ei.value.code == "MALFORMED_MESSAGE"
+    for bad in (
+        _with(pos, ("visible",), ...),
+        _with(pos, ("gen",), 0),
+        _with(pos, ("x",), 65536),
+        _with(pos, ("y",), -1),
+        _with(pos, ("on_surface",), True),
+        {"type": "cursor_shape", "kind": "pointer"},
+        {"type": "cursor_shape", "kind": "arrow", "width": 1},
+        {"type": "cursor_shape", "kind": "other"},
+        _with(custom, ("png",), ...),
+        _with(custom, ("width",), 0),
+        _with(custom, ("height",), 65),
+        _with(custom, ("hotspot_x",), 64),
+        _with(custom, ("visible",), True),
+        _with(custom, ("png",), "A" * 28),  # shorter than any PNG
+        _with(custom, ("png",), "A" * 32 + "="),  # 33 characters: not a base64 length
+        _with(custom, ("png",), "A" * 8196),  # over 8192 characters
+        _with(custom, ("png",), CURSOR_PNG[:10] + "-" + CURSOR_PNG[11:]),  # base64url is not standard base64
+        _with(custom, ("png",), "AA==" + "A" * 32),  # padding only at the end
+        _with(custom, ("png",), "A" * 32 + "\n" + "A" * 32),  # no line breaks
+        _with(state, ("cursor",), "video"),
+    ):
+        with pytest.raises(ProtocolError) as ei:
+            parse_screen_dc_message(dumps_compact(bad), "pc_to_phone")
+        assert ei.value.code == "MALFORMED_MESSAGE", bad
+
+
+def _padded(text: str, total_bytes: int) -> str:
+    """The same JSON object with spaces before its closing brace, exactly ``total_bytes`` bytes."""
+    out = text[:-1] + " " * (total_bytes - len(text.encode())) + "}"
+    assert len(out.encode()) == total_bytes
+    return out
+
+
+def test_the_data_channel_size_cap_is_per_type() -> None:
+    """§1.6: at most 1024 bytes, except a pc_to_phone cursor_shape (at most 12288); every refusal is MALFORMED_MESSAGE."""
+    custom = dumps_compact({"type": "cursor_shape", "kind": "custom", "width": 1, "height": 1, "hotspot_x": 0, "hotspot_y": 0, "png": "A" * 8192})
+    named = '{"type":"cursor_shape","kind":"arrow"}'
+    state = '{"type":"state","state":"sending"}'
+    hb = '{"type":"hb"}'
+    assert parse_screen_dc_message(_padded(hb, 1024), "phone_to_pc") == {"type": "hb"}
+    assert parse_screen_dc_message(_padded(state, 1024), "pc_to_phone") == {"type": "state", "state": "sending"}
+    assert parse_screen_dc_message(_padded(named, 1025), "pc_to_phone") == {"type": "cursor_shape", "kind": "arrow"}  # any cursor_shape
+    for size in (9000, 12288):
+        assert parse_screen_dc_message(_padded(custom, size), "pc_to_phone")["kind"] == "custom", size
+        assert parse_screen_dc_message(_padded(custom, size).encode(), "pc_to_phone")["kind"] == "custom", size
+    for text, direction, why in (
+        (_padded(hb, 1025), "phone_to_pc", "data-channel message too long"),
+        (_padded(hb, 1025).encode(), "phone_to_pc", "data-channel message too long"),
+        (_padded(named, 1025), "phone_to_pc", "data-channel message too long"),  # the larger cap is for the phone's side only
+        (_padded(state, 1025), "pc_to_phone", "only cursor_shape may exceed screen_dc_message_max_bytes"),
+        (_padded(custom, 12289), "pc_to_phone", "data-channel message too long"),
+        (_padded(custom, 12289).encode(), "pc_to_phone", "data-channel message too long"),
+        (_padded(hb, 20000), "phone_to_pc", "data-channel message too long"),
+    ):
+        with pytest.raises(ProtocolError) as ei:
+            parse_screen_dc_message(text, direction)  # type: ignore[arg-type]
+        assert ei.value.code == "MALFORMED_MESSAGE" and why in str(ei.value), (direction, len(text))
 
 
 # ----- SDP helper -------------------------------------------------------------------------------------------------------
@@ -464,7 +650,15 @@ def _pc() -> tuple[object, dict[str, str], str]:
 
 def _answer(pc_key, **overrides) -> dict:
     payload = build_screen_answer_payload(
-        account_id=ACCOUNT, pc_id=PC, controller_id=CONTROLLER, command_id=COMMAND, screen_session_id=SID, offer_sdp=OFFER, answer_sdp=ANSWER, now=now_utc()
+        account_id=ACCOUNT,
+        pc_id=PC,
+        controller_id=CONTROLLER,
+        command_id=COMMAND,
+        screen_session_id=SID,
+        offer_sdp=OFFER,
+        answer_sdp=ANSWER,
+        protocol_version="1.5",
+        now=now_utc(),
     )
     payload.update(overrides)
     return sign_payload(pc_key, dumps_compact(payload)).to_dict()  # type: ignore[arg-type]
@@ -479,18 +673,48 @@ def _verify(raw, pinned_jwk, **kw):
 def test_answer_round_trip() -> None:
     pc_key, pc_jwk, pc_kid = _pc()
     payload = build_screen_answer_payload(
-        account_id=ACCOUNT, pc_id=PC, controller_id=CONTROLLER, command_id=COMMAND, screen_session_id=SID, offer_sdp=OFFER, answer_sdp=ANSWER
+        account_id=ACCOUNT, pc_id=PC, controller_id=CONTROLLER, command_id=COMMAND, screen_session_id=SID, offer_sdp=OFFER, answer_sdp=ANSWER, protocol_version="1.5"
     )
     load_schemas().validate_screen_answer_payload(payload)
-    assert payload["type"] == "screen_answer" and payload["protocol_version"] == "1.4" and payload["offer_digest"] == offer_digest(OFFER)
+    assert payload["type"] == "screen_answer" and payload["protocol_version"] == "1.5" and payload["offer_digest"] == offer_digest(OFFER)
     assert (parse_rfc3339(payload["expires_at"]) - parse_rfc3339(payload["issued_at"])) == timedelta(seconds=60)
     verified = _verify(_answer(pc_key), pc_jwk)
     assert verified.pc_kid == pc_kid and verified.answer_sdp == ANSWER and verified.screen_session_id == SID
     assert verified.fingerprint == FIXTURE["screen"]["fingerprint"]
     with pytest.raises(ProtocolError):  # the builder refuses an SDP that would fail the strict check anyway
         build_screen_answer_payload(
-            account_id=ACCOUNT, pc_id=PC, controller_id=CONTROLLER, command_id=COMMAND, screen_session_id=SID, offer_sdp=OFFER, answer_sdp=ANSWER.replace("\r\n", "\n")
+            account_id=ACCOUNT,
+            pc_id=PC,
+            controller_id=CONTROLLER,
+            command_id=COMMAND,
+            screen_session_id=SID,
+            offer_sdp=OFFER,
+            answer_sdp=ANSWER.replace("\r\n", "\n"),
+            protocol_version="1.5",
         )
+
+
+def test_the_answer_carries_the_stamp_of_the_start_it_answers() -> None:
+    """rules.screen_signaling (5), 1.5: a 1.4 start gets a 1.4 answer that a 1.4 phone accepts; the builder refuses a stamp
+    this library does not speak, and the stamp is a required argument (no silent default to the library's version)."""
+    pc_key, pc_jwk, _pc_kid = _pc()
+    args = {"account_id": ACCOUNT, "pc_id": PC, "controller_id": CONTROLLER, "command_id": COMMAND, "screen_session_id": SID, "offer_sdp": OFFER, "answer_sdp": ANSWER}
+    old = build_screen_answer_payload(**args, protocol_version="1.4", now=now_utc())
+    assert old["protocol_version"] == "1.4"
+    raw = sign_payload(pc_key, dumps_compact(old)).to_dict()  # type: ignore[arg-type]
+    phone_1_4 = copy.copy(load_registry())
+    phone_1_4.protocol_version = "1.4"  # a 1.4 phone (stale PWA bundle, the 1.4 Python phone)
+    assert _verify(raw, pc_jwk, registry=phone_1_4).payload["protocol_version"] == "1.4"
+    assert _verify(raw, pc_jwk).payload["protocol_version"] == "1.4"  # and a 1.5 phone accepts it under the compatibility rule
+    with pytest.raises(ProtocolError) as ei:  # the 1.4 phone refuses a 1.5 answer: why the stamp follows the start
+        _verify(_answer(pc_key), pc_jwk, registry=phone_1_4)
+    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.5", "supported": ["1.4"]}
+    for bad in ("1.6", "2.0", "x", ""):
+        with pytest.raises(ProtocolError) as ei:
+            build_screen_answer_payload(**args, protocol_version=bad)
+        assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": bad, "supported": ["1.5"]}, bad
+    with pytest.raises(TypeError):
+        build_screen_answer_payload(**args)  # type: ignore[call-arg]
 
 
 def test_answer_rejections_are_a_hard_stop() -> None:
@@ -527,8 +751,8 @@ def test_answer_rejections_are_a_hard_stop() -> None:
         assert ANSWER[:40] not in str(ei.value) and ":".join(["00"] * 32) not in str(ei.value)  # never echo SDP
     # the one honest exception: a newer MINOR is "update", not "not your PC"
     with pytest.raises(ProtocolError) as ei:
-        _verify(_answer(pc_key, protocol_version="1.5"), pc_jwk)
-    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.5", "supported": ["1.4"]}
+        _verify(_answer(pc_key, protocol_version="1.6"), pc_jwk)
+    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.6", "supported": ["1.5"]}
     with pytest.raises(ProtocolError) as ei:
         _verify(good, {"kty": "EC", "crv": "P-256", "x": "A" * 43, "y": "A" * 43})
     assert ei.value.code == "SCREEN_ANSWER_INVALID" and ei.value.detail["reason"] == "pinned key unusable"
@@ -601,7 +825,7 @@ def test_batch_with_a_screen_event_must_be_stamped_1_4() -> None:
         assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": stamp, "required": "1.4"}, stamp
     # a plain touchpad batch may still carry any stamp from 1.1 up to this library's version
     plain = build_input_batch_payload(account_id=ACCOUNT, controller_id=CONTROLLER, target_pc_id=PC, input_session_id=SID, seq=2, events=[{"type": "key", "key": "enter"}])
-    for stamp in ("1.1", "1.2", "1.3", "1.4"):
+    for stamp in ("1.1", "1.2", "1.3", "1.4", "1.5"):
         assert verify_and_parse_input_batch(sign_payload(key, dumps_compact({**plain, "protocol_version": stamp})).to_dict(), resolve).required_protocol_version == "1.1"  # type: ignore[arg-type]
 
 
@@ -610,13 +834,13 @@ def test_check_order_version_before_schema() -> None:
     an unparseable stamp still falls through to the schema."""
     key, kid, record = _controller()
     resolve = lambda k: record if k == kid else None
-    future_event = {"type": "pointer_tilt", "angle": 3}  # does not exist in 1.4
+    future_event = {"type": "pointer_tilt", "angle": 3}  # does not exist in 1.5
     batch = build_input_batch_payload(account_id=ACCOUNT, controller_id=CONTROLLER, target_pc_id=PC, input_session_id=SID, seq=1, events=[future_event])
     with pytest.raises(ProtocolError) as ei:
-        verify_and_parse_input_batch(sign_payload(key, dumps_compact({**batch, "protocol_version": "1.5"})).to_dict(), resolve)  # type: ignore[arg-type]
-    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.5", "supported": ["1.4"]}
+        verify_and_parse_input_batch(sign_payload(key, dumps_compact({**batch, "protocol_version": "1.6"})).to_dict(), resolve)  # type: ignore[arg-type]
+    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.6", "supported": ["1.5"]}
     with pytest.raises(ProtocolError) as ei:  # the same unknown event stamped at our version: that IS malformed
-        verify_and_parse_input_batch(sign_payload(key, dumps_compact({**batch, "protocol_version": "1.4"})).to_dict(), resolve)  # type: ignore[arg-type]
+        verify_and_parse_input_batch(sign_payload(key, dumps_compact({**batch, "protocol_version": "1.5"})).to_dict(), resolve)  # type: ignore[arg-type]
     assert ei.value.code == "MALFORMED_MESSAGE"
     with pytest.raises(ProtocolError) as ei:  # a stamp below the 1.1 floor is refused before the schema too
         verify_and_parse_input_batch(sign_payload(key, dumps_compact({**batch, "protocol_version": "1.0"})).to_dict(), resolve)  # type: ignore[arg-type]
@@ -625,11 +849,11 @@ def test_check_order_version_before_schema() -> None:
         with pytest.raises(ProtocolError) as ei:
             verify_and_parse_input_batch(sign_payload(key, dumps_compact({**batch, "protocol_version": junk})).to_dict(), resolve)  # type: ignore[arg-type]
         assert ei.value.code == "MALFORMED_MESSAGE", junk
-    # commands: a 1.5 command with a field this library does not know
+    # commands: a 1.6 command with a field this library does not know
     now = now_utc()
     command = {
         "type": "command",
-        "protocol_version": "1.5",
+        "protocol_version": "1.6",
         "command_id": COMMAND,
         "account_id": ACCOUNT,
         "controller_id": CONTROLLER,
@@ -644,7 +868,7 @@ def test_check_order_version_before_schema() -> None:
     }
     with pytest.raises(ProtocolError) as ei:
         verify_and_parse_command(sign_payload(key, dumps_compact(command)).to_dict(), resolve)  # type: ignore[arg-type]
-    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.5", "supported": ["1.4"]}
+    assert ei.value.code == "PROTOCOL_INCOMPATIBLE" and ei.value.detail == {"peer": "1.6", "supported": ["1.5"]}
     # a known action stamped below its since is refused before the schema as well (an older phone can never send it)
     with pytest.raises(ProtocolError) as ei:
         verify_and_parse_command(sign_payload(key, dumps_compact({**command, "protocol_version": "1.3"})).to_dict(), resolve)  # type: ignore[arg-type]

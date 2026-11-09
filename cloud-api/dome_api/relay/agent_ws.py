@@ -8,6 +8,7 @@ from typing import Any
 
 from dome_protocol import ProtocolError, dumps_compact, loads_strict, parse_rfc3339, protocol_compatible
 from dome_protocol.keys import kid_from_jwk
+from dome_protocol.versions import parse_version
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -96,6 +97,8 @@ async def agent_endpoint(ws: WebSocket, svc: Services) -> None:
                     await conn.close(CLOSE_REVOKED)
                     return
                 pc.agent_version = str(hello.get("component_version", ""))[:64]
+                # 1.5: REST pc.protocol_versions, so a phone knows which MINORs this agent speaks, offline too
+                pc.protocol_versions = [v for v in conn.protocol_versions if parse_version(v) is not None][:8]
                 pc.last_seen_at = utcnow()
                 snapshot = await mgr.build_snapshot(db, pc)
         if not await conn.send(snapshot):

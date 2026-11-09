@@ -242,3 +242,30 @@ async def test_pcs_response_reflects_connection_and_agent_version(
     await asyncio.sleep(0.2)
     pcs = (await alice.get("/v1/pcs"))["pcs"]
     assert pcs[0]["remote_enabled_reported"] is False
+
+
+async def test_pcs_response_carries_the_protocol_versions_of_the_last_hello(
+    env: Env, alice: Browser, linked_agent: AgentSim
+) -> None:
+    """REST pc.protocol_versions (protocol 1.5, DECISIONS #115): persisted from the agent's hello next to
+    agent_version, so a phone knows which MINORs the PC's agent speaks while it is offline too; [] before any hello."""
+    import asyncio
+
+    every = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"]
+    [row] = (await alice.get("/v1/pcs", schema="pcs_response"))["pcs"]
+    assert row["connection"] == "offline" and row["protocol_versions"] == []
+    await linked_agent.connect()
+    [row] = (await alice.get("/v1/pcs", schema="pcs_response"))["pcs"]
+    assert row["connection"] == "online" and row["protocol_versions"] == every
+    await linked_agent.close()
+    await asyncio.sleep(0.2)
+    [row] = (await alice.get("/v1/pcs", schema="pcs_response"))["pcs"]
+    assert row["connection"] == "offline" and row["protocol_versions"] == every
+    # an agent that went back to 1.4 shows its shorter list from its next hello on (KNOWN_ISSUES #37)
+    await linked_agent.connect(protocol_versions=("1.0", "1.1", "1.2", "1.3", "1.4"), registry_version="1.4")
+    [row] = (await alice.get("/v1/pcs", schema="pcs_response"))["pcs"]
+    assert row["protocol_versions"] == every[:-1]
+    patched = await alice.patch(f"/v1/pcs/{linked_agent.pc_id}", {"name": "Den PC"}, schema="pc")
+    assert patched["name"] == "Den PC" and patched["protocol_versions"] == every[:-1]
+    [(stored,)] = sql(env.database_url, "SELECT protocol_versions FROM pcs WHERE id = %s", (linked_agent.pc_id,))
+    assert stored == every[:-1]

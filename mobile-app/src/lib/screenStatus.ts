@@ -100,6 +100,21 @@ export const COPY = {
   agentRestart: "DoMe on the PC restarted, so Screen view ended.",
   explainer: "Your PC's picture goes straight to this phone, encrypted between the two. Nothing is recorded or stored. The AI never sees it. Uses about 0.7 GB per hour at full quality.",
   unsupported: errorMessage({ code: SCREEN_UNSUPPORTED_BROWSER }),
+  /** 1.5: the start asked for the pointer drawn by the phone and this PC could not leave it out of the picture. */
+  pointerInPicture: "On this PC the pointer stays in the picture, so it can lag a little behind your finger.",
+  /** `/v1/pcs` answered with a field this app version does not know: the deploy is newer than the open app. */
+  updateReady: "A newer DoMe is ready. Close and reopen the app to update.",
+} as const;
+
+/**
+ * Next screen (1.5): the copy that names a screen number. Functions, so they live beside `COPY` (whose entries are
+ * all plain strings). Screens are counted from 1 in DoMe's own order (the main screen is 1).
+ */
+export const SWITCH_COPY = {
+  switching: (n: number) => `Switching to screen ${n}…`,
+  switched: (n: number, of: number) => `Screen ${n} of ${of}`,
+  screenGone: (n: number) => `Screen ${n} isn't connected any more. Showing screen 1.`,
+  switchFailed: (n: number) => `Couldn't switch screens. Still showing screen ${n}.`,
 } as const;
 
 export const SCREEN_BETA_LABEL = "Screen view (beta)";

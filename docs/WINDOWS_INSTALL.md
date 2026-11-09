@@ -581,6 +581,30 @@ other was skipped, how long the first picture took, the connection type (never a
 many frames were captured, encoded and sent and whether the phone reported receiving them; after Stop the bundle
 keeps the last session's numbers (`status.screen.last_session_media`). **Not yet verified on a device.**
 
+**Round 2a additions (protocol 1.5, built 2026-11-09; not yet verified on a device).** Four things were added;
+each was tested on Linux only, with a synthetic picture and stand-ins for Windows.
+- *Two screens.* On a PC with two or more monitors the phone shows a screens button ("1/2"). Tapping it starts
+  a new Screen view on the other monitor; the old one ends (Screen view history lists it as "the phone started
+  again"), the "Screen view on" bars stay up, and Windows shows "‹phone› switched to screen 2. Stop: tray >
+  Stop Screen view, or Ctrl+Alt+Shift+S". If you allowed this phone at the PC for this Screen view, switching screens does not ask
+  you again (for at most the usual 4 hours in total); after you stopped Screen view at the PC, blocked the phone
+  or another phone took over, the PC asks (or refuses) exactly as before. DoMe calls the main screen 1; Windows
+  may number them differently. Unplugging the monitor being watched still ends Screen view.
+- *The pointer.* When this PC's DoMe and the phone are both up to date, the PC leaves its pointer out of the
+  picture and tells the phone where it is and what it looks like; the phone draws it, so it moves the moment
+  the finger does. The pointer's image is treated like the picture: never logged, stored or put in diagnostics.
+  When DoMe has to use the Windows.Graphics.Capture fallback on a Windows 10 older than version 1903 (build
+  18362), Windows cannot leave the pointer out, so the picture keeps it (the log says
+  `screen cursor mode mode=drawn`) and the phone says "On this PC the pointer stays in the picture, so it can lag
+  a little behind your finger."
+- *Video from the graphics chip.* DoMe now also tries Windows' hardware H.264 encoder and uses it only after a
+  short test at the session's real size gave a picture packet. The log says which encoder was chosen
+  (`screen encoder opened … hw=True` for the hardware one) and, per encoder, what the test found
+  (`screen encoder probed …`); the diagnostics bundle lists the same (`media.encoders`). Setting the environment
+  variable `DOME_SCREEN_H264_HW=0` before DoMe starts turns the hardware encoder off (the bundle's
+  `settings.screen_h264_hw` then says `false`).
+- *Zoom with Touchpad on* is a phone-only change: pinch zooms the picture and the view follows the pointer.
+
 **Allowing a phone (on the PC only).** A phone can never give itself Screen view, and neither can the
 DoMe service or a pairing (`--yes` included):
 - tray → **Paired phones ▸ ‹phone› ▸ Allow Screen view…** opens DoMe's window, which explains what it
@@ -593,7 +617,12 @@ DoMe service or a pairing (`--yes` included):
 the picture the phone sees; no setting hides it), the tray shows it, and Windows shows a notification at
 the start and the end. Stop it with the bar, tray → **Stop Screen view**, **Ctrl+Alt+Shift+S**,
 `DoMe.exe stop-screen`, **Disable remote control**, by locking the PC or by quitting DoMe. After you stop
-it at the PC, phones are asked before they can start again (10 minutes by default). Tray → **Screen view
+it at the PC, phones are asked before they can start again (10 minutes by default). The phone can move the
+pointer only on the screen it is watching: when one of the phone's moves would take the pointer off that
+screen, DoMe puts it back on the nearest edge. Your own mouse is never limited and DoMe never locks the pointer
+to a screen; because Windows cannot tell your mouse from the phone's moves, the one exception is the moment you
+and the phone cross that edge at the same time, when the pointer can be put back once (not yet verified on a
+device). Tray → **Screen view
 history…** or `DoMe.exe screen-history` lists the last 20 sessions and refused starts (phone, time,
 duration, reason; never a picture). Nothing is recorded and the AI assistant never sees the screen. The
 lock screen, UAC prompts and windows protected by their app (some videos) are never shown.

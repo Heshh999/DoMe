@@ -18,7 +18,7 @@ between the phone PWA, the cloud backend/relay, the Windows agent and the browse
 | `schemas/entitlement.schema.json` | Claims of the EdDSA entitlement assertion and its refresh rule |
 | `schemas/rest.schema.json` | REST request/response bodies that cross component boundaries |
 | `version.json` → `rules` | Normative behavioural rules (terminal result, duplicates, snapshot semantics, pairing, identity binding, caching, in-flight deadlines, coalescing) |
-| `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations (`es256-*.json`, signed with the committed TEST keys `test-controller-key.pem` and, since 1.4, `test-pc-key.pem`: commands, confirmations, the PC-signed screen answer and the pairing `pc_key_mac`); `strict-json-cases.json` (parser, pattern, timestamp, negotiation and SDP-shape decisions); `assistant-plan-cases.json` (AI-shaped plans and their structure verdict, run by cloud-api and the phone); `ai-window-cases.json` |
+| `fixtures/` | Cross-language signing fixtures verified by both the Python and TypeScript implementations (`es256-*.json`, signed with the committed TEST keys `test-controller-key.pem` and, since 1.4, `test-pc-key.pem`: commands, confirmations, the PC-signed screen answer and the pairing `pc_key_mac`); `strict-json-cases.json` (parser, pattern, timestamp, negotiation and SDP-shape decisions); `assistant-plan-cases.json` (AI-shaped plans and their structure verdict, run by cloud-api and the phone); `ai-window-cases.json`; since 1.5 `screen-dc-cases.json` (data-channel messages both parsers must accept or refuse, written byte for byte by both fixture generators) |
 
 Rules:
 
@@ -26,6 +26,11 @@ Rules:
    updating `docs/PROTOCOL.md`. Exception: a new REST endpoint whose bodies travel only between the
    PWA and cloud-api (deployed together), and error codes only such endpoints return, need no bump;
    they are listed with their date in `docs/PROTOCOL.md` §19.
+
+   Stamping (`rules.command_version_stamping`): a signed payload carries the lowest version that
+   defines it, not the sender's newest. Since 1.5, stamping is content-based for commands with
+   `param_since` params, as for input batches: `screen.session_start` is stamped 1.4 without
+   `cursor` and 1.5 with it.
 2. Verifiers reject unknown `alg`, unknown top-level fields, duplicate keys, oversized or
    deeply nested payloads, and anything failing schema validation. Nothing is silently
    reinterpreted.
@@ -145,6 +150,51 @@ Library helpers: Python `build_screen_answer_payload`, `verify_screen_answer_pay
 every verifier in both libraries now checks protocol compatibility and `since` before schema validation, so a payload
 from a newer MINOR yields `PROTOCOL_INCOMPATIBLE` instead of `MALFORMED_MESSAGE`. Design brief:
 `docs/design/screen-view.md`; transport decision: `docs/adr/0002-screen-view-transport.md`.
+
+## Protocol 1.5 — Screen view, Phase 2a (2026-11-09)
+
+Additive MINOR for four Screen view additions (`docs/design/screen-view-2a.md`, `docs/PROTOCOL.md` §21): Next screen,
+the pointer drawn by the phone, pinch zoom in Touchpad mode and hardware H.264. Only the first two touch the wire.
+A 1.4 agent keeps every 1.4 behaviour, and Next screen works with it too (it is `surface: N`, which 1.4 defined), except
+that in ask mode or while the post-Stop cooldown runs a 1.4 agent asks again for a switch (a new consent window, or
+`SCREEN_CONSENT_DECLINED` without one when a window opened less than a minute ago); it checks consent before it ends the
+old session, so after a refusal the phone goes back to the old session. On the relay and the data channels a 1.4 phone
+never receives a 1.5 field or message, because `result.cursor`, `state.cursor`, `cursor_pos` and `cursor_shape` are
+sent only in sessions started with `cursor`; the REST pc row is the documented exception (`docs/PROTOCOL.md` §21.9).
+The relay refuses any command whose stamp the target agent did not announce **before forwarding**
+(`PROTOCOL_INCOMPATIBLE detail{peer: "agent", required}`), so a 1.5-stamped start never reaches a 1.4 agent (which
+would refuse it itself, with a detail that has no `required`, after the relay had spent a start token). The PC-signed answer carries the stamp of the
+start it answers. Deploy the cloud (relay + PWA) first, then the agents; an open PWA from before the deploy rejects the
+new `pc.protocol_versions` field in `GET /v1/pcs` and `PATCH /v1/pcs/{id}` until it reloads (a rename or a switch on or
+off of a PC from it is applied but reported as failed). The browser extension is untouched.
+
+| Addition or change | Where |
+| --- | --- |
+| `protocol_version` and `registry_version` 1.5 | `version.json`, `actions.json` |
+| `screen.session_start.cursor: drawn \| overlay` (optional, no default: a start without it is a 1.4 start and the PC draws the pointer) and the top-level action key `param_since` (`{"cursor": "1.5"}`, a sibling of `since`; documented in the file's `$comment`) | `actions.json` |
+| `screen_session_result.cursor: drawn \| overlay`, present only when the start carried `cursor` | `results.schema.json` |
+| Data-channel messages PC → phone `cursor_pos{gen, x, y, visible}`, `cursor_shape{kind}` (14 named kinds) and `cursor_shape{kind: custom, width, height, hotspot_x, hotspot_y, png}` as the named defs `screen_dc_cursor_pos`, `screen_dc_cursor_shape_named`, `screen_dc_cursor_shape_custom` in `screen_dc_pc_to_phone`; `state.cursor: drawn \| overlay`; the second channel `dome-screen-cursor-v1` (unordered, no retransmissions, `cursor_pos` only) in the `screen_dc_message` description | `relay-frames.schema.json` |
+| Limit `screen_dc_cursor_shape_max_bytes` 12288 (`screen_dc_message_max_bytes` stays 1024 for every other message) | `version.json → limits` |
+| `pc.protocol_versions` (at most 8 `MAJOR.MINOR` strings; optional in the schema, always sent by the server) | `rest.schema.json` |
+| Rules: amended `command_version_stamping` (content-based command stamp, the post-schema check, the relay's gate for every command), `screen_signaling` (2) the second channel and (5) the answer stamp, `screen_sessions` (1b) surface switch and the end reasons in (6), `screen_content` (the vocabulary and the size exception), `screen_metering` (3) a switch is a new session; new `screen_cursor` | `version.json → rules` |
+| `PROTOCOL_INCOMPATIBLE` gains a `description` naming the relay's gate (no new code) | `errors.json` |
+| Fixtures: the accepted screen answer is stamped 1.5 and the refused newer-MINOR case is computed by both generators (one MINOR above the library's version, 1.6 now) and signed with `test-pc-key.pem`; new `screen-dc-cases.json` (`{$comment, accepted[], rejected[]}`, each case `{name, direction, text}`), written byte for byte by both generators and run by both libraries | `fixtures/` |
+
+Library helpers: Python `command_protocol_version(action, params, *, registry=None)` (defined in
+`dome_protocol.versions`, also exported from `dome_protocol.commands` and the package), `Registry.min_version(name,
+params=None)` (the action's `since` raised to the `param_since` of the keys present in the raw params),
+`ActionSpec.param_since`, `build_screen_answer_payload(..., protocol_version=...)` (a required keyword; a stamp the
+library does not speak is `PROTOCOL_INCOMPATIBLE`), `parse_screen_dc_message` with the per-type size cap (every
+refusal `MALFORMED_MESSAGE`) and `SCREEN_CURSOR_CHANNEL_LABEL`. TypeScript `commandProtocolVersion(action, params)` and
+`minVersion(action, params?)` (`commands.ts`; `buildCommandPayload` stamps by content), `registry.minVersion(action,
+params?)` and `ActionSpec.paramSince` (`registry.ts`), `buildScreenAnswerPayload({ …, protocolVersion })` (required),
+`parseScreenDcMessage` with the per-type size cap, `SCREEN_CURSOR_CHANNEL_LABEL` and the type `CursorKind`
+(`screen.ts`, whose hand-written `ScreenDcPcToPhone` union gains the three pointer members and `state.cursor`), the
+generated types `ScreenDcCursorPos`, `ScreenDcCursorShapeNamed` and `ScreenDcCursorShapeCustom`, and in `versions.ts`
+(Ajv-free, not exported from the package) `parseParamSince` and `paramsProtocolVersion`, which the real registry and
+the PWA's no-eval facade (`mobile-app/src/protocol/registry.ts`, now with `paramSince` and `registry.minVersion`) both
+call. **Check order:** the compatibility check and the action's `since` stay before schema validation; the floor that
+present params need is checked after it, on the raw signed params.
 
 ## AI assistant, step 1 — REST additions without a version bump (2026-10-11)
 

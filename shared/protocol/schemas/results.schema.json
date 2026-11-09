@@ -587,6 +587,14 @@
             "vp8"
           ],
           "description": "The video encoder in use; vp8 is the basic picture mode."
+        },
+        "cursor": {
+          "type": "string",
+          "enum": [
+            "drawn",
+            "overlay"
+          ],
+          "description": "Since 1.5; present ONLY when the start carried the `cursor` param (a 1.4 phone validates this result with additionalProperties:false). The pointer mode the PC will try: `overlay` when the start asked for it and this PC can capture without the pointer, else `drawn`. The data-channel `state.cursor` is authoritative once capture is open (rules.screen_cursor)."
         }
       }
     },

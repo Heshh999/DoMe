@@ -9,16 +9,29 @@
  *                  click, which would be three presses — DECISIONS.md 22)
  *   move           one finger past either tap threshold                                 → relative motion
  *   two fingers    both lift quickly and nearly stationary                              → right click
- *                  movement                                                              → scroll notches
+ *                  the midpoint moves first (over scrollStartPx)                         → scroll notches
+ *                  the spread changes first (over pinchRatio)                            → `pinch` (the Screen
+ *                  view zooms its picture; nothing is sent; a pinch never clicks or scrolls). Decided on
+ *                  pairs of moves with the direct machine's classifier (`twoFinger.ts`)
  *   finger count   a second finger arriving cancels the first finger's pending tap: changing from one
  *                  finger to two NEVER clicks; once a gesture was two-fingered, the remaining finger
  *                  neither clicks nor moves the cursor until every finger lifted
  *   drag mode      first finger down presses the left button (held); moves drag; lifting keeps the
  *                  hold (drag lock) until endDrag()/cancel()/setDragMode(false) releases it
  *   cancel         releases a held button and discards the current gesture without any tap
+ *
+ * The machine only uses deltas and distances, so it can be fed any coordinate space; a `pinch` centre is in the
+ * coordinates it was fed (the Screen view feeds box px).
  */
+import { spread, TwoFingerClassifier, type Pt } from "./twoFinger.ts";
 
-export type GestureOutput = { type: "move"; dx: number; dy: number } | { type: "click"; button: "left" | "right"; double: boolean } | { type: "scroll"; dx: number; dy: number } | { type: "button"; button: "left"; action: "down" | "up" };
+export type GestureOutput =
+  | { type: "move"; dx: number; dy: number }
+  | { type: "click"; button: "left" | "right"; double: boolean }
+  | { type: "scroll"; dx: number; dy: number }
+  | { type: "button"; button: "left"; action: "down" | "up" }
+  /** Two fingers spreading or closing: multiply the zoom by `scale` about (cx, cy). Local only, never an input event. */
+  | { type: "pinch"; scale: number; cx: number; cy: number };
 
 export interface GestureOptions {
   /** Cursor pixels per touch pixel (0.5 … 3). */
@@ -31,9 +44,14 @@ export interface GestureOptions {
   doubleTapMaxDist: number;
   /** Touch pixels per wheel notch. */
   scrollPxPerNotch: number;
+  /** Spread-ratio change that turns two moving fingers into a pinch (the direct machine's value); `Infinity` never
+   *  pinches (the Touchpad page, which has nothing to zoom: two fingers there scroll or right-click as before 1.5). */
+  pinchRatio: number;
+  /** Midpoint travel in px that turns two moving fingers into a scroll. */
+  scrollStartPx: number;
 }
 
-export const DEFAULT_GESTURE_OPTIONS: GestureOptions = { sensitivity: 1.4, scrollDirection: "natural", tapMaxMs: 250, tapMaxMove: 10, doubleTapMs: 300, doubleTapMaxDist: 24, scrollPxPerNotch: 36 };
+export const DEFAULT_GESTURE_OPTIONS: GestureOptions = { sensitivity: 1.4, scrollDirection: "natural", tapMaxMs: 250, tapMaxMove: 10, doubleTapMs: 300, doubleTapMaxDist: 24, scrollPxPerNotch: 36, pinchRatio: 0.1, scrollStartPx: 8 };
 
 /** schema: pointer_move / pointer_scroll values are integers within ±input_motion_max. */
 const MOTION_MAX = 4096;
@@ -48,7 +66,7 @@ interface Finger {
   travelled: number;
 }
 
-type Phase = "idle" | "one_pending" | "one_moving" | "two" | "two_release" | "two_settling" | "drag";
+type Phase = "idle" | "one_pending" | "one_moving" | "two_undecided" | "two_scroll" | "two_pinch" | "two_release" | "two_settling" | "drag";
 
 function clamp(v: number): number {
   return Math.max(-MOTION_MAX, Math.min(MOTION_MAX, v));
@@ -69,6 +87,10 @@ export class GestureMachine {
   private scrollAccX = 0;
   private scrollAccY = 0;
   private twoLastCentroid: { x: number; y: number } | null = null;
+  /** Two fingers down: pinch or scroll, decided on completed pairs of moves. */
+  private two: TwoFingerClassifier | null = null;
+  /** In two_pinch: the finger distance at the previous pinch step. */
+  private twoPrevDistance = 1;
   private readonly out: GestureOutput[] = [];
 
   constructor(options: Partial<GestureOptions> = {}) {
@@ -134,6 +156,7 @@ export class GestureMachine {
     this.lastTap = null;
     this.twoMoved = false;
     this.twoLastCentroid = null;
+    this.two?.reset();
     this.scrollAccX = this.scrollAccY = 0;
     this.remX = this.remY = 0;
     if (this.leftHeld) {
@@ -160,10 +183,14 @@ export class GestureMachine {
       // one → two fingers: the first finger's pending tap is discarded (never a click); a drag in
       // progress keeps holding but stops following the fingers.
       if (this.phase === "drag") return;
-      this.phase = "two";
+      this.phase = "two_undecided";
       this.twoMoved = false;
       this.scrollAccX = this.scrollAccY = 0;
       this.twoLastCentroid = this.centroid();
+      const [a, b] = this.pair();
+      this.two = new TwoFingerClassifier({ pinchRatio: this.opts.pinchRatio, scrollStartPx: this.opts.scrollStartPx });
+      this.two.start(a, b);
+      this.twoPrevDistance = this.two.startDistance;
       return;
     }
     // three or more: nothing is interpreted until everything lifts
@@ -191,7 +218,29 @@ export class GestureMachine {
       case "drag":
         this.emitMove(dx, dy);
         return;
-      case "two": {
+      case "two_undecided": {
+        if (this.fingers.size !== 2 || !this.two) return;
+        const [a, b] = this.pair();
+        const decision = this.two.move(id, a, b);
+        if (decision === "undecided") return;
+        if (decision === "pinch") {
+          this.phase = "two_pinch";
+          // measured from the spread at touch-down, so the dead zone is part of the first step (no jump, nothing lost)
+          this.twoPrevDistance = this.two.startDistance;
+          this.emitPinch(a, b);
+          return;
+        }
+        // a scroll: the midpoint's whole travel since touch-down counts, as before the decision existed
+        this.phase = "two_scroll";
+        const start = this.two.startMid;
+        const c = this.centroid();
+        this.twoLastCentroid = c;
+        this.scrollAccX = c.x - start.x;
+        this.scrollAccY = c.y - start.y;
+        this.scrollStep();
+        return;
+      }
+      case "two_scroll": {
         const c = this.centroid();
         if (!this.twoLastCentroid) {
           this.twoLastCentroid = c;
@@ -202,8 +251,13 @@ export class GestureMachine {
         this.twoLastCentroid = c;
         this.scrollAccX += cdx;
         this.scrollAccY += cdy;
-        if (!this.twoMoved && Math.hypot(this.scrollAccX, this.scrollAccY) > this.opts.tapMaxMove) this.twoMoved = true;
-        if (this.twoMoved) this.emitScroll();
+        this.scrollStep();
+        return;
+      }
+      case "two_pinch": {
+        if (this.fingers.size !== 2) return;
+        const [a, b] = this.pair();
+        this.emitPinch(a, b);
         return;
       }
       default:
@@ -233,9 +287,13 @@ export class GestureMachine {
         // drag lock: the button stays held until End Drag
         if (this.fingers.size === 0) this.phase = "idle";
         return;
-      case "two": {
+      case "two_undecided":
+      case "two_scroll":
+      case "two_pinch": {
+        // a pinch never clicks; a still or barely moved pair is a right click as before
+        const tapPossible = this.phase !== "two_pinch" && !this.twoMoved;
         if (this.fingers.size === 0) {
-          const quick = !this.twoMoved && t - f.downAt <= this.opts.tapMaxMs;
+          const quick = tapPossible && t - f.downAt <= this.opts.tapMaxMs;
           this.phase = "idle";
           this.twoLastCentroid = null;
           if (quick) this.out.push({ type: "click", button: "right", double: false });
@@ -244,7 +302,7 @@ export class GestureMachine {
         }
         // one of two fingers lifted: whatever remains must not move the cursor; a quick lift of the
         // second finger completes the two-finger tap (right click), anything else settles silently.
-        this.twoTapCandidate = !this.twoMoved && t - f.downAt <= this.opts.tapMaxMs;
+        this.twoTapCandidate = tapPossible && t - f.downAt <= this.opts.tapMaxMs;
         this.phase = "two_release";
         this.twoLastCentroid = null;
         return;
@@ -272,6 +330,29 @@ export class GestureMachine {
     if (this.leftHeld) return;
     this.leftHeld = true;
     this.out.push({ type: "button", button: "left", action: "down" });
+  }
+
+  /** The two fingers' current positions (only called with exactly two down). */
+  private pair(): [Pt, Pt] {
+    const [a, b] = [...this.fingers.values()];
+    return [
+      { x: a!.lastX, y: a!.lastY },
+      { x: b!.lastX, y: b!.lastY },
+    ];
+  }
+
+  /** One pinch step: the spread now over the spread at the previous step, about the fingers' midpoint. */
+  private emitPinch(a: Pt, b: Pt): void {
+    const { distance, mid } = spread(a, b);
+    const scale = distance / this.twoPrevDistance;
+    this.twoPrevDistance = distance;
+    if (scale !== 1) this.out.push({ type: "pinch", scale, cx: mid.x, cy: mid.y });
+  }
+
+  /** Scroll notches once the pair travelled past the tap threshold (a barely moved pair is still a right click). */
+  private scrollStep(): void {
+    if (!this.twoMoved && Math.hypot(this.scrollAccX, this.scrollAccY) > this.opts.tapMaxMove) this.twoMoved = true;
+    if (this.twoMoved) this.emitScroll();
   }
 
   private centroid(): { x: number; y: number } {
@@ -320,5 +401,15 @@ export const GESTURES: Array<{ phone: string; pc: string }> = [
   { phone: "Two fingers moving", pc: "Scroll (vertical, and horizontal where the app supports it)" },
   { phone: "Drag mode, then move a finger", pc: "Holds the left button while moving; End Drag releases it" },
   { phone: "Keyboard button", pc: "Opens the phone keyboard and the key/shortcut rows" },
+];
+
+/** Touchpad mode over the Screen view picture ("With Touchpad on"), rendered by the Screen page's help sheet. */
+export const TOUCHPAD_SCREEN_GESTURES: Array<{ phone: string; pc: string }> = [
+  { phone: "Slide one finger", pc: "Moves the pointer, like a laptop touchpad" },
+  { phone: "Tap", pc: "Clicks where the pointer is" },
+  { phone: "Tap with two fingers", pc: "Right-click" },
+  { phone: "Slide two fingers", pc: "Scrolls" },
+  { phone: "Pinch", pc: "Zooms the picture; the view follows the pointer" },
+  { phone: "Drag, then slide", pc: "Holds the mouse button while you move; End Drag lets go" },
 ];
 

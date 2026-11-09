@@ -234,3 +234,46 @@ Items from the review that were recorded rather than fully closed, plus residual
     "Hide readout"), and the clipboard copy is unverified in the Home Screen app (the select box is the way
     out). `transport_connected`
     in a bundle downloaded after Stop means "the last attempt's DTLS came up", not "connected now".
+
+41. **The pointer drawn by the phone can drift from the PC's while a finger slides.** The Touchpad prediction adds
+    each sent move scaled to the screen's physical size; with Windows' "Enhance pointer precision" on, the PC moves
+    its pointer further on fast slides than that, so the drawn pointer runs behind and is pulled to the PC's report
+    (blended while the finger moves, snapped beyond 10 % of the screen). Once nothing was sent and no report came for
+    120 ms it eases to the PC's last report within 80 ms, also when that report came during the slide and no other
+    follows (the PC never repeats one); a last report lost on the unreliable cursor channel is not resent, so the
+    drawn pointer can stay up to one report's movement off until the pointer moves again. The four numbers
+    (`EASE_MS`, `IDLE_MS`, `BLEND_WHILE_MOVING`, `SNAP_FRACTION`, `lib/pointer.ts`) are first guesses to tune on a
+    device; the readout's `pred err max` says how far off the prediction got. Not yet verified on a device. In a
+    `drawn` or 1.4 session there are no reports at all: see 47.
+
+42. **Whether Safari keeps the last picture under "Switching to screen 2…" is not yet verified on a device.** The
+    old picture stays on the shown `<video>` and the new one plays on a second `<video>` under it; if Safari blanks the
+    shown element while the second one decodes (or when the old peer closes), the dark overlay with "Switching…" is
+    what the owner sees until the new picture arrives. Nothing else depends on it.
+
+43. **A 24 px pointer image redrawn at 60 Hz under `translate3d` is not yet verified on a device.** Custom pointers
+    are `<img>` elements from a `data:` URL moved by a CSS transform once a frame; whether that stays smooth (and
+    whether a custom pointer that changes several times a second flickers) has only been seen in tests.
+
+44. **Low Power Mode frame cadence against the 80 ms ease.** In Low Power Mode Safari may run animation frames at
+    30 per second or slower; the pointer's ease and the zoomed view's follow then move in fewer, larger steps. Not yet
+    verified on a device.
+
+45. **"A newer DoMe is ready. Close and reopen the app to update." is shown on the Screen and Devices pages only.** It
+    appears when a successful `/v1/pcs` answer carries a field this app version does not know (an app left open across
+    a deploy; a refusal whose body is not DoMe's, such as a proxy's HTML 404, is an ordinary error). The device list on
+    screen is kept, the controllers still come from their own answer (so the Devices page names this phone, and says
+    nothing about pairing while nothing about it is known), and the app asks the service-worker registration for the
+    newer version (with `autoUpdate` the new worker activates and the page reloads once the browser has it). On the
+    other pages the app keeps the last list without a word until that reload or until it is reopened. The reload
+    after the update check is not yet verified on a device.
+
+46. **With Drag on, Touchpad mode has no pinch zoom.** While Drag holds the mouse button, a second finger is ignored
+    (as before 1.5), so a pinch does not zoom; End Drag first, then pinch. The 1× button still works.
+
+47. **In a `drawn` or 1.4 session the zoomed Touchpad view follows a guess, not the PC's pointer.** No position report
+    ever arrives in such a session, so the point the zoomed view keeps in sight starts at the first pinch centre (or
+    the last direct-mode tap) and is dead-reckoned from the moves sent, with nothing to correct it: it can sit away
+    from the PC's real pointer from the start, and drift further with Windows' "Enhance pointer precision" or after a
+    batch the PC dropped. The pointer itself is in the picture there and stays where the PC puts it; only the zoomed
+    view can lead away from it, and 1× shows the whole picture again. Not yet verified on a device.

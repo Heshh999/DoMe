@@ -249,10 +249,12 @@ def test_h264_mf_opens_low_delay_without_b_frames_and_records_its_open_facts(mon
     assert ctx.flags & Flags.low_delay and ctx.flags & Flags.global_header and ctx.max_b_frames == 0
     assert ctx.opened_with == {"scenario": "display_remoting", "rate_control": "cbr", "hw_encoding": "0"}
     facts = enc.open_facts()
+    assert ctx.pix_fmt == "nv12"  # mfenc accepts only an input type that is exactly the context's format
     assert facts == {
         "label": "h264_mf",
+        "hw": False,
         "mft": "Intel® Quick Sync Video H.264 Encoder MFT",
-        "pix_fmt": "yuv420p",
+        "pix_fmt": "nv12",
         "size": "1280x720",
         "fps": 30,
         "kbps": 1500,
@@ -417,11 +419,13 @@ def test_encoder_candidates_follow_the_preference_order() -> None:
 def test_the_probe_runs_at_the_given_size_and_names_every_failed_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, int, int]] = []
 
-    def one_frame(choice: encode.EncoderChoice, width: int, height: int) -> str | None:
+    def one_frame(choice: encode.EncoderChoice, width: int, height: int) -> encode.ProbeResult:
         calls.append((choice.label, width, height))
-        return "open: Invalid argument (errno 22)" if choice.hardware else None
+        if choice.hardware:
+            return encode.ProbeResult(choice.label, False, reason="open: Invalid argument (errno 22)", gated=True)
+        return encode.ProbeResult(choice.label, True)
 
-    monkeypatch.setattr(encode, "_encode_one_frame", one_frame)
+    monkeypatch.setattr(encode, "_probe_h264", one_frame)
     monkeypatch.setattr(av, "codecs_available", set(av.codecs_available) | {"h264_mf"})
     failures: list[encode.ProbeFailure] = []
     candidates = encode.encoder_candidates(["h264", "vp8"], dev_h264=False, platform="win32")
@@ -447,7 +451,9 @@ def test_a_candidate_that_cannot_open_carries_ffmpegs_reason() -> None:
     [failure] = failures
     assert failure.candidate == "libx264 DEV ONLY" and failure.reason.startswith("open: ") and "errno" in failure.reason
     rows = encode.list_encoders(dev_h264=False)
-    assert rows == [{"encoder": "vp8 (aiortc libvpx)", "kind": "vp8", "available": True, "note": ""}]
+    assert rows == [
+        {"encoder": "vp8 (aiortc libvpx)", "kind": "vp8", "available": True, "note": "", "frames_in": 0, "mft": None}
+    ]
 
 
 async def test_the_worker_start_probes_at_the_output_size_and_logs_each_failed_candidate(
@@ -456,7 +462,11 @@ async def test_the_worker_start_probes_at_the_output_size_and_logs_each_failed_c
     seen: dict[str, Any] = {}
 
     def probe(
-        candidates: list[encode.EncoderChoice], width: int, height: int, failures: list[encode.ProbeFailure]
+        candidates: list[encode.EncoderChoice],
+        width: int,
+        height: int,
+        failures: list[encode.ProbeFailure],
+        results: list[encode.ProbeResult] | None = None,
     ) -> encode.EncoderChoice:
         seen["size"], seen["labels"] = (width, height), [c.label for c in candidates]
         failures.append(encode.ProbeFailure("h264_mf hw", "open: Invalid argument (errno 22)"))
@@ -1079,3 +1089,367 @@ def test_every_new_log_line_fits_the_supervisors_cap_and_no_key_is_redacted(
         assert len(line) < STDERR_LINE_MAX, (len(line), line)
         assert "[redacted]" not in line, line
         assert redact_text_line(line) == line, line  # no run of 40 token characters, no address
+
+
+# ----- E: hardware H.264 (design 2a §3.8, DECISIONS #105) --------------------------------------------------------------
+def hardware_choice() -> encode.EncoderChoice:
+    return encode.encoder_candidates(["h264"], dev_h264=False, platform="win32")[0]
+
+
+def software_choice() -> encode.EncoderChoice:
+    return encode.encoder_candidates(["h264"], dev_h264=False, platform="win32")[1]
+
+
+@pytest.fixture
+def with_mf(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(av, "codecs_available", set(av.codecs_available) | {"h264_mf"})
+
+
+def test_every_h264_candidate_takes_nv12_and_the_hardware_one_can_be_left_out() -> None:
+    win = encode.encoder_candidates(["h264", "vp8"], dev_h264=False, platform="win32")
+    assert [(c.label, c.pix_fmt) for c in win] == [
+        ("h264_mf hw", "nv12"),
+        ("h264_mf", "nv12"),
+        ("vp8 (aiortc libvpx)", "yuv420p"),
+    ]
+    assert [
+        c.label for c in encode.encoder_candidates(["h264", "vp8"], dev_h264=False, platform="win32", hw=False)
+    ] == [
+        "h264_mf",
+        "vp8 (aiortc libvpx)",
+    ]
+    assert encode.encoder_candidates(["h264"], dev_h264=False, platform="win32", hw=False)[0].hardware is False
+    [dev] = encode.encoder_candidates(["h264"], dev_h264=True, platform="linux")
+    assert dev.pix_fmt == "nv12" and dev.development_only
+    assert encode.PROBE_MAX_FRAMES == 16 and encode.PROBE_BUDGET_SECONDS == 3.0
+
+
+def test_the_hardware_encoder_opens_with_nv12_and_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = FakeContext(extradata=annexb(SPS, PPS), mft="NVIDIA H.264 Encoder MFT")
+    with_context(monkeypatch, ctx)
+    facts = encode.H264Encoder(hardware_choice(), 1280, 720, 30, 1500).open_facts()
+    assert ctx.pix_fmt == "nv12" and ctx.opened_with is not None and ctx.opened_with["hw_encoding"] == "1"
+    assert (facts["label"], facts["hw"], facts["pix_fmt"], facts["mft"]) == (
+        "h264_mf hw",
+        True,
+        "nv12",
+        "NVIDIA H.264 Encoder MFT",
+    )
+
+
+def test_the_probe_gets_a_held_picture_out_of_a_hardware_transform(
+    monkeypatch: pytest.MonkeyPatch, with_mf: None
+) -> None:
+    """A transform that holds 7 frames (as the software MFT did at the 1 fps floor, DECISIONS #98): the probe feeds up
+    to 16 and accepts it with the facts: the first packet after 8 frames, the parameter sets from extradata."""
+    ctx = FakeContext(
+        extradata=annexb(SPS, PPS), script=[[]] * 7 + [[annexb(IDR)]], mft="Intel® Quick Sync Video H.264 Encoder MFT"
+    )
+    with_context(monkeypatch, ctx)
+    result = encode.probe_candidate(hardware_choice(), 1152, 720)
+    assert result == encode.ProbeResult(
+        "h264_mf hw",
+        True,
+        frames_in=8,
+        open_ms=result.open_ms,
+        mft="Intel® Quick Sync Video H.264 Encoder MFT",
+        parameter_sets="extradata",
+        gated=True,
+    )
+    assert ctx.pix_fmt == "nv12" and (ctx.width, ctx.height) == (1152, 720)
+    assert result.as_dict() == {
+        "encoder": "h264_mf hw",
+        "ok": True,
+        "gated": True,
+        "reason": "",
+        "frames_in": 8,
+        "open_ms": result.open_ms,
+        "mft": "Intel® Quick Sync Video H.264 Encoder MFT",
+        "parameter_sets": "extradata",
+    }
+
+
+def test_the_probe_refuses_a_hardware_transform_that_gives_nothing_or_no_parameter_sets(
+    monkeypatch: pytest.MonkeyPatch, with_mf: None
+) -> None:
+    with_context(monkeypatch, FakeContext(extradata=annexb(SPS, PPS)))  # never outputs
+    silent = encode.probe_candidate(hardware_choice(), 1280, 720)
+    assert (silent.ok, silent.reason, silent.frames_in, silent.gated) == (False, "no packet within 16 frames", 16, True)
+    with_context(monkeypatch, FakeContext(extradata=b"", script=[[annexb(IDR)]]))  # a slice, no SPS/PPS anywhere
+    bare = encode.probe_candidate(hardware_choice(), 1280, 720)
+    assert (bare.ok, bare.reason, bare.frames_in, bare.parameter_sets) == (False, "packet without SPS/PPS", 1, "")
+    with_context(monkeypatch, FakeContext(extradata=b"", script=[[annexb(SPS, PPS, IDR)]]))  # in band only: fine
+    inband = encode.probe_candidate(hardware_choice(), 1280, 720)
+    assert (inband.ok, inband.reason, inband.parameter_sets) == (True, "", "inband")
+    with_context(monkeypatch, FakeContext(extradata=b"", script=[[annexb(SPS, PPS)], [annexb(P_SLICE)]]))
+    later = encode.probe_candidate(hardware_choice(), 1280, 720)  # sets first, the slice in the next packet
+    assert (later.ok, later.frames_in, later.parameter_sets) == (True, 2, "inband")
+
+
+def test_the_probe_is_bounded_in_time_and_names_encode_failures(monkeypatch: pytest.MonkeyPatch, with_mf: None) -> None:
+    class Slow(FakeContext):
+        def encode(self, frame: Any) -> list[Any]:
+            time.sleep(0.03)
+            return []
+
+    monkeypatch.setattr(encode, "PROBE_BUDGET_SECONDS", 0.05)
+    with_context(monkeypatch, Slow(extradata=annexb(SPS, PPS)))
+    slow = encode.probe_candidate(hardware_choice(), 1280, 720)
+    assert slow.ok is False and slow.reason == "no packet within 0.05 s" and 2 <= slow.frames_in < 16
+
+    class Failing(FakeContext):
+        def encode(self, frame: Any) -> list[Any]:
+            av.logging.log(av.logging.ERROR, "h264_mf", "ProcessInput() failed: MF_E_NOTACCEPTING\n")
+            raise av.error.ExternalError(capture_dda.AVERROR_EXTERNAL, "Generic error in an external library")
+
+    with_context(monkeypatch, Failing(extradata=annexb(SPS, PPS)))
+    failing = encode.probe_candidate(hardware_choice(), 1280, 720)
+    assert failing.ok is False and failing.reason.startswith("encode: ProcessInput() failed: MF_E_NOTACCEPTING")
+    assert failing.frames_in == 0
+
+
+def test_the_software_candidate_keeps_its_acceptance_with_the_facts_recorded(
+    monkeypatch: pytest.MonkeyPatch, with_mf: None
+) -> None:
+    """2a review #20: the software MFT is the only encoder verified on a device; it is still accepted after it opened
+    and encoded one frame, packet or not (``gated`` false), and the probe records what it saw."""
+    with_context(monkeypatch, FakeContext(extradata=avcc_record(SPS, PPS), mft="H264 Encoder MFT"))  # holds frames
+    result = encode.probe_candidate(software_choice(), 1280, 720)
+    assert (result.ok, result.gated, result.frames_in, result.parameter_sets, result.mft) == (
+        True,
+        False,
+        1,
+        "extradata",
+        "H264 Encoder MFT",
+    )
+    failures: list[encode.ProbeFailure] = []
+    results: list[encode.ProbeResult] = []
+    with_context(monkeypatch, FakeContext(extradata=annexb(SPS, PPS)))  # one context for both: neither outputs
+    chosen = encode.probe_encoders(
+        encode.encoder_candidates(["h264", "vp8"], dev_h264=False, platform="win32"), 1280, 720, failures, results
+    )
+    assert chosen.label == "h264_mf" and [r.encoder for r in results] == ["h264_mf hw", "h264_mf"]
+    assert failures == [encode.ProbeFailure("h264_mf hw", "no packet within 16 frames")]
+    assert [r.gated for r in results] == [True, False]
+
+
+def test_list_encoders_rows_carry_the_probe_facts(monkeypatch: pytest.MonkeyPatch, with_mf: None) -> None:
+    with_context(monkeypatch, FakeContext(extradata=annexb(SPS, PPS), script=[[annexb(IDR)]] * 2, mft="M"))
+    real = encode.encoder_candidates
+
+    def on_windows(preference: list[str], *, dev_h264: bool) -> list[encode.EncoderChoice]:
+        return real(preference, dev_h264=dev_h264, platform="win32")
+
+    monkeypatch.setattr(encode, "encoder_candidates", on_windows)
+    rows = encode.list_encoders(dev_h264=False)
+    assert rows[0] == {
+        "encoder": "h264_mf hw",
+        "kind": "h264",
+        "available": True,
+        "note": "",
+        "frames_in": 1,
+        "mft": "M",
+    }
+    assert rows[-1]["encoder"] == "vp8 (aiortc libvpx)" and rows[-1]["available"] is True
+
+
+def test_a_reopen_that_fails_is_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    contexts: list[FakeContext] = []
+    refuse = [False, True, False]  # the open, the reopen (refused), the retry
+
+    class Refusing(FakeContext):
+        def open(self) -> None:
+            if refuse[len(contexts) - 1]:
+                raise av.error.ExternalError(capture_dda.AVERROR_EXTERNAL, "Generic error in an external library")
+            super().open()
+
+    def create(_name: str, _mode: str) -> FakeContext:
+        contexts.append(Refusing(extradata=annexb(SPS, PPS)))
+        return contexts[-1]
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(av, "CodecContext", SimpleNamespace(create=create))
+    monkeypatch.setattr(encode.time, "sleep", sleeps.append)
+    enc = encode.H264Encoder(hardware_choice(), 1280, 720, 30, 1500)
+    with structlog.testing.capture_logs() as logs:
+        enc.reopen(800)
+    assert len(contexts) == 3 and enc._ctx is contexts[2] and enc.bitrate_kbps == 800  # noqa: SLF001
+    assert sleeps == [encode.REOPEN_RETRY_SECONDS] == [0.1]
+    assert [e["event"] for e in logs] == ["H.264 encoder reopen failed; retrying once"]
+    refuse[:] = [False, True, True, True, True]
+    contexts.clear()
+    enc = encode.H264Encoder(hardware_choice(), 1280, 720, 30, 1500)
+    with pytest.raises(encode.EncoderOpenError):
+        enc.reopen(500)  # a second failure: the track's encoder_stalled open_error
+    assert len(contexts) == 3
+
+
+class FormatRecorder:
+    """What the track gives an H.264 encoder, by pixel format."""
+
+    formats: list[str] = []
+
+    def __init__(self, *_args: Any) -> None:
+        self.pending, self.prepended, self.non_annexb, self.first_idr = 0, 0, 0, None
+
+    def open_facts(self) -> dict[str, Any]:
+        return {"label": "recorder"}
+
+    def encode(self, frame: Any, *, force_idr: bool) -> list[Any]:
+        FormatRecorder.formats.append(frame.format.name)
+        return []
+
+    def close(self) -> None:
+        return None
+
+
+async def test_the_track_converts_frames_to_the_encoders_pixel_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A yuv420p fake source and an NV12 encoder: the frame is converted in the worker thread before it is encoded;
+    the held still frame stays as the source gave it. A VP8 track converts an NV12 frame to yuv420p."""
+    monkeypatch.setattr(FormatRecorder, "formats", [])
+    monkeypatch.setattr(track_module, "H264Encoder", FormatRecorder)
+    events: list[dict[str, Any]] = []
+    track = still_h264_track(events)
+    assert track.choice.pix_fmt == "nv12"
+    pull = asyncio.ensure_future(track.recv())
+    try:
+        for _ in range(200):
+            if len(FormatRecorder.formats) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        assert FormatRecorder.formats[:2] == ["nv12", "nv12"] and track.frames_converted >= 2
+        assert track._last_frame is not None and track._last_frame.format.name == "yuv420p"  # noqa: SLF001
+    finally:
+        await stop_track(track, pull)
+    allowed = asyncio.Event()
+    allowed.set()
+    vp8 = ScreenTrack(
+        source=fake.SyntheticSource(64, 36, 30, pix_fmt="nv12"),
+        choice=encode.EncoderChoice("vp8", ""),
+        width=64,
+        height=36,
+        fps=30,
+        bitrate_kbps=500,
+        capture_allowed=allowed,
+        emit=events.append,
+    )
+    try:
+        frame = await asyncio.wait_for(vp8.recv(), 5)
+        assert frame.format.name == "yuv420p" and frame.pts is not None and frame.time_base == encode.VIDEO_TIME_BASE
+        assert vp8.frames_converted == 1
+    finally:
+        await vp8.aclose()
+
+
+async def test_the_track_reports_what_its_source_captured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After the source's one open (worker thread): ``{source, cursor_drawn}``; again when a fallback inside the
+    source changed it (Desktop Duplication → Windows.Graphics.Capture), never per frame otherwise."""
+
+    class Switching(fake.SyntheticSource):
+        kind = "dda"
+        reads = 0
+
+        def read(self) -> Any | None:
+            self.reads += 1
+            if self.reads == 3:
+                self.kind, self.cursor_drawn = "wgc", True  # what DdaWithFallback does inside read()
+            return super().read()
+
+    reports: list[dict[str, Any]] = []
+    allowed = asyncio.Event()
+    allowed.set()
+    track = ScreenTrack(
+        source=Switching(64, 36, 60, cursor_drawn=False),
+        choice=encode.EncoderChoice("vp8", ""),
+        width=64,
+        height=36,
+        fps=60,
+        bitrate_kbps=500,
+        capture_allowed=allowed,
+        emit=lambda e: None,
+        on_source_open=reports.append,
+    )
+    try:
+        for _ in range(6):
+            await asyncio.wait_for(track.recv(), 5)
+        assert reports == [{"source": "dda", "cursor_drawn": False}, {"source": "wgc", "cursor_drawn": True}]
+        assert track.source_facts() == {"source": "wgc", "cursor_drawn": True}
+    finally:
+        await track.aclose()
+
+
+async def test_the_worker_sends_the_probe_rows_to_the_agent_and_logs_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``{"ev": "encoders", "probed": [...]}`` right after ``answer``, one ``screen encoder probed`` line per
+    candidate (the key is ``encoder``, never a parameter set), ``hw_encoding`` false leaves the hardware candidate
+    out of the probe."""
+    asked: list[bool] = []
+    real = worker_main.encoder_candidates
+
+    def candidates(preference: list[str], *, dev_h264: bool, hw: bool = True) -> list[encode.EncoderChoice]:
+        asked.append(hw)
+        return real(preference, dev_h264=dev_h264, hw=hw)
+
+    monkeypatch.setattr(worker_main, "encoder_candidates", candidates)
+    offer = await make_phone_offer(aiortc.RTCPeerConnection(aiortc.RTCConfiguration(iceServers=[])), close=True)
+    w = InProcessWorker()
+    try:
+        with structlog.testing.capture_logs() as logs:
+            w.start()
+            w.send(start_message(offer, encoder_preference=["vp8"], hw_encoding=False))
+            await w.expect("answer", timeout=20)
+            encoders = await w.expect("encoders", timeout=5)
+        assert asked == [False]
+        assert encoders == {
+            "ev": "encoders",
+            "probed": [
+                {
+                    "encoder": "vp8 (aiortc libvpx)",
+                    "ok": True,
+                    "gated": False,
+                    "reason": "",
+                    "frames_in": 0,
+                    "open_ms": 0,
+                    "mft": None,
+                    "parameter_sets": "",
+                }
+            ],
+        }
+        [probed] = [e for e in logs if e["event"] == "screen encoder probed"]
+        assert probed["encoder"] == "vp8 (aiortc libvpx)" and probed["ok"] is True and "candidate" not in probed
+        w.send({"op": "stop"})
+        assert await w.finish() == 0
+    finally:
+        await w.aclose()
+
+
+def test_the_new_log_lines_fit_the_supervisors_cap_and_no_key_is_redacted(capsys: pytest.CaptureFixture[str]) -> None:
+    worker_main.configure_worker_logging("INFO")
+    try:
+        log = structlog.get_logger("dome_agent.screen.worker.main")
+        log.info(
+            "screen encoder probed",
+            encoder="h264_mf hw",
+            ok=False,
+            gated=True,
+            frames_in=16,
+            open_ms=99_999,
+            mft="M" * 30 + " Quick Sync Video H.264 Encoder MFT",
+            parameter_sets="extradata",
+            reason="no packet within 16 frames",
+        )
+        log.warning("H.264 encoder reopen failed; retrying once", error="ExternalError")
+        log.warning("cursor reporting stopped", errors=10, error="OSError")
+        log.warning(
+            "Windows.Graphics.Capture cannot leave the pointer out; it stays drawn",
+            reason=capture_dda.sanitise_reason("Toggling cursor capture is not supported by the Graphics Capture API"),
+        )
+        log.info("screen cursor shape", kind="custom", w=64, h=64, bitmap_chars=8192)
+        err = capsys.readouterr().err
+    finally:
+        configure_logging("INFO", None)
+    lines = [line for line in err.splitlines() if line.strip()]
+    assert len(lines) == 5, lines
+    for line in lines:
+        assert len(line) < STDERR_LINE_MAX, (len(line), line)
+        assert "[redacted]" not in line, line
+        assert redact_text_line(line) == line, line

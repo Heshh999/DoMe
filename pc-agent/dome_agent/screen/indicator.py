@@ -7,6 +7,10 @@ and nothing is captured. The bars' rectangles (physical pixels) are registered a
 land on them are dropped (``rules.local_permission_ui``) and are sent to the phone, normalised to the streamed
 monitor, in the ``geometry`` message. After a display change the session manager re-checks ``present()``; the bars'
 tkinter implementation and the capture exclusion are **not yet verified on a device**.
+
+A same-controller replacement (Next screen, protocol 1.5) keeps the bars up across the end of the old session; the
+controller records the viewer name and the audio flag of the armed request, so the new session reuses the bars only
+when they say the same thing (``ScreenSessionManager._bring_up``).
 """
 
 from __future__ import annotations
@@ -60,6 +64,10 @@ class IndicatorController:
         self._armed = False
         self.reserved: tuple[Rect, ...] = ()
         self.monitors: tuple[Monitor, ...] = ()  # the monitor set the bars were created for (re-checked while live)
+        # what the armed bars say (who is watching, whether PC sound is shared): a replacement reuses them only when
+        # its own request would say the same
+        self.viewer_name: str | None = None
+        self.audio: bool | None = None
 
     @property
     def armed(self) -> bool:
@@ -98,6 +106,8 @@ class IndicatorController:
             raise self._unavailable(bars.detail or "a bar could not be created")
         self._armed = True
         self.monitors = monitor_list
+        self.viewer_name = viewer_name
+        self.audio = bool(audio)
         self.reserved = tuple(bars.reserved)
         self._permission_ui.set_reserved(RESERVED_OWNER, self.reserved)
         return bars
@@ -126,6 +136,8 @@ class IndicatorController:
         self._armed = False
         self.reserved = ()
         self.monitors = ()
+        self.viewer_name = None
+        self.audio = None
         self._permission_ui.clear_reserved(RESERVED_OWNER)
         self._hide_quietly()
 

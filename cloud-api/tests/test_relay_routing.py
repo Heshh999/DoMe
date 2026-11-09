@@ -133,7 +133,7 @@ async def test_hello_is_required_and_validated(env: Env, alice: Browser) -> None
         )
     )
     err = await recv_frame(ws, "relay_to_controller")
-    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.4"]
+    assert err["error"]["code"] == "PROTOCOL_INCOMPATIBLE" and err["error"]["detail"]["supported"] == ["1.5"]
     assert await close_code(ws) == 4000
 
 
@@ -665,7 +665,7 @@ async def test_action_stamped_below_its_since_is_refused_before_forwarding(
                 cid = await ctrl.command(pc, action, params, target, protocol_version=stamp)
                 failure = await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
                 assert failure["error"]["detail"] == {"peer": stamp, "required": "1.2"}
-        cid = await ctrl.command(pc, "app.maximize", {}, {"app_id": "notepad"}, protocol_version="1.5")
+        cid = await ctrl.command(pc, "app.maximize", {}, {"app_id": "notepad"}, protocol_version="1.6")
         await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
         await expect_nothing(online_agent.ws)  # type: ignore[arg-type]
         assert (await alice.get(f"/v1/commands?pc_id={pc}"))["commands"] == []
@@ -707,3 +707,30 @@ async def test_1_1_agent_and_1_1_phone_are_still_accepted_by_a_1_2_relay(
         assert (await phone.recv_type("result", command_id=cid))["state"] == "succeeded"
     finally:
         await phone.close()
+
+
+async def test_a_command_stamped_above_what_the_agent_announced_is_refused_before_forwarding(
+    env: Env, alice: Browser, linked_agent: AgentSim
+) -> None:
+    """rules.command_version_stamping (1.5, DECISIONS #116): the relay refuses ANY command whose stamp the target agent
+    did not announce, not only screen starts, with the stamp as the requirement; the agent never sees it."""
+    await linked_agent.connect(protocol_versions=("1.0", "1.1"), registry_version="1.1")
+    pc = linked_agent.pc_id
+    ctrl = await _phone_with(env, alice, linked_agent, "apps", "volume")
+    try:
+        for action, params, target, stamp in (
+            ("app.maximize", {}, {"app_id": "notepad"}, "1.2"),  # its own since
+            ("windows.set_volume", {"value": 20}, None, "1.2"),  # an old action stamped above what the agent speaks
+        ):
+            cid = await ctrl.command(pc, action, params, target, protocol_version=stamp)
+            failure = await _expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
+            assert failure["error"]["detail"] == {"peer": "agent", "required": stamp}
+        await expect_nothing(linked_agent.ws)  # type: ignore[arg-type]
+        assert (await alice.get(f"/v1/commands?pc_id={pc}"))["commands"] == []
+        # what the agent announced still flows
+        for stamp in ("1.0", "1.1"):
+            cid = await ctrl.command(pc, "windows.set_volume", {"value": 20}, protocol_version=stamp)
+            assert (await linked_agent.serve_one())["command_id"] == cid
+            assert (await ctrl.recv_type("result", command_id=cid))["state"] == "succeeded"
+    finally:
+        await ctrl.close()

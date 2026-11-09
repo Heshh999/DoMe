@@ -23,6 +23,7 @@ from .timeutil import check_command_window, format_rfc3339, now_utc, parse_rfc33
 from .versions import (
     INPUT_BATCH_PROTOCOL_VERSION,
     SCREEN_INPUT_PROTOCOL_VERSION,
+    command_protocol_version,
     input_batch_protocol_version,
     input_event_since,
     negotiate_version,
@@ -45,6 +46,7 @@ __all__ = [
     "VerifiedInputBatch",
     "build_hello_proof_payload",
     "build_input_batch_payload",
+    "command_protocol_version",
     "input_batch_protocol_version",
     "input_event_capabilities",
     "input_event_since",
@@ -185,7 +187,8 @@ def verify_and_parse_command(
     registry = registry or load_registry()
     schemas = schemas or load_schemas()
     envelope, payload, key = _verify(raw_envelope, resolve_key, registry)
-    # Version first (compatibility and the action's `since`, when the action is one we know), schema second.
+    # Version first (compatibility and the action's `since`, when the action is one we know), schema second. The floor
+    # its params need (`param_since`, 1.5) is judged after the schema, once the params are known to be ours.
     action = payload.get("action")
     since = registry.min_version(action) if isinstance(action, str) and action in registry.actions else None
     _check_stamp(payload, registry, since=since)
@@ -201,6 +204,9 @@ def verify_and_parse_command(
     spec = registry.get(payload["action"])
     _require_since(payload["protocol_version"], spec.since)
     params = registry.validate_params(spec.name, payload["params"])
+    # rules.command_version_stamping (1.5): a command stamped below what its PRESENT params need is refused. Judged on the
+    # raw signed params (payload["params"]), never on `params`, which validate_params filled with defaults.
+    _require_since(payload["protocol_version"], registry.min_version(spec.name, payload["params"]))
     target = registry.validate_target(spec.name, payload["target"])
     return VerifiedCommand(
         envelope=envelope,

@@ -128,6 +128,9 @@ class GateDecision:
     kind: GateKind
     cause: ConsentCause | None = None  # why a window is needed (ask)
     refusal: RefusalCause | None = None  # why no window opens (refused)
+    # a ``backoff`` refusal by the one-consent-window-per-minute rule alone, not the escalating back-off after a Deny,
+    # a timeout or a turn-off (which refuses starts from every controller); only the former lets a Next screen inherit
+    window_interval: bool = False
 
 
 class ConsentGate:
@@ -195,7 +198,7 @@ class ConsentGate:
         if now < self._backoff_until:
             return GateDecision("refused", refusal="backoff")
         if self._last_window_at is not None and now - self._last_window_at < self.window_interval:
-            return GateDecision("refused", refusal="backoff")  # one consent window per minute per PC
+            return GateDecision("refused", refusal="backoff", window_interval=True)  # one consent window per minute
         return GateDecision("ask", cause="cooldown" if cooldown else "ask_mode")
 
     def note_window_opened(self) -> None:

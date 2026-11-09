@@ -161,7 +161,7 @@ sweeper), the screen steps of `relay/router.py` (`route_command` step 8a, `route
 | From | Frame | What the relay does |
 | --- | --- | --- |
 | phone | `screen_ice_request{pc_id}` | 1.4 socket only; plan rate limit per controller and per account (`screen_ice_rate_limit`); a grant with the `screen` capability. Answers `screen_ice_servers{ice_servers, expires_at, allowance, turn}`: the STUN urls always, plus one TURN entry minted by the provider when configured (`turn: available`); otherwise `turn: unavailable` (no keys, provider failure, breaker open) or `disabled` (a cap or the monthly guard). Refusals are `error{code, ref_pc_id}` plus a `screen_ice_rejected` event. |
-| phone | signed `command` `screen.session_start` | Step 8a of `route_command`: the PC must announce 1.4 (`PROTOCOL_INCOMPATIBLE` for every `screen` command otherwise), the switch (`SCREEN_VIEW_DISABLED`), `screen_start_rate_limit`, then `metering.reserve_start` in the command's transaction (`SCREEN_ALLOWANCE_EXHAUSTED` with `resets_at` and a `screen_allowance_exhausted` event; the PC never sees the command). The forwarded command carries `relay.screen{granted_until, unlimited, stun_urls, relayed_max_kbps?}` (the last only in Data saver). The PC's `result` binds its `screen_session_id` to the reservation, or settles it (`connection_failed` / `start_failed`, a `screen_consent_declined` event for `SCREEN_CONSENT_*`) and revokes the TURN credential. The PC owns the single session per PC (`SCREEN_SESSION_OWNED` comes back as its result and is settled like any refused start; a `takeover` start's `ended{takeover}` settles the first phone's reservation and revokes its credential while the new one keeps its own); the relay remembers each forwarded start for 105 s. `screen.session_stop` needs only the 1.4 agent: it passes the switch, so a phone can always stop. |
+| phone | signed `command` `screen.session_start` | Step 8a of `route_command`: the PC must announce 1.4 (`PROTOCOL_INCOMPATIBLE` for every `screen` command otherwise), then (8b, since 1.5, every command) the PC must have announced the command's own stamp (`PROTOCOL_INCOMPATIBLE{peer: agent, required: <stamp>}`, so a start carrying `cursor` never reaches a 1.4 agent; DECISIONS #116), the switch (`SCREEN_VIEW_DISABLED`), `screen_start_rate_limit`, then `metering.reserve_start` in the command's transaction (`SCREEN_ALLOWANCE_EXHAUSTED` with `resets_at` and a `screen_allowance_exhausted` event; the PC never sees the command). The forwarded command carries `relay.screen{granted_until, unlimited, stun_urls, relayed_max_kbps?}` (the last only in Data saver). The PC's `result` binds its `screen_session_id` to the reservation, or settles it (`connection_failed` / `start_failed`, a `screen_consent_declined` event for `SCREEN_CONSENT_*`) and revokes that start's TURN credential (a relay-side refusal does the same; a credential that carries the phone's live session is never touched, DECISIONS #117). The PC owns the single session per PC (`SCREEN_SESSION_OWNED` comes back as its result and is settled like any refused start; a `takeover` start's `ended{takeover}` settles the first phone's reservation and revokes its credential while the new one keeps its own); the relay remembers each forwarded start for 105 s. `screen.session_stop` needs only the 1.4 agent: it passes the switch, so a phone can always stop. |
 | PC | `screen_answer{envelope, ref_controller_id}` (the PC-signed `screen_answer_payload`) | Delivered verbatim, `ref_controller_id` stripped, to the controller that holds the screen grant and issued the start (its socket first, any other 1.4 socket of that controller otherwise); dropped with a log line when the grant is gone. |
 | PC | `screen_session{event}` | `started` / `paused` / `resumed` / `ended` mark the ledger (`started` opens the charge, pauses the relay saw are discounted up to 120 s, `ended` settles); the `screen_session_started` / `screen_session_ended` events carry ids, the path or the reason and the relay-charged seconds, and the one log line per end a duration bucket only; delivered to the owner and the 1.4 subscribers. |
 | PC | `screen_usage{screen_session_id}` | Budget 2 per minute per session. Answers `screen_allowance`: the next ticket (`granted_until` at most 60 s ahead, `remaining_seconds` / `resets_at` on Free, `unlimited: true` on paid plans, still in chunks), or `final: true` with the honest reason: `controller_offline` (no bound socket of the owner for 60 s, or logout / session revocation / controller revocation at once), `plan_disabled`, exhausted (`resets_at`), an unknown session (no reason). The agent's own figures in the frame are read by nobody (rules.screen_metering (3)). |
@@ -180,15 +180,18 @@ account row is locked for every write, so parallel starts, renewals and the swee
 (`tests/test_screen_metering.py` runs them from separate sessions). `DOME_SCREEN_CHARGE_FROM=started` moves the start of
 the charge from the forwarded command to the PC's `started` event (default `forwarded`, rules.screen_metering).
 
-**TURN** (`turn.py`, tables `turn_credentials`, `turn_usage_days`): the phone alone gets a relay-server credential
-(the PC is on the owner's network; spec §4). `CloudflareTurn` mints short-lived credentials from the Cloudflare
-Realtime TURN API with `DOME_TURN_KEY_ID` / `DOME_TURN_API_TOKEN` (httpx, 3 s timeout), revokes them, and with
-`DOME_TURN_ANALYTICS_TOKEN` reads the account's daily egress through the GraphQL analytics API once an hour
+**TURN** (`turn.py`, tables `turn_credentials`, `turn_deferred_revocations`, `turn_usage_days`): the phone alone gets a
+relay-server credential (the PC is on the owner's network; spec §4). `CloudflareTurn` mints short-lived credentials from
+the Cloudflare Realtime TURN API with `DOME_TURN_KEY_ID` / `DOME_TURN_API_TOKEN` (httpx, 3 s timeout), revokes them, and
+with `DOME_TURN_ANALYTICS_TOKEN` reads the account's daily egress through the GraphQL analytics API once an hour
 (`reconcile`). One outstanding credential per controller (`controller_id` is the primary key): a new mint revokes the
-previous one; TTL = remaining allowance + 60 s capped at 3600 s on Free, `DOME_SCREEN_TURN_TTL_UNLIMITED_SECONDS` on
-paid plans. Revoked at the provider and marked with the reason on every §13 path: `start_refused`, `session_ended`,
-`controller_offline`, `grant_narrowed` (the `screen` capability left a `grant_update`), `plan_change` (the whole
-account), `cap_reached`, `swept` (ticket expired), `no_start` (minted but no start within the lifetime), `replaced`,
+previous one, except one bound to a session the ledger still holds open, which moves to `turn_deferred_revocations` and
+is revoked when that session ends, so a Next screen switch keeps the old session relaying and can restore it (DECISIONS
+#117); TTL = remaining allowance + 60 s capped at 3600 s on Free, `DOME_SCREEN_TURN_TTL_UNLIMITED_SECONDS` on paid
+plans. Revoked at the provider and marked with the reason on every §13 path: `start_refused` (only the credential minted
+for that start), `session_ended`, `controller_offline`, `grant_narrowed` (the `screen` capability left a
+`grant_update`), `plan_change` (the whole account), `cap_reached`, `swept` (ticket expired), `no_start` (minted but no
+start within the lifetime), `replaced`,
 plus logout / session revocation / controller revocation through `ConnectionManager` (`controller_gone`). Caps use the
 larger of the reconciled figure and a provisional bound (outstanding + charged seconds, and the TTL of session-less
 credentials, at 0.5 GB/h): `DOME_SCREEN_TURN_FREE_DAILY_GB` per Free account and day,
@@ -216,7 +219,7 @@ grant narrowing ending a session within one ticket, the stamp gate, `pc_key_mac`
 `tests/test_screen_metering.py` (every ledger rule including concurrency and the window roll-over),
 `tests/test_screen_turn.py` (`TurnService` with `FakeTurn`; the Cloudflare adapter against an `httpx.MockTransport`,
 including the 204 revoke and the GraphQL usage shape), `tests/test_screen_settings.py` (including the address masking and the redacted keys), `tests/test_screen_migration.py`
-(0005 down and up, `alembic check`). **Not verified against the real Cloudflare service** (the request and response
+(0005 and 0007 down and up, `alembic check`). **Not verified against the real Cloudflare service** (the request and response
 shapes follow its documentation and may need a fix on first contact: KNOWN_ISSUES), **not device-verified**.
 
 ## Manual input (protocol 1.1)
@@ -557,8 +560,8 @@ frame against `relay-frames.schema.json`.
   `_token/_secret/_code/_credential/_key` are redacted; IPv4/IPv6 addresses in free text are masked; URLs are logged as
   paths only. Input batches are never logged (not even on rejection
   beyond the error code), so typed text exists only in transit through this process.
-- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`, `0004_billing`, `0005_screen_view`. `dome-api`
-  applies them at start-up;
+- Migrations: `0001_initial`, `0002_support_tickets`, `0003_assistant`, `0004_billing`, `0005_screen_view`,
+  `0006_pc_protocol_versions`, `0007_turn_deferred_revocations`. `dome-api` applies them at start-up;
   on Fly.io the `release_command` applies them and the process starts with `--skip-migrations`.
 - `GET /healthz` (no auth, `no-store`): `status` (`ok`/`degraded`, 200/503), `version`, `commit` (the build
   commit or null), `database`, `forwarded_client` (above), the relay counts, and the Screen view fields `screen_view`,

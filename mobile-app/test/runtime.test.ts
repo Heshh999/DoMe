@@ -1,15 +1,16 @@
 /**
  * Runtime wiring: a REST 401 mid-session signs the user out and closes the socket; a socket drop
  * marks pending confirmations as connection-lost (and an `open` clears it); the store clock ticks so
- * time-based freshness is re-evaluated without a frame.
+ * time-based freshness is re-evaluated without a frame; a PC whose connection flips has its REST row read again
+ * (debounced, 1.5: `protocol_versions` and `agent_version` follow an agent update without a reload).
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { IDBFactory } from "fake-indexeddb";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Runtime, setRuntimeForTests } from "../src/app/runtime.ts";
+import { DEVICES_REFRESH_DEBOUNCE_MS, Runtime, setRuntimeForTests } from "../src/app/runtime.ts";
 import { api, configureApi } from "../src/lib/api.ts";
 import { getExistingKeyPair, getOrCreateKeyPair, getStoredControllerId, resetDbHandleForTests, setStoredControllerId } from "../src/lib/controllerKey.ts";
 import type { WebSocketLike } from "../src/lib/relay.ts";
@@ -245,6 +246,42 @@ describe("Runtime", () => {
     s.receive({ type: "pc_status", pc_id: other, connection: "online", last_seen: TS });
     await flush();
     expect(fetched.some((u) => u.includes(other))).toBe(false);
+  });
+
+  it("a pc_status that flips a PC's connection reads /v1/pcs again once, 2 s after the last flip; the same connection or a first status does not", async () => {
+    const fetched: string[] = [];
+    configureApi({
+      csrfToken: session.csrf_token,
+      fetchImpl: async (input) => {
+        fetched.push(String(input));
+        return String(input).endsWith("/v1/controllers") ? respond(200, { controllers: [] }) : respond(200, { pcs: [] });
+      },
+    });
+    const s = await connected();
+    const pcsReads = () => fetched.filter((u) => u.endsWith("/v1/pcs")).length;
+    const baseline = pcsReads();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      s.receive({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS }); // the first status: nothing known to flip from
+      s.receive({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS }); // unchanged
+      vi.advanceTimersByTime(DEVICES_REFRESH_DEBOUNCE_MS * 2);
+      expect(pcsReads()).toBe(baseline);
+      s.receive({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: TS }); // the agent restarts for an update…
+      vi.advanceTimersByTime(DEVICES_REFRESH_DEBOUNCE_MS - 500);
+      s.receive({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS }); // …and is back: one read for both
+      vi.advanceTimersByTime(DEVICES_REFRESH_DEBOUNCE_MS - 1);
+      expect(pcsReads()).toBe(baseline);
+      vi.advanceTimersByTime(1);
+      expect(pcsReads()).toBe(baseline + 1);
+      // a flip pending when the runtime stops is never read
+      s.receive({ type: "pc_status", pc_id: PC, connection: "offline", last_seen: TS });
+      rt!.stop();
+      vi.advanceTimersByTime(DEVICES_REFRESH_DEBOUNCE_MS * 2);
+      expect(pcsReads()).toBe(baseline + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+    await flush();
   });
 
   it("advances the live store clock while started and stops it on stop()", async () => {

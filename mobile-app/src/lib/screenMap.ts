@@ -113,6 +113,42 @@ export function toSurface(px: number, py: number, fit: Fit, view: View): { u: nu
   return { u, v };
 }
 
+/**
+ * The inverse of `toSurface` for a point of the streamed surface in normalised units (0..65535, like `cursor_pos` and
+ * `pointer_move_to`): where it is drawn in box px, through `fit` and then `view`. Used to place the phone-drawn
+ * pointer and to keep it in sight while zoomed.
+ */
+export function fromSurface(x: number, y: number, fit: Fit, view: View): { px: number; py: number } {
+  return { px: view.tx + view.s * (fit.offX + (x / NORM_MAX) * fit.cw), py: view.ty + view.s * (fit.offY + (y / NORM_MAX) * fit.ch) };
+}
+
+/** Below this zoom a pinch snaps back to the whole picture (1×). */
+export const ZOOM_SNAP_IDENTITY = 1.1;
+
+/** A zoom that ended close to 1× is the whole picture again (applied after `zoomAt` by both gesture modes). */
+export function snapIdentity(view: View): View {
+  return view.s < ZOOM_SNAP_IDENTITY ? IDENTITY_VIEW : view;
+}
+
+/**
+ * Zoomed in (Touchpad mode), the view follows the pointer: when the box point `p` (from `fromSurface`) leaves the
+ * inner window `[m, width − m] × [m, height − m]`, `m = max(minMarginPx, marginFrac · min(width, height))`, the view
+ * pans by the overshoot so the point sits on the window's edge, within the content's own edges (`clampView`). At 1×
+ * nothing moves. The margin never exceeds half the box, so a tiny box still has a window to keep the point in.
+ */
+export function followPointer(view: View, p: { px: number; py: number }, box: Box, marginFrac = 0.2, minMarginPx = 48): View {
+  if (!(view.s > 1)) return IDENTITY_VIEW;
+  const short = Math.min(box.width, box.height);
+  const m = Math.min(Math.max(minMarginPx, marginFrac * short), short / 2);
+  let { tx, ty } = view;
+  if (p.px < m) tx += m - p.px;
+  else if (p.px > box.width - m) tx -= p.px - (box.width - m);
+  if (p.py < m) ty += m - p.py;
+  else if (p.py > box.height - m) ty -= p.py - (box.height - m);
+  if (tx === view.tx && ty === view.ty) return view;
+  return clampView({ s: view.s, tx, ty }, box);
+}
+
 /** Fractions → the contract's integers (rounded, clamped to 0..65535). */
 export function normalise(u: number, v: number): { x: number; y: number } {
   return { x: clampNumber(Math.round(u * NORM_MAX), 0, NORM_MAX), y: clampNumber(Math.round(v * NORM_MAX), 0, NORM_MAX) };

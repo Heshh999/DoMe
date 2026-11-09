@@ -842,3 +842,115 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     bounded table); younger ones keep waiting for the ack, which settles them by `last_seq` and `dropped_events` as
     before. The congestion hold is unchanged. Every other per-batch rejection (INPUT_SEQUENCE_INVALID,
     INPUT_RESTRICTED, …) still settles every waiter as "dropped": it can name any batch.
+85. **The pointer drawn by the phone never goes through React state.** (Protocol 1.5, Screen view round 2a.)
+    `lib/pointer.ts` `PointerModel` is a plain object on the session client (`client.pointer`): the client feeds it
+    the PC's reports and the page's gestures feed it the moves it sends, and the overlay reads one
+    `sample(now)` per animation frame. A `cursor_pos` (up to 60 a second) goes into ONE slot on the client, last one
+    wins, and `sample()` drains that slot once per frame; no message calls `set()`, so the page does not re-render
+    for the pointer. The model keeps a predicted point that moves with the finger at once (Touchpad: each sent move
+    times 65535 / (W − 1) of the PHYSICAL screen size, `client.surfaceSize()`, never the size of the encoded
+    picture, which can be half of it; direct mode: the tap, loupe or scroll point) and reconciles it with the
+    reports: while a finger is on the glass or moved in the last `IDLE_MS` (120 ms) each report pulls it
+    `BLEND_WHILE_MOVING` (35 %) of the way, after that the shown point eases to the report over `EASE_MS` (80 ms),
+    and an error above `SNAP_FRACTION` (10 %) of the screen snaps. The PC sends a position only when it changes and
+    never repeats one, so the last report of a slide usually arrives while the finger still counts as moving and is
+    only blended: once no move was sent and no report came for `IDLE_MS` (a finger may still rest on the glass),
+    `sample()` eases the shown point to that last report, once per report (waiting for the reports to go quiet keeps a
+    report still in flight from being undone). Nothing is shown before the session's first report, in a `drawn` or
+    1.4 session, while paused, or after a new geometry until the next report. The follow
+    point for the zoomed Touchpad view (`followSample`) exists in every mode, but only an `overlay` session corrects
+    it: in a `drawn` or 1.4 session no report ever arrives, so it starts at the first pinch centre (`seedFollow`, or
+    the last direct-mode tap) and is dead-reckoned from the moves sent, with nothing to correct it; it can sit away
+    from the PC's real pointer and drift (KNOWN_ISSUES 47). The four numbers are named so a device test can tune them
+    in one place. A custom shape is checked by its PNG header bytes only (`lib/cursorShape.ts`, inside try/catch: a
+    schema-valid string must never throw out of the data-channel handler) and drawn as an `<img>` from a `data:`
+    URL; it is kept in memory only and never logged. Unit-tested (jsdom, the fake peer); not yet verified on a
+    device.
+86. **Switching screens is never an ended session.** `client.switchSurface(index)` sends a fresh signed
+    `screen.session_start{surface: index}` while the current session stays up: no `bye`, no
+    `screen.session_stop`, the stage and the last picture stay. The old peer and channels are set aside with their
+    handlers detached (and every handler checks that its peer or channel is still the current one), but the old
+    heartbeat keeps renewing the PC's 8 s lease on the old channel, so a refused switch loses nothing. The new
+    session's stream goes to `incomingStream` (a second, hidden `<video>`); on its first frame it becomes `stream`
+    (`switched` drives the short "Screen 2 of 2" note) and the old peer closes. The old id is retired when the new
+    result arrives; its `ended{replaced}` is matched by id before that and changes no state, and its `paused` and
+    `resumed` are recorded in what a restore brings back (so a refused switch never shows a paused PC as sending, and
+    no stall restart stops the healthy old session). A switch that fails before the new picture arrived (the relay's
+    rate limit, the Free allowance, PC offline, a 1.4 agent's declined consent, no answer, a local error, a new
+    session that delivered no picture within 15 s) restores the old session as it was, with `switchFailed` for a
+    short "Couldn't switch screens" note, unless the PC had already ended the old one: then it is an ordinary
+    failure. For the Free allowance the restored session's allowance reads 0 with the refusal's `resets_at` and there
+    is no note: the countdown at 0, then the PC's `ended{allowance_exhausted}` and the exhausted state. A new picture
+    that arrived but never showed within 15 s (H.264 this phone does not decode, say) means the PC already replaced
+    the old session: the old one is closed and a fresh session starts on the new screen like after any start whose
+    picture never came (VP8 only when H.264 arrived and never decoded; counted toward the two retries). During a
+    switch the state keeps how long the picture was live (Stop says it), the consent the PC asked for (a hidden page
+    offers Resume rather than starting by itself) and a relay socket that is down (clicks stay paused, also after a
+    restore). A stall or transport restart never runs underneath a switch. Unit-tested (jsdom, the fake peer); the
+    PC side of the switch is integration-tested (Linux, fakes) end to end with the Python phone
+    (`tests/test_e2e_screen.py::test_next_screen_replaces_the_session_and_keeps_the_pointer_on_the_watched_monitor`);
+    whether Safari keeps the last picture under the switch is not yet verified on a device.
+87. **`cursor` is sent only to a PC that announced 1.5, and only that start opens the second data channel.** The
+    start carries `cursor: "overlay"` when the PC's `protocol_versions` (REST, `store/devices.ts`) include 1.5; the
+    shared builder then stamps it 1.5 (and 1.4 without it). Only such a start opens `dome-screen-cursor-v1`
+    (unordered, `maxRetransmits: 0`, after `dome-screen-v1` in the same offer): the shipped 1.4 worker sends on the
+    channel the phone announced last, so a second channel in a start to a 1.4 PC would lose its state, allowance and
+    restricted messages (found by the end-to-end run of the first build). When the list was stale the relay answers
+    `PROTOCOL_INCOMPATIBLE {peer: "agent", required: "1.5"}` before forwarding: the phone marks the PC for this app
+    run and starts once more without `cursor` (same screen, a switch stays a switch, not counted as a retry). The
+    mark clears when a later start sees a changed list that includes 1.5 (an agent update after a downgrade); a list
+    that did not change keeps it, so a stale row can never cause a refusal at every start. `INVALID_PARAMETERS` on a
+    numbered screen is treated as "that screen is gone" only when the start carried no `cursor` (or the message
+    names the surface): a pre-1.5 agent answers the same code for an unknown param.
+88. **The last screen watched is remembered per PC, in memory, for the app run.** `lastSurfaceByPc` is set from
+    each result's `surface_index`; the next Show screen, a resume after the app was in the background and an
+    automatic fresh session go back to it, and a new launch starts on the main screen. When the remembered screen is
+    not connected any more (`INVALID_PARAMETERS` naming the surface) the start goes once more on the main screen
+    and `switchedGone` drives "Screen N isn't connected any more. Showing screen 1." No setting and nothing stored.
+89. **The pointer is drawn outside the zoom layer at 24 CSS px; hidden under the loupe and before the first
+    report.** (Protocol 1.5, Screen view round 2a.) `components/ScreenPointer.tsx` is a sibling right after the
+    zoom/pan layer of `ScreenSurface`, so a pinch moves it but never scales it: the phone's own glyphs for the 14
+    Windows system kinds (`lib/cursorGlyphs.ts`, a 24-unit box drawn at 24 CSS px, white with a 1 px black edge and
+    a soft shadow, each with its hotspot; the busy ring spins, and the "working in the background" arrow spins only
+    its small ring) and a custom bitmap from the PC as an `<img>` from a `data:` URL, scaled down to 24 px when it is
+    taller, never up, its hotspot with it. A missing shape is drawn as the arrow. Its position goes through the
+    picture's letterbox fit (`fitRef`, refreshed when the box resizes, on the shown `<video>`'s metadata and resize,
+    at every swap and at each gesture) and the zoom (`viewRef`) with `fromSurface`, written straight onto the element
+    as `transform`/`opacity` in a `requestAnimationFrame` loop that reads `pointer.sample()` once a frame (no React
+    state per message; only a new shape re-renders the glyph). It is hidden before the session's first report, while
+    the PC says it is not visible, while no fit is known, while the loupe is open, while the PC paused, during a
+    switch of screens and for 150 ms after a tap's ripple, and not rendered at all in a `drawn` or 1.4 session. It
+    sits above the readout and the status line (`z-[15]`) and under the loupe (`z-20`). The gestures that are sent
+    move it at once: a Touchpad move by the same dx, dy the batch carries (on the screen's physical size), a tap,
+    loupe click or two-finger scroll to its point. Zoomed in Touchpad mode, the view follows the pointer: a frame loop
+    that runs only while zoomed in that mode reads `followSample()` and pans by the overshoot past a 20 % margin
+    (counted for the readout); it works in every pointer mode of the PC, because a pinch with nothing to follow seeds
+    the follow point at the fingers' centre; while two fingers pinch, they own the view. The Touchpad machine is fed
+    box coordinates (it uses deltas and distances only), so its pinch zooms about the fingers; within one pinch the
+    unsnapped zoom is kept and the 1.1× snap back to the whole picture applies to what is shown. The standalone
+    Touchpad page has nothing to zoom: its machine is built with `pinchRatio: Infinity`, so two fingers there never
+    classify as a pinch and scroll or right-click exactly as before 1.5 (an anchored thumb, a sloppy slide, a
+    jittery two-finger tap). Unit-tested (jsdom, the fake peer); the feel of the pointer and of the follow is not
+    yet verified on a device.
+90. **Header: time-left on line two; the screens button only with two or more monitors; the 1× chip.** The strip
+    is at its 390 px limit, so the Free time left moves under the PC name, after "Encrypted between your PC and this
+    phone" (or the beta label) and a dot; only its own text turns amber when low, and it keeps
+    `data-testid="screen-time-left"`. A screens button (the layout icon and "1/2") comes before Touchpad only when the
+    PC has two or more screens; its label says which screen is shown and which comes next, it is disabled outside a
+    live or paused picture and while a switch is in flight, when a spinner replaces the numbers. Screens are counted
+    from 1 in DoMe's own order (the main screen is 1; Windows may number them differently). During a switch the stage
+    and the last picture stay under "Switching to screen 2…", which gives way to "Tap to show the picture" when the
+    new picture's play() was refused (the tap plays both `<video>` elements) and to the consent wait when the PC asks
+    someone; the new picture plays on a second `<video>` under the shown one (not `display: none`, so Safari keeps
+    decoding it) and the two swap roles by CSS on its first frame, so the shown element's `srcObject` is never
+    reassigned during a switch. Short notes at the bottom, after the input notice and "View only": "Couldn't switch
+    screens. Still showing screen N." and "Screen N isn't connected any more. Showing screen 1." for 3 s, "Screen 2 of
+    2" for 1.5 s, and once per session for 3 s "On this PC the pointer stays in the picture…" when the phone asked
+    for its own pointer and the PC kept it in the picture (never on a 1.4 PC, which was never asked); no note when a
+    switch failed because the Free time ran out (the time left reads 0 over the kept picture, then the exhausted state
+    takes over when the PC ends the session). While zoomed, in either mode, a "1×" button at the bottom left ("Back to
+    the whole screen") shows the whole picture again; its touches never reach the gesture machines, and it is drawn
+    above the page's bottom notices ("View only" stays up for a whole view-only session; the notices let touches
+    through). In Touchpad mode the Drag row stays through a switch, so the kept picture is not laid out again and End
+    Drag stays reachable while the button is held. A mode switch and a new picture also start from the whole picture.
+    Unit-tested (jsdom, the fake peer); not yet verified on a device.

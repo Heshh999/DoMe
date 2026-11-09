@@ -1,4 +1,4 @@
-# DoMe protocol 1.4
+# DoMe protocol 1.5
 
 The wire contract between the phone PWA (controller), cloud-api (relay), the Windows agent (PC)
 and the browser extension. The normative source is `shared/protocol/`; this document explains it
@@ -8,7 +8,8 @@ support tickets. Section 18 describes what protocol 1.2 adds: maximise, restore 
 approved apps, YouTube search, per-action version stamping and browser-bridge version negotiation.
 Section 19 lists REST additions that need no version bump (the AI assistant's PWA-only endpoints).
 Protocol 1.3 (plans and billing, `docs/BILLING.md`) changed REST bodies and `plans.json`. Section 20
-describes what protocol 1.4 adds: Screen view, Phase 1 (`docs/design/screen-view.md`).
+describes what protocol 1.4 adds: Screen view, Phase 1 (`docs/design/screen-view.md`). Section 21
+describes what protocol 1.5 adds: Screen view, Phase 2a (`docs/design/screen-view-2a.md`).
 When the two disagree, the JSON files win and this document must be
 corrected. Changing any schema requires a version bump (§1) and an update here.
 
@@ -40,23 +41,29 @@ Files:
 | `fixtures/strict-json-cases.json` | Accept/reject cases for both strict parsers and pattern semantics |
 | `fixtures/test-controller-key.pem` | The phone fixture key (test only) |
 | `fixtures/test-pc-key.pem` | The PC fixture key that signs the Screen view answer vectors (test only, 1.4) |
+| `fixtures/screen-dc-cases.json` | Data-channel messages both parsers must accept or refuse, written byte for byte by both fixture generators (1.5) |
 
 ## 1. Versioning and compatibility
 
-- `protocol_version` is `MAJOR.MINOR`, currently **`1.4`**; `actions.json` carries its own
-  `registry_version` (`1.4`). 1.1 is additive over 1.0 (§17), so 1.0 peers remain compatible and
+- `protocol_version` is `MAJOR.MINOR`, currently **`1.5`**; `actions.json` carries its own
+  `registry_version` (`1.5`). 1.1 is additive over 1.0 (§17), so 1.0 peers remain compatible and
   never receive 1.1-only frames or `pc_state` fields. 1.2 is additive over 1.1 (§18) and changes
   no frame, payload or existing result shape. 1.3 (2026-10-20) added the plans and billing bodies
   only (`docs/BILLING.md`; `shared/protocol/README.md` "Protocol 1.3"): no frame, signed payload,
   action or result changed, so 1.2 agents are unaffected. 1.4 is Screen view (§20): new frames,
   defs, actions, input events and errors, all additive; peers that did not announce 1.4 never
-  receive a `screen_*` frame.
+  receive a `screen_*` frame. 1.5 is Screen view, Phase 2a (§21): one optional param, one result
+  field, the pointer messages on the data channel, one limit and one REST field, all additive; the
+  result field and the pointer messages are sent only in sessions whose start carried the new
+  param, so a 1.4 phone never receives them.
 - Signed payloads are stamped with the **lowest** version that defines them, not the sender's
   newest (`rules.command_version_stamping`, §18.2): a command carries its action's `since`
-  (absent = 1.0), a confirmation the confirmed command's version, an input batch the lowest
+  (absent = 1.0), raised to the `param_since` of any param it carries that a later MINOR added
+  (1.5, §21.5), a confirmation the confirmed command's version, an input batch the lowest
   version that defines every event in it (1.1; 1.4 once it carries a Screen view event, §20.6).
-  Verifiers also refuse a command stamped below its action's `since`, and a batch stamped below
-  what its events need (`PROTOCOL_INCOMPATIBLE`, `detail{peer, required}`). Since 1.4 both
+  Verifiers also refuse a command stamped below its action's `since`, a batch stamped below
+  what its events need, and (since 1.5, after schema validation) a command stamped below what
+  its params need (`PROTOCOL_INCOMPATIBLE`, `detail{peer, required}`). Since 1.4 both
   libraries check the stamp **before** the schema, so a payload from a newer MINOR is
   `PROTOCOL_INCOMPATIBLE`, never `MALFORMED_MESSAGE`. So an updated phone keeps working with an
   older PC for every action that PC knows, and an older PC answers a newer action with
@@ -98,6 +105,7 @@ Limits (`version.json → limits`):
 | `per_pc_queue_depth` | 16 |
 | `input_batches_per_second`, `input_batch_max_events`, `input_batch_lifetime_seconds`, `input_age_budget_ms`, `input_lease_seconds`, `input_text_max_chars`, `input_motion_max` (1.1) | 40, 64, 5, 1000, 3, 256, 4096 — see §17.2 |
 | `screen_*` limits and `input_wheel_max` (1.4) | see §20.2 |
+| `screen_dc_cursor_shape_max_bytes` (1.5) | 12 288 — see §21.2 |
 
 ## 2. Transports and endpoints
 
@@ -1483,7 +1491,9 @@ on the phone) and drops anything else. No message can inject input, change a gra
 | PC → phone | `allowance` | `unlimited`, `remaining_seconds \| null`, `resets_at \| null` | the ticket the PC last received, for the countdown (display only) |
 | PC → phone | `restricted` | `restricted`, `reason?: elevated \| secure_desktop \| locked \| permission_ui` | input is currently refused on the PC and why |
 
-Phase 2/3 add `cursor_shape`, `cursor_pos` and `roi` as new members (a MINOR each).
+1.5 adds `cursor_pos`, `cursor_shape` and `state.cursor` (the pointer drawn by the phone), a second
+channel `dome-screen-cursor-v1` for `cursor_pos` and a larger size cap for `cursor_shape` only (§21.4,
+§21.2); Phase 3 adds `roi` as a new member (a MINOR).
 
 ### 20.8 Free minutes (`rules.screen_metering`, `plans.json`)
 
@@ -1576,6 +1586,8 @@ generated validators did not change).
 | 1.4 agent with a 1.3 phone | The phone never sends `screen_*`. But pairing a 1.4 PC from a phone still running the 1.3 build fails until the phone reloads: the approved `pairing_status_response` carries `pc_key`, which the 1.3 build's closed schema rejects ("The server's answer was not understood"). After the cloud deploy, an open PWA must reload (its service worker update) before pairing a 1.4 PC (mobile-app `KNOWN_ISSUES.md` #37) |
 | Old relay with a 1.4 phone or agent | Refused on `registry_version`, which is why the cloud deploys first |
 | Any peer, a payload from 1.5 | `PROTOCOL_INCOMPATIBLE detail{peer, supported}` from the 1.4 libraries, even with unknown fields or events |
+
+The rows for 1.5 peers, among them "1.5 phone with a 1.4 agent", are in §21.9.
 
 ### 20.13 Examples
 
@@ -1691,3 +1703,410 @@ Update 2026-10-22 (the components are built; the contract itself did not change)
 - Deviations recorded during the build are listed in §16 items 18–23; §20.2 (the generations limit),
   §20.8 (the pause discount and consent forgiveness) and §20.12 (a 1.3 PWA must reload before pairing a
   1.4 PC) were corrected to match the code.
+
+## 21. Protocol 1.5: Screen view, Phase 2a (Next screen, phone-drawn pointer, Touchpad zoom, hardware encoding)
+
+Protocol 1.5 (registry 1.5) is an **additive MINOR** bump for four additions to Screen view
+(`docs/design/screen-view-2a.md`): a Next screen button that switches the picture between the PC's
+monitors, a pointer the phone draws itself so it moves the instant the finger does, pinch zoom in
+Touchpad mode, and video encoded on the graphics chip. Only the first two touch the wire: Touchpad
+zoom happens on the phone alone, and hardware H.264 changes which encoder the PC picks without any new
+field towards the phone (`encoder` still says `h264` or `vp8`). On the wire, 1.5 adds one optional
+param (`screen.session_start.cursor`) and the `param_since` key that dates it, one optional result
+field, three data-channel message shapes and one `state` field, a second data channel, one limit and
+one REST field; one rule is new and five are amended. No relay frame, signed-payload schema, action or
+error code is added, and no existing required field changes. Two rules change on purpose: a command is
+now stamped by what it carries (a start with `cursor` is 1.5, one without it stays 1.4), and the
+PC-signed answer carries the stamp of the start it answers instead of the library's own version.
+
+On the relay and the data channels a 1.4 peer never receives a 1.5 field or message: `result.cursor`,
+`state.cursor`, `cursor_pos` and `cursor_shape` are sent only in a session whose start carried `cursor`,
+and the relay refuses **before forwarding** any command whose stamp the target agent did not announce, so
+a 1.5-stamped start never reaches a 1.4 agent. The REST pc row is the documented exception (§21.9):
+`GET /v1/pcs` and `PATCH /v1/pcs/{id}` carry `pc.protocol_versions` to every PWA, and a 1.4 PWA left open
+from before the deploy refuses those answers until it reloads. Next screen itself is `surface: N`, which
+1.4 already defined. Input stays where it was: every touch, click and key is a signed `input_batch` on the
+relay path, no data-channel message on either channel can inject input, and the PC drops whatever the phone
+sends on the second channel.
+Normative text: `version.json → rules.screen_cursor` (new) and the amended
+`rules.command_version_stamping`, `rules.screen_signaling` ((2) the second channel, (5) the answer
+stamp), `rules.screen_sessions` ((1b) surface switch, the end reasons in (6)), `rules.screen_content`
+and `rules.screen_metering` (3).
+
+### 21.1 What 1.5 adds
+
+| Addition | Contract location |
+| --- | --- |
+| `protocol_version` and `registry_version` 1.5 | `version.json`, `actions.json` |
+| `screen.session_start.cursor: drawn \| overlay` (optional, **no default**: a start without it is a 1.4 start and the PC draws the pointer) and the top-level action key `param_since` (`{"cursor": "1.5"}`; a sibling of `since`, not a JSON-Schema keyword, documented in the file's `$comment`) | `actions.json` |
+| `screen_session_result.cursor: drawn \| overlay`, present only when the start carried `cursor` | `results.schema.json` |
+| Data-channel messages PC → phone `cursor_pos{gen, x, y, visible}`, `cursor_shape{kind}` (14 named kinds) and `cursor_shape{kind: custom, width, height, hotspot_x, hotspot_y, png}`; `state.cursor: drawn \| overlay` | `relay-frames.schema.json`: the named defs `screen_dc_cursor_pos`, `screen_dc_cursor_shape_named` and `screen_dc_cursor_shape_custom`, referenced from `screen_dc_pc_to_phone.oneOf`; the `state` member of `screen_dc_pc_to_phone`; the descriptions of `screen_dc_message` and `screen_dc_pc_to_phone` |
+| A second data channel `dome-screen-cursor-v1` (unordered, no retransmissions, `cursor_pos` only), opened by the phone only in a start that carries `cursor` | `rules.screen_signaling` (2), `rules.screen_cursor` (3) and (6), `rules.screen_content`, `screen_dc_message` |
+| Limit `screen_dc_cursor_shape_max_bytes` 12288 | `version.json → limits` |
+| `pc.protocol_versions` (at most 8 `MAJOR.MINOR` strings; optional in the schema, always sent by the server) | `rest.schema.json → $defs/pc` |
+| The content-based command stamp (the action's `since` raised by `param_since`), refused after schema validation when too low; the relay's stamp gate for every command | `rules.command_version_stamping` |
+| The signed answer's `protocol_version` is the stamp of the start it answers | `rules.screen_signaling` (5) |
+| Surface switch: a same-controller `surface: N` start replaces the session; when consent is inherited; the bars kept | `rules.screen_sessions` (1b) and (6), `rules.screen_metering` (3) |
+| The pointer drawn by the phone, and injected relative moves kept on the watched monitor | `rules.screen_cursor` (new), `rules.screen_content` |
+| `PROTOCOL_INCOMPATIBLE` gains a `description` naming the relay's gate (no new code) | `errors.json` |
+| Fixtures: the accepted screen answer is stamped 1.5; the refused newer-MINOR answer is computed (one MINOR above the library's version, 1.6 now) and signed with `test-pc-key.pem`; new `screen-dc-cases.json` | `fixtures/` |
+
+Library helpers: Python `command_protocol_version(action, params, *, registry=None)` (defined in
+`dome_protocol.versions`, also exported from `dome_protocol.commands` and the package),
+`Registry.min_version(name, params=None)`, `ActionSpec.param_since`,
+`build_screen_answer_payload(..., protocol_version=...)` (a required keyword),
+`parse_screen_dc_message` with the per-type size cap, and `SCREEN_CURSOR_CHANNEL_LABEL`. TypeScript
+`commandProtocolVersion(action, params)` and `minVersion(action, params?)` (`commands.ts`),
+`registry.minVersion(action, params?)` and `ActionSpec.paramSince` (`registry.ts`),
+`buildScreenAnswerPayload({ …, protocolVersion })` (required), `parseScreenDcMessage` with the
+per-type size cap, `SCREEN_CURSOR_CHANNEL_LABEL` and the type `CursorKind` (`screen.ts`, whose
+hand-written `ScreenDcPcToPhone` union gains the three pointer members and `state.cursor`), the
+generated types `ScreenDcCursorPos`, `ScreenDcCursorShapeNamed` and `ScreenDcCursorShapeCustom`, and in
+`versions.ts` (Ajv-free, not exported from the package) `parseParamSince` and `paramsProtocolVersion`,
+which the real registry and the PWA's no-eval facade (`mobile-app/src/protocol/registry.ts`) both call,
+so their load checks and their stamps cannot drift. `buildCommandPayload` stamps
+`commandProtocolVersion(action, params)` over the params it was given, before defaults are filled in.
+
+### 21.2 Limits
+
+| Limit or bound | Value | Where | Meaning |
+| --- | --- | --- | --- |
+| `screen_dc_cursor_shape_max_bytes` | 12288 | `version.json → limits` | the most a PC → phone `cursor_shape` may weigh (UTF-8 bytes) |
+| `screen_dc_message_max_bytes` | 1024 (unchanged) | `version.json → limits` | every other data-channel message, in both directions |
+| `png` | 32–8192 characters of standard base64 with a valid length and padding | `screen_dc_cursor_shape_custom` | a 32-bit RGBA PNG of exactly `width` × `height` |
+| `width`, `height` / `hotspot_x`, `hotspot_y` | 1–64 / 0–63 | `screen_dc_cursor_shape_custom` | bitmap pixels; the PC scales a larger cursor down, hotspot included |
+| `cursor_pos.gen` / `x`, `y` | 1–2147483647 / 0–65535 | `screen_dc_cursor_pos` | the geometry generation and the normalised position, as for `pointer_move_to` |
+| pointer reports | polled at about 60 Hz; at most 60 `cursor_pos` and 4 custom shapes per second | `rules.screen_cursor` (3) | bounds on the sender, stated in the rule text and as constants in the PC's worker, not as limits (no verifier counts them) |
+| `screen_session_max_seconds` | 14400 (unchanged) | `version.json → limits` | now also bounds a chain of replacements that inherited consent (§21.3) |
+| `pc.protocol_versions` | at most 8 items, each `^[0-9]+\.[0-9]+$` | `rest.schema.json → $defs/pc` | the agent's announced versions |
+
+Both parsers (`parse_screen_dc_message` / `parseScreenDcMessage`) apply the size cap per type, in this
+order:
+
+1. A message above 12288 bytes, or above 1024 bytes sent phone → PC, is refused before it is parsed:
+   `MALFORMED_MESSAGE` "data-channel message too long".
+2. Otherwise it is strict-parsed and validated against the receiving side's vocabulary, as in 1.4.
+3. A PC → phone message above 1024 bytes that is not a `cursor_shape` is refused:
+   `MALFORMED_MESSAGE` "only cursor_shape may exceed screen_dc_message_max_bytes".
+
+Every refusal is `MALFORMED_MESSAGE` (the 1.4 libraries answered `PAYLOAD_TOO_LARGE` for an over-long
+message). The PC's worker checks what it sends with the same parser, so it never emits a message the
+phone would drop for its size.
+
+### 21.3 Surface switch (`rules.screen_sessions` (1b))
+
+Next screen is a fresh signed `screen.session_start{surface: N}` from the phone that owns the live
+session. There is no renegotiation (`rules.screen_signaling` (8)) and the phone sends no `bye` and no
+`screen.session_stop` (either would end the old session `stopped`). `surface` (`"primary"` or an index
+0–7 from the result's `surfaces`) already existed in 1.4, so a switch is a 1.4 start unless it also
+carries `cursor`.
+
+| Step | Frame or payload | What happens |
+| --- | --- | --- |
+| 1 | controller → relay `command` `screen.session_start{offer_sdp, surface: 1, audio, takeover: false, cursor?}` | a new offer with a new DTLS fingerprint; the phone keeps the old picture on screen and keeps sending `hb` on the old channel, so the old lease does not lapse while it waits |
+| 2 | relay → agent `command{envelope, relay{…, screen}}` | the relay meters the new session like any other (`rules.screen_metering` (3)): the start limit, a new reservation, and its setup time counts |
+| 3 | (agent, locally) | the consent rules of (5) are evaluated for the replacement (below); a surface index this PC does not have is `INVALID_PARAMETERS` ("This PC has no monitor with that surface index.") before anything ends |
+| 4 | agent → relay → owner `screen_session{event: ended, reason: replaced}` for the old id | the agent retires the old id; the bars stay up |
+| 5 | agent → relay → controller `result{succeeded, screen_session_result{surface_index: 1, gen: 1, …}}`, and the `screen_answer` | a new `screen_session_id`, a new DTLS certificate and `gen: 1`; the answer carries the start's stamp (§21.5) |
+| 6 | PC → phone on the new data channel `geometry{gen: 1, surface_index: 1, …}`, `state{sending, …}` | taps and `pointer_move_to` now land on the monitor with surface index 1 (the phone calls it screen 2) |
+
+Consent: the rules of (5) are evaluated for every replacement. A same-controller replacement inherits
+an explicit `granted` (someone at the PC pressed Allow for this phone, for the live session or for the
+chain of replacements it started) only where the person would otherwise get an ask-mode window or a
+one-window-per-minute (back-off) refusal, and only while that chain is younger than
+`screen_session_max_seconds`; the new result then carries `granted`. Consent is never inherited from
+`not_required`, for a takeover, for a per-controller block or for the post-Stop cooldown (its first
+consent is never skipped), and when Stop is pressed while a replacement is being prepared the agent
+checks again before it ends the old session. A chain of replacements that inherited consent ends
+`max_duration` like one session.
+
+Indicator: the bars stay up across the replacement. They are reused when they already cover the same
+monitors for the same phone and sound setting, otherwise replaced before capture starts, and never
+left up without a session.
+
+The phone keeps the countdown, the allowance and the list of surfaces across the switch and treats
+the old session's late frames as retired (it still recognises the old id's `ended` frame). When the
+switch fails (a relay refusal such as `RATE_LIMITED`, a consent refusal from a 1.4 agent, no answer)
+and the old id's `ended` frame has not arrived, the old session is still live: the phone goes back to
+it and says "Couldn't switch screens. Still showing screen N." (For `SCREEN_ALLOWANCE_EXHAUSTED` it
+shows its existing out-of-minutes state instead.)
+
+### 21.4 The pointer (`rules.screen_cursor`)
+
+Two modes: `drawn` (the PC paints its pointer into the picture, as in 1.4) and `overlay` (the PC
+captures without it and reports its position and shape, and the phone draws it). The phone asks for
+`overlay` only from a PC whose agent announced 1.5 (§21.6). `screen_session_result.cursor` is the PC's
+intent at start (`overlay` when asked and this PC can capture without the pointer, else `drawn`); the
+first `state{sending, cursor}` after the capture source opened is authoritative, and every later
+`state` message of that session repeats it. The phone draws only while the latest known mode is
+`overlay`, so it never draws a second pointer.
+
+Capture without the pointer, per source: Desktop Duplication `draw_mouse=0`; Windows.Graphics.Capture
+`cursor_capture=False`, and when Windows refuses that setting (Windows 10 before build 18362) the
+capture keeps the pointer drawn and the PC says so (`state.cursor: drawn`).
+
+Messages, PC → phone, in an overlay session only:
+
+| Message | Channel | When |
+| --- | --- | --- |
+| `cursor_shape{kind}` or `cursor_shape{kind: custom, width, height, hotspot_x, hotspot_y, png}` | `dome-screen-v1` | when the shape changed (custom shapes at most 4 per second); the first one before the first `cursor_pos`; both re-sent after every `geometry` and after every resume |
+| `cursor_pos{gen, x, y, visible}` | `dome-screen-cursor-v1` when the phone opened it, else `dome-screen-v1` | when position or visibility changed, at most 60 per second; `x`, `y` 0–65535 over the streamed surface of generation `gen`, like `pointer_move_to`; `visible: false` when Windows hides the pointer or it is on another monitor (`x`, `y` then hold the last position inside the surface) |
+
+Nothing is sent while paused, and nothing at all in a `drawn` session. The second channel is unordered
+and has no retransmissions: a lost report is replaced by the next one instead of holding it up. The
+phone keeps only the latest report, draws it once per frame, and drops a `cursor_pos` whose `gen` is
+not its current geometry generation. It opens `dome-screen-cursor-v1` only in a start that carries
+`cursor`: an agent before 1.5 knows one data channel only and sends on whichever channel the phone
+opened last, so a second channel offered to a 1.4 PC would swallow its `state`, `allowance` and
+`restricted` messages.
+
+Named kinds are Windows' system cursors, recognised by the handle `LoadCursorW` returns for each
+`IDC_*`. The phone draws each with its own art; the hotspots below are the phone's design (a 24-unit
+box, `docs/design/screen-view-2a.md` §4.4), not part of the contract:
+
+| `kind` | Windows cursor | Phone's hotspot |
+| --- | --- | --- |
+| `arrow` | `IDC_ARROW` (32512) | 1, 1 |
+| `ibeam` | `IDC_IBEAM` (32513) | 12, 12 |
+| `hand` | `IDC_HAND` (32649) | 8, 2 |
+| `wait` | `IDC_WAIT` (32514) | 12, 12 (a spinning ring) |
+| `appstarting` | `IDC_APPSTARTING` (32650) | 1, 1 (an arrow with a small spinning ring) |
+| `cross` | `IDC_CROSS` (32515) | 12, 12 |
+| `no` | `IDC_NO` (32648) | 12, 12 |
+| `sizeall` | `IDC_SIZEALL` (32646) | 12, 12 |
+| `sizens` | `IDC_SIZENS` (32645) | 12, 12 |
+| `sizewe` | `IDC_SIZEWE` (32644) | 12, 12 |
+| `sizenesw` | `IDC_SIZENESW` (32643) | 12, 12 |
+| `sizenwse` | `IDC_SIZENWSE` (32642) | 12, 12 |
+| `uparrow` | `IDC_UPARROW` (32516) | 12, 1 |
+| `help` | `IDC_HELP` (32651) | 1, 1 (an arrow with "?") |
+
+Custom shapes: an application's own pointer as a 32-bit RGBA PNG of exactly `width` × `height` (at
+most 64 × 64; the PC scales larger cursors down, hotspot included), in standard base64 of at most 8192
+characters with a valid length and padding (the pattern
+`^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$`, so a decoder never meets a broken
+group of four), with its hotspot in bitmap pixels. A shape the PC cannot render within those bounds is
+sent as `arrow`. `cursor_shape` is the only data-channel message that may exceed 1024 bytes (§21.2).
+
+Content rule (`rules.screen_cursor` (4), `rules.screen_content`): a cursor bitmap is screen content.
+No component writes it to disk, logs it, journals it, puts it in a diagnostics bundle (kinds, sizes
+and counts only) or sends it anywhere but the phone over the data channel; the phone keeps at most the
+current shape in memory, never in storage.
+
+Confinement (`rules.screen_cursor` (5)): while a connected screen session owned by the batch's
+controller exists, the agent reads the pointer position before and after each injected relative
+`pointer_move`; when the pointer was inside the streamed monitor's rectangle before the move and
+outside it after, it places it on the nearest point inside (physical pixels). Windows cannot tell the
+phone's injected moves from the mouse of the person at the PC, so a pointer that was already elsewhere
+before the move is left alone: the person at the PC is never constrained and no clip rectangle is ever
+set. `pointer_move_to` already maps onto the streamed monitor. A 1.4 agent does not confine.
+
+Who receives what (`rules.screen_cursor` (6)): `result.cursor`, `state.cursor`, `cursor_pos` and
+`cursor_shape` are sent only in a session whose start carried `cursor`, so a 1.4 phone never receives
+them.
+
+### 21.5 Version stamping, amended (`rules.command_version_stamping`, `rules.screen_signaling` (5))
+
+**Commands are stamped by content.** A command carries the lowest protocol version that defines every
+param it carries: the action's `since`, raised to the `param_since` of any present param a later MINOR
+added. `screen.session_start` (`since` 1.4, `param_since {"cursor": "1.5"}`) is stamped `"1.4"`
+without `cursor` and `"1.5"` with it, whatever its value. Present means present in the params as the
+controller signs them: a `param_since` param has no schema default, and a default that validation
+fills in never raises the stamp. Input batches have been stamped this way since 1.4 (§20.6); 1.5
+applies the same idea to commands.
+
+Registry load check (both libraries; the PWA facade calls the TypeScript helper): every `param_since`
+key names a property of the action's `params` that has no `default`, and every value is a
+`MAJOR.MINOR` not below the action's `since` and not above `protocol_version`; otherwise the registry
+does not load.
+
+**Check order.** Verifiers (relay and agent) keep the 1.4 order and add one step:
+
+1. Before schema validation: protocol compatibility and the action's `since`
+   (`PROTOCOL_INCOMPATIBLE detail{peer, supported}` or `detail{peer, required}`), so a payload from a
+   newer MINOR is never `MALFORMED_MESSAGE`.
+2. Schema validation of the payload and of its `params`.
+3. After schema validation (since 1.5): a command stamped below what its **present** params need is
+   `PROTOCOL_INCOMPATIBLE detail{peer: <stamp>, required: "1.5"}`; the param must exist to be judged.
+   It is judged on the raw signed params, never on the default-filled ones, so a 1.4-stamped start
+   without `cursor` passes.
+
+**The relay's stamp gate.** Since 1.5 the relay refuses before forwarding ANY command whose stamp is
+not compatible with the target agent's announced `protocol_versions`:
+`result{origin: relay, failed, PROTOCOL_INCOMPATIBLE detail{peer: "agent", required: <stamp>}}`. It
+generalises the 1.4 gates for `screen.*` commands and input batches (§20.6). It sits after the
+`screen.*` gate (`required: "1.4"`) and before the operator switch (`SCREEN_VIEW_DISABLED`), the
+Screen view start limit (`screen_start_rate_limit`) and the allowance reservation, so a refused start
+spends no start token and reserves nothing. Without it a shipped 1.4 agent would refuse a 1.5-stamped
+start itself, with `PROTOCOL_INCOMPATIBLE {peer: "1.5", supported: [...]}` (it checks the stamp before
+the schema). That detail carries no `required`, so the phone could not tell that a start without
+`cursor` would work, and the refusal would come only after the relay had spent a start token and
+reserved allowance.
+
+**The answer's stamp (changed rule).** `protocol_version` in the PC-signed `screen_answer_payload` is
+the stamp of the `screen.session_start` it answers (1.4 for a 1.4-stamped start, 1.5 for one that
+carried `cursor`), as a confirmation carries the stamp of its command. In 1.4 it was the library's own
+version, so a 1.5 agent would have answered a 1.4 phone (a PWA loaded before the deploy) with a stamp
+that phone refuses. The answer builders take the stamp as a required argument and refuse one the
+library does not speak (`PROTOCOL_INCOMPATIBLE detail{peer, supported: ["1.5"]}`). The phone's
+verifier is unchanged: it accepts any stamp the compatibility rule allows.
+
+### 21.6 Capability discovery (`rest.schema.json → $defs/pc.protocol_versions`)
+
+The phone must know whether a PC's agent speaks 1.5 before it signs a start with `cursor`. The relay
+knows each agent's announced versions while it is connected. From 1.5 it keeps them on the PC's row at
+every agent hello (next to `agent_version`) and returns them in `GET /v1/pcs` as
+`pc.protocol_versions`, also while the PC is offline (the last list announced). The field is optional
+in the schema (fixtures and the dev preview build `pc` rows without it) and the server always sends
+it. No `pc_status` field was added: `pc_status` is a closed object broadcast in one frame to sockets of
+every version.
+
+What the phone does with it:
+
+- `[]` (the agent has not said hello to a 1.5 relay yet) or a list without `"1.5"`: it sends no
+  `cursor`; the start is stamped 1.4 and the PC draws the pointer.
+- A list with `"1.5"`: it sends `cursor: "overlay"` and the start is stamped 1.5.
+- A stale list (say, the agent was downgraded and has not reconnected since): the relay's gate answers
+  `PROTOCOL_INCOMPATIBLE detail{peer: "agent", required: "1.5"}`; the phone remembers "no pointer from
+  this PC" for the rest of the app run and retries once without `cursor`. A stale list costs one
+  round-trip, never a wrong result.
+
+The phone reloads `/v1/pcs` (debounced) when a `pc_status` frame changes a PC's `connection`, so the
+list follows an agent update without the app being reopened. The list is as announced at the agent's
+last hello: a downgraded agent shows its shorter list only after it reconnects.
+
+### 21.7 Result shapes
+
+| Shape | Change |
+| --- | --- |
+| `screen_session_result` | gains `cursor: drawn \| overlay`, present **only** when the start carried `cursor` (a 1.4 phone validates the result with `additionalProperties: false`). A switch returns the same shape with the new `screen_session_id`, `surface_index` and `gen: 1`; `consent` is `granted` when the replacement inherited an Allow (§21.3) |
+| `screen_session_stop_result` | unchanged |
+
+### 21.8 Errors
+
+No new code. `PROTOCOL_INCOMPATIBLE` gains a `description` in `errors.json` (no code reads it) and now
+also arises here:
+
+| Emitted by | When | `detail` |
+| --- | --- | --- |
+| relay | any command whose stamp the target agent did not announce (a start carrying `cursor` to a 1.4 agent), before forwarding | `{peer: "agent", required: <stamp>}` |
+| relay, PC (command verifiers) | a command stamped below what its present params need (a 1.4-stamped start carrying `cursor`), after schema validation | `{peer: <stamp>, required: "1.5"}` |
+| shared libraries (answer builders) | asked to build an answer with a stamp the library does not speak | `{peer: <stamp>, supported: ["1.5"]}` |
+| phone (answer verifier) | an answer stamped above 1.5 (the fixtures' newer-MINOR case is stamped 1.6) | `{peer: <stamp>, supported: ["1.5"]}` |
+
+Other codes this round touches: `MALFORMED_MESSAGE` replaces `PAYLOAD_TOO_LARGE` for an over-long
+data-channel message (§21.2); `INVALID_PARAMETERS` stays the answer for a surface index the PC does not
+have, and is what a 1.4 agent would answer for a param its schema does not know (the relay's gate keeps
+a `cursor` start away from it); `SCREEN_CONSENT_DECLINED` and `SCREEN_CONSENT_TIMEOUT` can now end a
+switch to a 1.4 agent (§21.9).
+
+### 21.9 Compatibility and deploy order
+
+Deploy the cloud (relay + PWA, one deploy) first, then the agents. The browser extension is untouched
+(`bridge.schema.json` did not change).
+
+| Combination | Outcome |
+| --- | --- |
+| 1.5 relay with 1.4 agents | Everything works as before; the relay records each agent's announced versions (`pc.protocol_versions`) |
+| An open 1.4 PWA after the cloud deploy | `GET /v1/pcs` and `PATCH /v1/pcs/{id}` now carry `protocol_versions`, which the 1.4 build's closed schema rejects ("The server's answer was not understood. Try updating DoMe.") until the PWA reloads (its service worker update), as with the 1.4 `pc_key` field (§20.12). A rename or a switch on or off of a PC from such a PWA is applied on the server but reported as failed, and its Devices page keeps showing the old name or state until the PWA reloads. From 1.5 on, the PWA turns that error into "A newer DoMe is ready. Close and reopen the app to update." and asks its service worker to update |
+| 1.4 phone with a 1.5 agent | The phone never sends `cursor`, so its starts are stamped 1.4, the answer is stamped 1.4 and no 1.5 field or message is sent |
+| 1.5 phone with a 1.4 agent | The PC's list has no 1.5, so the phone sends no `cursor`: the start is stamped 1.4, the PC draws the pointer, one data channel, the answer is stamped 1.4 and accepted. Next screen (`surface: N`, 1.4) works when the PC needs no consent. In ask mode or while the post-Stop cooldown runs, the 1.4 agent asks again for the switch: a new consent window at the PC (Deny or no answer refuses the switch), or `SCREEN_CONSENT_DECLINED` without one when a window opened less than a minute ago. It checks consent before it ends the old session, so after a refusal the old session is intact and the phone goes back to it ("Couldn't switch screens. Still showing screen N."). A 1.4 agent does not keep injected moves on the watched monitor |
+| 1.5 phone with a stale list and a 1.4 agent | The 1.5-stamped start is refused **by the relay** before forwarding (`PROTOCOL_INCOMPATIBLE detail{peer: "agent", required: "1.5"}`; nothing reserved, no start token spent); the phone retries once without `cursor` |
+| 1.5 phone with a 1.5 agent | Everything: the pointer drawn by the phone (or `drawn` when this PC cannot leave it out of the capture), Next screen with consent inherited where (1b) allows it, injected moves kept on the watched monitor |
+| Old relay with a 1.5 phone or agent | Refused on `registry_version`, which is why the cloud deploys first |
+| Any peer, a payload from 1.6 | `PROTOCOL_INCOMPATIBLE detail{peer, supported}` from the 1.5 libraries, even with unknown fields or messages |
+
+### 21.10 Examples
+
+Each example below validates against the contract (`dome_protocol` command, params, frame, result,
+data-channel and REST validation, with the full offer from the fixtures in place of the shortened
+one, and the stamp recomputed with `command_protocol_version`), checked on 2026-11-09 with a one-off
+script, not a test suite. The custom `cursor_shape` is the one exception: it is shown shortened and is
+illustrative only.
+
+Next screen with the pointer drawn by the phone, stamped 1.5 because it carries `cursor` (the offer
+shortened here):
+
+```json
+{"type":"command","protocol_version":"1.5","command_id":"5b2d3e4f-6a7b-4c8d-9e0f-123456789abc","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"screen.session_start","params":{"offer_sdp":"v=0\r\no=- 4611731400430051337 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\n…a=fingerprint:sha-256 21:22:…:40\r\na=setup:actpass\r\n…","surface":1,"audio":false,"takeover":false,"cursor":"overlay"},"target":null,"issued_at":"2026-11-03T12:00:00.000Z","expires_at":"2026-11-03T12:01:00.000Z","nonce":"BwcHBwcHBwcHBwcHBwcHBw"}
+```
+
+The agent ends the old session `replaced`, then answers. The result carries `cursor` because the start
+did, and `consent: granted` because this phone was allowed in ask mode a minute earlier and the
+replacement inherited it (§21.3); the signed answer, in its own frame, is stamped `"1.5"` like the
+start (the accepted vector in `fixtures/es256-python.json → screen` is such an answer):
+
+```json
+{"type":"screen_session","pc_id":"33333333-3333-4333-8333-333333333333","screen_session_id":"U2NyZWVuU2Vzc2lvbjAxQQ","controller_id":"22222222-2222-4222-8222-222222222222","event":"ended","reason":"replaced","live_seconds":95,"at":"2026-11-03T12:00:01.200Z"}
+{"type":"result","command_id":"5b2d3e4f-6a7b-4c8d-9e0f-123456789abc","origin":"agent","state":"succeeded","at":"2026-11-03T12:00:01.400Z","duration_ms":1350,"result":{"screen_session_id":"U2NyZWVuU2Vzc2lvbjAyQg","surfaces":[{"index":0,"width":2560,"height":1440,"primary":true},{"index":1,"width":1920,"height":1080,"primary":false}],"surface_index":1,"gen":1,"audio":false,"lease_seconds":8,"allowance":{"unlimited":false,"remaining_seconds":480,"resets_at":"2026-11-03T17:00:00.000Z"},"consent":"granted","encoder":"h264","cursor":"overlay"}}
+```
+
+Data-channel messages of the new session (PC → phone): the geometry, the authoritative mode, a named
+shape before the first position, and a position on the second channel:
+
+```json
+{"type":"geometry","gen":1,"surface_index":1,"width":1920,"height":1080,"rotation":0,"reserved":[{"x":0,"y":0,"w":65535,"h":1800}]}
+{"type":"state","state":"sending","encoder":"h264","cursor":"overlay"}
+{"type":"cursor_shape","kind":"arrow"}
+{"type":"cursor_pos","gen":1,"x":32768,"y":16384,"visible":true}
+```
+
+A custom shape (illustrative: the `png` is shortened and does not validate as shown; the fixture case
+"custom cursor_shape with a real 1x1 RGBA PNG" in `fixtures/screen-dc-cases.json` holds a complete one):
+
+```json
+{"type":"cursor_shape","kind":"custom","width":24,"height":24,"hotspot_x":3,"hotspot_y":2,"png":"iVBOR…"}
+```
+
+In a session whose start carried no `cursor`, `state` has no `cursor` key and no pointer message is
+sent:
+
+```json
+{"type":"state","state":"sending","encoder":"h264"}
+```
+
+A 1.5-stamped start to a PC whose agent announced only 1.4 (the phone's list was stale), refused by the
+relay before forwarding, and the phone's single retry without `cursor`, stamped 1.4:
+
+```json
+{"type":"result","command_id":"6c3e4f5a-7b8c-4d9e-8f0a-23456789abcd","origin":"relay","state":"failed","at":"2026-11-03T12:05:00.020Z","duration_ms":0,"error":{"code":"PROTOCOL_INCOMPATIBLE","message":"The PC's DoMe agent needs an update for this feature","retryable":false,"detail":{"peer":"agent","required":"1.5"}}}
+{"type":"command","protocol_version":"1.4","command_id":"7d4f5a6b-8c9d-4e0f-9a1b-3456789abcde","account_id":"11111111-1111-4111-8111-111111111111","controller_id":"22222222-2222-4222-8222-222222222222","target_pc_id":"33333333-3333-4333-8333-333333333333","action":"screen.session_start","params":{"offer_sdp":"v=0\r\n…","surface":"primary","audio":false,"takeover":false},"target":null,"issued_at":"2026-11-03T12:05:00.100Z","expires_at":"2026-11-03T12:06:00.100Z","nonce":"CAgICAgICAgICAgICAgICA"}
+```
+
+The PC's row in `GET /v1/pcs` (`pcs_response.pcs[]`), with the versions its agent announced at its
+last hello:
+
+```json
+{"id":"33333333-3333-4333-8333-333333333333","name":"Desk PC","enabled":true,"connection":"online","last_seen":"2026-11-03T12:00:00.000Z","created_at":"2026-10-21T11:58:00.000Z","platform":"windows","agent_version":"0.9.0","protocol_versions":["1.0","1.1","1.2","1.3","1.4","1.5"],"remote_enabled_reported":true,"last_power_request":null}
+```
+
+### 21.11 Evidence
+
+| What | Status | Tests |
+| --- | --- | --- |
+| `param_since` and its load check (unknown param, a default, a version outside `[since, protocol_version]`) | unit-tested | `shared/python/tests/test_registry_and_schemas.py::test_registry_refuses_an_invalid_param_since`; `shared/ts/test/registry.test.ts` "protocol 1.5: param_since" |
+| Content-based stamp over the raw params, the post-schema refusal, and a 1.4 start without `cursor` passing | unit-tested | `test_screen_contract.py::test_the_cursor_param_has_no_default_and_raises_the_stamp`, `::test_a_start_is_refused_below_what_its_present_params_need`; `screenContract.test.ts` "protocol 1.5: the cursor param and content-based command stamping"; through the PWA facade `mobile-app/test/protocol-parity.test.ts` "stamps by content (1.5)" |
+| The answer's stamp (a 1.4 answer verifies; an unspoken stamp is refused) | unit-tested, cross-language | `test_screen_contract.py::test_the_answer_carries_the_stamp_of_the_start_it_answers`; `screenContract.test.ts` "protocol 1.5: the answer stamp"; both `es256-*.json` carry a 1.5 answer the other language accepts, the two `SCREEN_ANSWER_INVALID` refusals and one stamped 1.6 that it calls `PROTOCOL_INCOMPATIBLE` (`test_fixtures.py`, `fixtures.test.ts`) |
+| Pointer messages, their bounds and `state.cursor`; PC → phone only | unit-tested | `test_screen_contract.py::test_cursor_messages_are_pc_to_phone_only_and_bounded`; `screenContract.test.ts` "protocol 1.5: pointer messages and the per-type size cap"; `fixtures/screen-dc-cases.json` (5 accepted, 10 refused) through `test_shared_cases.py` and `sharedCases.test.ts`, which also check that its PNGs are real RGBA images of the declared size; `test_shared_cases.py` also checks that the Python generator writes exactly this file; that the TypeScript generator writes the same bytes was checked on 2026-11-09 by running it with its writes sent elsewhere (no test compares the two generators) |
+| The per-type size cap and its messages | unit-tested | `test_screen_contract.py::test_the_data_channel_size_cap_is_per_type`; the size cases of `screen-dc-cases.json`; through the PWA facade in `protocol-parity.test.ts` |
+| `result.cursor`, `pc.protocol_versions`, the limit, the rule texts, the channel label | unit-tested | `test_screen_contract.py::test_registry_is_1_5_with_the_screen_capabilities_and_actions`, `::test_1_5_limit_rules_and_the_cursor_channel_label`; `screenContract.test.ts` "validates result.cursor and the REST pc.protocol_versions"; `protocol-parity.test.ts` "agrees on the 1.5 result and REST additions" |
+| The relay's stamp gate: a command stamped with a version the target agent did not announce is refused before forwarding (`PROTOCOL_INCOMPATIBLE detail{peer: "agent", required}`; for a start: nothing reserved, no commands row, no start token spent), and the same start without `cursor` reaches the 1.4 agent | integration-tested (Linux, fakes: real PostgreSQL, simulated agents) | `cloud-api/tests/test_screen_routing.py::test_stamp_gate_shields_a_1_4_agent_from_a_1_5_start`, `test_relay_routing.py::test_a_command_stamped_above_what_the_agent_announced_is_refused_before_forwarding` |
+| The persisted `pc.protocol_versions` (from the agent's hello, migration `0006_pc_protocol_versions`): `[]` before the first hello, kept while the PC is offline, returned by `GET /v1/pcs` and `PATCH /v1/pcs/{id}` | integration-tested (Linux, fakes: real PostgreSQL, simulated agents) | `cloud-api/tests/test_entitlement_and_misc.py::test_pcs_response_carries_the_protocol_versions_of_the_last_hello`, `test_pcs_migration.py::test_migration_0006_downgrade_upgrade_roundtrip` |
+| The answer stamp on the PC: a start without `cursor` is answered 1.4 with no `cursor` anywhere, a start with it is answered 1.5 with `result.cursor`, a 1.4-stamped start carrying `cursor` is refused, signing refuses a stamp the library does not speak | unit-tested (fake platform, fake worker) | `pc-agent/tests/test_screen_session.py::test_a_1_4_start_gets_a_1_4_answer_and_no_cursor_anywhere`, `::test_a_start_with_cursor_is_answered_in_1_5_and_its_result_says_the_mode`, `::test_a_1_4_stamped_start_carrying_cursor_is_refused_before_anything_starts`; `test_screen_signing.py::test_the_answer_carries_the_start_stamp_and_a_1_4_answer_verifies_on_a_1_4_phone`, `::test_signing_refuses_a_stamp_this_library_does_not_speak` |
+| The phone's capability check and its retry: `cursor` and the second channel only to a PC whose `protocol_versions` include 1.5, one start again without `cursor` after the relay's `required: "1.5"`, `INVALID_PARAMETERS` never retried | unit-tested (jsdom, the fake peer) | `mobile-app/test/screen.test.ts` "1.5: the cursor param and the second data channel"; `devices.test.ts` "reads pc.protocol_versions, [] when the field is absent or the PC unknown; pcSpeaks follows the compatibility rule" |
+| §21.9 "1.5 phone with a 1.4 agent": the start is stamped 1.4 and answered 1.4, no 1.5 key or message reaches the phone, Next screen ends the old session `replaced` and starts the new one at `gen: 1` | integration-tested (Linux, fakes), with a stand-in 1.4 agent | `tests/test_e2e_versions.py::test_a_1_4_agent_with_a_1_5_phone_starts_screen_view_without_the_cursor_param`. The stand-in, `tests/agent_1_4.py`, is this tree's agent with the 1.4 version checks: it proves the versions, the stamps and the messages, not the shipped 1.4 agent's consent order in ask mode or the post-Stop cooldown, which no test in this tree exercises |
+| §21.9 "1.5 phone with a stale list and a 1.4 agent": the relay refuses the 1.5-stamped start before forwarding (nothing at the PC, nothing reserved), and a start without `cursor` then works | integration-tested (Linux, fakes), with the same stand-in; the app's own retry unit-tested (jsdom) | `tests/test_e2e_versions.py::test_a_1_5_stamped_start_to_a_1_4_agent_is_refused_before_forwarding` (the Python phone sends the second start itself); the app's retry in `mobile-app/test/screen.test.ts` "the relay's PROTOCOL_INCOMPATIBLE required 1.5 (a stale list): one start again without cursor; the mark clears when the list changes back to 1.5" |
+| §21.9 "1.4 phone with a 1.5 agent": a start without `cursor` gets an answer stamped 1.4 that a 1.4 verifier accepts, a result without `cursor`, one data channel and no 1.5 key or message | integration-tested (Linux, fakes) | `tests/test_e2e_screen.py::test_a_1_5_agent_answers_a_1_4_phone_in_1_4` |
+
+Runs of 2026-11-09: `shared/python` 357 passed, `shared/ts` 198 passed, `mobile-app/test/protocol-parity.test.ts` 11
+passed; `gen:types` and `gen:validators` regenerated. The components' runs of the same day are recorded in
+`docs/PROGRESS.md` (2026-11-09) and `docs/ACCEPTANCE.md` Scenario 26; the end-to-end run is recorded in
+`tests/README.md` (50 passed), and the six round 2a end-to-end cases were run again on their own the same day
+(6 passed).
+
+- not yet verified on a device: everything that touches capture without the pointer (Desktop
+  Duplication, Windows.Graphics.Capture on Windows 10 before build 18362), reading and drawing custom
+  cursors on Windows, the pointer the phone draws and how well it keeps up on an iPhone, the second
+  channel's behaviour on a real network, keeping the pointer on the watched monitor of a real
+  two-monitor PC, the picture staying on screen during a switch in Safari, and hardware H.264 (no wire
+  change; pc-agent `KNOWN_ISSUES.md` #35). There is no Windows machine or iPhone in this environment.

@@ -69,9 +69,9 @@ REPO = Path(__file__).resolve().parents[2]
 DEV_IDP_BIN = REPO / "tools" / "dev-idp" / ".venv" / "bin" / "dome-dev-idp"
 TEST_DB_URL = os.environ.get("DOME_TEST_DATABASE_URL", "postgresql+psycopg://dome@/dome_test?host=/tmp&port=54329")
 RECV_TIMEOUT = 5.0
-# Both simulators announce every MINOR up to the registry's (1.4) by default; tests that need an older peer pass
+# Both simulators announce every MINOR up to the registry's (1.5) by default; tests that need an older peer pass
 # ``protocol_versions=("1.0",)`` / ``("1.0", "1.1")`` (and ``registry_version``) explicitly.
-DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3", "1.4")
+DEFAULT_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3", "1.4", "1.5")
 
 
 def new_input_session_id() -> str:
@@ -707,10 +707,17 @@ class AgentSim:
         return result
 
     async def screen_answer(
-        self, controller_id: str, command_id: str, screen_session_id: str, *, offer_sdp: str = OFFER_SDP
+        self,
+        controller_id: str,
+        command_id: str,
+        screen_session_id: str,
+        *,
+        offer_sdp: str = OFFER_SDP,
+        protocol_version: str = "1.4",
     ) -> dict[str, Any]:
-        """The PC-signed answer frame (rules.screen_signaling (5)): the payload signed with this PC's identity key.
-        Returns the envelope that went on the wire."""
+        """The PC-signed answer frame (rules.screen_signaling (5)): the payload signed with this PC's identity key and
+        stamped with the answered start's ``protocol_version`` (1.4 unless the start carried ``cursor``). Returns the
+        envelope that went on the wire."""
         payload = build_screen_answer_payload(
             account_id=self.account_id,
             pc_id=self.pc_id,
@@ -719,6 +726,7 @@ class AgentSim:
             screen_session_id=screen_session_id,
             offer_sdp=offer_sdp,
             answer_sdp=ANSWER_SDP,
+            protocol_version=protocol_version,
             registry=REGISTRY,
         )
         envelope: dict[str, Any] = sign_payload(self.key, dumps_compact(payload)).to_dict()
@@ -943,14 +951,16 @@ class ControllerSim:
         nonce: str | None = None,
         protocol_version: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """A signed command. Like the phone (rules.command_version_stamping) it is stamped with the action's ``since``
-        unless ``protocol_version`` overrides it (unknown actions get the registry's version)."""
+        """A signed command. Like the phone (rules.command_version_stamping) it is stamped by content: the action's
+        ``since`` raised to the ``param_since`` of any param it carries (``screen.session_start`` with ``cursor`` is 1.5,
+        without it 1.4), unless ``protocol_version`` overrides it (unknown actions get the registry's version). The
+        repository's e2e suite reuses this class for its Python phone, so its stamps follow the same rule."""
         issued = issued_at or now_utc()
         from datetime import timedelta
 
         if protocol_version is None:
             known = action in REGISTRY.actions
-            protocol_version = REGISTRY.min_version(action) if known else REGISTRY.protocol_version
+            protocol_version = REGISTRY.min_version(action, params) if known else REGISTRY.protocol_version
         payload = {
             "type": "command",
             "protocol_version": protocol_version,
@@ -1035,7 +1045,8 @@ class ControllerSim:
                 return frame
 
     async def screen_start(self, pc_id: str, *, offer_sdp: str = OFFER_SDP, **kw: Any) -> str:
-        """The signed ``screen.session_start`` with the offer inside (stamped 1.4, its ``since``; 60 s lifetime)."""
+        """The signed ``screen.session_start`` with the offer inside (stamped 1.4, its ``since``: no ``cursor``; 60 s
+        lifetime)."""
         params: dict[str, Any] = {"offer_sdp": offer_sdp, "surface": "primary", "audio": True, "takeover": False}
         kw.setdefault("lifetime", 60)
         return await self.command(pc_id, "screen.session_start", params, None, **kw)

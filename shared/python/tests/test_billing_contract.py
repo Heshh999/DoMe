@@ -202,7 +202,7 @@ def test_error_codes_and_rule():
     from dome_protocol.registry import _load_json
 
     version = _load_json("version.json")
-    assert version["protocol_version"] == "1.4"  # 1.3 added the billing shapes; 1.4 (Screen view) is current
+    assert version["protocol_version"] == "1.5"  # 1.3 added the billing shapes; 1.5 (Screen view round 2a) is current
     rule = version["rules"]["ai_allowance"]
     assert "AI_ALLOWANCE_EXHAUSTED{reason, resets_at}" in rule and "never renews" in rule and "'pro' for every paid plan" in rule
 

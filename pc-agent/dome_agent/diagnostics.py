@@ -12,6 +12,12 @@ the DXGI adapters with their outputs (descriptions, vendor ids, the software fla
 no handles, no pixels), ``GetSystemMetrics(SM_REMOTESESSION)``, the Windows build, the per-app GPU preference for this
 executable and each monitor's advanced-colour (HDR) state. Each item is collected on its own (:func:`collect_hardware`):
 one that fails leaves ``{"error": "<class>"}`` in its place and never spoils the bundle.
+
+Screen view round 2a (protocol 1.5) adds, all counts, flags and short words: ``status.screen.session.media.cursor``
+(the pointer drawn by the phone: mode, messages sent, the largest bitmap's length in characters, never a position or
+a bitmap; no key says ``png``, which is a redacted key part), ``media.encoders`` (each H.264/VP8 candidate the worker
+probed and why one was skipped), ``media.encoder_hw``, ``status.screen.session.surface`` / ``.consent`` / ``.cursor``,
+``status.input.session.confined_moves`` and ``settings.screen_h264_hw`` (``DOME_SCREEN_H264_HW`` is not ``0``).
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from dome_protocol import load_registry
 from . import __version__
 from .logsetup import is_sensitive_key, redact_text_line, redact_value
 from .platform.protocol import PlatformSet
+from .screen.session import screen_h264_hw
 from .settings import Settings
 
 LOG_TAIL_LINES = 200
@@ -113,6 +120,7 @@ def build_bundle(settings: Settings, status: dict[str, Any], platform: PlatformS
             "log_level": settings.log_level,
             "api_url_configured": bool(settings.api_url),
             "relay_url_configured": bool(settings.relay_url),
+            "screen_h264_hw": screen_h264_hw(),  # DOME_SCREEN_H264_HW=0 turns the hardware H.264 candidate off
         },
         "status": status,
         "hardware": _redact_structure(collect_hardware(hardware_probes(platform))),

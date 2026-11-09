@@ -18,7 +18,7 @@ import restSchema from "../../protocol/schemas/rest.schema.json" with { type: "j
 
 import { ProtocolError } from "./errors.ts";
 import { loadsStrict } from "./strictJson.ts";
-import { parseVersion, protocolCompatible } from "./versions.ts";
+import { paramsProtocolVersion, parseParamSince, parseVersion, protocolCompatible } from "./versions.ts";
 
 export type Risk = "low" | "moderate" | "disruptive";
 export type Confirmation = "none" | "challenge";
@@ -51,6 +51,11 @@ export interface ActionSpec {
    * older PCs keep accepting older actions; verifiers refuse lower stamps (rules.command_version_stamping).
    */
   since: string;
+  /**
+   * Params a later MINOR added to the action (actions.json `param_since`, 1.5): {param name: version}. A command that carries
+   * such a param is stamped at least that version (rules.command_version_stamping); such a param has no default.
+   */
+  paramSince: Readonly<Record<string, string>>;
 }
 
 /** True when a grant holding `capabilities` may run `spec`. */
@@ -119,10 +124,12 @@ for (const [name, raw] of Object.entries(actionsJson.actions)) {
     alternateCapabilities: ((r.alternate_capabilities as string[] | undefined) ?? []) as Capability[],
     aiEligible: r.ai_eligible === undefined ? true : Boolean(r.ai_eligible),
     since: r.since === undefined ? "1.0" : String(r.since),
+    paramSince: {},
   };
   if (parseVersion(spec.since) === null || !protocolCompatible(spec.since, [PROTOCOL_VERSION])) {
     throw new Error(`action ${name} has since ${JSON.stringify(spec.since)} outside protocol ${PROTOCOL_VERSION}`);
   }
+  spec.paramSince = parseParamSince(name, r, spec.since, PROTOCOL_VERSION);
   if (spec.routineAllowed && !spec.aiEligible) throw new Error(`human-only action ${name} cannot be routine-allowed`);
   if (spec.risk === "disruptive" && spec.confirmation !== "challenge") throw new Error(`disruptive action ${name} must require a challenge`);
   actionSpecs.set(name, spec);
@@ -140,6 +147,15 @@ export const registry = {
   },
   has(name: string): name is ActionName {
     return actionSpecs.has(name);
+  },
+  /**
+   * The lowest protocol_version a command for `action` may carry (rules.command_version_stamping): the action's `since`,
+   * raised to the highest `param_since` of the keys PRESENT in `params` (the raw params, never `validateParams` output).
+   * Throws UNKNOWN_ACTION.
+   */
+  minVersion(action: string, params?: Record<string, unknown>): string {
+    const spec = registry.get(action);
+    return paramsProtocolVersion(spec.since, spec.paramSince, params);
   },
   validateParams(action: string, params: unknown): Record<string, unknown> {
     const spec = registry.get(action);

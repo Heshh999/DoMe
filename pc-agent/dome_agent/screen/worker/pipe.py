@@ -6,8 +6,11 @@ Framing: a 4-byte big-endian length followed by that many bytes of compact UTF-8
 
 * ``start``   ``{offer_sdp, stun_urls, source{kind, surface_index, left, top, width, height, rotation, fps, ...},
   reserved[], lease_seconds, tick_timeout_seconds, connect_timeout_seconds, encoder_preference[], bitrate_kbps
-  {direct, relayed, data_saver}, relayed_max_kbps?, audio}``: everything the worker needs; the SDP crosses the pipe
-  and nothing else (argv is visible to every process of the user).
+  {direct, relayed, data_saver}, relayed_max_kbps?, audio, cursor?, hw_encoding}``: everything the worker needs; the
+  SDP crosses the pipe and nothing else (argv is visible to every process of the user). Since 1.5: ``cursor``
+  (``drawn`` | ``overlay``) only when the phone's start carried it (absent for a 1.4-stamped start: the session then
+  sends no 1.5 key or message); ``hw_encoding`` false leaves the hardware H.264 candidate out. A fake source's spec
+  may carry ``cursor_script`` (``fake.FakeCursorReader``) and ``pix_fmt``.
 * ``tick``    liveness (every 3 s; the worker exits after ``tick_timeout_seconds`` without one, design §7).
 * ``pause {reason}`` / ``resume``   capture off / on (secure desktop, a missing bar).
 * ``allowance {unlimited, remaining_seconds, resets_at}``   forwarded to the phone's data channel.
@@ -20,10 +23,15 @@ Framing: a 4-byte big-endian length followed by that many bytes of compact UTF-8
 
 Worker → agent (``ev``): ``answer {answer_sdp, encoder, geometry}`` or ``error {code, detail?, message}`` in reply to
 ``start``; ``connected {path}``, ``first_frame``, ``hb``, ``bye``, ``keyframe``, ``audio {on}``, ``geometry {...}``,
-``state {state, reason?}``, ``stats {relayed_bytes, bitrate_kbps, ...}`` (every 2 s: RTP and receiver-report numbers and
-the track's counters), ``encoder_stalled {encoder, reason, encoded, aus}`` (once: no IDR within 5 s of the first frame,
-or the encoder failed), ``disconnected {reason}``, ``exiting {reason}``; ``geometry`` answers ``reserved`` and
-``rebuild`` (``error`` when a rebuild cannot open its source).
+``state {state, reason?}``, ``stats {relayed_bytes, bitrate_kbps, ...}`` (every 2 s: RTP and receiver-report numbers,
+the track's counters, ``encoder_hw`` and the cursor counters ``cursor_pos_sent``, ``cursor_pos_unreliable``,
+``cursor_shape_sent``, ``cursor_custom_sent``, ``cursor_bitmap_max_chars``, ``cursor_bitmap_too_large``,
+``cursor_dropped_gen``, ``cursor_poll_errors``, ``cursor_last_kind``, ``dropped_1_4``), ``encoder_stalled {encoder,
+reason, encoded, aus}`` (once: no IDR within 5 s of the first frame, or the encoder failed), ``disconnected {reason}``,
+``exiting {reason}``; ``geometry`` answers ``reserved`` and ``rebuild`` (``error`` when a rebuild cannot open its
+source). Since 1.5: ``encoders {probed: [{encoder, ok, gated, reason, frames_in, open_ms, mft, parameter_sets}]}``
+right after ``answer``; ``cursor {mode, source}`` (``drawn`` | ``overlay``; ``dda`` | ``wgc`` | ``fake``) after every
+source open, only when the start carried ``cursor``.
 No message is ever logged whole: SDP crosses here.
 """
 

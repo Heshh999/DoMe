@@ -1,4 +1,5 @@
-"""Screen view (protocol 1.4; docs/design/screen-view.md §18 WP1.8) through the real relay and the real agent process.
+"""Screen view (protocol 1.4; docs/design/screen-view.md §18 WP1.8; and the 1.5 additions of design 2a §5.4: Next
+screen, the pointer drawn by the phone, a 1.4 phone) through the real relay and the real agent process.
 
 The PC is the real `dome-agent` on the fake platform (screen_agent.py: pc-agent's FakeScreenUI plays the person at the
 PC); it spawns the real worker process, which captures the fake frame source (synthetic frames), encodes H.264 with
@@ -18,7 +19,9 @@ relaying (the fake TURN provider's URLs name no server, so media always takes th
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
+import json
 import re
 import sys
 import time
@@ -37,10 +40,12 @@ from dome_protocol import (
     generate_private_key,
     jwk_from_public_key,
     kid_from_jwk,
+    load_registry,
     loads_strict,
     sdp_fingerprints,
     sign_payload,
     verify_pc_key_mac,
+    verify_screen_answer_payload,
 )
 from screen_phone import FrameLog, ScreenClient, Started, StunServer, Viewer, start_stun_server
 
@@ -127,8 +132,9 @@ async def phones() -> AsyncIterator[list[Phone]]:
 
 
 async def pair_phone(env: Env, browser: Browser, pc: RealAgent, phones: list[Phone], name: str) -> Phone:
-    """Pair through the PC's code, verify `pc_key_mac` with the code the phone still holds, pin the key, connect a 1.4
-    socket and subscribe. The phone asked for `screen`; the PC did not grant it."""
+    """Pair through the PC's code, verify `pc_key_mac` with the code the phone still holds, pin the key, connect (the
+    socket announces every version this tree speaks) and subscribe. The phone asked for `screen`; the PC did not grant
+    it."""
     ctrl = ControllerSim(env, browser, name=name)
     final, code = await pc.pair(ctrl, PAIR_CAPS)
     assert "screen" not in final["granted_capabilities"] and "pointer" in final["granted_capabilities"], final
@@ -162,14 +168,15 @@ def verified_pin(pc: RealAgent, ctrl: ControllerSim, final: dict[str, Any], code
     return jwk
 
 
-async def allow_screen_on_the_pc(pc: RealAgent, phone: Phone) -> None:
-    """The PC owner opens "Allow Screen view…" for this phone and presses Allow in DoMe's window; the widened grant
-    reaches the relay (grant_update) and comes back in the snapshot."""
+async def allow_screen_on_the_pc(pc: RealAgent, phone: Phone, *, ask_each_time: bool = False) -> None:
+    """The PC owner opens "Allow Screen view…" for this phone and presses Allow in DoMe's window (with "Ask me each
+    time" ticked when ``ask_each_time``); the widened grant reaches the relay (grant_update) and comes back in the
+    snapshot."""
     opened = await pc.control("test_open_grant_window", controller_id=phone.controller_id)
     assert opened["window_opened"] is True
     window = (await pc.control("test_ui"))["grant_windows"][-1]
     assert window["controller_id"] == phone.controller_id and window["screen"] is False
-    await pc.control("test_answer_grant", allow=True)
+    await pc.control("test_answer_grant", allow=True, ask_each_time=ask_each_time)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         grants = await phone.ctrl.browser.get(f"/v1/pcs/{pc.pc_id}/grants")
@@ -197,14 +204,37 @@ async def wait_session_gone(pc: RealAgent, timeout: float = 10) -> dict[str, Any
         await asyncio.sleep(0.1)
 
 
-async def stream(phone: Phone, *, takeover: bool = False, frames: int = 10) -> Started:
+async def stream(
+    phone: Phone,
+    *,
+    takeover: bool = False,
+    frames: int = 10,
+    surface: str | int = "primary",
+    cursor: str | None = None,
+) -> Started:
     """A pinned start whose picture arrives: the answer verified, DTLS connected, ``frames`` decoded frames."""
-    started = await phone.client.start(takeover=takeover)
+    return await picture(await phone.client.start(takeover=takeover, surface=surface, cursor=cursor), frames)
+
+
+async def picture(started: Started, frames: int = 10) -> Started:
+    """A succeeded start's picture: DTLS connected and ``frames`` decoded frames."""
     assert started.result["state"] == "succeeded", started.result
     viewer = started.viewer
     await viewer.wait(lambda: viewer.pc.connectionState == "connected", 20, "DTLS connected")
     await viewer.wait(lambda: len(viewer.frames) >= frames, 20, f"{frames} frames")
     return started
+
+
+async def start_answered_at_the_pc(pc: RealAgent, phone: Phone, action: str, **start: Any) -> Started:
+    """A start that opens a consent window at the PC (ask mode, the cooldown), answered ``action`` by the person."""
+    windows_before = len((await pc.control("test_ui"))["consent_windows"])
+    attempt = asyncio.create_task(phone.client.start(**start))
+    deadline = time.monotonic() + 15
+    while len((await pc.control("test_ui"))["consent_windows"]) == windows_before:
+        assert time.monotonic() < deadline and not attempt.done(), "no consent window opened at the PC"
+        await asyncio.sleep(0.1)
+    await pc.control("test_answer_consent", action=action)
+    return await attempt
 
 
 async def keyframe_latency(viewer: Viewer, request: Any) -> float:
@@ -385,11 +415,13 @@ async def test_pinned_session_streams_answers_pli_maps_taps_renews_and_is_charge
     expected = map_to_pixels(Monitor(0, 0, 0, 1920, 1080, True), 32768, 49152)
     injected = await agent.control("test_input")
     assert tuple(injected["cursor"]) == expected == (960, 809), injected
-    assert injected["injected"][-2:] == [["move_to", "960", "809"], ["button", "left", "click"]]
+    # each row ends with where the pointer was when the call was made: the click landed on the mapped pixels
+    assert injected["injected"][-2][:3] == ["move_to", "960", "809"], injected
+    assert injected["injected"][-1] == ["button", "left", "click", "@", "960", "809"], injected
     # two-finger scroll: smooth wheel units
     await phone.ctrl.input_batch(agent.pc_id, isid, 2, [{"type": "pointer_wheel", "dx": 0, "dy": -240}])
     await phone.log.wait("input_ack", timeout=10, input_session_id=isid, where=lambda f: f["last_seq"] >= 2)
-    assert (await agent.control("test_input"))["injected"][-1] == ["wheel", "0", "-240"]
+    assert (await agent.control("test_input"))["injected"][-1] == ["wheel", "0", "-240", "@", "960", "809"]
     # a tap aimed at an older picture is dropped whole (never mapped onto a rectangle that may have moved)
     await phone.ctrl.input_batch(agent.pc_id, isid, 3, [{**tap[0], "gen": 2}, tap[1]])
     err = await phone.log.wait("error", timeout=10, where=lambda f: f["error"]["code"] == "SCREEN_GEOMETRY_CHANGED")
@@ -400,7 +432,7 @@ async def test_pinned_session_streams_answers_pli_maps_taps_renews_and_is_charge
     )
     err = await phone.log.wait("error", timeout=10, where=lambda f: f["error"]["code"] == "INPUT_TARGET_RESERVED")
     injected = await agent.control("test_input")
-    assert injected["cursor"] == [960, 0] and injected["injected"][-1] == ["move_to", "960", "0"], injected
+    assert injected["cursor"] == [960, 0] and injected["injected"][-1][:3] == ["move_to", "960", "0"], injected
 
     # 7. Allowance tickets: about 20 s before the first chunk runs out the PC asks, the relay grants the next chunk on
     #    its own clock and the PC passes the news to the phone on the data channel (heartbeats kept the lease alive).
@@ -921,3 +953,325 @@ async def test_the_operator_switch_off_refuses_screen_view_before_the_pc(
     assert res["origin"] == "relay" and res["state"] == "failed", res
     assert res["error"]["code"] == "SCREEN_VIEW_DISABLED", res
     assert (await screen_status(agent))["sessions_started"] == 0
+
+
+# ----- protocol 1.5: Next screen, the pointer drawn by the phone, a 1.4 phone (design 2a §5.4) -----------------------
+TWO_MONITORS = [
+    {"index": 0, "left": 0, "top": 0, "width": 1920, "height": 1080, "primary": True},
+    {"index": 1, "left": 1920, "top": 0, "width": 1280, "height": 1024, "primary": False},
+]
+STOP_HINT = "Stop: tray > Stop Screen view, or Ctrl+Alt+Shift+S"
+
+
+def monitor(index: int) -> Any:
+    from dome_agent.platform.protocol import Monitor
+
+    m = TWO_MONITORS[index]
+    return Monitor(
+        int(m["index"]), int(m["left"]), int(m["top"]), int(m["width"]), int(m["height"]), bool(m["primary"])
+    )
+
+
+def inside(row: list[str], m: Any) -> bool:
+    """A test_input row's position (after its "@") lies on monitor ``m``."""
+    at = row.index("@")
+    x, y = int(row[at + 1]), int(row[at + 2])
+    return bool(m.left <= x < m.right and m.top <= y < m.bottom)
+
+
+async def input_batch(phone: Phone, pc: RealAgent, isid: str, seq: int, events: list[dict[str, Any]]) -> dict[str, Any]:
+    """One signed batch and its ack; returns test_input afterwards."""
+    await phone.ctrl.input_batch(pc.pc_id, isid, seq, events)
+    ack = await phone.log.wait("input_ack", timeout=10, input_session_id=isid, where=lambda f: f["last_seq"] >= seq)
+    assert ack["dropped_events"] == 0, ack
+    injected: dict[str, Any] = await pc.control("test_input")
+    return injected
+
+
+async def test_next_screen_replaces_the_session_and_keeps_the_pointer_on_the_watched_monitor(
+    env: Env, alice: Browser, agent: RealAgent, screen_on: Any, phones: list[Phone]
+) -> None:
+    """rules.screen_sessions (1b) and rules.screen_cursor (5). On a PC with two monitors, where the owner ticked "Ask
+    me each time", the phone watches screen 1 after the person allowed it, then presses Next screen: a fresh signed
+    start with `surface: 1` and no bye or stop. The PC ends the old session `replaced`, starts a new one on monitor 1
+    at `gen: 1` without asking again (the person allowed this phone a moment ago; the one-window-a-minute back-off
+    would refuse a second window anyway), keeps the "Screen view on" bars (no new bar request, none hidden) and says
+    so in a toast. The relay settles the old session and meters the new one. Taps land on monitor 1; a relative move
+    the phone injected that would leave monitor 1 is pulled back to its edge (a click in the same batch lands inside
+    it), while a pointer the person had put on the other monitor is never pulled back."""
+    phone = await pair_phone(env, alice, agent, phones, "Alice's iPhone")
+    await allow_screen_on_the_pc(agent, phone, ask_each_time=True)
+    shown = await agent.control("test_set_monitors", monitors=TWO_MONITORS)
+    surfaces = [{"index": 0, "width": 1920, "height": 1080, "primary": True}]
+    surfaces.append({"index": 1, "width": 1280, "height": 1024, "primary": False})
+    assert shown["monitors"] == surfaces, shown
+
+    # A: screen 1 (the primary), asked at the PC and allowed by the person
+    first = await picture(await start_answered_at_the_pc(agent, phone, "allow"))
+    session_a = first.result["result"]
+    assert session_a["surfaces"] == surfaces, session_a
+    assert (session_a["surface_index"], session_a["gen"], session_a["consent"]) == (0, 1, "granted"), session_a
+    assert "cursor" not in session_a and first.stamp == "1.4"  # Next screen needs nothing from 1.5
+    ui_a = await agent.control("test_ui")
+    assert ui_a["bars_shown"] is True and ui_a["bar_monitors"] == [2], ui_a  # a bar on each monitor
+    assert ui_a["consent_windows"] == [{"controller_id": phone.controller_id, "cause": "ask_mode"}], ui_a
+
+    # B: Next screen. No bye, no stop: the same phone's start for surface 1 is the switch.
+    second = await stream(phone, surface=1)
+    session_b = second.result["result"]
+    assert second.session_id != first.session_id and second.stamp == "1.4"
+    assert (session_b["surface_index"], session_b["gen"]) == (1, 1), session_b
+    assert session_b["consent"] == session_a["consent"] and session_b["surfaces"] == surfaces, session_b
+    ended = await ended_frame(phone, first.session_id)
+    assert ended["reason"] == "replaced", ended
+    ui_b = await agent.control("test_ui")
+    assert ui_b["consent_windows"] == ui_a["consent_windows"], ui_b  # not asked again
+    assert ui_b["bars_shown"] is True, ui_b
+    assert (ui_b["bar_requests"], ui_b["bars_hidden"]) == (ui_a["bar_requests"], ui_a["bars_hidden"]), (ui_a, ui_b)
+    viewer = second.viewer
+    await viewer.wait(lambda: bool(viewer.dc_of("geometry")), 10, "geometry")
+    geometry = viewer.dc_of("geometry")[0]
+    assert (geometry["gen"], geometry["surface_index"]) == (1, 1), geometry
+    status = await screen_status(agent)
+    session = status["session"]
+    assert session["surface"] == {"index": 1, "switched_from": 0}, session
+    assert session["consent"]["value"] == "granted" and session["consent"]["inherited"] is True, session
+    assert status["history"][0]["reason"] == "replaced", status["history"]
+    toast = f"Alice's iPhone switched to screen 2. {STOP_HINT}"
+    deadline = time.monotonic() + 10
+    while toast not in (await agent.control("test_ui"))["notification_messages"]:
+        assert time.monotonic() < deadline, "no 'switched to screen 2' toast at the PC"
+        await asyncio.sleep(0.1)
+    # the relay settled A `replaced` and meters B like any other session (rules.screen_metering (3))
+    row_a = await settled(env, first.command_id)
+    assert row_a["end_reason"] == "replaced" and row_a["state"] == "settled", row_a
+    row_b = reservation(env, second.command_id)
+    assert row_b["state"] == "live" and row_b["screen_session_id"] == second.session_id, row_b
+
+    # Taps map onto monitor 1 now.
+    res = await phone.log.command(agent.pc_id, "input.session_start", {})
+    assert res["state"] == "succeeded" and res["result"]["pointer"] is True, res
+    isid = res["result"]["input_session_id"]
+    from dome_agent.screen.session import map_to_pixels
+
+    right_edge = map_to_pixels(monitor(1), 65535, 32768)
+    assert right_edge == (3199, 512)
+    injected = await input_batch(phone, agent, isid, 1, [{"type": "pointer_move_to", "x": 65535, "y": 32768, "gen": 1}])
+    assert tuple(injected["cursor"]) == right_edge, injected
+    assert injected["injected"][-1][:3] == ["move_to", "3199", "512"], injected
+
+    # A relative move from the right edge of monitor 1 would leave it: pulled back onto its edge.
+    injected = await input_batch(phone, agent, isid, 2, [{"type": "pointer_move", "dx": 400, "dy": 0}])
+    assert injected["cursor"][0] == 3199 and tuple(injected["cursor"]) == right_edge, injected
+    assert injected["injected"][-2:] == [
+        ["move", "400", "0", "@", "3199", "512"],
+        ["move_to", "3199", "512", "@", "3599", "512"],
+    ], injected
+
+    # move, click, move: each move is confined before the next event, so the click lands on monitor 1.
+    events = [
+        {"type": "pointer_move", "dx": 50, "dy": 0},
+        {"type": "pointer_button", "button": "left", "action": "click"},
+        {"type": "pointer_move", "dx": -100, "dy": 0},
+    ]
+    injected = await input_batch(phone, agent, isid, 3, events)
+    rows = injected["injected"]
+    click = [r for r in rows if r[0] == "button"][-1]
+    assert click == ["button", "left", "click", "@", "3199", "512"] and inside(click, monitor(1)), rows
+    assert rows[-1] == ["move", "-100", "0", "@", "3199", "512"] and injected["cursor"] == [3099, 512], rows
+
+    # The person's own pointer on the other monitor is never pulled over: only a move that left monitor 1 is.
+    await agent.control("test_set_cursor", x=100, y=100)
+    injected = await input_batch(phone, agent, isid, 4, [{"type": "pointer_move", "dx": 10, "dy": 0}])
+    assert injected["cursor"] == [110, 100], injected
+    assert injected["injected"][-1] == ["move", "10", "0", "@", "100", "100"], injected
+    counters = (await agent.control("status"))["input"]["session"]
+    assert (counters["confined_moves"], counters["confine_failures"]) == (2, 0), counters
+
+    res = await phone.log.command(agent.pc_id, "screen.session_stop", {"screen_session_id": second.session_id})
+    assert res["state"] == "succeeded" and res["result"]["stopped"] is True, res
+    assert (await ended_frame(phone, second.session_id))["reason"] == "stopped"
+    await wait_session_gone(agent)
+    assert (await agent.control("test_ui"))["bars_shown"] is False
+    await agent.control("diagnostics")
+    assert first.answer is not None and second.answer is not None
+    secrets = sdp_secrets(first.offer_sdp, first.answer.answer_sdp, second.offer_sdp, second.answer.answer_sdp)
+    assert_nothing_leaked(agent, env, secrets)
+
+
+def normalised(px: int, py: int, width: int = 1920, height: int = 1080) -> tuple[int, int]:
+    """A physical position on the 1920x1080 primary as cursor_pos reports it (the inverse of map_to_pixels)."""
+    return round(px * 65535 / (width - 1)), round(py * 65535 / (height - 1))
+
+
+def most_in_one_second(times: list[float]) -> int:
+    """The most arrivals in any window of one second (half-open: [t, t + 1))."""
+    most = 0
+    for i, start in enumerate(times):
+        most = max(most, sum(1 for t in times[i:] if t - start < 1.0))
+    return most
+
+
+async def test_cursor_overlay_messages_reach_the_phone_and_validate(
+    env: Env, alice: Browser, agent: RealAgent, screen_on: Any, phones: list[Phone]
+) -> None:
+    """rules.screen_cursor, protocol 1.5. A phone whose start carries `cursor: overlay` (stamped 1.5) gets a picture
+    without the pointer and the pointer itself on the data channel: the result and every state say `overlay`, the
+    first cursor_shape comes before the first cursor_pos, each position is normalised over the streamed monitor at
+    the session's geometry generation and travels on the unordered `dome-screen-cursor-v1` channel, at most 60 a
+    second; a pointer that left the monitor is `visible: false` at its last position; an application's own pointer
+    arrives as a 24 x 24 PNG with its hotspot, the one message allowed above 1024 bytes. The pointer is scripted on
+    the fake platform (the worker's fake cursor reader; its custom bitmap is made up, never anyone's screen). The
+    bitmap is screen content: no byte of it in any agent file, log, the diagnostics bundle (kinds, sizes and counts
+    only) or any relay table."""
+    phone = await pair_phone(env, alice, agent, phones, "Alice's iPhone")
+    await allow_screen_on_the_pc(agent, phone)
+    # The worker reads one sample per tick, 60 a second: the arrow at rest for 2.5 s, then the I-beam sliding right one
+    # pixel a sample for exactly one second (a new position every tick: the PC at its cap of 60 a second), then an
+    # application's own pointer at rest, then off the monitor (held from there on). A slide of exactly 60 samples
+    # with rests around it makes "at most 60 in any second" independent of how the arrivals jitter: a PC that
+    # repeated positions while the pointer rests, or sent one twice, puts more than 60 into some second.
+    samples: list[list[Any]] = [[1, "arrow", 960, 540]] * 150
+    samples += [[1, "ibeam", 1500 + i, 200] for i in range(60)]
+    samples += [[1, "app", 1559, 200]] * 90
+    samples += [[1, "app", 2500, 200]]
+    shapes = {"arrow": "arrow", "ibeam": "ibeam", "app": {"custom": {"w": 24, "h": 24, "hx": 3, "hy": 2}}}
+    await agent.control("test_cursor_script", samples=samples, shapes=shapes)
+
+    started = await stream(phone, cursor="overlay")
+    assert started.stamp == "1.5"  # the start carries `cursor`
+    assert started.answer is not None and started.answer.payload["protocol_version"] == "1.5"  # the start's stamp
+    assert started.result["result"]["cursor"] == "overlay", started.result
+    viewer = started.viewer
+    # the whole script: shapes, the slide, then the pointer leaving the monitor
+    await viewer.wait(
+        lambda: any(m["visible"] is False for m in viewer.dc_of("cursor_pos")), 20, "the pointer off the monitor"
+    )
+    states = viewer.dc_of("state")
+    assert states and all(s.get("cursor") == "overlay" for s in states), states
+    assert states[0] == {"type": "state", "state": "sending", "encoder": "h264", "cursor": "overlay"}, states
+
+    kinds = [m["type"] for m in viewer.dc_messages]
+    assert kinds.index("cursor_shape") < kinds.index("cursor_pos"), kinds  # the shape first
+    positions = viewer.dc_of("cursor_pos")
+    assert all(p["gen"] == 1 for p in positions), positions
+    assert (positions[0]["x"], positions[0]["y"], positions[0]["visible"]) == (*normalised(960, 540), True)
+    assert (positions[0]["x"], positions[0]["y"]) == (32785, 32798)
+    visible = [p for p in positions if p["visible"]]
+    assert (visible[-1]["x"], visible[-1]["y"]) == normalised(1559, 200), visible[-1]
+    off = positions[-1]
+    assert off["visible"] is False and (off["x"], off["y"]) == (visible[-1]["x"], visible[-1]["y"]), positions
+    # sent on change only: one position for the 2.5 s at rest (twice if the channel opened meanwhile: the PC sends
+    # the pointer again then), one per tick of the slide (the PC keeps only the latest if it fell behind)
+    at_rest = [p for p in positions if (p["x"], p["y"]) == normalised(960, 540)]
+    assert 1 <= len(at_rest) <= 2, at_rest
+    slide = {p["x"] for p in visible if p["y"] == normalised(1500, 200)[1]}
+    assert 30 <= len(slide) <= 60, sorted(slide)
+    # positions on the unordered cursor channel; nothing else on it
+    assert set(viewer.labels_of("cursor_pos")) == {"dome-screen-cursor-v1"}, viewer.labels_of("cursor_pos")
+    assert {m["type"] for label, m in viewer.messages if label == "dome-screen-cursor-v1"} == {"cursor_pos"}
+    times = [t for t, (_label, m) in zip(viewer.dc_arrivals, viewer.messages, strict=True) if m["type"] == "cursor_pos"]
+    assert most_in_one_second(times) <= 60, most_in_one_second(times)
+
+    shape_messages = [(raw, m) for raw, m in zip(viewer.dc_raw_lengths, viewer.dc_messages, strict=True)]
+    shape_messages = [(raw, m) for raw, m in shape_messages if m["type"] == "cursor_shape"]
+    sequence = [m["kind"] for _raw, m in shape_messages]
+    # a shape is sent again when the channel opens or a geometry arrives (rules.screen_cursor (3)): repeats collapse
+    assert [k for i, k in enumerate(sequence) if i == 0 or sequence[i - 1] != k] == ["arrow", "ibeam", "custom"]
+    raw, custom = next((raw, m) for raw, m in shape_messages if m["kind"] == "custom")
+    assert (custom["width"], custom["height"], custom["hotspot_x"], custom["hotspot_y"]) == (24, 24, 3, 2), raw
+    png = custom["png"]
+    assert len(png) <= 8192 and png.startswith("iVBORw0KGgo"), len(png)  # a PNG, standard base64
+    assert 1024 < raw <= 12288, raw  # above the 1 KiB every other message keeps to, within the cursor_shape cap
+    assert all(r <= 1024 for r, m in zip(viewer.dc_raw_lengths, viewer.dc_messages, strict=True) if m is not custom)
+
+    # the PC's view: the mode it asked and runs, and counts (never a position or a bitmap) in its status
+    deadline = time.monotonic() + 10
+    while True:
+        session = (await screen_status(agent))["session"]
+        counts = session["media"].get("cursor") or {}
+        if counts.get("custom_sent") == 1 and counts.get("pos_sent", 0) >= len(positions):
+            break
+        assert time.monotonic() < deadline, f"the PC's cursor counters never caught up: {counts}"
+        await asyncio.sleep(0.2)
+    assert session["cursor"] == {"requested": "overlay", "mode": "overlay"}, session
+    bundle_path = Path((await agent.control("diagnostics"))["path"])
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    in_bundle = bundle["status"]["screen"]["session"]["media"]["cursor"]
+    assert set(in_bundle) == {
+        "mode",
+        "pos_sent",
+        "pos_unreliable",
+        "shape_sent",
+        "custom_sent",
+        "bitmap_max_chars",
+        "bitmap_too_large",
+        "dropped_gen",
+        "poll_errors",
+        "last_kind",
+    }, in_bundle
+    assert (in_bundle["mode"], in_bundle["last_kind"]) == ("overlay", "custom"), in_bundle
+    numbers = {k: v for k, v in in_bundle.items() if k not in ("mode", "last_kind")}
+    assert all(isinstance(v, int) and not isinstance(v, bool) for v in numbers.values()), in_bundle
+    assert in_bundle["custom_sent"] == 1 and in_bundle["bitmap_max_chars"] == len(png), in_bundle
+    assert in_bundle["shape_sent"] >= 3 and in_bundle["pos_unreliable"] == in_bundle["pos_sent"], in_bundle
+    assert (in_bundle["bitmap_too_large"], in_bundle["dropped_gen"], in_bundle["poll_errors"]) == (0, 0, 0)
+
+    res = await phone.log.command(agent.pc_id, "screen.session_stop", {"screen_session_id": started.session_id})
+    assert res["state"] == "succeeded", res
+    assert (await ended_frame(phone, started.session_id))["reason"] == "stopped"
+    await wait_session_gone(agent)
+    # the bundle written after the end keeps the last session's counters (a bundle is usually made after the trouble)
+    bundle_path = Path((await agent.control("diagnostics"))["path"])
+    after = json.loads(bundle_path.read_text(encoding="utf-8"))["status"]["screen"]
+    assert after["session"] is None and after["last_session_media"]["cursor"]["custom_sent"] == 1, after
+    secrets = sdp_secrets(started.offer_sdp, started.answer.answer_sdp)
+    secrets |= {png[:24], png[len(png) // 2 : len(png) // 2 + 24], png[-24:]}  # the bitmap: header, data, end
+    assert_nothing_leaked(agent, env, secrets)
+
+
+async def test_a_1_5_agent_answers_a_1_4_phone_in_1_4(
+    env: Env, alice: Browser, agent: RealAgent, screen_on: Any, phones: list[Phone]
+) -> None:
+    """rules.screen_signaling (5) and rules.screen_cursor (6): a start without `cursor` (what a 1.4 phone, a stale PWA
+    bundle, sends) is stamped 1.4 and gets a 1.4 session from this 1.5 PC: the signed answer is stamped 1.4 (a 1.4
+    verifier accepts it), the result has no `cursor`, and nothing 1.5 added ever reaches the phone on the data
+    channel: no cursor_pos, no cursor_shape, no `cursor` in a state message (a 1.4 phone validates every message with
+    additionalProperties:false and would drop the session's state, allowance and restricted news otherwise)."""
+    phone = await pair_phone(env, alice, agent, phones, "Alice's iPhone")
+    await allow_screen_on_the_pc(agent, phone)
+    started = await stream(phone, frames=20)
+    assert started.stamp == "1.4"
+    assert started.viewer.cdc is None  # a 1.4 phone opens one data channel
+    assert started.answer is not None and started.answer_envelope is not None
+    assert started.answer.payload["protocol_version"] == "1.4", started.answer.payload
+    assert "cursor" not in started.result["result"], started.result
+    REGISTRY.validate_result("screen.session_start", started.result["result"])
+    phone_1_4 = copy.copy(load_registry())
+    phone_1_4.protocol_version = "1.4"  # what a 1.4 phone's library speaks
+    verified = verify_screen_answer_payload(
+        started.answer_envelope,
+        pinned_jwk=phone.client.pinned_jwk or {},
+        account_id=alice.account_id,
+        controller_id=phone.controller_id,
+        pc_id=agent.pc_id,
+        command_id=started.command_id,
+        offer_sdp=started.offer_sdp,
+        registry=phone_1_4,
+    )
+    assert verified.answer_sdp == started.answer.answer_sdp
+
+    viewer = started.viewer
+    await viewer.wait(lambda: bool(viewer.dc_of("geometry")) and bool(viewer.dc_of("state")), 10, "geometry + state")
+    await viewer.wait(lambda: len(viewer.frames) >= 20, 20, "20 frames")
+    await asyncio.sleep(2.5)  # a stats interval and a few more frames: time for anything 1.5 to slip out
+    kinds = {m["type"] for m in viewer.dc_messages}
+    assert kinds <= {"geometry", "state", "allowance", "restricted"}, kinds
+    assert all("cursor" not in m for m in viewer.dc_of("state")), viewer.dc_of("state")
+    assert {label for label, _m in viewer.messages} == {"dome-screen-v1"}
+    session = (await screen_status(agent))["session"]
+    assert session["cursor"] == {"requested": None, "mode": None}, session
+
+    res = await phone.log.command(agent.pc_id, "screen.session_stop", {"screen_session_id": started.session_id})
+    assert res["state"] == "succeeded", res
+    assert (await ended_frame(phone, started.session_id))["reason"] == "stopped"

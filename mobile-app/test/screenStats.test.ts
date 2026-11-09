@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { redact } from "../src/lib/log.ts";
 import { EMPTY_SCREEN_STATE } from "../src/lib/screen.ts";
-import { emptyTimeline, fmtpSummary, mediaSummary, playOutcome, probeVideo, readoutLines, reduceStats, statsSummary, type FrameCounters, type ScreenClientFacts } from "../src/lib/screenStats.ts";
+import { EMPTY_POINTER_FACTS, EMPTY_SURFACE_FACTS, EMPTY_ZOOM_FACTS, emptyTimeline, fmtpSummary, mediaSummary, playOutcome, probeVideo, readoutLines, readoutLines15, reduceStats, statsSummary, type FrameCounters, type ScreenClientFacts } from "../src/lib/screenStats.ts";
 import { safariLikeStats, STATS_SECRETS } from "./helpers/fakePeer.ts";
 
 const report = (entries: Array<Record<string, unknown>>) => new Map(entries.map((e, i) => [e && typeof e === "object" && typeof e.id === "string" ? e.id : `x${i}`, e]));
@@ -173,5 +173,32 @@ describe("readoutLines: the gate checklist, then the numbers", () => {
       ]),
     );
     for (const secret of STATS_SECRETS) expect(lines.join("\n"), secret).not.toContain(secret);
+  });
+});
+
+describe("readoutLines (1.5): the pointer, the screens, the zoom", () => {
+  const base = (): ScreenClientFacts => ({ stats: null, media: null, timeline: emptyTimeline(), channel: { open: false, hb_sent: 0, received: 0, dropped: 0 }, transport_connected: false, codec_fallback: null });
+
+  it("the three lines in the readout's format, after the existing lines", () => {
+    const f: ScreenClientFacts = {
+      ...base(),
+      pointer: { mode: "overlay", shapes: 3, custom: 1, rejected: 0, positions: 412, unreliable: 400, droppedGen: 2, lastKind: "ibeam", predErrMaxPx: 9 },
+      surfaces: { count: 2, showing: 2, switches: 1, switchFailures: 0, gone: 0 },
+      zoom: { maxScale: 2.6, followPans: 83 },
+    };
+    const lines = readoutLines({ ...EMPTY_SCREEN_STATE, phase: "live", verified: true }, f);
+    expect(lines.slice(-3)).toEqual(["pointer: overlay · shapes 3 custom 1 rejected 0 · pos 412 old-gen 2 · pred err max 9 px", "screens: 2 · showing 2 · switches 1 failed 0 · gone 0", "zoom: max 2.6x · follow pans 83"]);
+    expect(lines.slice(0, 13)[0]).toBe("verified: yes"); // the gate checklist still leads
+  });
+
+  it("drawn reads 'in picture', a session without cursor 'none (PC speaks 1.4)'; unknown numbers are '-'", () => {
+    expect(readoutLines15({ pointer: { ...EMPTY_POINTER_FACTS, mode: "drawn" } })[0]).toBe("pointer: in picture · shapes 0 custom 0 rejected 0 · pos 0 old-gen 0 · pred err max -");
+    expect(readoutLines15({})).toEqual(["pointer: none (PC speaks 1.4) · shapes 0 custom 0 rejected 0 · pos 0 old-gen 0 · pred err max -", "screens: 0 · showing - · switches 0 failed 0 · gone 0", "zoom: max 1.0x · follow pans 0"]);
+    expect(readoutLines15({ pointer: EMPTY_POINTER_FACTS, surfaces: EMPTY_SURFACE_FACTS, zoom: EMPTY_ZOOM_FACTS })).toEqual(readoutLines15({}));
+  });
+
+  it("counts and short words only: no coordinates, no bitmap", () => {
+    const text = readoutLines15({ pointer: { ...EMPTY_POINTER_FACTS, mode: "overlay", lastKind: "custom", positions: 5 } }).join("\n");
+    expect(text).not.toMatch(/png|base64|data:/i);
   });
 });

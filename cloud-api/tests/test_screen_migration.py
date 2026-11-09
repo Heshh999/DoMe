@@ -62,3 +62,37 @@ def test_migration_0005_downgrade_upgrade_roundtrip() -> None:
                 (name,),
             )
             conn.execute(f'DROP DATABASE "{name}"')
+
+
+def test_migration_0007_turn_deferred_revocations_roundtrip() -> None:
+    """0007 (DECISIONS #117): the set-aside TURN usernames of live sessions; ids, a username and timestamps only."""
+    base = make_url(TEST_DB_URL)
+    name = f"dome_mig_{secrets.token_hex(4)}"
+    admin = base.set(database="postgres").set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{name}"')
+    url = base.set(database=name).render_as_string(hide_password=False)
+    try:
+        cfg = alembic_config(url)
+        command.upgrade(cfg, "head")
+        assert columns(url, "turn_deferred_revocations") == {
+            "username",
+            "screen_session_id",
+            "account_id",
+            "controller_id",
+            "expires_at",
+            "created_at",
+        }
+        command.downgrade(cfg, "0006")
+        assert "turn_deferred_revocations" not in tables(url)
+        assert SCREEN_TABLES <= tables(url)
+        command.upgrade(cfg, "head")
+        assert "turn_deferred_revocations" in tables(url)
+        command.check(cfg)  # raises when the models and the migrated schema differ
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+                (name,),
+            )
+            conn.execute(f'DROP DATABASE "{name}"')

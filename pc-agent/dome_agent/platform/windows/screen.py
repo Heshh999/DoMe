@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import sys
 from collections.abc import Iterator
 from ctypes import wintypes
 from typing import Any
@@ -29,6 +30,8 @@ from dome_protocol import ProtocolError
 from ..protocol import DuplicationProbe, Monitor
 
 MONITORINFOF_PRIMARY = 0x00000001
+# GraphicsCaptureSession.IsCursorCaptureEnabled: Windows 10 1903 (build 18362) and later (protocol 1.5)
+CURSOR_CAPTURE_MIN_BUILD = 18362
 ENUM_CURRENT_SETTINGS = 0xFFFFFFFF
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 CCHDEVICENAME = 32
@@ -148,6 +151,17 @@ def capture_order_position(
     return None
 
 
+def windows_build() -> int:
+    """The Windows build number (``sys.getwindowsversion().build``); 0 where it cannot be read."""
+    version = getattr(sys, "getwindowsversion", None)
+    if version is None:
+        return 0
+    try:
+        return int(version().build)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return 0
+
+
 class WindowsScreen:
     """:class:`ScreenAdapter` on ``user32``. Constructed on ``win32`` only; the DLL loads on first use."""
 
@@ -237,6 +251,11 @@ class WindowsScreen:
         except Exception as exc:  # noqa: BLE001 - a probe that cannot run is "no answer", never a refusal
             return DuplicationProbe(None, reason=f"probe failed ({exc.__class__.__name__})")
 
+    def cursor_capture_configurable(self) -> bool:
+        """Windows.Graphics.Capture can leave the pointer out from Windows 10 1903 (build 18362) on
+        (``IsCursorCaptureEnabled``); before it the package refuses ``cursor_capture=False``."""
+        return windows_build() >= CURSOR_CAPTURE_MIN_BUILD
+
     @staticmethod
     def _rotation(user32: Any, device: str) -> int:
         mode = DEVMODEW()
@@ -250,4 +269,12 @@ class WindowsScreen:
         return orientation * 90 if orientation in (0, 1, 2, 3) else 0
 
 
-__all__ = ["DEVMODEW", "MONITORINFOEXW", "WindowsScreen", "capture_order_position", "order_monitors"]
+__all__ = [
+    "CURSOR_CAPTURE_MIN_BUILD",
+    "DEVMODEW",
+    "MONITORINFOEXW",
+    "WindowsScreen",
+    "capture_order_position",
+    "order_monitors",
+    "windows_build",
+]

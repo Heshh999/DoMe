@@ -3,7 +3,8 @@
   "errors": {
     "PROTOCOL_INCOMPATIBLE": {
       "retryable": false,
-      "user_message": "One of your DoMe components needs an update before they can talk to each other."
+      "user_message": "One of your DoMe components needs an update before they can talk to each other.",
+      "description": "A peer's protocol version is not one this component speaks (detail {peer, supported}), or a payload is stamped below the version that defines it (detail {peer, required}); and, since 1.5, any command whose stamp the target agent did not announce (the relay refuses it before forwarding, detail {peer: \"agent\", required})."
     },
     "MALFORMED_MESSAGE": {
       "retryable": false,

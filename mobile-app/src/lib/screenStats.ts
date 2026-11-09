@@ -11,6 +11,8 @@
  *   - the session timeline: ms since `start_sent` at which each stage was first seen.
  * The keys are chosen to pass `log.ts` REDACT_KEY untouched (`fmtp`, `local_type`; never `url`, `candidate*` or
  * `*_text`), so a summary can be logged as it is. `readoutLines` is the test-build readout's text (ScreenReadout).
+ * Protocol 1.5 adds three counts-only fact groups (the phone-drawn pointer, the screens and the zoom): numbers and short
+ * words, never a position, a shape bitmap or anything else from the picture (rules.screen_content).
  */
 import type { ScreenSessionState } from "./screen.ts";
 
@@ -391,6 +393,41 @@ export interface CodecFallback {
   reason: "not_decoded";
 }
 
+/** The pointer drawn by the phone (1.5), counts only: never a position or a bitmap. */
+export interface ScreenPointerFacts {
+  /** The session's pointer mode: `result.cursor`, then `state.cursor`; null = a session without `cursor` (1.4). */
+  mode: "drawn" | "overlay" | null;
+  /** Shapes accepted, of them custom bitmaps, and shapes refused (bad header, size or hotspot). */
+  shapes: number;
+  custom: number;
+  rejected: number;
+  /** `cursor_pos` accepted, of them on the unordered cursor channel, and dropped for an old geometry generation. */
+  positions: number;
+  unreliable: number;
+  droppedGen: number;
+  /** The last shape's kind ("arrow", "custom", …) or null. */
+  lastKind: string | null;
+  /** The largest prediction error seen, in PC pixels. */
+  predErrMaxPx: number | null;
+}
+
+/** Next screen (1.5): the PC's screens and the switches between them. */
+export interface ScreenSurfaceFacts {
+  count: number;
+  /** The screen shown, counted from 1 (DoMe's numbering), or null. */
+  showing: number | null;
+  switches: number;
+  switchFailures: number;
+  /** A remembered screen was not connected any more and the picture went back to the main one. */
+  gone: number;
+}
+
+/** Zoom on the phone (both modes) and the Touchpad view following the pointer. */
+export interface ScreenZoomFacts {
+  maxScale: number;
+  followPans: number;
+}
+
 export interface ScreenClientFacts {
   stats: ScreenStatsSnapshot | null;
   media: ScreenMediaFacts | null;
@@ -399,6 +436,29 @@ export interface ScreenClientFacts {
   /** DTLS came up in the current (or last) attempt. */
   transport_connected: boolean;
   codec_fallback: CodecFallback | null;
+  /** 1.5 groups; the client always fills them (optional so facts built elsewhere stay valid). */
+  pointer?: ScreenPointerFacts;
+  surfaces?: ScreenSurfaceFacts;
+  zoom?: ScreenZoomFacts;
+}
+
+export const EMPTY_POINTER_FACTS: ScreenPointerFacts = { mode: null, shapes: 0, custom: 0, rejected: 0, positions: 0, unreliable: 0, droppedGen: 0, lastKind: null, predErrMaxPx: null };
+export const EMPTY_SURFACE_FACTS: ScreenSurfaceFacts = { count: 0, showing: null, switches: 0, switchFailures: 0, gone: 0 };
+export const EMPTY_ZOOM_FACTS: ScreenZoomFacts = { maxScale: 1, followPans: 0 };
+
+const POINTER_MODE_WORDS: Record<"drawn" | "overlay" | "none", string> = { overlay: "overlay", drawn: "in picture", none: "none (PC speaks 1.4)" };
+
+/** The three 1.5 readout lines: the pointer, the screens, the zoom (numbers and short words only). */
+export function readoutLines15(f: Pick<ScreenClientFacts, "pointer" | "surfaces" | "zoom">): string[] {
+  const p = f.pointer ?? EMPTY_POINTER_FACTS;
+  const s = f.surfaces ?? EMPTY_SURFACE_FACTS;
+  const z = f.zoom ?? EMPTY_ZOOM_FACTS;
+  const err = p.predErrMaxPx === null ? "-" : `${p.predErrMaxPx} px`;
+  return [
+    `pointer: ${POINTER_MODE_WORDS[p.mode ?? "none"]} · shapes ${p.shapes} custom ${p.custom} rejected ${p.rejected} · pos ${p.positions} old-gen ${p.droppedGen} · pred err max ${err}`,
+    `screens: ${s.count} · showing ${s.showing ?? "-"} · switches ${s.switches} failed ${s.switchFailures} · gone ${s.gone}`,
+    `zoom: max ${z.maxScale.toFixed(1)}x · follow pans ${z.followPans}`,
+  ];
 }
 
 const yesNo = (v: boolean | null | undefined): string => (v === true ? "yes" : v === false ? "no" : "-");
@@ -437,6 +497,7 @@ export function readoutLines(state: Pick<ScreenSessionState, "phase" | "verified
     `pair ${p?.state ?? "-"} ${p ? `${p.local_type}/${p.remote_type}` : "-"} ${p?.proto ?? "-"} rtt ${num0(p?.rtt_ms)} ms dtls ${f.stats?.dtls ?? "-"}`,
     `video ${size(m?.width, m?.height)} paused ${yesNo(m?.paused)} t ${num0(m?.current_time)} err ${num0(m?.error)} quality ${num0(m?.total_frames)}/${num0(m?.dropped_frames)} track ${m?.track_state ?? "-"} enabled ${yesNo(m?.track_enabled)} active ${yesNo(m?.stream_active)}`,
     `phase ${state.phase} retries ${state.retries} stalled ${yesNo(state.stalled)} encoder ${state.encoder ?? "-"} path ${state.path ?? "-"}${f.codec_fallback ? ` fallback ${f.codec_fallback.to}` : ""}`,
+    ...readoutLines15(f),
   ];
 }
 

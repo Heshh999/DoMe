@@ -2554,7 +2554,7 @@
       ]
     },
     "screen_dc_pc_to_phone": {
-      "description": "Data-channel messages the PC may send: geometry (a new generation: the streamed surface, its size and rotation, and DoMe's own reserved rectangles that taps must avoid), state (sending, or paused with the cause; encoder and data_saver as hints for the Health note and the badge), allowance (the ticket the PC last received, for the countdown) and restricted (input is currently refused on the PC and why). Phase 2/3 add cursor_shape, cursor_pos and roi.",
+      "description": "Data-channel messages the PC may send: geometry (a new generation: the streamed surface, its size and rotation, and DoMe's own reserved rectangles that taps must avoid), state (sending, or paused with the cause; encoder and data_saver as hints for the Health note and the badge), allowance (the ticket the PC last received, for the countdown) and restricted (input is currently refused on the PC and why). 1.5 adds cursor_pos and cursor_shape (the pointer drawn by the phone, rules.screen_cursor); Phase 3 adds roi.",
       "oneOf": [
         {
           "type": "object",
@@ -2644,6 +2644,14 @@
             },
             "data_saver": {
               "type": "boolean"
+            },
+            "cursor": {
+              "type": "string",
+              "enum": [
+                "drawn",
+                "overlay"
+              ],
+              "description": "Since 1.5. The pointer mode in effect; present in every state message of a session whose start carried `cursor`, absent otherwise."
             }
           }
         },
@@ -2710,11 +2718,136 @@
               ]
             }
           }
+        },
+        {
+          "$ref": "#/$defs/screen_dc_cursor_pos"
+        },
+        {
+          "$ref": "#/$defs/screen_dc_cursor_shape_named"
+        },
+        {
+          "$ref": "#/$defs/screen_dc_cursor_shape_custom"
         }
       ]
     },
+    "screen_dc_cursor_pos": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "gen",
+        "x",
+        "y",
+        "visible"
+      ],
+      "properties": {
+        "type": {
+          "const": "cursor_pos"
+        },
+        "gen": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      },
+      "description": "Since 1.5. The real pointer's hotspot over the streamed surface of geometry generation `gen`, normalised 0..65535 like pointer_move_to. `visible` is false when Windows hides the pointer or it is on another monitor; x and y then hold the last position inside the surface. Sent only in an overlay session, when changed, coalesced to at most 60 per second, on dome-screen-cursor-v1 (unordered, no retransmissions) when the phone opened it, else on dome-screen-v1; the phone keeps the latest report only."
+    },
+    "screen_dc_cursor_shape_named": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "kind"
+      ],
+      "properties": {
+        "type": {
+          "const": "cursor_shape"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "arrow",
+            "ibeam",
+            "hand",
+            "wait",
+            "appstarting",
+            "cross",
+            "no",
+            "sizeall",
+            "sizens",
+            "sizewe",
+            "sizenesw",
+            "sizenwse",
+            "uparrow",
+            "help"
+          ]
+        }
+      },
+      "description": "Since 1.5. The pointer took one of Windows' system shapes (IDC_*); the phone draws it with its own crisp vector art and hotspot."
+    },
+    "screen_dc_cursor_shape_custom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "kind",
+        "width",
+        "height",
+        "hotspot_x",
+        "hotspot_y",
+        "png"
+      ],
+      "properties": {
+        "type": {
+          "const": "cursor_shape"
+        },
+        "kind": {
+          "const": "custom"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "hotspot_x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 63
+        },
+        "hotspot_y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 63
+        },
+        "png": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 8192,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        }
+      },
+      "description": "Since 1.5. An application's own pointer as a 32-bit RGBA PNG of exactly width x height (at most 64 x 64; the PC scales larger cursors down, hotspot included), standard base64 (base64-valid length and padding; the PC's base64.b64encode output always matches) of at most 8192 characters, with its hotspot in bitmap pixels. A cursor bitmap is screen content (rules.screen_content): never logged, stored or put in a diagnostics bundle by either side. This is the only data-channel message that may exceed screen_dc_message_max_bytes; it is bounded by screen_dc_cursor_shape_max_bytes instead."
+    },
     "screen_dc_message": {
-      "description": "Every message on the dome-screen-v1 data channel, in either direction (rules.screen_content): a JSON object of at most screen_dc_message_max_bytes with a closed vocabulary; each side validates against its own inbound direction (screen_dc_phone_to_pc on the PC, screen_dc_pc_to_phone on the phone) and drops anything else.",
+      "description": "Every message on the screen data channels, in either direction (rules.screen_content): dome-screen-v1 and, since 1.5 and only in a session whose start carried `cursor`, dome-screen-cursor-v1 (unordered, no retransmissions; it carries cursor_pos from the PC only, and the PC drops anything the phone sends on it). A JSON object of at most screen_dc_message_max_bytes with a closed vocabulary, except cursor_shape, which may be up to screen_dc_cursor_shape_max_bytes; each side validates against its own inbound direction (screen_dc_phone_to_pc on the PC, screen_dc_pc_to_phone on the phone) and drops anything else.",
       "oneOf": [
         {
           "$ref": "#/$defs/screen_dc_phone_to_pc"

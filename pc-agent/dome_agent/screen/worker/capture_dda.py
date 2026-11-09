@@ -21,6 +21,9 @@ What ``vsrc_ddagrab.c`` (FFmpeg n8.1.3) really does, and what follows from it he
   visible bytes, about 0.4 ms for 1280x720 NV12) and answers None for a repeat. The FrameSource contract ("the next
   CHANGED frame, or None") holds, and the track's time-driven floor re-encodes the held frame at >= 1 fps as before.
   A cursor move is a change (``draw_mouse=1`` paints the pointer into the frame).
+* **The pointer left out** (2a §3.6, rules.screen_cursor (1)): an ``overlay`` session builds the graph with
+  ``draw_mouse=0`` (``DdagrabSource(draw_mouse=False)``; ``cursor_drawn`` False) and the worker's cursor poller reports
+  the pointer instead; every other option, and the default graph the licence gate checks, is unchanged.
 * **The open can block too, so a thread of its own owns it.** ``probe_output_format`` runs inside ``av.open`` and loops
   until the desktop produces a real frame (pointer-only updates do not count); no option skips it.
   :meth:`DdagrabSource.open` therefore opens on a helper thread and waits :data:`OPEN_WAIT_SECONDS` (shorter than the
@@ -121,11 +124,12 @@ _level_users: dict[int, int] = {}  # level asked for -> blocks inside ffmpeg_log
 _level_was_set = False
 
 
-def ddagrab_graph(output_idx: int, width: int, height: int, fps: int) -> str:
+def ddagrab_graph(output_idx: int, width: int, height: int, fps: int, *, draw_mouse: bool = True) -> str:
     """The Desktop Duplication graph: ``ddagrab``'s own options, then ``scale_d3d11``'s ``width``/``height``/``format``
-    (FFmpeg n8.1.3 option names; ``w``/``h`` are ``scale``'s, not ``scale_d3d11``'s)."""
+    (FFmpeg n8.1.3 option names; ``w``/``h`` are ``scale``'s, not ``scale_d3d11``'s). ``draw_mouse`` False leaves the
+    pointer out of the picture (an overlay session); only that token changes."""
     return (
-        f"ddagrab=output_idx={int(output_idx)}:framerate={int(fps)}:draw_mouse=1:dup_frames=1,"
+        f"ddagrab=output_idx={int(output_idx)}:framerate={int(fps)}:draw_mouse={1 if draw_mouse else 0}:dup_frames=1,"
         f"scale_d3d11=width={int(width)}:height={int(height)}:format=nv12,hwdownload,format=nv12"
     )
 
@@ -457,8 +461,10 @@ class _PendingOpen:
 
 
 class DdagrabSource:
+    kind = "dda"
     # declared here because the constructor's platform guard hides the assignments from the Linux type-check
     output_idx: int
+    cursor_drawn: bool
     width: int
     height: int
     fps: int
@@ -475,7 +481,7 @@ class DdagrabSource:
     frames_repeated: int
     proven: bool
 
-    def __init__(self, output_idx: int, width: int, height: int, fps: int) -> None:
+    def __init__(self, output_idx: int, width: int, height: int, fps: int, *, draw_mouse: bool = True) -> None:
         if sys.platform != "win32":
             raise ProtocolError(
                 "SCREEN_CAPTURE_UNAVAILABLE",
@@ -483,6 +489,7 @@ class DdagrabSource:
                 detail={"detail": "unsupported_display"},
             )
         self.output_idx = output_idx
+        self.cursor_drawn = bool(draw_mouse)  # ddagrab paints the pointer into the frame (draw_mouse=1)
         self.width, self.height = int(width) // 2 * 2, int(height) // 2 * 2
         self.fps = max(1, int(fps))
         self.open_wait = OPEN_WAIT_SECONDS
@@ -502,7 +509,9 @@ class DdagrabSource:
         """Start the graph on a helper thread and wait up to ``open_wait``: a failure in that time is raised as the
         classified error; success is adopted; a still desktop (``probe_output_format`` waits for a real frame) leaves
         the open pending, and :meth:`read` answers None until the helper has the graph."""
-        pending = _PendingOpen(ddagrab_graph(self.output_idx, self.width, self.height, self.fps))
+        pending = _PendingOpen(
+            ddagrab_graph(self.output_idx, self.width, self.height, self.fps, draw_mouse=self.cursor_drawn)
+        )
         self._pending = pending
         pending.start()
         pending.done.wait(self.open_wait)
@@ -658,7 +667,11 @@ class DdaWithFallback:
     Desktop Duplication is used only once it has proven itself: an open still pending after the primary's wait (a
     still desktop: no frame until something on it changes) is abandoned for Windows.Graphics.Capture, and so is a
     primary whose read fails before its first frame (``proven`` False); either way the session stays on
-    Windows.Graphics.Capture."""
+    Windows.Graphics.Capture.
+
+    Both sources are built with the start's pointer choice and pixel format (``main._build_source``: ``draw_mouse``
+    for the primary, ``cursor_capture`` and ``pix_fmt`` for the fallback); :attr:`kind` and :attr:`cursor_drawn` are
+    those of the source in use, so the worker re-reports the pointer mode after a fallback."""
 
     def __init__(
         self,
@@ -676,6 +689,18 @@ class DdaWithFallback:
         self._skip = skip
         self._active: Any | None = None
         self.width, self.height = int(primary.width), int(primary.height)
+
+    @property
+    def kind(self) -> str:
+        """``dda`` until Windows.Graphics.Capture took over, then ``wgc``."""
+        active = self._active
+        return "dda" if active is None or active is self._primary else "wgc"
+
+    @property
+    def cursor_drawn(self) -> bool:
+        """Whether the source in use (Desktop Duplication before it opened) paints the pointer into its frames."""
+        active = self._active if self._active is not None else self._primary
+        return bool(getattr(active, "cursor_drawn", True))
 
     def open(self) -> None:
         skipped = self._aim_primary()

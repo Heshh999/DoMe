@@ -192,7 +192,7 @@ def dda(monkeypatch: pytest.MonkeyPatch, graph: str) -> Any:
     with monkeypatch.context() as m:
         m.setattr(sys, "platform", "win32")
         source = capture_dda.DdagrabSource(0, 64, 36, 30)
-    monkeypatch.setattr(capture_dda, "ddagrab_graph", lambda *_args: graph)
+    monkeypatch.setattr(capture_dda, "ddagrab_graph", lambda *_args, **_kw: graph)
     return source
 
 
@@ -652,7 +652,7 @@ def test_the_worker_asks_dxgi_for_the_output_at_open_time_only(monkeypatch: pyte
     monkeypatch.setattr(capture_dda, "locate_ddagrab_output", locate)
 
     class Dda:
-        def __init__(self, *_args: Any) -> None:
+        def __init__(self, *_args: Any, **_kw: Any) -> None:
             self.width, self.height, self.output_idx = 1280, 720, 1
 
         def open(self) -> None:
@@ -662,7 +662,7 @@ def test_the_worker_asks_dxgi_for_the_output_at_open_time_only(monkeypatch: pyte
     spec = {"surface_index": 1, "primary": False, "left": 2560, "top": 0, "width": 1920, "height": 1080}
     with monkeypatch.context() as m:
         m.setattr(sys, "platform", "win32")
-        source = worker_main._build_source("ddagrab", spec, 1280, 720, 30)  # noqa: SLF001
+        source = worker_main._build_source("ddagrab", spec, 1280, 720, 30, cursor_drawn=True, pix_fmt="nv12")  # noqa: SLF001
     assert asked == []  # constructing asks nothing (and captures nothing)
     source.open()
     assert asked == [{"left": 2560, "top": 0, "width": 1920, "height": 1080, "fallback_idx": 1}]
@@ -672,7 +672,7 @@ def test_the_fallback_warning_carries_desktop_duplications_reason(monkeypatch: p
     """The device log said only ``detail=unsupported_display``: the warning now carries FFmpeg's sanitised words."""
 
     class Dda:
-        def __init__(self, *_args: Any) -> None:
+        def __init__(self, *_args: Any, **_kw: Any) -> None:
             self.width, self.height = 1280, 720
 
         def open(self) -> None:
@@ -694,9 +694,15 @@ def test_the_fallback_warning_carries_desktop_duplications_reason(monkeypatch: p
     monkeypatch.setattr(capture_wgc, "WgcSource", Wgc)
     with monkeypatch.context() as m:
         m.setattr(sys, "platform", "win32")
-        source = worker_main._build_source(
-            "ddagrab", {"surface_index": 0, "width": 1920, "height": 1080}, 1280, 720, 30
-        )  # noqa: SLF001
+        source = worker_main._build_source(  # noqa: SLF001
+            "ddagrab",
+            {"surface_index": 0, "width": 1920, "height": 1080},
+            1280,
+            720,
+            30,
+            cursor_drawn=True,
+            pix_fmt="nv12",
+        )
     with structlog.testing.capture_logs() as logs:
         source.open()
     [warning] = [e for e in logs if e["log_level"] == "warning"]
@@ -764,6 +770,7 @@ class FakeCapture:
 
     instances: list[FakeCapture] = []
     start_error: Exception | None = None
+    cursor_error: str | None = None  # what start_free_threaded() raises for cursor_capture=False (old Windows 10)
 
     def __init__(
         self,
@@ -795,6 +802,8 @@ class FakeCapture:
     def start_free_threaded(self) -> FakeControl:
         if FakeCapture.start_error is not None:
             raise FakeCapture.start_error
+        if FakeCapture.cursor_error is not None and self.settings["cursor_capture"] is False:
+            raise Exception(FakeCapture.cursor_error)  # the package's refusal: a bare Exception, from here
         self.control = FakeControl()
         return self.control
 
@@ -814,9 +823,11 @@ def native(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
     monkeypatch.setitem(sys.modules, capture_wgc.NATIVE_MODULE, module)
     FakeCapture.instances = []
     FakeCapture.start_error = None
+    FakeCapture.cursor_error = None
     yield module
     FakeCapture.instances = []
     FakeCapture.start_error = None
+    FakeCapture.cursor_error = None
 
 
 @pytest.fixture
@@ -1015,7 +1026,7 @@ def test_the_worker_passes_the_monitors_rectangle_to_wgc(monkeypatch: pytest.Mon
     spec = {"surface_index": 1, "primary": False, "left": -1920, "top": 0, "width": 1920, "height": 1080}
     with monkeypatch.context() as m:
         m.setattr(sys, "platform", "win32")
-        source = worker_main._build_source("wgc", spec, 1280, 720, 30)  # noqa: SLF001
+        source = worker_main._build_source("wgc", spec, 1280, 720, 30, cursor_drawn=True, pix_fmt="yuv420p")  # noqa: SLF001
     source.open()
     assert seen == [{"left": -1920, "top": 0, "width": 1920, "height": 1080, "primary": False}]
     assert FakeCapture.instances[0].settings["monitor_index"] == 3
@@ -1092,3 +1103,210 @@ def test_load_native_loads_the_extension_by_file(tmp_path: Path, monkeypatch: py
     assert module.NativeWindowsCapture == "stand-in" and module.__name__ == capture_wgc.NATIVE_MODULE
     assert sys.modules[capture_wgc.NATIVE_MODULE] is module and capture_wgc.load_native() is module
     assert "windows_capture" not in sys.modules  # the wrapper never ran
+
+
+# ----- 1.5: the pointer left out, the encoder's pixel format (design 2a §3.6, §3.8) -----------------------------------
+# windows-capture 2.0.1's refusal on a Windows 10 before 1903 (graphics_capture_api.rs CursorConfigUnsupported, wrapped
+# by lib.rs like every start failure)
+CURSOR_REFUSED = (
+    "Capture session threw an exception: Toggling cursor capture is not supported by the Graphics Capture API on this "
+    "platform."
+)
+
+
+def test_ddagrab_graph_without_the_pointer_changes_only_that_token() -> None:
+    from .test_licence_gate import gate
+
+    default = capture_dda.ddagrab_graph(0, 1280, 720, 30)
+    assert default == gate.DDAGRAB_GRAPH and "draw_mouse=1" in default  # the licence gate's copy: unchanged
+    assert capture_dda.ddagrab_graph(0, 1280, 720, 30, draw_mouse=True) == default
+    without = capture_dda.ddagrab_graph(0, 1280, 720, 30, draw_mouse=False)
+    before, after = capture_dda.graph_filters(default), capture_dda.graph_filters(without)
+    assert [name for name, _ in before] == [name for name, _ in after] and before[1:] == after[1:]
+    assert after[0] == ("ddagrab", "output_idx=0:framerate=30:draw_mouse=0:dup_frames=1")
+    assert without.replace("draw_mouse=0", "draw_mouse=1") == default
+
+
+def test_desktop_duplication_without_the_pointer_opens_the_draw_mouse_0_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    graphs: list[str] = []
+
+    class Pending:
+        def __init__(self, graph: str) -> None:
+            graphs.append(graph)
+            self.done = threading.Event()
+            self.done.set()
+
+        def start(self) -> None:
+            return None
+
+        def collect(self) -> None:
+            return None  # still waiting for the desktop: nothing is opened here
+
+        def abandon(self) -> None:
+            return None
+
+    monkeypatch.setattr(capture_dda, "_PendingOpen", Pending)
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", "win32")
+        overlay = capture_dda.DdagrabSource(2, 1280, 720, 30, draw_mouse=False)
+        drawn = capture_dda.DdagrabSource(2, 1280, 720, 30)
+    assert (overlay.kind, overlay.cursor_drawn, drawn.cursor_drawn) == ("dda", False, True)
+    overlay.open()
+    drawn.open()
+    assert graphs == [
+        capture_dda.ddagrab_graph(2, 1280, 720, 30, draw_mouse=False),
+        capture_dda.ddagrab_graph(2, 1280, 720, 30),
+    ]
+
+
+def test_wgc_leaves_the_pointer_out_when_windows_can(
+    monkeypatch: pytest.MonkeyPatch, native: Any, located: Any
+) -> None:
+    source = wgc(monkeypatch, expected_size=(64, 4), cursor_capture=False)
+    assert source.kind == "wgc" and source.cursor_drawn is False
+    source.open()
+    [capture] = FakeCapture.instances
+    assert capture.settings["cursor_capture"] is False and capture.settings["monitor_index"] == 2
+    assert {k: v for k, v in capture.settings.items() if k not in ("cursor_capture", "monitor_index")} == dict.fromkeys(
+        ("draw_border", "secondary_window", "minimum_update_interval", "dirty_region", "window_name", "window_hwnd")
+    )
+    assert source.cursor_drawn is False
+    source.close()
+
+
+def test_wgc_refusing_cursor_off_from_start_is_retried_with_the_1_4_call(
+    monkeypatch: pytest.MonkeyPatch, native: Any, located: Any
+) -> None:
+    """The package refuses ``cursor_capture=False`` from ``start_free_threaded()`` (not the constructor), always as
+    ``Exception``: the source starts again with only the monitor set and says the pointer stays in the picture."""
+    FakeCapture.cursor_error = CURSOR_REFUSED
+    source = wgc(monkeypatch, expected_size=(64, 4), cursor_capture=False)
+    with structlog.testing.capture_logs() as logs:
+        source.open()
+    first, second = FakeCapture.instances
+    assert first.settings["cursor_capture"] is False and first.control is None  # refused: nothing started
+    assert second.settings["cursor_capture"] is None and second.control is not None  # the 1.4 call
+    assert source.cursor_drawn is True and source.capture_index == 2
+    [warning] = [e for e in logs if e["log_level"] == "warning"]
+    assert warning["event"] == "Windows.Graphics.Capture cannot leave the pointer out; it stays drawn"
+    assert "Toggling cursor capture is not supported" in warning["reason"]
+    source.close()
+    assert second.control.stops == 1
+
+
+def test_wgc_other_start_failures_with_cursor_off_stay_capture_unavailable(
+    monkeypatch: pytest.MonkeyPatch, native: Any, located: Any
+) -> None:
+    FakeCapture.start_error = Exception(
+        "Capture session threw an exception: The Graphics Capture API is not supported on this platform."
+    )
+    source = wgc(monkeypatch, expected_size=(64, 4), cursor_capture=False)
+    with pytest.raises(ProtocolError) as caught:
+        source.open()
+    assert caught.value.code == "SCREEN_CAPTURE_UNAVAILABLE" and caught.value.detail == {
+        "detail": "unsupported_display"
+    }
+    assert len(FakeCapture.instances) == 1  # no retry: only a refusal that names the cursor is retried
+    # the 1.4 call refused as well after a cursor refusal: the honest error, not a loop
+    FakeCapture.start_error, FakeCapture.cursor_error = None, CURSOR_REFUSED
+    FakeCapture.instances = []
+
+    class Refusing(FakeCapture):
+        def start_free_threaded(self) -> FakeControl:
+            if self.settings["cursor_capture"] is None:
+                raise Exception("Failed to get monitor from index: The monitor was not found.")
+            return super().start_free_threaded()
+
+    native.NativeWindowsCapture = Refusing
+    source = wgc(monkeypatch, expected_size=(64, 4), cursor_capture=False)
+    with pytest.raises(ProtocolError, match="monitor was not found"):
+        source.open()
+    assert len(FakeCapture.instances) == 2
+
+
+def test_wgc_reads_frames_in_the_encoders_pixel_format(
+    monkeypatch: pytest.MonkeyPatch, native: Any, located: Any
+) -> None:
+    source = wgc(monkeypatch, expected_size=(64, 4), pix_fmt="nv12")
+    source.open()
+    FakeCapture.instances[0].arrive(FakeFrame(64, 4, 256, red, [], "nv12"))
+    out = source.read()
+    assert out is not None and (out.width, out.height, out.format.name) == (64, 4, "nv12")
+    y = bytes(out.planes[0])[0]
+    u, v = bytes(out.planes[1])[:2]  # interleaved chroma
+    assert abs(y - 81) <= 2 and abs(u - 90) <= 2 and abs(v - 240) <= 2  # red, as in yuv420p
+    source.close()
+
+
+def test_build_source_hands_the_pointer_choice_and_pixel_format_to_both_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    made: list[tuple[str, dict[str, Any]]] = []
+
+    class Dda:
+        kind = "dda"
+
+        def __init__(self, *_args: Any, draw_mouse: bool = True) -> None:
+            made.append(("dda", {"draw_mouse": draw_mouse}))
+            self.width, self.height, self.cursor_drawn = 1280, 720, draw_mouse
+
+        def open(self) -> None:
+            raise ProtocolError("SCREEN_CAPTURE_UNAVAILABLE", "no", detail={"detail": "driver"})
+
+        def close(self) -> None:
+            return None
+
+    class Wgc:
+        kind = "wgc"
+
+        def __init__(self, *_args: Any, **kw: Any) -> None:
+            made.append(("wgc", {"cursor_capture": kw["cursor_capture"], "pix_fmt": kw["pix_fmt"]}))
+            self.width, self.height = 1280, 720
+            self.cursor_drawn = True  # this Windows refused to leave it out
+
+        def open(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(capture_dda, "DdagrabSource", Dda)
+    monkeypatch.setattr(capture_wgc, "WgcSource", Wgc)
+    spec = {"surface_index": 0, "width": 1920, "height": 1080, "preflight": None}
+    with monkeypatch.context() as m:
+        m.setattr(sys, "platform", "win32")
+        source = worker_main._build_source("ddagrab", spec, 1280, 720, 30, cursor_drawn=False, pix_fmt="nv12")  # noqa: SLF001
+        drawn = worker_main._build_source("ddagrab", spec, 1280, 720, 30, cursor_drawn=True, pix_fmt="yuv420p")  # noqa: SLF001
+    assert (source.kind, source.cursor_drawn) == ("dda", False)  # before open: Desktop Duplication's choice
+    source.open()  # Desktop Duplication fails: Windows.Graphics.Capture, which kept the pointer
+    assert (source.kind, source.cursor_drawn) == ("wgc", True)
+    assert made == [
+        ("dda", {"draw_mouse": False}),
+        ("dda", {"draw_mouse": True}),
+        ("wgc", {"cursor_capture": False, "pix_fmt": "nv12"}),
+    ]
+    drawn.open()
+    assert made[-1] == ("wgc", {"cursor_capture": None, "pix_fmt": "yuv420p"})  # the 1.4 call
+
+
+def test_the_fake_sources_deliver_nv12_when_their_spec_asks() -> None:
+    from dome_agent.screen.worker import fake
+
+    synthetic = fake.build_fake_source({"pattern": "synthetic", "pix_fmt": "nv12"}, 64, 36, 60, cursor_drawn=False)
+    synthetic.open()
+    frame = synthetic.read()
+    assert frame is not None and frame.format.name == "nv12" and len(frame.planes) == 2
+    assert set(bytes(frame.planes[1])) == {128}  # Y = the bar, UV = 128
+    assert getattr(synthetic, "kind") == "fake" and getattr(synthetic, "cursor_drawn") is False
+    lavfi = fake.build_fake_source({"pix_fmt": "nv12"}, 64, 64, 30)
+    lavfi.open()
+    try:
+        out = lavfi.read()
+        assert out is not None and out.format.name == "nv12"
+    finally:
+        lavfi.close()
+    default = fake.build_fake_source({"pattern": "still", "pix_fmt": "rgb24"}, 64, 36, 30)
+    default.open()
+    assert default.read().format.name == "yuv420p" and getattr(default, "cursor_drawn") is True  # type: ignore[union-attr]

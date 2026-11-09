@@ -786,3 +786,139 @@
      After the first frame nothing changes: access lost and the pending rebuild after a UAC prompt are handled as in
      #83 and #94. The cost: on a desktop that is still at the start, the session uses Windows.Graphics.Capture (and
      its border) even where Desktop Duplication would work.
+105. **Hardware H.264: NV12 on every `h264_mf` candidate, a probe that proves a slice packet and SPS/PPS within 16
+     frames for the hardware candidate only, `DOME_SCREEN_H264_HW`, one reopen retry, no vendor forced** (Screen view
+     round 2a, protocol 1.5; `encode.EncoderChoice.pix_fmt`, `probe_candidate`, `ProbeResult`, `H264Encoder.reopen`;
+     revises the "yuv420p this round" of #98, KNOWN_ISSUES #35). `mfenc.c` accepts only a transform input type that is
+     exactly the context's `pix_fmt` and GPU transforms offer NV12, so with yuv420p the hardware candidate never opened.
+     Both `h264_mf` candidates (and the development `libx264`) are now fed NV12: Desktop Duplication delivers it
+     natively, Windows.Graphics.Capture converts to it with libswscale (`WgcSource(pix_fmt=...)`), and the track
+     converts any other frame in the worker thread just before encoding (the fakes stay yuv420p so that conversion runs
+     on Linux; VP8 stays yuv420p). An asynchronous hardware transform can open and then give nothing, so the probe feeds
+     the hardware candidate up to `PROBE_MAX_FRAMES = 16` black frames within `PROBE_BUDGET_SECONDS = 3.0` at the
+     session's real size and uses it only when a packet with a slice (NAL 5 or 1) came out and SPS and PPS exist, in
+     band or in extradata (`gated: true`; else "no packet within 16 frames", "no packet within 3.0 s" or "packet without
+     SPS/PPS", and the chain falls through). 16, because the software transform held 6 to 9 frames on the founder's PC
+     (#98): 8 would demote a transform that buffers like it. The software candidate is the only encoder verified on a
+     device, so it keeps the acceptance it had (it opened and one frame encoded, no packet required; review finding 20);
+     the probe records its facts too (`gated: false`). Each candidate's result is logged (`screen encoder probed
+     encoder= ok= gated= frames_in= open_ms= mft= parameter_sets= reason=`; never a parameter set's bytes) and sent to
+     the agent after the answer (`{"ev": "encoders", "probed": [...]}`) for the bundle; `--list-encoders` and the
+     self-test rows gain `frames_in` and `mft`. The start's `hw_encoding` false (the agent's `DOME_SCREEN_H264_HW=0`)
+     leaves the hardware candidate out. A bitrate reopen that fails is retried once after 100 ms (a hardware transform
+     may still be releasing the old session); a second failure is the existing `encoder_stalled` `open_error` (#101).
+     No vendor is forced on a hybrid laptop: Media Foundation picks the transform by merit and its name is logged
+     (`mft`); `screen encoder opened` adds `hw` and the real `pix_fmt`, the stats event `encoder_hw`. The drain pump
+     (#100) and VP8 first after a stall (#103) stay. Unit-tested on Linux (scripted contexts stand in for the
+     transforms); not yet verified on a device.
+106. **The pointer drawn by the phone: a 60 Hz daemon poller in the worker, named kinds by `LoadCursorW` identity,
+     custom shapes through `GetIconInfo`/`DrawIconEx`/PIL, the bitmap is screen content, the mode in effect is reported
+     after the source opened** (round 2a, protocol 1.5, `rules.screen_cursor`; `screen/worker/cursor.py`,
+     `cursor_win.py`, `fake.FakeCursorReader`, `main.WorkerApp`). In a session whose start carried `cursor: "overlay"`
+     the source captures without the pointer (`ddagrab` `draw_mouse=0`; Windows.Graphics.Capture
+     `cursor_capture=False`, constructed AND started that way because the package raises a refusal from
+     `start_free_threaded()`, always as `Exception`: a refusal whose text names the cursor is logged once and the 1.4
+     call runs, the pointer staying in the picture; review findings 14 and 21). After every source open the track tells
+     the worker `{source, cursor_drawn}` (also when Desktop Duplication fell back inside a read), the worker emits
+     `{"ev": "cursor", "mode", "source"}`, every `state` message carries the mode in effect, and only in `overlay` a
+     `CursorPoller` thread reads `GetCursorInfo` at most 60 times a second (each read at least one interval after the
+     previous began), its thread per-monitor DPI aware once. A system cursor is recognised by comparing its handle with
+     `LoadCursorW(NULL, IDC_*)` of the fourteen named kinds (the phone draws its own vector art); any other is rendered
+     into a zeroed 32-bpp DIB with `DrawIconEx(DI_NORMAL)`, its alpha taken from a second `DI_MASK` DIB's pixels when
+     it has none of its own (review finding 15) and its colours made straight when it has (`DrawIconEx` blends it onto
+     the zeroed DIB, leaving premultiplied colours), scaled to at most 64 x 64 (hotspot with it) and sent as a PNG of
+     at most 8192 base64 characters, else as `arrow` (counted `cursor_bitmap_too_large`, also when the render or the
+     encode raised); at most 4 custom shapes a second, the latest winning; a cache of 8 decided shapes for 10 s. The
+     shape is worked out with the poller's mutex released (the worker's loop takes it for a geometry, a pause or a
+     resume) and offered only if nothing was forgotten meanwhile; the handle counts as seen only once its shape was
+     decided, so a failed lookup is retried and counts towards the error stop. Positions are normalised like `pointer_move_to`
+     (the exact inverse of `map_to_pixels`), sent only on a change and only after the first shape, `visible: false` off
+     the monitor or hidden (at the last position inside); pause sends one `visible: false`; a new geometry, a resume
+     and the data channel opening send shape and position again; a position of an older geometry generation is dropped
+     on the loop (`cursor_dropped_gen`); ten failed reads in a row stop the reporting with one `visible: false`
+     (`cursor reporting stopped`). Positions travel on the unordered `dome-screen-cursor-v1` channel when the phone
+     opened it (`cursor_pos_unreliable`), else on `dome-screen-v1`; the worker now dispatches channels by label and
+     closes any other. A session whose start carried no `cursor` never sends a 1.5 key or message
+     (`_shape_for_vocabulary`, counted `dropped_1_4`). A cursor bitmap is screen content: nothing logs, stores or
+     journals a position, a handle or a bitmap; counters and log keys say `bitmap` and `png` is a redacted key part
+     (`logsetup.SENSITIVE_KEY_PARTS`, review finding 18). Unit- and integration-tested on Linux (aiortc loopback, the
+     fake reader, stand-ins for `user32`/`gdi32`); not yet verified on a device.
+107. **The pointer stays on the watched screen: each injected relative move that left the streamed monitor is pulled
+     back; never `ClipCursor`; counted, best effort** (round 2a, protocol 1.5, `rules.screen_cursor` (5);
+     `input_session.InputSessionManager._confine_after_move`, `ScreenSessionManager.streamed_monitor`; review finding
+     3). In Touchpad mode the phone sends relative moves, which Windows lets wander onto another monitor the phone
+     cannot see. While a connected Screen view owned by the batch's controller exists (any geometry generation: a
+     relative move is not aimed at a picture), the dispatcher reads the pointer before and after each injected
+     `pointer_move` that moved at all, and only when it was inside the streamed monitor before and outside after, places
+     it on the nearest point inside (`SetCursorPos`, physical pixels). This runs per move, not per batch, so a
+     coalesced `move, click, move` batch is meant never to click on the other monitor; that holds only if
+     `GetCursorPos` shows a relative `SendInput` as soon as it returned, which is not yet verified on a device
+     (KNOWN_ISSUES #43; when the pointer reads as not moved although the move would have left the monitor, it is read
+     once more before deciding). `GetCursorPos` cannot tell our `SendInput` from the person's own mouse, so a pointer
+     that was already elsewhere is left alone and no clip rectangle is ever set: the person at the PC is never
+     constrained. One read before and one after per coalesced move (at most 80 moves a second; a second read after
+     only in the case above) and a `SetCursorPos` only when our move crossed an edge; `pointer_move_to` never
+     triggers it (it maps onto the streamed monitor already). A failed correction is counted (`confine_failures`) and
+     never fails the batch; corrections are counted `confined_moves` (`status.input.session`, the bundle). A 1.4
+     agent does not confine.
+     Unit- and integration-tested on Linux (the fake platform with two monitors); not yet verified on a device.
+108. **Next screen is a replacement that keeps the bars up; it inherits an explicit Allow only where the person would
+     otherwise get an ask-mode window or a one-window-per-minute refusal, and only within one session's time**
+     (round 2a, `rules.screen_sessions` (1b); `ScreenSessionManager._start_session`, `_bring_up`, `_end(...,
+     keep_indicator=True)`; review findings 1, 2 and 22). A `screen.session_start{surface: N}` from the controller
+     that owns the live session ends it `replaced` and starts a fresh one at `gen: 1` (no renegotiation). The consent
+     gate decides on every start: ask mode switched on mid-session, a block, the post-Stop cooldown and the back-off
+     are evaluated in `ConsentGate.decide()` only. A same-controller replacement inherits the old session's `granted`
+     (an explicit Allow by the person, never an inherited `not_required`) only when the gate's answer is an ask-mode
+     window or the one-window-per-minute refusal (`GateDecision.window_interval`; no window opens, so that rule's
+     purpose holds; never the escalating back-off after a Deny, a timeout or a turn-off, which refuses starts from
+     every controller) and only while the chain of replacements is younger than `screen_session_max_seconds`: the new
+     session copies the chain's start (`chain_started_at`) and the watchdog ends the whole chain like one session
+     (`max_duration`). The cooldown, a block and a takeover are never inherited. Several awaits pass between the first
+     and the second read of the live session; a consent no window answered in this start (inherited or
+     `not_required`) rested on the gate and the session as they were, so when that session has gone meanwhile (Stop at
+     the PC started the cooldown) or the cooldown is active, the gate decides again (the cooldown's window), before
+     anything is ended or created; the start then waits for any end in flight (`drain_ends` also waits on the end
+     lock: a Stop's end runs on its own task and closes its bars only once its worker exited). While the old session
+     ends (its id retired, no session current, the bars still up) a Stop on the bars, the tray or the hotkey, a
+     turn-off or a revocation is held (`_refuse_replacement`): the Stop's cooldown and security event as always, and
+     the new session is refused (`SCREEN_CONSENT_DECLINED` for a Stop, else `GRANT_MISSING`, `CONTROLLER_REVOKED` or
+     `PC_PLAN_DISABLED`). A refused replacement leaves the old session running (consent is decided before `_end`). The
+     bars stay up across the replacement and are reused when they were made for the same monitors, viewer name and
+     audio flag (no new request, the same reserved rectangles), else closed and made afresh (`arm()` always creates
+     bars); a start that fails after the old session ended closes them (never bars without a session). Nothing ended
+     for the person at the PC, so the replaced session's "Screen view ended" notification is held back: the new
+     session's first frame says "<phone> switched to screen N" when the monitor changed (else "<phone> is viewing this
+     screen"), and the held-back notification is shown only when the new session ends without ever showing a picture.
+     Integration-tested on Linux (fake worker, fake UI); not yet verified on a device.
+109. **The PC-signed answer carries the start's own stamp** (round 2a, `rules.screen_signaling` (5);
+     `signing.sign_screen_answer(protocol_version=...)`, `ScreenSession.protocol_version`). Until 1.5 the answer was
+     stamped with the library's version and the phone's verifier refuses a stamp above its own: a 1.5 agent would
+     have been refused by every 1.4 phone (a stale PWA bundle, the Python phone). The answer now carries the
+     `protocol_version` of the `screen.session_start` it answers, as a confirmation carries its command's: 1.4 for a
+     start without `cursor`, 1.5 for one that carried it. The action handler passes `ctx.command.payload
+     ["protocol_version"]`. Unit-tested (both stamps; a 1.4 answer verifies on a registry whose version is 1.4).
+110. **1.5 fields and messages only in sessions whose start carried `cursor`** (round 2a, `rules.screen_cursor` (6);
+     `actions/screen.py`, `ScreenSessionManager._start_message`, the worker's `_shape_for_vocabulary`; review finding
+     5). A 1.4 phone validates the result and every data-channel message with `additionalProperties: false`. The
+     agent reads the `cursor` param from the RAW signed params (`VerifiedCommand.payload["params"]`; no default ever
+     fills it in), puts `cursor` in the result only when it was present (the PC's guess: `overlay` unless the source
+     will be Windows.Graphics.Capture on a Windows before build 18362, `ScreenAdapter.cursor_capture_configurable()`),
+     and gives the worker `cursor` only then; the worker strips `state.cursor` and sends no `cursor_pos` or
+     `cursor_shape` in any other session (counted `dropped_1_4`). The worker's `cursor` event (after every source
+     open) is the mode in effect; the agent keeps it and the worker's cursor counters as `media.cursor` (short names,
+     counts and the kind word; never a position, a handle or a bitmap). Unit- and integration-tested on Linux.
+111. **`cursor_pos` rides the unordered `dome-screen-cursor-v1` channel when the phone opened it** (round 2a,
+     `rules.screen_cursor`; `worker/rtc.ScreenPeer.send_cursor_pos`, `_on_datachannel`; review finding 13). On the
+     reliable ordered `dome-screen-v1` a lost packet holds back every later position until it is retransmitted
+     (aiortc's minimum retransmission timeout is 1 s), then releases a stale burst the phone replays as a backward
+     hop. A phone that asked for `cursor` opens a second channel `{ordered: false, maxRetransmits: 0}` in the same
+     offer (aiortc applies the phone's partial-reliability parameters to its own sends); the worker dispatches
+     channels by label: `cursor_pos` goes on the cursor channel while it is open (counted `cursor_pos_unreliable`),
+     else on the data channel; `cursor_shape`, `state` and `geometry` always on the data channel; anything the phone
+     sends on the cursor channel is dropped and counted (`dc_dropped`); a channel with any other label is closed
+     (`dc_unknown_channels`). A phone opens the second channel only in a start that carries `cursor`: the shipped 1.4
+     worker sends on whichever channel the phone announced last, so a two-channel offer to a 1.4 PC would lose its
+     `state`, `allowance` and `restricted` messages (found by the end-to-end run of the first build, 2026-11-05).
+     Integration-tested on Linux (aiortc loopback; the no-retransmit property itself is not asserted); not yet
+     verified on a device.

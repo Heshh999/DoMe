@@ -4,6 +4,10 @@ The worker produces a send-only answer with a fresh per-session DTLS certificate
 ``screen_answer_payload`` with the identity key it already has (``identity.py``, ``pc_key.bin``), so the phone can
 verify it against the PC key it pinned at pairing (``rules.pc_key_pinning``). The envelope travels in a
 ``screen_answer`` frame, never in a result: results are journaled and SDP is never persisted (``rules.screen_content``).
+
+Since 1.5 the answer carries the ``protocol_version`` of the ``screen.session_start`` it answers, not this library's
+version (``rules.screen_signaling`` (5)): a 1.4-stamped start gets a 1.4 answer, which a 1.4 phone accepts, and one that
+carried ``cursor`` a 1.5 answer (DECISIONS #109).
 """
 
 from __future__ import annotations
@@ -27,9 +31,11 @@ def sign_screen_answer(
     screen_session_id: str,
     offer_sdp: str,
     answer_sdp: str,
+    protocol_version: str,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build and sign the answer payload; returns the envelope dict (``kid`` = the PC's ``pc_kid``)."""
+    """Build and sign the answer payload; returns the envelope dict (``kid`` = the PC's ``pc_kid``).
+    ``protocol_version`` is the stamp of the start this answers (the command's ``protocol_version``)."""
     payload = build_screen_answer_payload(
         account_id=account_id,
         pc_id=pc_id,
@@ -38,6 +44,7 @@ def sign_screen_answer(
         screen_session_id=screen_session_id,
         offer_sdp=offer_sdp,
         answer_sdp=answer_sdp,
+        protocol_version=protocol_version,
         now=now,
     )
     envelope = sign_payload(identity.ensure_key(), dumps_compact(payload))

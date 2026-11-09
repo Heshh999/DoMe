@@ -340,6 +340,138 @@ async def test_session_less_credentials_stay_in_the_guard_after_the_phone_mints_
     assert await ttl_term() == 5 + 660
 
 
+# ----- a credential that carries a live session across the next mint (Next screen; DECISIONS #117) -----------------------
+
+
+def deferred_rows(env: Env, controller_id: uuid.UUID) -> list[tuple[str, str]]:
+    rows = sql(
+        env.database_url,
+        "SELECT username, screen_session_id FROM turn_deferred_revocations WHERE controller_id = %s "
+        "ORDER BY created_at",
+        (str(controller_id),),
+    )
+    return [(username, sid) for (username, sid) in rows]
+
+
+async def live_session(env: Env, svc: TurnService, p: Party, now: datetime) -> str:
+    """A forwarded start that became a session the ledger holds open; the current credential is bound to both."""
+    command_id, sid = uuid.uuid4(), new_screen_session_id()
+    async with transaction(env.services.db) as db:
+        reservation, _ = await metering.reserve_start(
+            db,
+            account_id=p.account,
+            pc_id=p.pc,
+            controller_id=p.controller,
+            command_id=command_id,
+            now=now,
+            limits=FREE,
+        )
+        reservation_id = reservation.id
+        await svc.bind_start(db, p.controller, command_id)
+    async with transaction(env.services.db) as db:
+        assert await metering.bind_session(db, reservation_id, sid)
+        await svc.bind_session(db, p.controller, sid)
+    return sid
+
+
+async def test_a_mint_sets_aside_the_credential_of_a_live_session_until_that_session_ends(env: Env) -> None:
+    """The phone's Next screen keeps the old session up while it mints for the new start, and restores that session
+    when the switch is refused: the old credential is not revoked by the mint, a refusal of the switch revokes only
+    the new one (``revoke_for_start``, as ``on_start_refused`` calls it), and the old one goes with its own session."""
+    p, now, svc = Party(env), far_future(), service()
+    fake = svc.provider
+    assert isinstance(fake, FakeTurn)
+    old = await mint(env, svc, p, now)
+    assert old.ice_server is not None
+    sid = await live_session(env, svc, p, now)
+    new = await mint(env, svc, p, now + timedelta(seconds=10))  # the switch's ICE request
+    assert new.ice_server is not None
+    assert fake.revoked == [] and revocation_events(env, p.account) == []
+    assert deferred_rows(env, p.controller) == [(old.ice_server["username"], sid)]
+    row = credential_row(env, p.controller)
+    assert row is not None and row["username"] == new.ice_server["username"] and row["state"] == "outstanding"
+    assert row["screen_session_id"] is None and row["command_id"] is None
+    # the relay refuses the switch: only the credential minted for it goes
+    async with transaction(env.services.db) as db:
+        later = now + timedelta(seconds=11)
+        assert await svc.revoke_for_start(db, p.controller, uuid.uuid4(), later, "start_refused", later)
+    assert fake.revoked == [new.ice_server["username"]]
+    assert deferred_rows(env, p.controller) == [(old.ice_server["username"], sid)]
+    # the restored session ends: its own credential is revoked with it, once
+    async with transaction(env.services.db) as db:
+        assert await svc.revoke_session(db, sid, "session_ended", now + timedelta(seconds=60))
+    assert fake.revoked == [new.ice_server["username"], old.ice_server["username"]]
+    assert deferred_rows(env, p.controller) == []
+    assert revocation_events(env, p.account) == ["start_refused", "session_ended"]
+    async with transaction(env.services.db) as db:
+        assert not await svc.revoke_session(db, sid, "session_ended", now + timedelta(seconds=61))
+    # a credential bound to a session the ledger does not hold open is replaced as before
+    third = await mint(env, svc, p, now + timedelta(seconds=70))
+    assert third.ice_server is not None
+    async with transaction(env.services.db) as db:
+        await svc.bind_start(db, p.controller, uuid.uuid4())
+        await svc.bind_session(db, p.controller, new_screen_session_id())
+    await mint(env, svc, p, now + timedelta(seconds=80))
+    assert fake.revoked[-1] == third.ice_server["username"] and deferred_rows(env, p.controller) == []
+    assert revocation_events(env, p.account)[-1] == "replaced"
+
+
+@pytest.mark.parametrize("path", ["controller", "account", "expired", "provider_error"])
+async def test_a_set_aside_credential_goes_with_the_controller_the_account_its_expiry_or_a_retry(
+    env: Env, path: str
+) -> None:
+    p, now, svc = Party(env), far_future(), service()
+    fake = svc.provider
+    assert isinstance(fake, FakeTurn)
+    old = await mint(env, svc, p, now, remaining=600)  # TTL 660
+    assert old.ice_server is not None
+    sid = await live_session(env, svc, p, now)
+    new = await mint(env, svc, p, now + timedelta(seconds=10))
+    assert new.ice_server is not None and deferred_rows(env, p.controller) == [(old.ice_server["username"], sid)]
+    both = {old.ice_server["username"], new.ice_server["username"]}
+    at = now + timedelta(seconds=20)
+    async with transaction(env.services.db) as db:
+        if path == "controller":
+            assert await svc.revoke_controller(db, p.controller, "logout", at)
+        elif path == "account":
+            assert await svc.revoke_account(db, p.account, "plan_change", at) == 2
+        elif path == "expired":
+            await svc.sweep(db, now + timedelta(seconds=661))
+        else:
+            fake.fail_revoke = True
+            assert await svc.revoke_session(db, sid, "session_ended", at)
+    assert deferred_rows(env, p.controller) == []
+    if path == "controller":
+        assert set(fake.revoked) == both and revocation_events(env, p.account) == ["logout", "logout"]
+    elif path == "account":
+        assert set(fake.revoked) == both and revocation_events(env, p.account) == ["plan_change", "plan_change"]
+    elif path == "expired":
+        assert old.ice_server["username"] not in fake.revoked  # expiry needs no call
+    else:
+        # not confirmed: no revocation is claimed, the username waits for the sweeper's retry like any other
+        assert fake.revoked == [] and revocation_events(env, p.account) == []
+        failed = sql(
+            env.database_url,
+            "SELECT detail->>'reason', detail->>'error' FROM security_events WHERE account_id = %s "
+            "AND kind = 'turn_revoke_failed'",
+            (str(p.account),),
+        )
+        assert failed == [("session_ended", "provider_error")]
+        pending = sql(
+            env.database_url,
+            "SELECT reason FROM turn_pending_revocations WHERE username = %s",
+            (old.ice_server["username"],),
+        )
+        assert pending == [("session_ended",)]
+        fake.fail_revoke = False
+        async with transaction(env.services.db) as db:
+            await svc.retry_revocations(db, at + timedelta(seconds=31))
+        assert fake.revoked == [old.ice_server["username"]]
+        assert revocation_events(env, p.account) == ["session_ended"]
+        row = credential_row(env, p.controller)  # the current credential was not touched
+        assert row is not None and row["username"] == new.ice_server["username"] and row["state"] == "outstanding"
+
+
 # ----- caps and the guard --------------------------------------------------------------------------------------------------
 
 

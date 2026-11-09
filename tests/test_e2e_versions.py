@@ -1,33 +1,62 @@
-"""A phone one protocol MINOR ahead of its PC (rules.command_version_stamping, docs/PROTOCOL.md §18.2): the PWA
-updates when the cloud deploys, PCs later. A 1.2 phone stamps each command with its action's `since` and each
-confirmation with the protocol_version of the command it confirms, so the real agent process with the version
-checks of a 1.1 release (older_agent.py) keeps executing everything 1.1 defines, confirmed power actions included,
-through the 1.2 relay, and answers an action 1.2 added with PROTOCOL_INCOMPATIBLE. Since 1.4 the relay also refuses,
-before forwarding, an input batch stamped with a MINOR the agent did not announce (a Screen view tap), which an older
-agent would otherwise answer MALFORMED_MESSAGE."""
+"""A phone ahead of its PC (rules.command_version_stamping, docs/PROTOCOL.md §18.2, §21): the PWA updates when the
+cloud deploys, PCs later. The phone stamps each command with the lowest version that defines everything it carries
+(its action's `since`, raised by any param a later MINOR added) and each confirmation with the protocol_version of
+the command it confirms, so the real agent process with the version checks of a 1.1 release (older_agent.py) keeps
+executing everything 1.1 defines, confirmed power actions included. Since 1.4 the relay refuses, before forwarding,
+an input batch stamped with a MINOR the agent did not announce (a Screen view tap), and since 1.5 any command so
+stamped (an action 1.2 added, sent to that 1.1 PC, comes back PROTOCOL_INCOMPATIBLE from the relay), which an older
+agent would otherwise answer MALFORMED_MESSAGE or INVALID_PARAMETERS.
+
+Protocol 1.5 with a 1.4 PC (agent_1_4.py: this tree's agent with the 1.4 release's version checks, on the fake
+platform with screen_agent.py's seams): the relay shows the PC's announced versions in `GET /v1/pcs`, a start without
+`cursor` (stamped 1.4) gets a 1.4 session and Next screen works, and a start with `cursor` (stamped 1.5) is refused by
+the relay before the PC sees it. What agent_1_4.py does not witness is the shipped 1.4 agent's own consent order
+(agent_1_4.py's docstring)."""
 
 from __future__ import annotations
 
 import asyncio
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+import test_e2e_screen as screen_e2e
 from dome_protocol import loads_strict
 
-from conftest import REGISTRY, Browser, Env, RealAgent, confirmation_envelope, run_command
+from conftest import REGISTRY, Browser, Env, RealAgent, confirmation_envelope, run_command, sql
 
 HERE = Path(__file__).resolve().parent
 OLDER = "1.1"
+VERSIONS_1_4 = ["1.0", "1.1", "1.2", "1.3", "1.4"]
+# Screen view fixtures from test_e2e_screen.py (pytest finds fixtures by module attribute): the operator switch on
+# with the loopback STUN server, and the phones a test pairs (closed afterwards)
+stun_server = screen_e2e.stun_server
+screen_on = screen_e2e.screen_on
+phones = screen_e2e.phones
 
 
 @pytest.fixture
 async def agent(env: Env, alice: Browser) -> AsyncIterator[RealAgent]:
     """This module's PC: the real agent with the version checks of the 1.1 release (older_agent.py)."""
     a = RealAgent(env, alice, command=[sys.executable, str(HERE / "older_agent.py")])
+    await a.link()
+    await a.start()
+    try:
+        yield a
+    finally:
+        await a.stop()
+        a.cleanup()
+
+
+@pytest.fixture
+async def agent14(env: Env, alice: Browser) -> AsyncIterator[RealAgent]:
+    """A PC one MINOR behind a 1.5 phone: the real agent with the version checks of the 1.4 release and Screen view on
+    the fake platform (agent_1_4.py)."""
+    a = RealAgent(env, alice, command=[sys.executable, str(HERE / "agent_1_4.py")])
     await a.link()
     await a.start()
     try:
@@ -89,11 +118,13 @@ async def test_an_agent_one_minor_behind_runs_a_confirmed_power_action_from_a_ne
 
 
 async def test_an_agent_one_minor_behind_refuses_only_the_actions_it_predates(agent: RealAgent, phone: Any) -> None:
-    # The relay (1.2) forwards app.maximize stamped 1.2; the PC refuses it before looking at the app.
+    # app.maximize is stamped 1.2, which the 1.1 PC never announced: since 1.5 the relay refuses it before forwarding
+    # (rules.command_version_stamping), as it refuses a 1.4 tap; the PC never looks at the app.
     for action, params in (("app.maximize", {}), ("app.set_fullscreen", {"enabled": True})):
         res = await run_command(phone, agent.pc_id, action, params, {"app_id": "notepad"})
-        assert res["origin"] == "agent" and res["state"] == "failed", (action, res)
+        assert res["origin"] == "relay" and res["state"] == "failed", (action, res)
         assert res["error"]["code"] == "PROTOCOL_INCOMPATIBLE"
+        assert res["error"]["detail"] == {"peer": "agent", "required": "1.2"}, res
     # actions the older PC knows keep working from the same phone
     res = await run_command(phone, agent.pc_id, "app.list")
     assert res["state"] == "succeeded" and res["result"]["apps"] == [], res
@@ -137,3 +168,87 @@ async def test_the_relay_refuses_a_screen_view_tap_to_an_agent_that_predates_it(
         if ack["last_seq"] >= 2:
             break
     assert ack["accepted_events"] == 1 and ack["dropped_events"] == 0, ack  # the tap's events never reached the PC
+
+
+# ----- protocol 1.5 phone, 1.4 PC (design 2a §5.5) --------------------------------------------------------------------
+async def test_a_1_4_agent_with_a_1_5_phone_starts_screen_view_without_the_cursor_param(
+    env: Env, alice: Browser, agent14: RealAgent, screen_on: Any, phones: list[Any]
+) -> None:
+    """The relay records the versions the PC announced (`GET /v1/pcs` `protocol_versions`), so a 1.5 phone knows this
+    PC predates the pointer drawn by the phone and starts Screen view without `cursor`: stamped 1.4, answered with an
+    answer stamped 1.4 and a 1.4 session (no 1.5 key or message). Next screen is `surface: N`, which 1.4 defines: the
+    phone's start for screen 2 replaces the session (`replaced`, `gen: 1`). (Here nobody is asked at the PC: in ask
+    mode or the post-Stop cooldown the shipped 1.4 agent asks before it ends the old session, which this agent with
+    1.4 constants does not witness; docs/PROTOCOL.md section 21.)"""
+    assert REGISTRY.protocol_version == "1.5"  # the phone and the relay
+    assert (await agent14.control("status"))["protocol_version"] == "1.4"
+    phone = await screen_e2e.pair_phone(env, alice, agent14, phones, "Alice's iPhone")
+    await screen_e2e.allow_screen_on_the_pc(agent14, phone)
+    pcs = (await alice.get("/v1/pcs", schema="pcs_response"))["pcs"]
+    row = next(p for p in pcs if p["id"] == agent14.pc_id)
+    assert row["protocol_versions"] == VERSIONS_1_4, row
+    assert "1.5" not in row["protocol_versions"]  # so the phone leaves `cursor` out
+    await agent14.control("test_set_monitors", monitors=screen_e2e.TWO_MONITORS)
+
+    first = await screen_e2e.stream(phone)
+    assert first.stamp == "1.4" and first.result["origin"] == "agent", first.result
+    assert first.answer is not None and first.answer.payload["protocol_version"] == "1.4"
+    session = first.result["result"]
+    assert "cursor" not in session and len(session["surfaces"]) == 2, session
+    assert (session["surface_index"], session["gen"]) == (0, 1), session
+    viewer = first.viewer
+    await viewer.wait(lambda: bool(viewer.dc_of("geometry")) and bool(viewer.dc_of("state")), 10, "geometry + state")
+    await asyncio.sleep(1.0)
+    assert {m["type"] for m in viewer.dc_messages} <= {"geometry", "state", "allowance", "restricted"}
+    assert all("cursor" not in m for m in viewer.dc_of("state")), viewer.dc_of("state")
+
+    second = await screen_e2e.stream(phone, surface=1)
+    assert second.stamp == "1.4" and second.answer is not None
+    assert second.answer.payload["protocol_version"] == "1.4"
+    assert (second.result["result"]["surface_index"], second.result["result"]["gen"]) == (1, 1), second.result
+    ended = await screen_e2e.ended_frame(phone, first.session_id)
+    assert ended["reason"] == "replaced", ended
+    viewer = second.viewer
+    await viewer.wait(lambda: bool(viewer.dc_of("geometry")), 10, "geometry")
+    assert viewer.dc_of("geometry")[0]["surface_index"] == 1
+    assert {m["type"] for m in viewer.dc_messages} <= {"geometry", "state", "allowance", "restricted"}
+    res = await phone.log.command(agent14.pc_id, "screen.session_stop", {"screen_session_id": second.session_id})
+    assert res["state"] == "succeeded", res
+
+
+async def test_a_1_5_stamped_start_to_a_1_4_agent_is_refused_before_forwarding(
+    env: Env, alice: Browser, agent14: RealAgent, screen_on: Any, phones: list[Any]
+) -> None:
+    """A phone whose knowledge of the PC was stale sends `cursor: overlay`, so its start is stamped 1.5. The relay's
+    stamp gate refuses it before forwarding (result origin relay, PROTOCOL_INCOMPATIBLE {peer: agent, required:
+    1.5}): the 1.4 PC never sees it (no consent window, no bar, no session), the ledger reserves nothing. The same
+    phone's start without `cursor` then works, which is what the app retries with."""
+    phone = await screen_e2e.pair_phone(env, alice, agent14, phones, "Alice's iPhone")
+    await screen_e2e.allow_screen_on_the_pc(agent14, phone)
+    ui_before = await agent14.control("test_ui")
+    started_before = (await agent14.control("status"))["screen"]["sessions_started"]
+
+    refused = await phone.client.start(cursor="overlay")
+    assert refused.stamp == "1.5"
+    result = refused.result
+    assert (result["origin"], result["state"]) == ("relay", "failed"), result
+    assert result["error"]["code"] == "PROTOCOL_INCOMPATIBLE", result
+    assert result["error"]["detail"] == {"peer": "agent", "required": "1.5"}, result
+    rows = sql(
+        env.database_url,
+        "SELECT count(*) FROM screen_reservations WHERE command_id = %s",
+        (uuid.UUID(refused.command_id),),
+    )
+    assert rows[0][0] == 0, rows  # nothing reserved for it
+    await asyncio.sleep(0.5)
+    ui = await agent14.control("test_ui")
+    assert ui["consent_windows"] == ui_before["consent_windows"] and ui["bar_requests"] == ui_before["bar_requests"]
+    status = (await agent14.control("status"))["screen"]
+    assert status["session"] is None and status["sessions_started"] == started_before, status
+    assert not phone.log.unread("screen_answer")
+
+    again = await screen_e2e.stream(phone)
+    assert again.stamp == "1.4" and again.answer is not None
+    assert again.answer.payload["protocol_version"] == "1.4" and "cursor" not in again.result["result"]
+    res = await phone.log.command(agent14.pc_id, "screen.session_stop", {"screen_session_id": again.session_id})
+    assert res["state"] == "succeeded", res

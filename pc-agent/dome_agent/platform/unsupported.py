@@ -195,6 +195,9 @@ class UnsupportedScreen:
     def duplication_probe(self, monitor: Monitor) -> DuplicationProbe:
         return DuplicationProbe(None, reason="Desktop Duplication is only available on Windows")
 
+    def cursor_capture_configurable(self) -> bool:
+        return False
+
 
 def build_unsupported_platform() -> PlatformSet:
     return PlatformSet(

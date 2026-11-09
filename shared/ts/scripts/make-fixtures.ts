@@ -3,16 +3,21 @@
  * Python verifier can check it (and vice versa). Uses the committed TEST keys only (controller and PC).
  * Since protocol 1.4 the file also carries the Screen view vectors: a PC-signed screen answer the phone must accept,
  * two it must refuse, one it must call PROTOCOL_INCOMPATIBLE, and the pairing pc_key_mac (rules.pc_key_pinning).
+ * Since protocol 1.5 it also writes shared/protocol/fixtures/screen-dc-cases.json, the data-channel messages both libraries
+ * must accept or refuse, byte for byte as shared/python/scripts/make_fixtures.py writes it.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { crc32, deflateSync } from "node:zlib";
 
 import { challengeDigest, commandDigest, pairingCodeHandle, pairingVerificationCode, pcKeyMac } from "../src/digest.ts";
 import { ECDSA_P256, exportPublicJwk, kidFromJwk } from "../src/keys.ts";
+import { PROTOCOL_VERSION } from "../src/registry.ts";
 import { buildScreenAnswerPayload, offerDigest, sdpFingerprints } from "../src/screen.ts";
 import { signPayload } from "../src/signing.ts";
 import { dumpsCompact } from "../src/strictJson.ts";
+import { parseVersion } from "../src/versions.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = resolve(here, "../../protocol/fixtures");
@@ -135,6 +140,8 @@ cases.push({ payload: base.payload, envelope: { ...base, kid: "A".repeat(43) }, 
 const challengeText =
   '{"challenge_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","command_id":"8f1c2d3e-4a5b-4c6d-8e7f-901234567890","controller_id":"22222222-2222-4222-8222-222222222222","pc_id":"33333333-3333-4333-8333-333333333333","action":"app.close","params":{},"target":{"app_id":"notepad"},"target_state_digest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issued_at":"2026-10-08T12:00:00.000Z","expires_at":"2026-10-08T12:01:00.000Z","display":{"pc_name":"Wohnzimmer-PC","action_label":"Close Notepad","detail":"Untitled — Notepad / 📝"}}';
 // ----- protocol 1.4: the PC-signed screen answer and the pairing pc_key_mac --------------------------------------
+const [major, minor] = parseVersion(PROTOCOL_VERSION)!;
+const newerStamp = `${major}.${minor + 1}`; // one MINOR above this library's version: the phone must refuse it
 const answer = await buildScreenAnswerPayload({
   accountId: ACCOUNT_ID,
   pcId: PC_ID,
@@ -143,15 +150,16 @@ const answer = await buildScreenAnswerPayload({
   screenSessionId: SCREEN_SESSION_ID,
   offerSdp: OFFER_SDP,
   answerSdp: ANSWER_SDP,
+  protocolVersion: PROTOCOL_VERSION,
   now: SCREEN_NOW,
 });
 const answerText = dumpsCompact(answer);
 const good = await signPayload(pcKeys.privateKey, pcKeys.publicKey, answerText);
 const tampered = { ...good, payload: answerText.replace("a=setup:active", "a=setup:passive") };
 const byControllerKey = await signPayload(privateKey, publicKey, answerText); // right payload, wrong (unpinned) signer
-const newer = await signPayload(pcKeys.privateKey, pcKeys.publicKey, dumpsCompact({ ...answer, protocol_version: "1.5" }));
+const newer = await signPayload(pcKeys.privateKey, pcKeys.publicKey, dumpsCompact({ ...answer, protocol_version: newerStamp }));
 const screen = {
-  $comment: "Protocol 1.4. The phone verifies these with the PC key pinned at pairing (pc_public_jwk) at `now`.",
+  $comment: "Protocol 1.4+. The newer-MINOR case is stamped one MINOR above this library's version. The phone verifies these with the PC key pinned at pairing (pc_public_jwk) at `now`.",
   pc_public_jwk: pcJwk,
   pc_kid: pcKid,
   account_id: ACCOUNT_ID,
@@ -191,3 +199,82 @@ const out = {
 };
 writeFileSync(resolve(fixtureDir, "es256-typescript.json"), JSON.stringify(out, null, 2) + "\n");
 console.log("wrote es256-typescript.json kid", kid);
+
+// ----- protocol 1.5: the data-channel cases (screen-dc-cases.json) ----------------------------------------------------
+// A real 1x1 RGBA PNG (signature, IHDR, IDAT with a stored deflate block, IEND), the same bytes the Python generator builds
+// with the standard library; both check them against this literal.
+const CURSOR_PNG_1X1_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AAAAAP8BBAEAeX5eMQAAAABJRU5ErkJggg==";
+// The largest custom bitmap the schema allows: 8192 base64 characters = 6144 PNG bytes (the 1x1 image plus a tEXt chunk).
+const CURSOR_PNG_MAX_BYTES = 6144;
+
+function pngChunk(kind: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(4);
+  head.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(kind, "latin1"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body) >>> 0);
+  return Buffer.concat([head, body, crc]);
+}
+
+/** A 1x1 RGBA PNG (one opaque black pixel); with `totalBytes` a valid tEXt chunk pads it to exactly that size. */
+function cursorPng(totalBytes?: number): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(1, 0); // width
+  ihdr.writeUInt32BE(1, 4); // height
+  ihdr.set([8, 6, 0, 0, 0], 8); // 8-bit, colour type 6 (RGBA), deflate, no filter set, no interlace
+  const idat = deflateSync(Buffer.from([0, 0, 0, 0, 255]), { level: 0 }); // filter byte 0, then R G B A
+  const head = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk("IHDR", ihdr)]);
+  const tail = Buffer.concat([pngChunk("IDAT", idat), pngChunk("IEND", Buffer.alloc(0))]);
+  if (totalBytes === undefined) return Buffer.concat([head, tail]);
+  const keyword = Buffer.from("Comment\0", "latin1");
+  const pad = totalBytes - head.length - tail.length - 12 - keyword.length;
+  return Buffer.concat([head, pngChunk("tEXt", Buffer.concat([keyword, Buffer.alloc(pad, "x")])), tail]);
+}
+
+/** The same JSON object with spaces before its closing brace so it is exactly `totalBytes` UTF-8 bytes. */
+function padded(text: string, totalBytes: number): string {
+  if (!text.endsWith("}") || !/^[\x00-\x7f]*$/.test(text)) throw new Error("padded() takes an ASCII JSON object");
+  const out = text.slice(0, -1) + " ".repeat(totalBytes - text.length) + "}";
+  if (Buffer.byteLength(out, "utf8") !== totalBytes) throw new Error("bad padding");
+  return out;
+}
+
+const small = cursorPng().toString("base64");
+if (small !== CURSOR_PNG_1X1_B64) throw new Error(`the 1x1 PNG differs from the shared literal: ${small}`);
+const large = cursorPng(CURSOR_PNG_MAX_BYTES).toString("base64");
+if (large.length !== 8192) throw new Error("the large PNG must be 8192 base64 characters");
+const custom = (png: string): string => `{"type":"cursor_shape","kind":"custom","width":1,"height":1,"hotspot_x":0,"hotspot_y":0,"png":"${png}"}`;
+const cursorPos = '{"type":"cursor_pos","gen":1,"x":32768,"y":16384,"visible":true}';
+const P2P = "phone_to_pc";
+const P2C = "pc_to_phone";
+const dcCase = (name: string, direction: string, text: string) => ({ name, direction, text });
+const screenDcCases = {
+  $comment:
+    "Protocol 1.5. Data-channel messages both libraries must accept or refuse with parse_screen_dc_message / " +
+    "parseScreenDcMessage (rules.screen_content, rules.screen_cursor); every refusal is MALFORMED_MESSAGE. " +
+    "`direction` is the receiving side's vocabulary, `text` the exact message string (padding is spaces before " +
+    "the closing brace). Written byte for byte by shared/python/scripts/make_fixtures.py and " +
+    "shared/ts/scripts/make-fixtures.ts; the PNGs are test images built there (1x1 RGBA, the large one padded " +
+    "with a tEXt chunk).",
+  accepted: [
+    dcCase("cursor_pos", P2C, cursorPos),
+    dcCase("named cursor_shape ibeam", P2C, '{"type":"cursor_shape","kind":"ibeam"}'),
+    dcCase("custom cursor_shape with a real 1x1 RGBA PNG", P2C, custom(small)),
+    dcCase("state sending with encoder h264 and cursor overlay", P2C, '{"type":"state","state":"sending","encoder":"h264","cursor":"overlay"}'),
+    dcCase("custom cursor_shape of 9000 bytes (8192-character png padded with a tEXt chunk)", P2C, padded(custom(large), 9000)),
+  ],
+  rejected: [
+    dcCase("custom cursor_shape without png", P2C, '{"type":"cursor_shape","kind":"custom","width":1,"height":1,"hotspot_x":0,"hotspot_y":0}'),
+    dcCase("custom cursor_shape whose png contains '-' (base64url, not standard base64)", P2C, custom(small.slice(0, 10) + "-" + small.slice(11))),
+    dcCase("custom cursor_shape with a 33-character png (not a valid base64 length)", P2C, custom("A".repeat(32) + "=")),
+    dcCase("custom cursor_shape with width 65", P2C, custom(small).replace('"width":1', '"width":65')),
+    dcCase("custom cursor_shape with a visible key", P2C, custom(small).slice(0, -1) + ',"visible":true}'),
+    dcCase("state of 1025 bytes", P2C, padded('{"type":"state","state":"sending"}', 1025)),
+    dcCase("custom cursor_shape of 12289 bytes", P2C, padded(custom(large), 12289)),
+    dcCase("cursor_pos without visible", P2C, '{"type":"cursor_pos","gen":1,"x":32768,"y":16384}'),
+    dcCase("hb of 1025 bytes", P2P, padded('{"type":"hb"}', 1025)),
+    dcCase("cursor_pos sent by the phone", P2P, cursorPos),
+  ],
+};
+writeFileSync(resolve(fixtureDir, "screen-dc-cases.json"), JSON.stringify(screenDcCases, null, 2) + "\n");
+console.log("wrote screen-dc-cases.json");

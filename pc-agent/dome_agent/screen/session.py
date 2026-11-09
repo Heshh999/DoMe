@@ -37,6 +37,26 @@ does not end the session (the phone's no-picture watchdog starts a fresh one); f
 run, a start whose offer has both codecs asks the worker for VP8 first (:data:`VP8_FIRST_SECONDS`; design §5.3 "A PC
 where H.264 failed ... offers VP8 first next time"). 1.4 signaling has no renegotiation, so the fallback is across
 sessions.
+
+Round 2a (protocol 1.5, ``docs/design/screen-view-2a.md`` §3.3):
+
+* **Next screen** is a ``screen.session_start{surface: N}`` from the controller that owns the live session: a
+  replacement (``rules.screen_sessions`` (1b)). The old session ends ``replaced`` with its bars kept up
+  (``_end(..., keep_indicator=True)``), the new one reuses them when the monitors, the viewer and the audio flag are
+  unchanged, and a start that fails after that end closes the kept bars (never bars without a session). Consent is
+  decided by :meth:`ConsentGate.decide` on EVERY start; a replacement inherits the old session's explicit ``granted``
+  only where the person would otherwise get an ask-mode window or a one-window-per-minute (``backoff``) refusal, and
+  only while the chain of replacements is younger than ``screen_session_max_seconds`` (``chain_started_at``; the
+  watchdog ends a chain like one session). Never for the cooldown, a block or a takeover; and when a Stop at the PC
+  (or any end) happened while the start was being prepared, the window is asked after all (DECISIONS #108).
+* **The pointer drawn by the phone**: the start's ``cursor`` (read from the raw signed params) goes to the worker,
+  ``result.cursor`` is the PC's guess (:meth:`ScreenSessionManager._cursor_guess`), the worker's ``cursor`` event the
+  mode in effect; its cursor counters are kept as ``media.cursor`` (counts and the kind word only, never a position or
+  a bitmap; no key says ``png``). :meth:`ScreenSessionManager.streamed_monitor` tells the input dispatcher which
+  monitor a controller watches, so its injected relative moves stay on it (``rules.screen_cursor`` (5)).
+* **Hardware H.264**: ``hw_encoding`` in the start (``DOME_SCREEN_H264_HW=0`` sends false), the worker's ``encoders``
+  probe rows kept as ``media.encoders``, ``encoder_hw`` in the media facts.
+* The PC-signed answer carries the start's own stamp (``ScreenSession.protocol_version``, DECISIONS #109).
 """
 
 from __future__ import annotations
@@ -62,7 +82,7 @@ from ..logsetup import get_logger
 from ..platform.protocol import Monitor, PlatformSet
 from ..ui import AgentUI, ScreenSessionView
 from . import NOT_INCLUDED_MESSAGE, SCREEN_VIEW_NOT_INCLUDED, media_stack_available
-from .consent import ConsentBroker, ConsentGate, PermissionUiState
+from .consent import ConsentBroker, ConsentGate, GateDecision, PermissionUiState
 from .history import ScreenHistory
 from .indicator import IndicatorController
 from .preflight import PREFLIGHT_TIMEOUT_SECONDS, preflight_refuses, preflight_verdict, probe_fields, run_preflight
@@ -115,6 +135,9 @@ NORMALISED_MAX = 65535
 BITRATE_KBPS = {"direct": 1500, "relayed": 1000, "data_saver": 500}  # design §5.3
 STOP_HINT = "Stop: tray > Stop Screen view, or Ctrl+Alt+Shift+S"
 VP8_FIRST_SECONDS = 24 * 3600.0  # after an H.264 stall, starts offering both codecs ask for VP8 first this long
+H264_HW_ENV = "DOME_SCREEN_H264_HW"  # "0": the worker leaves the hardware H.264 candidate out (DECISIONS #105)
+CURSOR_MODES = ("drawn", "overlay")
+CURSOR_SOURCES = ("dda", "wgc", "fake")  # the worker's `cursor` event: what captured
 # the worker's stats event fields kept in session.media (ints, floats, flags and short words only; never an address)
 MEDIA_KEYS = (
     "captured",
@@ -145,9 +168,40 @@ MEDIA_KEYS = (
     "nack",
     "bitrate_kbps",
     "encoder_label",
+    "encoder_hw",
     "stalled",
 )
 MEDIA_TEXT_MAX = 32
+# the worker's flat cursor counters (1.5) → the short names of `media.cursor` (counts and the last kind word; never a
+# position, a handle or a bitmap, and no key says "png": it is a redacted key part, logsetup.SENSITIVE_KEY_PARTS)
+CURSOR_MEDIA_KEYS = (
+    ("cursor_pos_sent", "pos_sent"),
+    ("cursor_pos_unreliable", "pos_unreliable"),
+    ("cursor_shape_sent", "shape_sent"),
+    ("cursor_custom_sent", "custom_sent"),
+    ("cursor_bitmap_max_chars", "bitmap_max_chars"),
+    ("cursor_bitmap_too_large", "bitmap_too_large"),
+    ("cursor_dropped_gen", "dropped_gen"),
+    ("cursor_poll_errors", "poll_errors"),
+    ("cursor_last_kind", "last_kind"),
+)
+# the worker's `encoders` probe rows (encode.ProbeResult.as_dict), key by key
+ENCODER_ROW_KEYS = ("encoder", "ok", "gated", "reason", "frames_in", "open_ms", "mft", "parameter_sets")
+ENCODER_ROWS_MAX = 8
+ENCODER_TEXT_MAX = 120  # FFmpeg's reason for a refused candidate and the transform's name are longer than a word
+
+
+def _media_value(value: Any, text_max: int = MEDIA_TEXT_MAX, *, keep_empty: bool = False) -> tuple[bool, Any]:
+    """``(keep, value)``: an int, a bool or None as it is, a float rounded, a string as printable words cut to
+    ``text_max`` characters (an empty one only with ``keep_empty``); anything else is not kept."""
+    if value is None or isinstance(value, bool | int):
+        return True, value
+    if isinstance(value, float):
+        return True, round(value, 3)
+    if isinstance(value, str):
+        text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())[:text_max]
+        return bool(text) or keep_empty, text
+    return False, None
 
 
 def media_from_stats(ev: dict[str, Any]) -> dict[str, Any]:
@@ -157,16 +211,52 @@ def media_from_stats(ev: dict[str, Any]) -> dict[str, Any]:
     for key in MEDIA_KEYS:
         if key not in ev:
             continue
-        value = ev[key]
-        if value is None or isinstance(value, bool | int):
+        keep, value = _media_value(ev[key])
+        if keep:
             media[key] = value
-        elif isinstance(value, float):
-            media[key] = round(value, 3)
-        elif isinstance(value, str):
-            text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())[:MEDIA_TEXT_MAX]
-            if text:
-                media[key] = text
     return media
+
+
+def cursor_media_from_stats(ev: dict[str, Any], mode: str | None) -> dict[str, Any] | None:
+    """``media.cursor``: the worker's flat cursor counters under their short names (:data:`CURSOR_MEDIA_KEYS`) plus
+    the mode in effect (the worker's ``cursor`` event; None in a 1.4 session). None when the stats carry none of
+    them (an older worker)."""
+    if not any(flat in ev for flat, _short in CURSOR_MEDIA_KEYS):
+        return None
+    cursor: dict[str, Any] = {"mode": mode if mode in CURSOR_MODES else None}
+    for flat, short in CURSOR_MEDIA_KEYS:
+        if flat not in ev:
+            continue
+        keep, value = _media_value(ev[flat])
+        if keep and (value is None or isinstance(value, int | str)):
+            cursor[short] = value
+    return cursor
+
+
+def encoder_rows(probed: Any) -> list[dict[str, Any]]:
+    """``media.encoders``: the worker's probe rows key by key (:data:`ENCODER_ROW_KEYS`; numbers, flags and short
+    texts only, at most :data:`ENCODER_ROWS_MAX` rows; never a parameter set)."""
+    rows: list[dict[str, Any]] = []
+    if not isinstance(probed, list):
+        return rows
+    for raw in probed[:ENCODER_ROWS_MAX]:
+        if not isinstance(raw, dict):
+            continue
+        row: dict[str, Any] = {}
+        for key in ENCODER_ROW_KEYS:
+            if key not in raw:
+                continue
+            keep, value = _media_value(raw[key], ENCODER_TEXT_MAX, keep_empty=True)  # "" says "none" in a row
+            if keep:
+                row[key] = value
+        rows.append(row)
+    return rows
+
+
+def screen_h264_hw() -> bool:
+    """Whether the worker may use the hardware H.264 candidate: ``DOME_SCREEN_H264_HW`` is not ``0`` (DECISIONS #105).
+    Sent as the start's ``hw_encoding`` and shown in the diagnostics bundle's ``settings``."""
+    return os.environ.get(H264_HW_ENV, "1") != "0"
 
 
 def new_session_id() -> str:
@@ -203,6 +293,12 @@ def _duration_text(seconds: int) -> str:
     return f"{minutes} min {rest} s" if minutes else f"{rest} s"
 
 
+def _held_back_end_toast(replaced: ScreenSession) -> int | None:
+    """The live seconds of the "Screen view ended" notification a replaced session held back (its own when it had
+    shown a picture, else the one it carried from the session it replaced)."""
+    return replaced.live_seconds() if replaced.started_emitted else replaced.replaced_live_seconds
+
+
 @dataclass(slots=True)
 class ScreenSession:
     screen_session_id: str
@@ -215,6 +311,20 @@ class ScreenSession:
     consent: str  # not_required | granted
     started_at: float  # monotonic, when the worker was asked to start
     started_wall: str
+    protocol_version: str  # the start's stamp: the PC-signed answer carries it (rules.screen_signaling (5))
+    # monotonic: when the person's consent this session rests on was given. `started_at` for a fresh decision; the
+    # replaced session's own value when a same-controller replacement inherited its `granted` (rules.screen_sessions
+    # (1b)): the watchdog ends the whole chain of replacements after screen_session_max_seconds
+    chain_started_at: float
+    consent_inherited: bool = False
+    # the pointer (rules.screen_cursor): what the start asked (None: a 1.4-stamped start), and the mode the PC will
+    # try (the guess at start, then what the worker reports once its source opened)
+    cursor_requested: str | None = None
+    cursor_mode: str | None = None
+    switched_from: int | None = None  # a replacement that changed monitor: the index the phone switched away from
+    # a replacement (Next screen): the live seconds of the session it replaced, whose "Screen view ended" notification
+    # was held back because the bars stayed up; shown after all when this session ends without ever showing a picture
+    replaced_live_seconds: int | None = None
     state: SessionState = "starting"
     gen: int = 1
     gens: deque[tuple[int, Monitor]] = field(default_factory=lambda: deque(maxlen=4))
@@ -386,6 +496,11 @@ class ScreenSessionManager:
         self._display_changed = False
         self._start_lock = asyncio.Lock()
         self._end_tasks: set[asyncio.Task[None]] = set()  # ends scheduled off the supervisor's tasks (strong refs)
+        # A same-controller replacement (Next screen) ending the old session with the bars kept up: no session is
+        # current meanwhile, so a Stop at the PC, a turn-off or a revocation in that window is held here and refuses
+        # the new session (`_refuse_replacement`; the first reason stands)
+        self._replacing: ScreenSession | None = None
+        self._replacement_refused: str | None = None
         self.sessions_started = 0
         self._last_media: dict[str, Any] | None = None  # the previous session's media, for the bundle after Stop
         self._vp8_first_until: float | None = None  # monotonic: an H.264 stall asks the next starts for VP8 first
@@ -402,9 +517,15 @@ class ScreenSessionManager:
         await self.drain_ends()
 
     async def drain_ends(self) -> None:
-        """Wait for every end scheduled by :meth:`_end_soon`."""
-        while self._end_tasks:
-            await asyncio.gather(*list(self._end_tasks), return_exceptions=True)
+        """Wait for every end scheduled by :meth:`_end_soon` and for any other end in flight (a Stop at the PC ends
+        on a task of its own: its session is retired at once, its worker and bars go only once the end order ran)."""
+        while True:
+            while self._end_tasks:
+                await asyncio.gather(*list(self._end_tasks), return_exceptions=True)
+            async with self._end_lock:  # an end that retired its session holds this lock, or waits for it, until done
+                pass
+            if not self._end_tasks:
+                return
 
     @property
     def current(self) -> ScreenSession | None:
@@ -485,7 +606,11 @@ class ScreenSessionManager:
         offer_sdp: str,
         surface: str | int,
         takeover: bool,
+        protocol_version: str,
+        cursor: str | None = None,
     ) -> ScreenSession:
+        """``protocol_version``: the start's stamp (the signed answer carries it). ``cursor``: the raw signed param
+        (None when the start did not carry it: a 1.4 session, which never sends a 1.5 key or message)."""
         deadline = time.monotonic() + self.start_budget  # the command's own timeout, less a margin
         async with self._start_lock:
             return await self._start_session(
@@ -497,6 +622,8 @@ class ScreenSessionManager:
                 surface=surface,
                 takeover=takeover,
                 deadline=deadline,
+                protocol_version=protocol_version,
+                cursor=cursor if cursor in CURSOR_MODES else None,
             )
 
     async def _start_session(
@@ -510,6 +637,8 @@ class ScreenSessionManager:
         surface: str | int,
         takeover: bool,
         deadline: float,
+        protocol_version: str,
+        cursor: str | None,
     ) -> ScreenSession:
         registry = load_registry()
         if not self.media_available:
@@ -526,7 +655,35 @@ class ScreenSessionManager:
         existing = self.live_session
         if existing is not None and existing.controller_id != controller_id and not takeover:
             raise registry.make_error("SCREEN_SESSION_OWNED")
-        consent = await self._consent(controller_id, display_name)
+        # Consent (rules.screen_sessions (1b), (5)). The gate decides on EVERY start: ask mode, a block, the post-Stop
+        # cooldown and the back-off are evaluated there only. A same-controller replacement (Next screen) inherits the
+        # live session's explicit Allow only where the person would otherwise get an ask-mode window or a
+        # one-window-per-minute refusal, and only while the chain of replacements is younger than the session limit.
+        decision = self.gate.decide(controller_id)
+        now = time.monotonic()
+        same = existing is not None and existing.controller_id == controller_id and existing.state != "ended"
+        inheritable = (
+            existing is not None
+            and same
+            and existing.consent == "granted"  # an explicit Allow by the person; never an inherited not_required
+            and now - existing.chain_started_at < self.max_seconds  # the chain never outlives the session limit
+            and (
+                (decision.kind == "ask" and decision.cause == "ask_mode")
+                # the one-window-per-minute refusal only (no window opens: it holds); never the escalating back-off
+                # after a Deny, which refuses starts from every controller
+                or (decision.kind == "refused" and decision.refusal == "backoff" and decision.window_interval)
+            )
+        )
+        inherited: bool
+        answered = False  # the person answered a consent window in this start
+        if decision.kind == "not_required":
+            consent, inherited = "not_required", False
+        elif inheritable:
+            consent, inherited = "granted", True
+        else:
+            # the cooldown, a block or a fresh ask
+            consent, inherited = await self._consent(controller_id, display_name, decision=decision), False
+            answered = True
         monitors = await self._monitors()
         monitor = self._pick_surface(monitors, surface)
         preflight = None
@@ -536,32 +693,87 @@ class ScreenSessionManager:
         # The consent window can stay open for 30 s: Disable remote control, a lock or a UAC prompt meanwhile refuses
         # the start exactly as at entry (design §7 "refuses new starts"), before any bar or worker exists.
         await self._recheck_start_conditions(registry)
-        existing = self.live_session
-        if existing is not None and existing.controller_id != controller_id and not takeover:
+        existing2 = self.live_session
+        if existing2 is not None and existing2.controller_id != controller_id and not takeover:
             raise registry.make_error("SCREEN_SESSION_OWNED")
-        if existing is not None:
-            await self._end(existing, "takeover" if existing.controller_id != controller_id else "replaced")
-        # An end a worker event scheduled (a `bye` a moment ago) must finish first: it stops that worker and closes
-        # the bars, which must not happen to this session's.
-        await self.drain_ends()
-        now = time.monotonic()
-        session = ScreenSession(
-            screen_session_id=new_session_id(),
-            controller_id=controller_id,
-            kid=kid,
-            display_name=display_name,
-            command_id=command_id,
-            monitor=monitor,
-            surfaces=tuple(monitors),
-            consent=consent,
-            started_at=now,
-            started_wall=format_rfc3339(now_utc()),
-        )
-        session.gens.append((1, monitor))
-        session.preflight = preflight
-        self._apply_ticket(session, ticket)
-        self._current = session
-        self._update_status()
+        while not answered and (
+            self.gate.cooldown_active()
+            or (
+                existing is not None
+                and (existing2 is None or existing2.screen_session_id != existing.screen_session_id)
+            )
+        ):
+            # Several awaits passed since the decision. A consent no window answered in this start (inherited, or
+            # not needed) rested on the gate and the live session as they were then: when that session has ended
+            # meanwhile (a Stop at the PC started the cooldown, whose first window is never skipped) or the cooldown
+            # is active, the gate decides again, before anything is ended or created.
+            consent, inherited = await self._consent(controller_id, display_name), False
+            answered = consent != "not_required"
+            existing = existing2
+            await self._recheck_start_conditions(registry)
+            existing2 = self.live_session
+            if existing2 is not None and existing2.controller_id != controller_id and not takeover:
+                raise registry.make_error("SCREEN_SESSION_OWNED")
+        replacement = existing2 is not None and existing2.controller_id == controller_id
+        self._replacement_refused = None
+        self._replacing = existing2 if replacement else None
+        try:
+            if existing2 is not None:
+                # a replacement keeps the bars up for the new session (they are reused or re-armed in _bring_up)
+                await self._end(existing2, "replaced" if replacement else "takeover", keep_indicator=replacement)
+            # An end a worker event scheduled (a `bye` a moment ago) or a Stop at the PC began must finish first: it
+            # stops that worker and closes the bars, which must not happen to this session's.
+            await self.drain_ends()
+            refused, self._replacement_refused = self._replacement_refused, None
+            if refused is not None:
+                # Stop (bar, tray, hotkey), a turn-off or a revocation while the old session was ending: the person's
+                # stop also refuses the new session (rules.screen_sessions (1b): every stop works)
+                log.info("Next screen refused: a stop arrived while the replaced session was ending", reason=refused)
+                if refused == "stopped_on_pc":
+                    raise registry.make_error("SCREEN_CONSENT_DECLINED")
+                raise _start_interrupted(refused)
+            now = time.monotonic()
+            switched_from = (
+                existing2.monitor.index
+                if existing2 is not None and replacement and existing2.monitor.index != monitor.index
+                else None
+            )
+            chain_started_at = existing.chain_started_at if inherited and existing is not None else now
+            held_back = _held_back_end_toast(existing2) if replacement and existing2 is not None else None
+            session = ScreenSession(
+                screen_session_id=new_session_id(),
+                controller_id=controller_id,
+                kid=kid,
+                display_name=display_name,
+                command_id=command_id,
+                monitor=monitor,
+                surfaces=tuple(monitors),
+                consent=consent,
+                started_at=now,
+                started_wall=format_rfc3339(now_utc()),
+                protocol_version=protocol_version,
+                chain_started_at=chain_started_at,
+                consent_inherited=inherited,
+                cursor_requested=cursor,
+                cursor_mode=self._cursor_guess(cursor, preflight=preflight),
+                switched_from=switched_from,
+                replaced_live_seconds=held_back,
+            )
+            session.gens.append((1, monitor))
+            session.preflight = preflight
+            self._apply_ticket(session, ticket)
+            self._current = session
+            self._update_status()
+        except BaseException:
+            if replacement and existing2 is not None:
+                self.indicator.disarm()  # never leave the kept bars up without a session
+                held = _held_back_end_toast(existing2)
+                if held is not None:
+                    self._ui_notify("Screen view ended", f"Screen view ended ({_duration_text(held)})")
+            raise
+        finally:
+            self._replacing = None
+            self._replacement_refused = None
         try:
             return await self._bring_up(session, offer_sdp, ticket, summary.h264, summary.vp8, deadline, takeover)
         except asyncio.CancelledError:
@@ -617,19 +829,34 @@ class ScreenSessionManager:
         deadline: float,
         takeover: bool,
     ) -> ScreenSession:
-        """Bars, then the worker, then the signed answer (the start's second half; the caller aborts on cancel)."""
+        """Bars, then the worker, then the signed answer (the start's second half; the caller aborts on cancel).
+
+        Bars kept up across a replacement (Next screen) are reused when they were made for the same monitors, the same
+        viewer and the same audio flag: no new request, the same reserved rectangles. Otherwise they are closed and
+        made afresh (``arm()`` always creates bars: a second one on armed bars would double them)."""
         registry = load_registry()
         controller_id, display_name, command_id = session.controller_id, session.display_name, session.command_id
         monitor, monitors = session.monitor, list(session.surfaces)
         consent = session.consent
         try:
-            await self.indicator.arm(
-                viewer_name=display_name,
-                audio=False,
-                monitors=monitors,
-                on_stop=self._stop_from_ui,
-                on_turn_off=self._turn_off_from_ui,
-            )
+            indicator = self.indicator
+            if (
+                indicator.armed
+                and indicator.monitors == tuple(monitors)
+                and indicator.viewer_name == display_name
+                and indicator.audio is False
+            ):
+                log.debug("screen bars kept for the new session", monitors=len(monitors))
+            else:
+                if indicator.armed:
+                    indicator.disarm()
+                await indicator.arm(
+                    viewer_name=display_name,
+                    audio=False,
+                    monitors=monitors,
+                    on_stop=self._stop_from_ui,
+                    on_turn_off=self._turn_off_from_ui,
+                )
         except ProtocolError:
             session.state = "ended"
             session.closed = True
@@ -699,6 +926,7 @@ class ScreenSessionManager:
             screen_session_id=session.screen_session_id,
             offer_sdp=offer_sdp,
             answer_sdp=str(answer["answer_sdp"]),
+            protocol_version=session.protocol_version,  # the start's own stamp (rules.screen_signaling (5))
         )
         if not await self._send(screen_answer_frame(envelope, controller_id)):
             log.warning("screen answer could not be sent (relay offline); the phone will time out")
@@ -709,9 +937,14 @@ class ScreenSessionManager:
             "screen session starting",
             controller_id=controller_id,
             surface_index=monitor.index,
+            switched_from=session.switched_from,
             encoder=session.encoder,
             consent=consent,
+            consent_inherited=session.consent_inherited,
             takeover=takeover,
+            stamp=session.protocol_version,
+            cursor_requested=session.cursor_requested,
+            cursor_mode=session.cursor_mode,
         )
         self._on_state_change()
         self._update_status()
@@ -729,12 +962,23 @@ class ScreenSessionManager:
             self._retired.append(session.screen_session_id)
         await self.supervisor.stop()
         self.indicator.disarm()
+        self._notify_held_back_end(session)
         if self._current is session:
             self._current = None
         self._update_status()
 
-    async def _consent(self, controller_id: str, display_name: str) -> str:
-        decision = self.gate.decide(controller_id)
+    def _notify_held_back_end(self, session: ScreenSession) -> None:
+        """A replacement that never showed a picture: the bars are gone, so the person at the PC gets the "Screen view
+        ended" notification the replaced session held back (once)."""
+        held, session.replaced_live_seconds = session.replaced_live_seconds, None
+        if held is not None and not session.started_emitted:
+            self._ui_notify("Screen view ended", f"Screen view ended ({_duration_text(held)})")
+
+    async def _consent(self, controller_id: str, display_name: str, *, decision: GateDecision | None = None) -> str:
+        """The person's answer for this start. ``decision``: the gate's decision the caller already made for this
+        start (not asked again); None asks the gate now."""
+        if decision is None:
+            decision = self.gate.decide(controller_id)
         if decision.kind == "not_required":
             return "not_required"
         if decision.kind == "refused":
@@ -798,10 +1042,32 @@ class ScreenSessionManager:
         session.final = False
         session.final_reason = None
 
+    def _cursor_guess(self, cursor: str | None, *, preflight: dict[str, Any] | None) -> str | None:
+        """``result.cursor`` (rules.screen_cursor (2)): the mode the PC will try. None for a start without ``cursor``;
+        ``overlay`` when asked unless the source will be Windows.Graphics.Capture (a ``wgc`` source, or the pre-flight
+        found Desktop Duplication failing) on a Windows that cannot leave the pointer out (before build 18362). The
+        worker's ``cursor`` event says what is really in effect once the source opened."""
+        if cursor is None:
+            return None
+        if cursor == "drawn":
+            return "drawn"
+        wgc = self.source.get("kind") == "wgc" or preflight is not None
+        if wgc and not self._cursor_capture_configurable():
+            return "drawn"
+        return "overlay"
+
+    def _cursor_capture_configurable(self) -> bool:
+        try:
+            return bool(self._platform.screen.cursor_capture_configurable())
+        except Exception:  # noqa: BLE001 - unknown: guess the pointer stays in the picture (the worker reports it)
+            return False
+
     def _start_message(
         self, session: ScreenSession, offer_sdp: str, ticket: dict[str, Any], h264: bool, vp8: bool
     ) -> dict[str, Any]:
         monitor = session.monitor
+        # the manager's source spec goes through as it is (a fake source's `cursor_script` / `pix_fmt` included),
+        # with the streamed monitor's geometry on top
         source = dict(self.source)
         source.update(_source_geometry(monitor))
         source.setdefault("fps", 30)
@@ -826,7 +1092,12 @@ class ScreenSessionManager:
             "encoder_preference": preference,
             "bitrate_kbps": dict(BITRATE_KBPS),
             "audio": False,
+            # DECISIONS #105: DOME_SCREEN_H264_HW=0 leaves the hardware H.264 candidate out (the worker reads only this)
+            "hw_encoding": screen_h264_hw(),
         }
+        if session.cursor_requested is not None:
+            # only for a start that carried `cursor`: without it the worker sends no 1.5 key or message
+            message["cursor"] = session.cursor_requested
         if isinstance(ticket.get("relayed_max_kbps"), int):
             message["relayed_max_kbps"] = ticket["relayed_max_kbps"]
         return message
@@ -872,7 +1143,14 @@ class ScreenSessionManager:
                 session.live_since = now if not session.pauses else None
                 await self._emit(session, "started", "started", path=session.path or "direct")
                 session.started_emitted = True
-                self._ui_notify("Screen view", f"{session.display_name} is viewing this screen. {STOP_HINT}")
+                if session.switched_from is not None:
+                    # Next screen: the same phone now watches another monitor (humans count screens from 1)
+                    self._ui_notify(
+                        "Screen view",
+                        f"{session.display_name} switched to screen {session.monitor.index + 1}. {STOP_HINT}",
+                    )
+                else:
+                    self._ui_notify("Screen view", f"{session.display_name} is viewing this screen. {STOP_HINT}")
                 self._on_state_change()
                 self._update_status()
         elif kind == "hb":
@@ -895,6 +1173,21 @@ class ScreenSessionManager:
             if isinstance(ev.get("relayed_bytes"), int):
                 session.relayed_bytes = int(ev["relayed_bytes"])
             session.media.update(media_from_stats(ev))
+            cursor = cursor_media_from_stats(ev, session.cursor_mode if session.cursor_requested else None)
+            if cursor is not None:
+                session.media["cursor"] = cursor
+        elif kind == "cursor":
+            # the mode in effect once the source opened (rules.screen_cursor (2)); every source open reports it
+            mode = ev.get("mode")
+            if session.cursor_requested is not None and mode in CURSOR_MODES:
+                session.cursor_mode = str(mode)
+                source = ev.get("source") if ev.get("source") in CURSOR_SOURCES else None
+                log.info("screen cursor mode", mode=session.cursor_mode, source=source)
+                media_cursor = session.media.get("cursor")
+                if isinstance(media_cursor, dict):
+                    media_cursor["mode"] = session.cursor_mode
+        elif kind == "encoders":
+            session.media["encoders"] = encoder_rows(ev.get("probed"))
         elif kind == "encoder_stalled":
             self._note_encoder_stalled(session, ev)
         elif kind == "disconnected":
@@ -979,7 +1272,9 @@ class ScreenSessionManager:
 
     async def end_for_controller(self, controller_id: str, reason: EndReason) -> bool:
         session = self._current
-        if session is None or session.state == "ended" or session.controller_id != controller_id:
+        if session is None or session.state == "ended":
+            return self._refuse_replacement(reason, controller_id) is not None
+        if session.controller_id != controller_id:
             return False
         await self._end(session, reason)
         return True
@@ -987,19 +1282,44 @@ class ScreenSessionManager:
     async def apply_capabilities(self, controller_id: str, effective: Any) -> None:
         """A snapshot or a local grant change: ``screen`` gone → ``grant_removed`` (design §6.2)."""
         session = self._current
-        if session is None or session.state == "ended" or session.controller_id != controller_id:
+        if session is None or session.state == "ended":
+            if "screen" not in set(effective):
+                self._refuse_replacement("grant_removed", controller_id)
+            return
+        if session.controller_id != controller_id:
             return
         if "screen" not in set(effective):
             await self._end(session, "grant_removed")
 
     async def stop_on_pc(self, source: str = "tray") -> bool:
-        """Bar Stop, tray "Stop Screen view" or the hotkey: ends ``stopped_on_pc`` and starts the PC-wide cooldown."""
+        """Bar Stop, tray "Stop Screen view" or the hotkey: ends ``stopped_on_pc`` and starts the PC-wide cooldown.
+        While a Next screen is ending the old session (the bars stay up, no session is current) it refuses the new
+        one instead, with the same cooldown."""
         session = self._current
         if session is None or session.state == "ended":
-            return False
+            replacing = self._refuse_replacement("stopped_on_pc")
+            if replacing is None:
+                return False
+            self._note_stop_on_pc(replacing, source)
+            return True
         self._note_stop_on_pc(session, source)
         await self._end(session, "stopped_on_pc")
         return True
+
+    def _refuse_replacement(self, reason: str, controller_id: str | None = None) -> ScreenSession | None:
+        """A stop that arrives while a same-controller replacement (Next screen) is ending the old session: that id is
+        retired and no session is current, but the bars stay up for the new one, so the Stop on them (or the tray,
+        the hotkey, a turn-off, a revocation) must not be lost. It is held here and the start refuses the new session
+        once the old one has ended (rules.screen_sessions (1b)). Returns the session being replaced when this stop
+        is the one that refused it; None when no replacement is in flight (for ``controller_id``) or an earlier stop
+        already refused it (the first reason stands)."""
+        replacing = self._replacing
+        if replacing is None or self._replacement_refused is not None:
+            return None
+        if controller_id is not None and replacing.controller_id != controller_id:
+            return None
+        self._replacement_refused = reason
+        return replacing
 
     async def turn_off_on_pc(self, controller_id: str, source: str) -> bool:
         """The bar's "Stop and turn off Screen view for this phone", or the tray's "Turn off Screen view" while that
@@ -1009,14 +1329,16 @@ class ScreenSessionManager:
         grant narrows, so the stopped phone's own setting counts. True: a live session of that phone was stopped."""
         session = self._current
         watching = session is not None and session.state != "ended" and session.controller_id == controller_id
-        if watching:
-            assert session is not None
-            self._note_stop_on_pc(session, source, turned_off=True)
+        # a Next screen of that phone ending its old session (the bars stay up): the new session is refused
+        replacing = None if watching else self._refuse_replacement("grant_removed", controller_id)
+        stopped = session if watching else replacing
+        if stopped is not None:
+            self._note_stop_on_pc(stopped, source, turned_off=True)
         with contextlib.suppress(Exception):
             await self._on_turn_off(controller_id)
         if watching:
             await self.end_for_controller(controller_id, "grant_removed")
-        return watching
+        return stopped is not None
 
     def _note_stop_on_pc(self, session: ScreenSession, source: str, *, turned_off: bool = False) -> None:
         screen_grants = [g.controller_id for g in self._store.list_grants() if "screen" in g.capabilities]
@@ -1040,7 +1362,8 @@ class ScreenSessionManager:
         """ "Stop and turn off Screen view for this phone" (the bar's menu, from the UI thread): the cooldown starts,
         then screen / screen_audio go through grant_update and the session ends ``grant_removed``."""
         loop = self._loop
-        session = self._current
+        # the bars stay up while a Next screen ends the old session: their phone is the one being replaced
+        session = self._current or self._replacing
         if loop is None or loop.is_closed() or session is None:
             return
         cid = session.controller_id
@@ -1076,7 +1399,9 @@ class ScreenSessionManager:
         task.add_done_callback(self._end_tasks.discard)
         return task
 
-    async def _end(self, session: ScreenSession, reason: str) -> None:
+    async def _end(self, session: ScreenSession, reason: str, *, keep_indicator: bool = False) -> None:
+        """The end order. ``keep_indicator``: a same-controller replacement (Next screen) keeps the bars up for the new
+        session; its start closes them if it fails (rules.screen_sessions (1b))."""
         self._retire(session, reason)  # no-op when an emergency stop or a worker event already retired it
         async with self._end_lock:
             if session.closed:
@@ -1094,8 +1419,9 @@ class ScreenSessionManager:
                     await self._watchdog
             # 2. the worker: stop, wait at most 2 s, terminate
             await self.supervisor.stop()
-            # 3. the bars close only once the worker has exited
-            self.indicator.disarm()
+            # 3. the bars close only once the worker has exited (a replacement keeps them for the new session)
+            if not keep_indicator:
+                self.indicator.disarm()
             self._delete_recovery()
             # 4. the relay, then the person at the PC and the local history
             media = session.media
@@ -1117,10 +1443,20 @@ class ScreenSessionManager:
                 pli=media.get("pli"),
                 first_kf_ms=media.get("first_kf_ms"),
                 stalled=media.get("stalled"),
+                encoder_hw=media.get("encoder_hw"),
+                cursor_mode=session.cursor_mode,
+                consent_inherited=session.consent_inherited,
+                bars_kept=keep_indicator,
             )
             await self._emit(session, "ended", reason, live_seconds=live)
-            if session.started_emitted:
+            if keep_indicator:
+                # Next screen: nothing ended for the person at the PC (the bars stay up); the new session's first frame
+                # says "<phone> switched to screen N", or its failed start shows this notification after all
+                pass
+            elif session.started_emitted:
                 self._ui_notify("Screen view ended", f"Screen view ended ({_duration_text(live)})")
+            else:
+                self._notify_held_back_end(session)
             self.history.record_session(
                 controller_id=session.controller_id,
                 display_name=session.display_name,
@@ -1239,7 +1575,8 @@ class ScreenSessionManager:
                 if session.connected and now >= session.lease_expires_at:
                     await self._end(session, "viewer_gone")
                     return
-                if now - session.started_at >= self.max_seconds:
+                if now - session.chain_started_at >= self.max_seconds:
+                    # a chain of replacements that inherited one Allow ends like one session would
                     await self._end(session, "max_duration")
                     return
                 if now >= session.ticket_deadline:
@@ -1383,6 +1720,21 @@ class ScreenSessionManager:
             return None, "SCREEN_GEOMETRY_CHANGED"
         return monitor, None
 
+    def streamed_monitor(self, controller_id: str) -> Monitor | None:
+        """The monitor ``controller_id`` is watching, for the input dispatcher's confinement of injected relative
+        moves (rules.screen_cursor (5)): the session's monitor while it exists, is not ended, is connected and is
+        owned by that controller; None otherwise. Generation-independent: confinement holds while a new geometry is
+        being announced too (a tap at an old ``gen`` is refused, a relative move is not)."""
+        session = self._current
+        if (
+            session is None
+            or session.state == "ended"
+            or not session.connected
+            or session.controller_id != controller_id
+        ):
+            return None
+        return session.monitor
+
     async def notify_restricted(self, restricted: bool, reason: str | None) -> None:
         """Input is refused on the PC (elevated window, secure desktop, lock, permission UI): tell the phone."""
         if self.live_session is None:
@@ -1399,6 +1751,7 @@ class ScreenSessionManager:
 
     def summary(self) -> dict[str, Any]:
         s = self._current
+        now = time.monotonic()
         return {
             "session": None
             if s is None
@@ -1410,10 +1763,16 @@ class ScreenSessionManager:
                 "encoder": s.encoder,
                 "gen": s.gen,
                 "surface_index": s.monitor.index,
+                "surface": {"index": s.monitor.index, "switched_from": s.switched_from},
                 "paused_reason": s.paused_reason,
                 "paused_causes": sorted(s.pauses),
                 "live_seconds": s.live_seconds(),
-                "consent": s.consent,
+                "consent": {
+                    "value": s.consent,
+                    "inherited": s.consent_inherited,
+                    "chain_seconds": max(0, int(now - s.chain_started_at)),
+                },
+                "cursor": {"requested": s.cursor_requested, "mode": s.cursor_mode},
                 "unlimited": s.unlimited,
                 "started_at": s.started_wall,
                 "media": dict(s.media),

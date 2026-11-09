@@ -68,10 +68,13 @@ async def send_start(
     takeover: bool = False,
     relay_screen: dict[str, Any] | None | str = "default",
     surface: str | int = "primary",
+    cursor: str | None = None,
+    protocol_version: str | None = None,
 ) -> str:
-    env = controller.command(
-        "screen.session_start", {"offer_sdp": offer, "surface": surface, "takeover": takeover}, lifetime=60
-    )
+    params: dict[str, Any] = {"offer_sdp": offer, "surface": surface, "takeover": takeover}
+    if cursor is not None:
+        params["cursor"] = cursor  # 1.5: the helper stamps by content (1.5 with cursor, 1.4 without)
+    env = controller.command("screen.session_start", params, lifetime=60, protocol_version=protocol_version)
     cid: str = payload_of(env)["command_id"]
     relay: dict[str, Any] = {
         "received_at": format_rfc3339(now_utc()),
@@ -1673,3 +1676,806 @@ async def test_a_vp8_stall_does_not_change_the_preference(fast: AgentHarness, co
     await worker.emit({"ev": "encoder_stalled", "encoder": "vp8", "reason": "no_keyframe", "encoded": 3, "aus": 0})
     assert fast.agent.screen.vp8_first_active() is False
     assert fast.agent.screen.summary()["session"]["media"]["stalled"] == "no_keyframe"
+
+
+# ----- round 2a (protocol 1.5): the stamp, the pointer, Next screen ---------------------------------------------------
+TWO_MONITORS = (("primary", 0, 0, 1920, 1080), ("side", 1920, 0, 1280, 1024))
+
+
+def two_monitors(h: AgentHarness) -> list[Any]:
+    from dome_agent.platform.protocol import Monitor
+
+    monitors = [Monitor(0, 0, 0, 1920, 1080, True), Monitor(1, 1920, 0, 1280, 1024, False)]
+    h.fake.monitors = list(monitors)
+    return monitors
+
+
+def answer_stamp(frame: dict[str, Any]) -> str:
+    from dome_protocol import loads_strict
+
+    return str(loads_strict(frame["envelope"]["payload"])["protocol_version"])
+
+
+async def test_a_1_4_start_gets_a_1_4_answer_and_no_cursor_anywhere(fast: AgentHarness, controller: Controller) -> None:
+    """rules.screen_cursor (6), rules.screen_signaling (5): a start without `cursor` is stamped 1.4, its signed answer
+    carries 1.4 (a 1.4 phone accepts it), its result has no `cursor` key (a 1.4 phone validates with
+    additionalProperties:false) and the worker is not asked for a pointer mode, so it sends no 1.5 key or message."""
+    cid = await send_start(fast, controller)
+    answer = await fast.relay.expect("screen_answer", timeout=10)
+    assert answer_stamp(answer) == "1.4"
+    res = await fast.result(cid)
+    assert res["state"] == "succeeded" and "cursor" not in res["result"], res
+    load_registry().validate_result("screen.session_start", res["result"])
+    worker = fast.screen_worker.current
+    assert worker is not None and worker.start_message is not None
+    assert "cursor" not in worker.start_message and worker.cursor_requested is None
+    assert worker.start_message["hw_encoding"] is True and worker.hw_encoding is True
+    session = fast.agent.screen.current
+    assert session is not None and (session.protocol_version, session.cursor_requested, session.cursor_mode) == (
+        "1.4",
+        None,
+        None,
+    )
+    await expect_screen_event(fast, "started", "started")
+    assert not [m for m in worker.messages if m.get("op") == "start" and "cursor" in m]
+
+
+@pytest.mark.parametrize(("asked", "mode"), [("overlay", "overlay"), ("drawn", "drawn")])
+async def test_a_start_with_cursor_is_answered_in_1_5_and_its_result_says_the_mode(
+    fast: AgentHarness, controller: Controller, asked: str, mode: str
+) -> None:
+    cid = await send_start(fast, controller, cursor=asked)
+    answer = await fast.relay.expect("screen_answer", timeout=10)
+    assert answer_stamp(answer) == "1.5"
+    verify_screen_answer_payload(
+        answer["envelope"],
+        pinned_jwk=fast.agent.identity.public_jwk,
+        account_id=controller.account_id,
+        controller_id=controller.controller_id,
+        pc_id=controller.pc_id,
+        command_id=cid,
+        offer_sdp=OFFER,
+    )
+    res = await fast.result(cid)
+    assert res["state"] == "succeeded" and res["result"]["cursor"] == mode, res
+    load_registry().validate_result("screen.session_start", res["result"])
+    worker = fast.screen_worker.current
+    assert worker is not None and worker.start_message is not None and worker.start_message["cursor"] == asked
+    with structlog.testing.capture_logs() as logs:
+        await expect_screen_event(fast, "started", "started")
+    session = fast.agent.screen.current
+    assert session is not None and session.cursor_mode == mode
+    assert fast.agent.screen.summary()["session"]["cursor"] == {"requested": asked, "mode": mode}
+    [line] = [e for e in logs if e["event"] == "screen cursor mode"]
+    assert (line["mode"], line["source"]) == (mode, "fake")
+    assert set(line) == {"event", "log_level", "mode", "source"}  # no position, handle or bitmap
+
+
+async def test_a_1_4_stamped_start_carrying_cursor_is_refused_before_anything_starts(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """The post-schema stamp check (rules.command_version_stamping): the param exists only since 1.5."""
+    res = await start_screen(fast, controller, cursor="overlay", protocol_version="1.4")
+    assert res["state"] == "failed" and res["error"]["code"] == "PROTOCOL_INCOMPATIBLE", res
+    assert res["error"]["detail"]["required"] == "1.5"
+    assert fast.screen_worker.spawned == [] and not fast.ui.bar_requests and not fast.ui.consent_requests
+
+
+async def test_the_worker_reports_the_mode_in_effect_and_the_media_facts_hold_counts_only(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Windows.Graphics.Capture on an old Windows keeps the pointer drawn: the worker's `cursor` event is the truth.
+    The cursor counters become `media.cursor` (short names; never a position, a handle or a bitmap; no key says
+    png), the probe rows `media.encoders` (key by key), `encoder_hw` a media fact."""
+    fast.screen_worker.cursor_mode = "drawn"
+    fast.screen_worker.connect_delay = 0.3  # the result leaves well before the worker's `cursor` event
+    res, worker = await live(fast, controller, cursor="overlay")
+    assert res["result"]["cursor"] == "overlay"  # the guess at start
+    session = fast.agent.screen.current
+    assert session is not None and session.cursor_mode == "drawn"  # what the source really did
+    await worker.emit(
+        {
+            "ev": "stats",
+            "relayed_bytes": 0,
+            "encoder_hw": True,
+            "cursor_pos_sent": 41,
+            "cursor_pos_unreliable": 40,
+            "cursor_shape_sent": 3,
+            "cursor_custom_sent": 1,
+            "cursor_bitmap_max_chars": 2200,
+            "cursor_bitmap_too_large": 0,
+            "cursor_dropped_gen": 2,
+            "cursor_poll_errors": 0,
+            "cursor_last_kind": "ibeam",
+            "cursor_x": 812,  # not on the list: dropped
+            "png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4",
+            "dropped_1_4": 0,
+        }
+    )
+    await worker.emit(
+        {
+            "ev": "encoders",
+            "probed": [
+                {
+                    "encoder": "h264_mf hw",
+                    "ok": False,
+                    "gated": True,
+                    "reason": "no packet within 16 frames",
+                    "frames_in": 16,
+                    "open_ms": 41,
+                    "mft": "Intel Quick Sync Video H.264 Encoder MFT",
+                    "parameter_sets": "",
+                    "sps": "Z0LAH9oBQBbsBEAAAAMAQAAADwPEiZw=",  # never kept
+                },
+                {
+                    "encoder": "h264_mf",
+                    "ok": True,
+                    "gated": False,
+                    "reason": "",
+                    "frames_in": 1,
+                    "open_ms": 12,
+                    "mft": "H264 Encoder MFT",
+                    "parameter_sets": "inband",
+                },
+                "not a row",
+            ],
+        }
+    )
+    media = fast.agent.screen.summary()["session"]["media"]
+    assert media["encoder_hw"] is True
+    assert media["cursor"] == {
+        "mode": "drawn",
+        "pos_sent": 41,
+        "pos_unreliable": 40,
+        "shape_sent": 3,
+        "custom_sent": 1,
+        "bitmap_max_chars": 2200,
+        "bitmap_too_large": 0,
+        "dropped_gen": 2,
+        "poll_errors": 0,
+        "last_kind": "ibeam",
+    }
+    assert media["encoders"][0] == {
+        "encoder": "h264_mf hw",
+        "ok": False,
+        "gated": True,
+        "reason": "no packet within 16 frames",
+        "frames_in": 16,
+        "open_ms": 41,
+        "mft": "Intel Quick Sync Video H.264 Encoder MFT",
+        "parameter_sets": "",
+    }
+    assert media["encoders"][1]["gated"] is False and len(media["encoders"]) == 2
+    text = json.dumps(fast.agent.status())
+    assert "iVBOR" not in text and "Z0LAH9" not in text and "cursor_x" not in text and '"png"' not in text
+    from dome_agent.diagnostics import build_bundle
+
+    bundled = build_bundle(fast.settings, fast.agent.status())["status"]["screen"]["session"]
+    assert bundled["media"]["cursor"] == media["cursor"] and bundled["media"]["encoders"] == media["encoders"]
+    assert "[redacted]" not in json.dumps(bundled["media"])  # no media key contains a redacted word
+    # a later cursor event (a fallback inside the source) moves the mode, in media.cursor too
+    await worker.emit({"ev": "cursor", "mode": "overlay", "source": "wgc"})
+    assert session.cursor_mode == "overlay" and session.media["cursor"]["mode"] == "overlay"
+    with structlog.testing.capture_logs() as logs:
+        await fast.agent.screen.end("stopped")
+        await expect_screen_event(fast, "ended", "stopped")
+    [ended] = [e for e in logs if e["event"] == "screen session ended"]
+    assert (ended["encoder_hw"], ended["cursor_mode"], ended["consent_inherited"]) == (True, "overlay", False)
+    assert fast.agent.screen.summary()["last_session_media"]["cursor"]["pos_sent"] == 41
+
+
+async def test_a_1_4_session_ignores_a_cursor_event_and_shows_no_mode(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    _res, worker = await live(fast, controller)
+    await worker.emit({"ev": "cursor", "mode": "overlay", "source": "fake"})
+    await worker.emit({"ev": "stats", "relayed_bytes": 0, "cursor_pos_sent": 0, "cursor_last_kind": None})
+    session = fast.agent.screen.current
+    assert session is not None and session.cursor_mode is None
+    assert session.media["cursor"] == {"mode": None, "pos_sent": 0, "last_kind": None}
+
+
+async def test_hw_encoding_follows_the_environment_and_the_source_spec_goes_through(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DOME_SCREEN_H264_HW=0 sends `hw_encoding: false`; the manager's source spec reaches the worker as it is (a fake
+    source's `cursor_script` included: the e2e agent sets it on `agent.screen.source`)."""
+    monkeypatch.setenv("DOME_SCREEN_H264_HW", "0")
+    script = {"samples": [[1, "a", 960, 540]], "shapes": {"a": "arrow"}}
+    fast.agent.screen.source["cursor_script"] = script
+    _res, worker = await live(fast, controller, cursor="overlay")
+    assert worker.start_message is not None and worker.start_message["hw_encoding"] is False
+    assert (
+        worker.start_message["source"]["cursor_script"] == script and worker.start_message["source"]["kind"] == "fake"
+    )
+    from dome_agent.diagnostics import build_bundle
+
+    assert build_bundle(fast.settings, fast.agent.status())["settings"]["screen_h264_hw"] is False
+    monkeypatch.delenv("DOME_SCREEN_H264_HW")
+    assert build_bundle(fast.settings, fast.agent.status())["settings"]["screen_h264_hw"] is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "dda_skipped", "configurable", "expected"),
+    [
+        ("ddagrab", False, False, "overlay"),  # Desktop Duplication leaves the pointer out on every Windows
+        ("ddagrab", True, False, "drawn"),  # the pre-flight sends it to Windows.Graphics.Capture on an old build
+        ("ddagrab", True, True, "overlay"),
+        ("wgc", False, False, "drawn"),
+        ("wgc", False, True, "overlay"),
+        ("fake", False, False, "overlay"),
+        ("fake", True, True, "overlay"),
+    ],
+)
+def test_the_cursor_guess_per_source_and_windows_build(
+    harness: AgentHarness, kind: str, dda_skipped: bool, configurable: bool, expected: str
+) -> None:
+    screen = harness.agent.screen
+    screen.source = {"kind": kind}
+    harness.fake.cursor_capture_configurable = configurable
+    preflight = {"detail": "busy"} if dda_skipped and kind == "ddagrab" else None
+    assert screen._cursor_guess("overlay", preflight=preflight) == expected  # noqa: SLF001
+    assert screen._cursor_guess("drawn", preflight=preflight) == "drawn"  # noqa: SLF001
+    assert screen._cursor_guess(None, preflight=preflight) is None  # noqa: SLF001
+
+
+async def test_an_old_windows_with_windows_graphics_capture_guesses_drawn(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    fast.agent.screen.source = {"kind": "wgc"}
+    fast.fake.cursor_capture_configurable = False
+    fast.screen_worker.cursor_mode = "drawn"
+    res, _worker = await live(fast, controller, cursor="overlay")
+    assert res["result"]["cursor"] == "drawn"
+
+
+def test_the_platform_adapters_answer_whether_the_pointer_can_be_left_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from dome_agent.platform.protocol import NoScreen
+    from dome_agent.platform.unsupported import UnsupportedScreen
+    from dome_agent.platform.windows import screen as windows_screen
+
+    assert NoScreen().cursor_capture_configurable() is False
+    assert UnsupportedScreen().cursor_capture_configurable() is False
+    for build, expected in ((17763, False), (18362, True), (22631, True)):
+        monkeypatch.setattr(sys, "getwindowsversion", lambda b=build: SimpleNamespace(build=b), raising=False)
+        assert windows_screen.WindowsScreen().cursor_capture_configurable() is expected
+    monkeypatch.delattr(sys, "getwindowsversion", raising=False)
+    assert windows_screen.windows_build() == 0 and windows_screen.WindowsScreen().cursor_capture_configurable() is False
+
+
+# Next screen (rules.screen_sessions (1b))
+async def test_next_screen_replaces_the_session_keeps_the_bars_and_asks_no_new_window_in_ask_mode(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    monitors = two_monitors(fast)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    cid = await send_start(fast, controller, cursor="overlay")
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    first = await fast.result(cid)
+    assert first["state"] == "succeeded" and first["result"]["consent"] == "granted"
+    await expect_screen_event(fast, "started", "started")
+    old_worker = fast.screen_worker.current
+    old = fast.agent.screen.current
+    assert old is not None and old_worker is not None and not old.consent_inherited
+    bars_before, hidden_before = len(fast.ui.bar_requests), fast.ui.hidden
+    reserved_before = fast.agent.permission_ui.reserved_rects()
+    notes_before = len(fast.ui.notifications)
+    # Next screen: the same phone asks for surface 1 (no bye, no stop)
+    res = await start_screen(fast, controller, surface=1, cursor="overlay")
+    assert res["state"] == "succeeded", res
+    r = res["result"]
+    assert (r["surface_index"], r["gen"], r["consent"], r["cursor"]) == (1, 1, "granted", "overlay")
+    ended = await expect_screen_event(fast, "ended", "replaced")
+    assert ended["screen_session_id"] == old.screen_session_id and old_worker.exit_code == 0
+    assert len(fast.ui.consent_requests) == 1  # no new consent window: the person already allowed this phone
+    assert (len(fast.ui.bar_requests), fast.ui.hidden) == (bars_before, hidden_before)  # the same bars, kept up
+    assert fast.ui.bars_shown and fast.agent.permission_ui.reserved_rects() == reserved_before
+    await expect_screen_event(fast, "started", "started")
+    new = fast.agent.screen.current
+    assert new is not None and new.screen_session_id == r["screen_session_id"] != old.screen_session_id
+    assert new.monitor == monitors[1] and new.switched_from == 0 and new.consent_inherited
+    assert new.chain_started_at == old.chain_started_at and new.started_at > old.started_at
+    summary = fast.agent.screen.summary()["session"]
+    assert summary["surface"] == {"index": 1, "switched_from": 0}
+    assert summary["consent"]["value"] == "granted" and summary["consent"]["inherited"] is True
+    assert isinstance(summary["consent"]["chain_seconds"], int) and summary["consent"]["chain_seconds"] >= 0
+    # nothing ended for the person at the PC: one notification, the switch (no "Screen view ended" before it)
+    assert fast.ui.notifications[notes_before:] == [
+        (
+            "Screen view",
+            f"{controller.display_name} switched to screen 2. Stop: tray > Stop Screen view, or Ctrl+Alt+Shift+S",
+        )
+    ]
+    worker = fast.screen_worker.current
+    assert worker is not None and worker.start_message is not None
+    assert worker.start_message["source"]["surface_index"] == 1 and worker.start_message["source"]["left"] == 1920
+    # back to screen 1: still the same chain, still no window
+    res = await start_screen(fast, controller, surface=0, cursor="overlay")
+    assert res["state"] == "succeeded" and res["result"]["surface_index"] == 0
+    await expect_screen_event(fast, "ended", "replaced")
+    await expect_screen_event(fast, "started", "started")
+    assert len(fast.ui.consent_requests) == 1 and len(fast.ui.bar_requests) == bars_before
+    third = fast.agent.screen.current
+    assert third is not None and third.switched_from == 1 and third.chain_started_at == old.chain_started_at
+    # the same surface again (a fresh restart of the same picture) is a replacement without a switch
+    res = await start_screen(fast, controller, surface=0)
+    assert res["state"] == "succeeded" and "cursor" not in res["result"]
+    await expect_screen_event(fast, "started", "started")
+    fourth = fast.agent.screen.current
+    assert fourth is not None and fourth.switched_from is None
+    assert fast.ui.notifications[-1][1].startswith(f"{controller.display_name} is viewing this screen")
+
+
+async def test_a_replacement_inherits_where_the_gate_would_open_a_window_too(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Outside the one-window-per-minute rule the gate asks again (`ask_mode`): an explicit Allow is inherited."""
+    two_monitors(fast)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    fast.agent.screen.gate.window_interval = 0.0
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    assert fast.agent.screen.gate.decide(controller.controller_id).cause == "ask_mode"
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "succeeded" and res["result"]["consent"] == "granted"
+    assert len(fast.ui.consent_requests) == 1
+
+
+async def test_ask_mode_switched_on_mid_session_asks_on_the_next_screen_and_a_takeover_always_asks(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Finding 2: a session that needed no consent lends none. Turning ask mode on while it runs makes Next screen ask
+    (consent `not_required` is never inherited), and a takeover never skips consent."""
+    two_monitors(fast)
+    await live(fast, controller)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    cid = await send_start(fast, controller, surface=1)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 1)
+    assert fast.ui.consent_requests[-1].cause == "ask_mode"
+    fast.ui.answer_consent("allow")
+    res = await fast.result(cid)
+    assert res["state"] == "succeeded" and res["result"]["consent"] == "granted"
+    await expect_screen_event(fast, "ended", "replaced")
+    await expect_screen_event(fast, "started", "started")
+    session = fast.agent.screen.current
+    assert session is not None and not session.consent_inherited
+    other = await second_phone(fast, controller, ("status", "screen"))
+    fast.agent.store.set_screen_grant_settings(other.controller_id, ask_each_time=True, cooldown_seconds=600)
+    fast.agent.screen.gate.window_interval = 0.0
+    cid = await send_start(fast, other, takeover=True)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 2)
+    assert fast.ui.consent_requests[-1].controller_id == other.controller_id
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "ended", "takeover")
+
+
+async def test_a_block_or_the_cooldown_is_never_inherited_and_a_refusal_leaves_the_old_session_running(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    two_monitors(fast)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    gate = fast.agent.screen.gate
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    session = fast.agent.screen.current
+    worker = fast.screen_worker.current
+    assert session is not None and worker is not None
+    # blocked meanwhile (as "Block this phone for 1 hour" does): refused, the old session untouched
+    gate._blocks[controller.controller_id] = time.monotonic() + 60  # noqa: SLF001
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "failed" and res["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+    assert fast.agent.screen.current is session and session.state == "live" and worker.alive
+    gate._blocks.clear()  # noqa: SLF001
+    # the post-Stop cooldown (set while this session still runs: a race at the desk) inside the minute: refused
+    fast.agent.store.set_screen_cooldown(format_rfc3339(now_utc() + timedelta(minutes=10)), controller.controller_id)
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "failed" and res["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+    assert fast.agent.screen.current is session and worker.alive and len(fast.ui.consent_requests) == 1
+    # ... and outside it: the cooldown's window, never skipped
+    gate.window_interval = 0.0
+    cid = await send_start(fast, controller, surface=1)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 2)
+    assert fast.ui.consent_requests[-1].cause == "cooldown"
+    fast.ui.answer_consent("allow")
+    res = await fast.result(cid)
+    assert res["state"] == "succeeded" and res["result"]["consent"] == "granted"
+    new = fast.agent.screen.current
+    assert new is not None and not new.consent_inherited
+
+
+async def test_a_stop_at_the_pc_while_the_next_screen_start_is_prepared_asks_after_all(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 2 (the race between the two live_session reads): Stop at the PC ends the session the inherited consent
+    rested on and starts the cooldown; the start re-validates and the cooldown's first window opens."""
+    two_monitors(fast)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    screen = fast.agent.screen
+    screen.indicator_poll_seconds = 30.0  # the watchdog's bar check must not press Stop before the start arrives
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    screen.gate.window_interval = 0.0
+    original_consent = screen._consent  # noqa: SLF001
+    consent_calls: list[str | None] = []
+
+    async def recorded_consent(controller_id: str, display_name: str, *, decision: Any = None) -> str:
+        consent_calls.append(None if decision is None else f"{decision.kind}/{decision.cause}")
+        return await original_consent(controller_id, display_name, decision=decision)
+
+    original = screen._recheck_start_conditions  # noqa: SLF001
+    calls: list[int] = []
+    stopped: list[bool] = []
+
+    async def recheck_after_a_stop(registry: Any) -> None:
+        calls.append(1)
+        # the 2nd check runs after the start's first decision and before its second live_session read
+        if len(calls) == 2 and not stopped:
+            stopped.append(await screen.stop_on_pc("bar"))  # someone at the desk presses Stop meanwhile
+        await original(registry)
+
+    monkeypatch.setattr(screen, "_consent", recorded_consent)
+    monkeypatch.setattr(screen, "_recheck_start_conditions", recheck_after_a_stop)
+    cid = await send_start(fast, controller, surface=1)
+    await expect_screen_event(fast, "ended", "stopped_on_pc")
+    await wait_for(lambda: len(fast.ui.consent_requests) == 2)
+    assert stopped == [True] and fast.ui.consent_requests[-1].cause == "cooldown"
+    fast.ui.answer_consent("allow")
+    res = await fast.result(cid)
+    assert res["state"] == "succeeded" and res["result"]["surface_index"] == 1
+    # the first decision (ask mode) was inherited without a window; the only consent is the re-validation's own ask
+    assert consent_calls == [None]
+    session = screen.current
+    assert session is not None and not session.consent_inherited and session.switched_from is None
+    assert session.chain_started_at == session.started_at
+
+
+async def test_a_stop_at_the_pc_while_a_no_consent_next_screen_is_prepared_asks_after_all(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ask mode off: the gate's `not_required` rested on the session as it was. A Stop at the PC between the two
+    live_session reads starts the cooldown, whose first window is never skipped (rules.screen_sessions (1b))."""
+    two_monitors(fast)
+    await live(fast, controller)
+    screen = fast.agent.screen
+    screen.indicator_poll_seconds = 60.0
+    original = screen._recheck_start_conditions  # noqa: SLF001
+    calls: list[int] = []
+    stopped: list[bool] = []
+
+    async def recheck_after_a_stop(registry: Any) -> None:
+        calls.append(1)
+        if len(calls) == 2 and not stopped:
+            stopped.append(await screen.stop_on_pc("bar"))  # someone at the desk presses Stop meanwhile
+        await original(registry)
+
+    monkeypatch.setattr(screen, "_recheck_start_conditions", recheck_after_a_stop)
+    cid = await send_start(fast, controller, surface=1)
+    await expect_screen_event(fast, "ended", "stopped_on_pc")
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    assert stopped == [True] and fast.ui.consent_requests[-1].cause == "cooldown"
+    fast.ui.answer_consent("allow")
+    res = await fast.result(cid)
+    assert res["state"] == "succeeded" and res["result"]["consent"] == "granted"
+    session = screen.current
+    assert session is not None and not session.consent_inherited and session.switched_from is None
+
+
+async def test_a_stop_on_its_own_task_with_a_slow_worker_is_waited_for_before_the_next_screen_starts(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bar's Stop runs on a task of its own: its session is retired at once but its worker and bars go only once
+    the worker exited. The start asks the cooldown's window and then waits for that end, so it neither keeps the
+    doomed bars nor finds the old worker still running."""
+    two_monitors(fast)
+    _res, old_worker = await live(fast, controller)
+    screen = fast.agent.screen
+    screen.indicator_poll_seconds = 60.0
+    fast.screen_worker.exit_on_stop = False  # the supervisor has to terminate it after the grace
+    original = screen._recheck_start_conditions  # noqa: SLF001
+    calls: list[int] = []
+
+    async def recheck_after_a_press(registry: Any) -> None:
+        calls.append(1)
+        if len(calls) == 2:
+            fast.ui.press_stop_on_bar()
+            await asyncio.sleep(0.01)  # the Stop's task retires the session and begins its end
+        await original(registry)
+
+    monkeypatch.setattr(screen, "_recheck_start_conditions", recheck_after_a_press)
+    bars_before = len(fast.ui.bar_requests)
+    cid = await send_start(fast, controller, surface=1)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    assert fast.ui.consent_requests[-1].cause == "cooldown"
+    fast.ui.answer_consent("allow")
+    res = await fast.result(cid, timeout=15)
+    assert res["state"] == "succeeded", res
+    assert res["result"]["consent"] == "granted" and res["result"]["surface_index"] == 1
+    await expect_screen_event(fast, "ended", "stopped_on_pc")
+    assert not old_worker.alive and len(fast.screen_worker.spawned) == 2
+    assert len(fast.ui.bar_requests) == bars_before + 1 and fast.ui.bars_shown  # fresh bars, not the doomed ones
+    await expect_screen_event(fast, "started", "started")
+
+
+async def test_a_stop_on_the_kept_bars_while_next_screen_ends_the_old_session_refuses_the_new_one(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """While a Next screen ends the old session its id is retired and no session is current, but the bars stay up for
+    the new one. A Stop on them then is not lost: the cooldown starts and the new session is refused."""
+    two_monitors(fast)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    screen = fast.agent.screen
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    original_stop = screen.supervisor.stop
+    pressed: list[bool] = []
+
+    async def stop_with_a_press() -> None:
+        if not pressed:
+            pressed.append(screen.current is None and fast.ui.bars_shown)  # retired, the bars still up
+            fast.ui.press_stop_on_bar()  # the UI thread's Stop: a task of its own
+            await asyncio.sleep(0.05)
+        await original_stop()
+
+    monkeypatch.setattr(screen.supervisor, "stop", stop_with_a_press)
+    notes_before = len(fast.ui.notifications)
+    res = await start_screen(fast, controller, surface=1)
+    assert pressed == [True]
+    assert res["state"] == "failed" and res["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+    await expect_screen_event(fast, "ended", "replaced")
+    assert screen.gate.cooldown_active()
+    event = next(e for e in fast.agent.store.list_security_events() if e["kind"] == "screen_stopped_on_pc")
+    assert event["detail"] == {"source": "bar", "cooldown_seconds": 600}
+    assert screen.current is None and not screen.indicator.armed and not fast.ui.bars_shown
+    assert fast.agent.permission_ui.reserved_rects() == ()
+    assert len(fast.screen_worker.spawned) == 1  # no worker for the refused session
+    assert [title for title, _message in fast.ui.notifications[notes_before:]] == ["Screen view ended"]
+    # a press now finds nothing to stop; the next start meets the cooldown's window
+    assert await screen.stop_on_pc("tray") is False
+    screen.gate.window_interval = 0.0
+    cid = await send_start(fast, controller, surface=1)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 2)
+    assert fast.ui.consent_requests[-1].cause == "cooldown"
+    fast.ui.answer_consent("deny")
+    assert (await fast.result(cid))["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+
+
+async def test_the_tray_stop_or_a_turn_off_while_next_screen_drains_refuses_the_new_session(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window seen from the tray (inline, True: something was stopped) and from the bar's "Stop and turn off
+    Screen view for this phone" (the cooldown, the grant narrowed, the start refused GRANT_MISSING)."""
+    two_monitors(fast)
+    await live(fast, controller)
+    screen = fast.agent.screen
+    original = screen.drain_ends
+    stopped: list[bool] = []
+
+    async def drain_with_a_stop() -> None:
+        if not stopped:
+            stopped.append(await screen.stop_on_pc("tray"))
+            stopped.append(await screen.stop_on_pc("hotkey"))  # a second press: already refused
+        await original()
+
+    monkeypatch.setattr(screen, "drain_ends", drain_with_a_stop)
+    res = await start_screen(fast, controller, surface=1)
+    assert stopped == [True, False]
+    assert res["state"] == "failed" and res["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+    assert screen.gate.cooldown_active() and screen.current is None and not fast.ui.bars_shown
+    monkeypatch.undo()
+    # the turn-off: a fresh session first (the cooldown answered), then Next screen with the turn-off meanwhile
+    fast.agent.store.set_screen_cooldown(None, None)
+    await live(fast, controller)
+    turned_off: list[bool] = []
+
+    async def drain_with_a_turn_off() -> None:
+        if not turned_off:
+            turned_off.append(True)
+            fast.ui.press_turn_off_on_bar()  # the bars' own menu, from the UI thread
+            await asyncio.sleep(0.05)
+        await original()
+
+    monkeypatch.setattr(screen, "drain_ends", drain_with_a_turn_off)
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "failed" and res["error"]["code"] == "GRANT_MISSING"
+    update = await fast.relay.expect("grant_update")
+    assert set(update["capabilities"]).isdisjoint({"screen", "screen_audio"})
+    assert screen.gate.cooldown_active() and screen.current is None and not fast.ui.bars_shown
+    events = [e for e in fast.agent.store.list_security_events() if e["kind"] == "screen_stopped_on_pc"]
+    assert events[0]["detail"] == {"source": "bar", "cooldown_seconds": 600, "turned_off": True}  # newest first
+
+
+async def test_the_escalating_back_off_after_a_deny_is_never_inherited(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Only the one-window-per-minute refusal lets a Next screen inherit. After a Deny the escalating back-off refuses
+    starts from every controller, the live session's own phone included; the old session keeps running."""
+    two_monitors(fast)
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    screen = fast.agent.screen
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    session, worker = screen.current, fast.screen_worker.current
+    assert session is not None and worker is not None
+    other = await second_phone(fast, controller, ("status", "screen"))
+    fast.agent.store.set_screen_grant_settings(other.controller_id, ask_each_time=True, cooldown_seconds=600)
+    screen.gate.window_interval = 0.0  # only the escalating back-off applies from here on
+    cid = await send_start(fast, other, takeover=True)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 2)
+    fast.ui.answer_consent("deny")
+    assert (await fast.result(cid))["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+    decision = screen.gate.decide(controller.controller_id)
+    assert decision.kind == "refused" and decision.refusal == "backoff" and not decision.window_interval
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "failed" and res["error"]["code"] == "SCREEN_CONSENT_DECLINED"
+    assert screen.current is session and session.state == "live" and worker.alive
+    assert len(fast.ui.consent_requests) == 2 and screen.history.recent()[0]["reason"] == "backoff"
+    # the one-window-per-minute refusal alone still lends the explicit Allow
+    screen.gate._backoff_until = 0.0  # noqa: SLF001
+    screen.gate.window_interval = 60.0
+    decision = screen.gate.decide(controller.controller_id)
+    assert decision.kind == "refused" and decision.window_interval
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "succeeded" and res["result"]["consent"] == "granted"
+    new = screen.current
+    assert new is not None and new.consent_inherited
+
+
+async def test_the_chain_of_replacements_ends_like_one_session_and_an_old_chain_asks_again(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    """Finding 1: one Allow does not last for ever. The watchdog counts the session limit from the chain's start, and
+    a replacement of a chain older than the limit asks again."""
+    two_monitors(fast)
+    screen = fast.agent.screen
+    fast.agent.store.set_screen_grant_settings(controller.controller_id, ask_each_time=True, cooldown_seconds=600)
+    screen.max_seconds = 2.5
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: bool(fast.ui.consent_requests))
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    first = screen.current
+    assert first is not None
+    await asyncio.sleep(1.0)
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "succeeded" and len(fast.ui.consent_requests) == 1
+    await expect_screen_event(fast, "started", "started")
+    second = screen.current
+    assert second is not None and second.consent_inherited and second.chain_started_at == first.chain_started_at
+    await expect_screen_event(fast, "ended", "max_duration", timeout=5)
+    assert time.monotonic() - second.started_at < screen.max_seconds  # earlier than its own start + the limit
+    # a chain older than the limit lends nothing (its watchdog held off here so the start sees it live)
+    screen.max_seconds = 60.0
+    screen.gate.window_interval = 0.0
+    cid = await send_start(fast, controller)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 2)
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    third = screen.current
+    assert third is not None
+    third.chain_started_at = time.monotonic() - screen.max_seconds - 1  # as if allowed more than the limit ago
+    watchdog = screen._watchdog  # noqa: SLF001
+    assert watchdog is not None
+    watchdog.cancel()
+    cid = await send_start(fast, controller, surface=1)
+    await wait_for(lambda: len(fast.ui.consent_requests) == 3)
+    assert fast.ui.consent_requests[-1].cause == "ask_mode"
+    fast.ui.answer_consent("allow")
+    assert (await fast.result(cid))["state"] == "succeeded"
+    fourth = screen.current
+    assert fourth is not None and not fourth.consent_inherited
+
+
+async def test_an_unknown_surface_is_refused_before_anything_ends(fast: AgentHarness, controller: Controller) -> None:
+    two_monitors(fast)
+    _res, worker = await live(fast, controller)
+    session = fast.agent.screen.current
+    res = await start_screen(fast, controller, surface=5)
+    assert res["state"] == "failed" and res["error"]["code"] == "INVALID_PARAMETERS"
+    assert fast.agent.screen.current is session and worker.alive and fast.ui.bars_shown
+    assert len(fast.screen_worker.spawned) == 1
+    with pytest.raises(TimeoutError):
+        await fast.relay.expect("screen_session", timeout=0.5)  # no `ended` for the session that keeps running
+
+
+async def test_kept_bars_are_closed_when_the_new_start_fails_after_the_old_end(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    two_monitors(fast)
+    await live(fast, controller)
+    notes_before = len(fast.ui.notifications)
+    fast.screen_worker.fail_start = "SCREEN_CAPTURE_UNAVAILABLE"
+    fast.screen_worker.fail_detail = "driver"
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "failed" and res["error"]["code"] == "SCREEN_CAPTURE_UNAVAILABLE"
+    await expect_screen_event(fast, "ended", "replaced")
+    assert fast.agent.screen.current is None and not fast.agent.screen.indicator.armed
+    assert not fast.ui.bars_shown and fast.agent.permission_ui.reserved_rects() == ()
+    # the bars are gone, so the person at the PC is told after all (the replaced session's held-back notification)
+    assert [title for title, _message in fast.ui.notifications[notes_before:]] == ["Screen view ended"]
+
+
+async def test_kept_bars_are_closed_when_the_start_fails_between_the_end_and_the_new_bars(
+    fast: AgentHarness, controller: Controller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The safety net: an exception after the old session ended with its bars kept, before the new session's bars
+    were confirmed, closes them (never bars without a session)."""
+    two_monitors(fast)
+    await live(fast, controller)
+    screen = fast.agent.screen
+
+    async def broken() -> None:
+        raise RuntimeError("drain failed")
+
+    monkeypatch.setattr(screen, "drain_ends", broken)
+    notes_before = len(fast.ui.notifications)
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "failed", res
+    assert screen.current is None and not screen.indicator.armed and not fast.ui.bars_shown
+    assert fast.agent.permission_ui.reserved_rects() == ()
+    assert [title for title, _message in fast.ui.notifications[notes_before:]] == ["Screen view ended"]
+    monkeypatch.undo()
+    assert len(fast.screen_worker.spawned) == 1
+
+
+async def test_bars_for_another_monitor_set_are_made_afresh_on_a_replacement(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    from dome_agent.platform.protocol import Monitor
+
+    fast.agent.screen.indicator_poll_seconds = 30.0  # the replacement sees the new monitor before the re-check does
+    listed = fast.fake.count("monitors")
+    await live(fast, controller)
+    # the start listed the monitors once, the watchdog's first bar check once more (the next one is 30 s away)
+    await wait_for(lambda: fast.fake.count("monitors") >= listed + 2)
+    bars_before, hidden_before = len(fast.ui.bar_requests), fast.ui.hidden
+    fast.fake.monitors = [Monitor(0, 0, 0, 1920, 1080, True), Monitor(1, 1920, 0, 1280, 1024, False)]
+    res = await start_screen(fast, controller, surface=1)
+    assert res["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    assert (len(fast.ui.bar_requests), fast.ui.hidden) == (bars_before + 1, hidden_before + 1)
+    assert len(fast.ui.bar_requests[-1].monitors) == 2 and fast.ui.bars_shown
+
+
+async def test_streamed_monitor_is_the_connected_owners_monitor_whatever_the_generation(
+    fast: AgentHarness, controller: Controller
+) -> None:
+    monitors = two_monitors(fast)
+    screen = fast.agent.screen
+    assert screen.streamed_monitor(controller.controller_id) is None
+    fast.screen_worker.connect_delay = 0.5
+    cid = await send_start(fast, controller, surface=1)
+    await wait_for(lambda: screen.current is not None)
+    assert screen.streamed_monitor(controller.controller_id) is None  # not connected yet
+    assert (await fast.result(cid))["state"] == "succeeded"
+    await expect_screen_event(fast, "started", "started")
+    assert screen.streamed_monitor(controller.controller_id) == monitors[1]
+    assert screen.streamed_monitor(str(uuid.uuid4())) is None  # another controller
+    session = screen.current
+    assert session is not None
+    session.geometry_pending = True  # a new geometry is being announced: taps wait, confinement does not
+    assert screen.streamed_monitor(controller.controller_id) == monitors[1]
+    assert screen.screen_target(controller.controller_id, 1) == (None, "SCREEN_GEOMETRY_CHANGED")
+    await screen.end("stopped")
+    assert screen.streamed_monitor(controller.controller_id) is None

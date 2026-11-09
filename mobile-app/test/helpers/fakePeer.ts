@@ -30,7 +30,7 @@ export class FakeDataChannel implements DataChannelLike {
   onclose: ((ev: unknown) => void) | null = null;
   constructor(
     readonly label: string,
-    readonly init: { ordered: boolean },
+    readonly init: { ordered: boolean; maxRetransmits?: number },
   ) {}
   send(data: string): void {
     if (this.readyState !== "open") throw new Error("channel not open");
@@ -87,7 +87,7 @@ export class FakePeerConnection implements PeerConnectionLike {
       },
     };
   }
-  createDataChannel(label: string, init: { ordered: boolean }): DataChannelLike {
+  createDataChannel(label: string, init: { ordered: boolean; maxRetransmits?: number }): DataChannelLike {
     const ch = new FakeDataChannel(label, init);
     this.channels.push(ch);
     return ch;
@@ -121,12 +121,12 @@ export class FakePeerConnection implements PeerConnectionLike {
     this.iceGatheringState = "complete";
     this.onicegatheringstatechange?.({});
   }
-  /** Test: DTLS connected with the certificate the PC signed, and the data channel opens (the track came with the answer). */
+  /** Test: DTLS connected with the certificate the PC signed, and the data channels open (the track came with the answer). */
   connect(): void {
     this.connectionState = "connected";
     this.iceConnectionState = "connected";
     this.onconnectionstatechange?.({});
-    this.channels[0]?.open();
+    for (const ch of this.channels) ch.open();
   }
   /** Test: the transport failed (network change, no path). */
   fail(): void {
@@ -138,6 +138,10 @@ export class FakePeerConnection implements PeerConnectionLike {
     const ch = this.channels[0];
     if (!ch) throw new Error("no data channel was created");
     return ch;
+  }
+  /** The 1.5 cursor channel (`dome-screen-cursor-v1`), or null when this offer has none (a start without `cursor`). */
+  get cursorChannel(): FakeDataChannel | null {
+    return this.channels.find((c) => c.label === "dome-screen-cursor-v1") ?? null;
   }
 }
 
@@ -174,8 +178,9 @@ export class FakePcKey {
   pin(pcId: string): PcKeyPin {
     return { pc_id: pcId, pc_kid: this.kid, pc_public_jwk: this.jwk, pinned_at: "2026-10-21T12:00:00.000Z" };
   }
-  async signAnswer(input: { accountId: string; pcId: string; controllerId: string; commandId: string; screenSessionId: string; offerSdp: string; answerSdp?: string; now?: Date; tamper?: (payload: Record<string, unknown>) => void }): Promise<Envelope> {
-    const payload = await buildScreenAnswerPayload({ accountId: input.accountId, pcId: input.pcId, controllerId: input.controllerId, commandId: input.commandId, screenSessionId: input.screenSessionId, offerSdp: input.offerSdp, answerSdp: input.answerSdp ?? ANSWER_SDP, ...(input.now ? { now: input.now } : {}) });
+  /** `protocolVersion` is the stamp of the start it answers, as the agent signs it (1.4 unless the start carried `cursor`). */
+  async signAnswer(input: { accountId: string; pcId: string; controllerId: string; commandId: string; screenSessionId: string; offerSdp: string; answerSdp?: string; protocolVersion?: string; now?: Date; tamper?: (payload: Record<string, unknown>) => void }): Promise<Envelope> {
+    const payload = await buildScreenAnswerPayload({ accountId: input.accountId, pcId: input.pcId, controllerId: input.controllerId, commandId: input.commandId, screenSessionId: input.screenSessionId, offerSdp: input.offerSdp, answerSdp: input.answerSdp ?? ANSWER_SDP, protocolVersion: input.protocolVersion ?? "1.4", ...(input.now ? { now: input.now } : {}) });
     const raw = payload as unknown as Record<string, unknown>;
     input.tamper?.(raw);
     return signScreenAnswer(this.pair.privateKey, this.pair.publicKey, raw as unknown as typeof payload);

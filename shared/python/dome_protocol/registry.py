@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -14,7 +14,7 @@ from jsonschema.exceptions import ValidationError
 
 from .errors import ProtocolError
 from .strict_regex import StrictValidator
-from .versions import parse_version, protocol_compatible
+from .versions import parse_version, protocol_compatible, version_below
 
 CONTRACT_DIR_CANDIDATES = (
     Path(__file__).resolve().parent / "_contract",  # installed wheel
@@ -56,6 +56,10 @@ class ActionSpec:
     # Protocol version that introduced the action (actions.json `since`, absent = 1.0). Controllers stamp
     # commands with it and verifiers refuse lower stamps (rules.command_version_stamping).
     since: str = "1.0"
+    # Params a later MINOR added to the action (actions.json `param_since`, 1.5): {param name: version}. A command that
+    # carries such a param is stamped at least that version (rules.command_version_stamping); such a param has no default,
+    # so a default filled in by ``validate_params`` never raises the stamp.
+    param_since: dict[str, str] = field(default_factory=dict)
 
     @property
     def requires_confirmation(self) -> bool:
@@ -113,9 +117,13 @@ class Registry:
                 alternate_capabilities=tuple(spec.get("alternate_capabilities", ())),
                 ai_eligible=bool(spec.get("ai_eligible", True)),
                 since=spec.get("since", "1.0"),
+                param_since=_param_since(name, spec, self.protocol_version),
             )
             if parse_version(action.since) is None or not protocol_compatible(action.since, (self.protocol_version,)):
                 raise ValueError(f"action {name} has since {action.since!r} outside protocol {self.protocol_version}")
+            for param, param_version in action.param_since.items():
+                if version_below(param_version, action.since):
+                    raise ValueError(f"action {name} has param_since {param}={param_version!r} outside [{action.since}, {self.protocol_version}]")
             if action.routine_allowed and not action.ai_eligible:
                 raise ValueError(f"human-only action {name} cannot be routine-allowed")
             if action.risk == "disruptive" and action.confirmation != "challenge":
@@ -141,9 +149,20 @@ class Registry:
             raise ProtocolError("UNKNOWN_ACTION", f"unknown action {name!r}")
         return spec
 
-    def min_version(self, name: str) -> str:
-        """The lowest protocol_version a command for ``name`` may carry: the action's ``since``."""
-        return self.get(name).since
+    def min_version(self, name: str, params: Mapping[str, Any] | None = None) -> str:
+        """The lowest protocol_version a command for ``name`` may carry (rules.command_version_stamping): the action's
+        ``since``, raised to the highest ``param_since`` of the keys PRESENT in ``params``.
+
+        Callers pass the raw params as signed (or about to be signed), never the output of ``validate_params``: a
+        ``param_since`` param has no default, but judging presence on the raw object keeps that true by construction.
+        Without ``params`` (or with anything that is not a mapping) the answer is the action's ``since``."""
+        spec = self.get(name)
+        best = spec.since
+        if isinstance(params, Mapping):
+            for param, version in spec.param_since.items():
+                if param in params and version_below(best, version):
+                    best = version
+        return best
 
     def error_defaults(self, code: str) -> dict[str, Any]:
         return self.errors.get(code) or self.errors["INTERNAL"]
@@ -204,6 +223,26 @@ class Registry:
         if plan_id not in plans:
             raise KeyError(plan_id)
         return dict(plans[plan_id])
+
+
+def _param_since(name: str, spec: dict[str, Any], protocol_version: str) -> dict[str, str]:
+    """actions.json `param_since` (1.5), checked while loading: every key names a property of the params schema that has
+    no `default`, and every value is a MAJOR.MINOR this registry's protocol speaks (the floor `since` is checked by the
+    caller once the action's own `since` is known)."""
+    raw = spec.get("param_since", {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"action {name} has a param_since that is not an object")
+    properties = spec["params"].get("properties", {})
+    out: dict[str, str] = {}
+    for param, version in raw.items():
+        if param not in properties:
+            raise ValueError(f"action {name} has param_since for unknown param {param!r}")
+        if "default" in properties[param]:
+            raise ValueError(f"action {name} has param_since for {param!r}, which has a default (it would raise every stamp)")
+        if parse_version(version) is None or not protocol_compatible(version, (protocol_version,)):
+            raise ValueError(f"action {name} has param_since {param}={version!r} outside [{spec.get('since', '1.0')}, {protocol_version}]")
+        out[param] = version
+    return out
 
 
 def _short(exc: ValidationError) -> str:

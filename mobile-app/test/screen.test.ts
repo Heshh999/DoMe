@@ -9,6 +9,9 @@
  * arrives inside setRemoteDescription and is kept until `verified`; the first-frame watchdog after DTLS (keyframes at
  * 3 s and 8 s, a fresh session at 15 s, the VP8 retry); the whitelisted stats, the timeline and the readout facts.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { verifyAndParseCommand, exportPublicJwk, kidFromJwk, type relayFrames } from "@dome/protocol";
@@ -26,7 +29,7 @@ import { useLiveStore } from "../src/store/live.ts";
 import { useScreenStore } from "../src/store/screen.ts";
 import { ANSWER_SDP, FakePcKey, fakePeerFactory, OFFER_SDP, safariLikeStats, SDP_SENTINEL, STATS_SECRETS, type FakePeerConnection } from "./helpers/fakePeer.ts";
 import { FakeTimers } from "./helpers/fakeTimers.ts";
-import { ACCOUNT, CONTROLLER, FakeSocket, flush, freshStorage, HELLO_ACK, noTimers, OTHER_PC, PC, signedIn, TS } from "./helpers/harness.ts";
+import { ACCOUNT, CONTROLLER, FakeSocket, flush, freshStorage, HELLO_ACK, noTimers, OFFICE_PC, OTHER_PC, PC, signedIn, TS } from "./helpers/harness.ts";
 
 const SESSION_ID = "U2NyZWVuU2Vzc2lvbjAyVF";
 const OTHER_CONTROLLER = "77777777-7777-4777-8777-777777777777";
@@ -80,7 +83,8 @@ async function startAndOffer(options: { takeover?: boolean } = {}): Promise<Reco
 }
 
 async function answerFor(start: Record<string, unknown>, tamper?: (p: Record<string, unknown>) => void, key: FakePcKey = pcKey) {
-  const envelope = await key.signAnswer({ accountId: ACCOUNT, pcId: PC, controllerId: CONTROLLER, commandId: String(start.command_id), screenSessionId: SESSION_ID, offerSdp: (start.params as { offer_sdp: string }).offer_sdp, now: new Date(timers.now), ...(tamper ? { tamper } : {}) });
+  // the PC signs its answer with the stamp of the start it answers (rules.screen_signaling (5), 1.5)
+  const envelope = await key.signAnswer({ accountId: ACCOUNT, pcId: PC, controllerId: CONTROLLER, commandId: String(start.command_id), screenSessionId: SESSION_ID, offerSdp: (start.params as { offer_sdp: string }).offer_sdp, protocolVersion: String(start.protocol_version), now: new Date(timers.now), ...(tamper ? { tamper } : {}) });
   return { type: "screen_answer", pc_id: PC, envelope };
 }
 
@@ -294,7 +298,7 @@ describe("ScreenSessionClient: the PC-signed answer", () => {
       ["window", (p) => ((p.issued_at = "2026-10-21T10:00:00.000Z"), (p.expires_at = "2026-10-21T10:01:00.000Z")), "SCREEN_ANSWER_INVALID"],
       ["fingerprints", (p) => (p.answer_sdp = ANSWER_SDP.replace("80:81:82:83", "81:81:82:83")), "SCREEN_ANSWER_INVALID"],
       ["bare LF", (p) => (p.answer_sdp = "v=0\na=fingerprint:sha-256 " + "80:81:82:83:84:85:86:87:88:89:8A:8B:8C:8D:8E:8F:90:91:92:93:94:95:96:97:98:99:9A:9B:9C:9D:9E:9F" + "\n"), "SCREEN_ANSWER_INVALID"],
-      ["newer MINOR", (p) => (p.protocol_version = "1.5"), "PROTOCOL_INCOMPATIBLE"],
+      ["newer MINOR", (p) => (p.protocol_version = "1.6"), "PROTOCOL_INCOMPATIBLE"],
     ];
     for (const [name, tamper, code] of cases) {
       const start = await startAndOffer();
@@ -1141,5 +1145,604 @@ describe("ScreenSessionClient: nothing recorded, nothing leaked", () => {
     socket.receive({ type: "result", command_id: start.command_id, origin: "relay", state: "failed", at: TS, duration_ms: 1, error: { code: "PROTOCOL_INCOMPATIBLE", message: "x", retryable: false, detail: { peer: "agent", required: "1.4" } } });
     await until(() => rt.screen.snapshot.phase === "failed");
     expect(useScreenStore.getState().lastProblemByPc[PC]).toBe("PROTOCOL_INCOMPATIBLE");
+  });
+});
+
+// ---- protocol 1.5: the pointer drawn by the phone, Next screen, the remembered screen (design screen-view-2a §4.1) ----
+
+const NEW_ID = "U2NyZWVuU2Vzc2lvbjA0VF";
+const TWO_SURFACES = [
+  { index: 0, width: 2560, height: 1440, primary: true },
+  { index: 1, width: 1920, height: 1080, primary: false },
+];
+const V15 = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"];
+const V14 = ["1.0", "1.1", "1.2", "1.3", "1.4"];
+/** A schema-valid custom cursor_shape (a real 1×1 RGBA PNG) from the shared cases. */
+const DC_CASES = JSON.parse(readFileSync(resolve(__dirname, "../../shared/protocol/fixtures/screen-dc-cases.json"), "utf8")) as { accepted: Array<{ name: string; text: string }> };
+const CUSTOM_1X1 = JSON.parse(DC_CASES.accepted.find((c) => c.name.includes("real 1x1"))!.text) as Record<string, unknown> & { png: string };
+
+function announce(versions: string[]): void {
+  useDevicesStore.setState({ pcs: [{ ...OFFICE_PC, protocol_versions: versions as never }] });
+}
+
+async function answerAs(start: Record<string, unknown>, sessionId: string) {
+  const envelope = await pcKey.signAnswer({ accountId: ACCOUNT, pcId: PC, controllerId: CONTROLLER, commandId: String(start.command_id), screenSessionId: sessionId, offerSdp: (start.params as { offer_sdp: string }).offer_sdp, protocolVersion: String(start.protocol_version), now: new Date(timers.now) });
+  return { type: "screen_answer", pc_id: PC, envelope };
+}
+
+/** Live on a PC with two screens; `extra` goes into the result (e.g. `cursor`, `surface_index`). */
+async function goLiveTwo(extra: Record<string, unknown> = {}, options: { surface?: number } = {}): Promise<{ start: Record<string, unknown>; peer: FakePeerConnection }> {
+  const asked = frames("screen_ice_request").length;
+  const before = commands("screen.session_start").length;
+  void rt.screen.start(PC, options);
+  await until(() => frames("screen_ice_request").length > asked);
+  socket.receive(iceServers());
+  await until(() => commands("screen.session_start").length > before);
+  const start = commands("screen.session_start")[before]!;
+  socket.receive(result(start.command_id, { surfaces: TWO_SURFACES, ...extra }));
+  socket.receive(await answerFor(start));
+  await until(() => rt.screen.snapshot.verified);
+  const peer = peers[peers.length - 1]!;
+  peer.connect();
+  rt.screen.onVideoFrame(timers.now);
+  expect(rt.screen.snapshot.phase).toBe("live");
+  return { start, peer };
+}
+
+/** switchSurface(1) up to the new signed start command. */
+async function switchTo(index: number): Promise<Record<string, unknown>> {
+  const asked = frames("screen_ice_request").length;
+  const before = commands("screen.session_start").length;
+  void rt.screen.switchSurface(index);
+  await until(() => frames("screen_ice_request").length > asked);
+  socket.receive(iceServers());
+  await until(() => commands("screen.session_start").length > before);
+  return commands("screen.session_start")[before]!;
+}
+
+const hbCount = (ch: { messages(): Array<Record<string, unknown>> }) => ch.messages().filter((m) => m.type === "hb").length;
+
+describe("1.5: the cursor param and the second data channel", () => {
+  it("a PC that did not announce 1.5: no cursor, stamped 1.4, ONE data channel (a 1.4 worker sends on the channel announced last)", async () => {
+    announce(V14);
+    const start = await startAndOffer();
+    expect(start.protocol_version).toBe("1.4");
+    expect(start.params).not.toHaveProperty("cursor");
+    expect(peers[0]!.channels.map((c) => c.label)).toEqual(["dome-screen-v1"]);
+    expect(rt.screen.snapshot.pointerOverlayAsked).toBe(false);
+    // an unknown list ([] before the first hello to a 1.5 relay) is the same
+    announce([]);
+    const again = await startAndOffer();
+    expect(again.protocol_version).toBe("1.4");
+    expect(peers[1]!.channels).toHaveLength(1);
+  });
+
+  it("a PC that announced 1.5: cursor 'overlay', stamped 1.5, the cursor channel after the main one (unordered, no retransmits)", async () => {
+    announce(V15);
+    const start = await startAndOffer();
+    expect(start.protocol_version).toBe("1.5");
+    expect(start.params).toEqual({ offer_sdp: peers[0]!.localDescription!.sdp, surface: "primary", audio: false, takeover: false, cursor: "overlay" });
+    expect(peers[0]!.channels.map((c) => [c.label, c.init])).toEqual([
+      ["dome-screen-v1", { ordered: true }],
+      ["dome-screen-cursor-v1", { ordered: false, maxRetransmits: 0 }],
+    ]);
+    expect(rt.screen.snapshot.pointerOverlayAsked).toBe(true);
+    // the PC answers with the start's stamp, which the phone's verifier accepts
+    socket.receive(result(start.command_id, { cursor: "overlay" }));
+    socket.receive(await answerFor(start));
+    await until(() => rt.screen.snapshot.verified);
+    expect(rt.screen.snapshot.cursorMode).toBe("overlay");
+    expect(rt.screen.pointer.pointerMode).toBe("overlay");
+  });
+
+  it("the relay's PROTOCOL_INCOMPATIBLE required 1.5 (a stale list): one start again without cursor; the mark clears when the list changes back to 1.5", async () => {
+    announce(V15);
+    const first = await startAndOffer();
+    expect(first.protocol_version).toBe("1.5");
+    socket.receive({ type: "result", command_id: first.command_id, origin: "relay", state: "failed", at: TS, duration_ms: 3, error: { code: "PROTOCOL_INCOMPATIBLE", message: "The PC's DoMe agent needs an update for this feature", retryable: false, detail: { peer: "agent", required: "1.5" } } });
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(rt.screen.snapshot.phase).toBe("ice"); // never a failure card in between
+    expect(rt.screen.snapshot.retries).toBe(0); // not counted as a retry
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    const retry = commands("screen.session_start")[1]!;
+    expect(retry.protocol_version).toBe("1.4");
+    expect(retry.params).not.toHaveProperty("cursor");
+    expect(peers[1]!.channels).toHaveLength(1);
+    expect(logged("screen.cursor_param_refused")).toHaveLength(1);
+    // the retry itself is refused for another reason: reported, not retried again
+    socket.receive({ type: "result", command_id: retry.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 3, error: { code: "SCREEN_CONSENT_DECLINED", message: "no", retryable: false } });
+    await until(() => rt.screen.snapshot.phase === "failed");
+    expect(frames("screen_ice_request")).toHaveLength(2);
+    // the same stale list: no cursor for this PC in this app run
+    const third = await startAndOffer();
+    expect(third.protocol_version).toBe("1.4");
+    // the list is read again and says 1.4 (the agent really is older): still none
+    announce(V14);
+    expect((await startAndOffer()).protocol_version).toBe("1.4");
+    // the agent was updated: the list includes 1.5 again, so the mark is cleared
+    announce(V15);
+    const updated = await startAndOffer();
+    expect(updated.protocol_version).toBe("1.5");
+    expect(updated.params).toHaveProperty("cursor", "overlay");
+  });
+
+  it("INVALID_PARAMETERS on a start that carried cursor is reported, never retried as a screen problem (a pre-1.5 agent answers that for an unknown param)", async () => {
+    announce(V15);
+    void rt.screen.start(PC, { surface: 1 });
+    await until(() => frames("screen_ice_request").length === 1);
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 1);
+    const start = commands("screen.session_start")[0]!;
+    expect(start.params).toMatchObject({ surface: 1, cursor: "overlay" });
+    socket.receive({ type: "result", command_id: start.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 3, error: { code: "INVALID_PARAMETERS", message: "params: must NOT have additional properties", retryable: false } });
+    await until(() => rt.screen.snapshot.phase === "failed");
+    expect(rt.screen.snapshot.problem?.code).toBe("INVALID_PARAMETERS");
+    expect(rt.screen.snapshot.switchedGone).toBeNull();
+    await flush();
+    expect(frames("screen_ice_request")).toHaveLength(1);
+  });
+});
+
+describe("1.5: the pointer messages", () => {
+  it("cursorMode comes from the result, then from state (authoritative); state paused hides the pointer", async () => {
+    announce(V15);
+    const { peer } = await goLiveTwo({ cursor: "overlay" });
+    expect(rt.screen.snapshot.cursorMode).toBe("overlay");
+    peer.cursorChannel!.receive({ type: "cursor_pos", gen: 1, x: 32768, y: 16384, visible: true });
+    expect(rt.screen.pointer.sample(timers.now)).toMatchObject({ visible: true, x: 32768, y: 16384 });
+    peer.channel.receive({ type: "state", state: "paused", reason: "secure_desktop", cursor: "overlay" });
+    expect(rt.screen.pointer.sample(timers.now).visible).toBe(false);
+    peer.channel.receive({ type: "state", state: "sending", cursor: "overlay" });
+    peer.cursorChannel!.receive({ type: "cursor_pos", gen: 1, x: 100, y: 200, visible: true });
+    expect(rt.screen.pointer.sample(timers.now).visible).toBe(true);
+    // the PC could not leave its pointer out after all (a Windows that refuses the setting): drawn wins, nothing is drawn by the phone
+    peer.channel.receive({ type: "state", state: "sending", cursor: "drawn" });
+    expect(rt.screen.snapshot.cursorMode).toBe("drawn");
+    peer.cursorChannel!.receive({ type: "cursor_pos", gen: 1, x: 300, y: 300, visible: true });
+    expect(rt.screen.pointer.sample(timers.now).visible).toBe(false);
+    // a state without the key keeps what is known
+    peer.channel.receive({ type: "state", state: "sending" });
+    expect(rt.screen.snapshot.cursorMode).toBe("drawn");
+    expect(rt.screen.facts.pointer?.mode).toBe("drawn");
+  });
+
+  it("cursor_pos: one slot, last wins, drained once per frame; an old geometry generation is dropped and counted; no state change per message", async () => {
+    announce(V15);
+    const { peer } = await goLiveTwo({ cursor: "overlay" });
+    const published = states.length;
+    for (let i = 0; i < 50; i++) peer.cursorChannel!.receive({ type: "cursor_pos", gen: 1, x: 1000 + i, y: 2000, visible: true });
+    peer.channel.receive({ type: "cursor_shape", kind: "hand" });
+    peer.cursorChannel!.receive({ type: "cursor_pos", gen: 7, x: 9, y: 9, visible: true }); // a generation the phone never saw
+    expect(states.length).toBe(published); // nothing went through React state
+    const taken = rt.screen.takeLatestCursorPos();
+    expect(taken).toEqual({ x: 1049, y: 2000, visible: true, gen: 1 });
+    expect(rt.screen.takeLatestCursorPos()).toBeNull();
+    // the reliable channel carries cursor_pos too when the PC has no cursor channel open
+    peer.channel.receive({ type: "cursor_pos", gen: 1, x: 5000, y: 6000, visible: false });
+    expect(rt.screen.pointer.sample(timers.now)).toMatchObject({ x: 5000, y: 6000, visible: false, shape: { kind: "hand" } });
+    const f = rt.screen.facts.pointer!;
+    expect(f).toMatchObject({ mode: "overlay", positions: 51, unreliable: 50, droppedGen: 1, shapes: 1, custom: 0, lastKind: "hand" });
+    // a new geometry: the pointer waits for the next report on the new generation
+    peer.channel.receive({ type: "geometry", gen: 2, surface_index: 0, width: 2560, height: 1440, rotation: 0, reserved: [] });
+    expect(rt.screen.pointer.sample(timers.now).visible).toBe(false);
+    peer.cursorChannel!.receive({ type: "cursor_pos", gen: 1, x: 1, y: 1, visible: true });
+    expect(rt.screen.facts.pointer!.droppedGen).toBe(2);
+    peer.cursorChannel!.receive({ type: "cursor_pos", gen: 2, x: 7000, y: 8000, visible: true });
+    expect(rt.screen.pointer.sample(timers.now)).toMatchObject({ visible: true, x: 7000, y: 8000 });
+  });
+
+  it("the cursor channel carries cursor_pos only: anything else on it is dropped and counted", async () => {
+    announce(V15);
+    const { peer } = await goLiveTwo({ cursor: "overlay" });
+    const before = rt.screen.facts.channel.dropped;
+    peer.cursorChannel!.receive({ type: "state", state: "paused", reason: "secure_desktop" });
+    peer.cursorChannel!.receive({ type: "cursor_shape", kind: "wait" });
+    peer.cursorChannel!.receive("not json");
+    expect(rt.screen.snapshot.phase).toBe("live");
+    expect(rt.screen.pointer.sample(timers.now).shape).toBeNull();
+    expect(rt.screen.facts.channel.dropped).toBe(before + 3);
+  });
+
+  it("a custom shape is accepted after its header check; an invalid one is dropped and counted; the bitmap never reaches the log", async () => {
+    announce(V15);
+    const { peer } = await goLiveTwo({ cursor: "overlay" });
+    peer.channel.receive(CUSTOM_1X1);
+    expect(rt.screen.pointer.sample(timers.now).shape).toEqual({ kind: "custom", width: 1, height: 1, hotspotX: 0, hotspotY: 0, src: `data:image/png;base64,${CUSTOM_1X1.png}` });
+    peer.channel.receive({ ...CUSTOM_1X1, width: 2 }); // schema-valid, but the PNG says 1×1
+    peer.channel.receive({ ...CUSTOM_1X1, png: CUSTOM_1X1.png.replace("o", "-") }); // not standard base64: the parser refuses it
+    peer.channel.receive({ ...CUSTOM_1X1, png: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" }); // a length atob would refuse
+    expect(rt.screen.facts.pointer).toMatchObject({ shapes: 1, custom: 1, rejected: 1, lastKind: "custom" });
+    expect(rt.screen.snapshot.phase).toBe("live");
+    expect(JSON.stringify(recentLogs())).not.toContain(CUSTOM_1X1.png.slice(0, 24));
+    const report = buildDiagnostics({ relayStatus: "open", controllerBound: true, keyAvailable: true, selectedPcId: PC, pcs: [], commands: [], sessionPresent: true, plan: "free", screen: rt.screen.snapshot, screenFacts: rt.screen.facts });
+    expect(JSON.stringify(report)).not.toContain(CUSTOM_1X1.png.slice(0, 24));
+  });
+
+  it("a handler that throws drops that message only (its error name is logged, never the message) and the next one is applied", async () => {
+    announce(V15);
+    const { peer } = await goLiveTwo({ cursor: "overlay" });
+    const spy = vi.spyOn(rt.screen.pointer, "shape").mockImplementationOnce(() => {
+      throw new TypeError("boom");
+    });
+    const before = rt.screen.facts.channel.dropped;
+    peer.channel.receive({ type: "cursor_shape", kind: "ibeam" });
+    expect(rt.screen.facts.channel.dropped).toBe(before + 1);
+    expect(logged("screen.dc_handler_failed").map((l) => l.fields)).toEqual([{ name: "TypeError", type: "cursor_shape" }]);
+    peer.channel.receive({ type: "allowance", unlimited: false, remaining_seconds: 300, resets_at: null });
+    expect(rt.screen.snapshot.allowance?.remainingSeconds).toBe(300);
+    spy.mockRestore();
+  });
+});
+
+describe("1.5: Next screen", () => {
+  it("nextSurfaceIndex wraps in index order; surfaceSize is the PHYSICAL size of the shown screen", async () => {
+    await goLiveTwo();
+    expect(rt.screen.snapshot.surfaceIndex).toBe(0);
+    expect(rt.screen.nextSurfaceIndex()).toBe(1);
+    expect(rt.screen.surfaceSize()).toEqual({ width: 2560, height: 1440 });
+    expect(rt.screen.facts.surfaces).toMatchObject({ count: 2, showing: 1, switches: 0 });
+  });
+
+  it("switchSurface: no bye, no stop; the old picture, allowance and screens stay; the old heartbeat goes on; the picture swaps on the new first frame", async () => {
+    const { peer: a } = await goLiveTwo();
+    const aMessages = a.channel.onmessage;
+    const allowance = rt.screen.snapshot.allowance;
+    const shownBefore = rt.screen.snapshot.stream;
+    const start = await switchTo(1);
+    expect(start.params).toMatchObject({ surface: 1, audio: false, takeover: false });
+    expect(start.protocol_version).toBe("1.4");
+    expect(a.channel.messages().some((m) => m.type === "bye")).toBe(false);
+    expect(commands("screen.session_stop")).toHaveLength(0);
+    let s = rt.screen.snapshot;
+    expect(s.switching).toMatchObject({ to: 1, from: 0 });
+    expect(s.stream).toBe(shownBefore);
+    expect(s.surfaces).toEqual(TWO_SURFACES);
+    expect(s.surfaceIndex).toBe(0);
+    expect(s.sessionId).toBeNull();
+    expect(a.closed).toBe(false);
+    // the old session's lease is renewed on its own channel while the new one comes up
+    const aHb = hbCount(a.channel);
+    await timers.advance(HEARTBEAT_MS * 2);
+    expect(hbCount(a.channel)).toBe(aHb + 2);
+    // the old channel's late messages change nothing (its handler checks it is not the current channel)
+    aMessages?.({ data: JSON.stringify({ type: "geometry", gen: 9, surface_index: 0, width: 640, height: 480, rotation: 0, reserved: [] }) });
+    expect(rt.screen.snapshot.geometry).toBeNull();
+    // the PC replaces the old session: its `ended` changes no state and leaves the old picture up
+    socket.receive(sessionFrame("ended", "replaced"));
+    await flush();
+    expect(rt.screen.snapshot.phase).toBe("starting");
+    expect(rt.screen.snapshot.switching).not.toBeNull();
+    expect(a.closed).toBe(false);
+    await timers.advance(HEARTBEAT_MS);
+    expect(hbCount(a.channel)).toBe(aHb + 2); // the old heartbeat stopped with the old session
+    socket.receive(result(start.command_id, { screen_session_id: NEW_ID, surfaces: TWO_SURFACES, surface_index: 1, gen: 1 }));
+    socket.receive(await answerAs(start, NEW_ID));
+    await until(() => rt.screen.snapshot.verified);
+    const b = peers[peers.length - 1]!;
+    s = rt.screen.snapshot;
+    expect(s.incomingStream).toBe(b.trackStreams[0]); // the new picture goes to the hidden second <video>
+    expect(s.stream).toBe(shownBefore);
+    expect(s.surfaceIndex).toBe(1);
+    expect(a.closed).toBe(false); // ended on the PC, but its last picture stays up until the new one shows
+    b.connect();
+    expect(rt.screen.snapshot.phase).toBe("connecting");
+    rt.screen.onVideoFrame(timers.now);
+    s = rt.screen.snapshot;
+    expect(s.phase).toBe("live");
+    expect(s.stream).toBe(b.trackStreams[0]);
+    expect(s.incomingStream).toBeNull();
+    expect(s.switching).toBeNull();
+    expect(s.switched).toMatchObject({ index: 1, count: 2 });
+    expect(s.sessionId).toBe(NEW_ID);
+    expect(a.closed).toBe(true); // the old session goes with the swap
+    expect(s.allowance).not.toBe(allowance); // the new result's figure
+    expect(rt.screen.surfaceSize()).toEqual({ width: 1920, height: 1080 });
+    expect(rt.screen.nextSurfaceIndex()).toBe(0);
+    expect(rt.screen.facts.surfaces).toMatchObject({ count: 2, showing: 2, switches: 1, switchFailures: 0 });
+    expect(commands("screen.session_stop")).toHaveLength(0);
+    // the old session's late frames are retired now
+    socket.receive(sessionFrame("ended", "replaced"));
+    await flush();
+    expect(rt.screen.snapshot.phase).toBe("live");
+  });
+
+  it("an old channel closing after the new one opened leaves the new heartbeat running; old peer events change nothing", async () => {
+    const { peer: a } = await goLiveTwo();
+    const aClose = a.channel.onclose;
+    const aState = a.onconnectionstatechange;
+    const start = await switchTo(1);
+    socket.receive(result(start.command_id, { screen_session_id: NEW_ID, surfaces: TWO_SURFACES, surface_index: 1, gen: 1 }));
+    socket.receive(await answerAs(start, NEW_ID));
+    await until(() => rt.screen.snapshot.verified);
+    const b = peers[peers.length - 1]!;
+    b.connect();
+    const bHb = hbCount(b.channel);
+    aClose?.({}); // the handler as it was wired before the switch
+    a.connectionState = "failed";
+    aState?.({});
+    await timers.advance(HEARTBEAT_MS * 2);
+    expect(hbCount(b.channel)).toBe(bHb + 2);
+    expect(rt.screen.snapshot.phase).toBe("connecting");
+    rt.screen.onVideoFrame(timers.now);
+    aClose?.({});
+    await timers.advance(HEARTBEAT_MS);
+    expect(hbCount(b.channel)).toBe(bHb + 3);
+    expect(rt.screen.snapshot.phase).toBe("live");
+  });
+
+  it("the old session's end arriving after the new media came closes its peer at once (no state change)", async () => {
+    const { peer: a } = await goLiveTwo();
+    const start = await switchTo(1);
+    socket.receive(result(start.command_id, { screen_session_id: NEW_ID, surfaces: TWO_SURFACES, surface_index: 1, gen: 1 }));
+    socket.receive(await answerAs(start, NEW_ID));
+    await until(() => rt.screen.snapshot.verified);
+    expect(a.closed).toBe(false);
+    const before = rt.screen.snapshot;
+    socket.receive(sessionFrame("ended", "replaced"));
+    await flush();
+    expect(a.closed).toBe(true);
+    expect(rt.screen.snapshot).toBe(before);
+  });
+
+  it.each([
+    ["after the old session's ended{replaced}", true],
+    ["before the old session's ended arrived", false],
+  ])("a switch whose new picture arrives but never decodes (H.264 on this phone) starts fresh on the new screen at 15 s, VP8 only (%s): nothing is left to restore", async (_label, endedFirst) => {
+    vi.stubGlobal("RTCRtpReceiver", { getCapabilities: (kind: string) => (kind === "video" ? { codecs: [{ mimeType: "video/H264", clockRate: 90000 }, { mimeType: "video/VP8", clockRate: 90000 }, { mimeType: "video/rtx", clockRate: 90000 }] } : { codecs: [{ mimeType: "audio/opus", clockRate: 48000, channels: 2 }] }) });
+    try {
+      const { peer: a } = await goLiveTwo();
+      knobs.stats = safariLikeStats({ packets: 900, received: 0, decoded: 0, keyDecoded: 0 });
+      const start = await switchTo(1);
+      if (endedFirst) {
+        socket.receive(sessionFrame("ended", "replaced")); // the PC replaced the old session when the new start landed
+        await flush();
+      }
+      socket.receive(result(start.command_id, { screen_session_id: NEW_ID, surfaces: TWO_SURFACES, surface_index: 1, gen: 1 }));
+      socket.receive(await answerAs(start, NEW_ID));
+      await until(() => rt.screen.snapshot.verified);
+      const b = peers[peers.length - 1]!;
+      expect(rt.screen.snapshot.incomingStream).toBe(b.trackStreams[0]); // the track came, as in every browser
+      b.connect();
+      await timers.advance(NO_PICTURE_RESTART_MS + 1000);
+      await until(() => frames("screen_ice_request").length === 3);
+      const s = rt.screen.snapshot;
+      expect(s.phase).toBe("ice");
+      expect(s.switching).toBeNull();
+      expect(s.switchFailed).toBeNull();
+      expect(s.problem).toBeNull();
+      expect(s.retries).toBe(1);
+      expect(a.closed).toBe(true);
+      expect(b.closed).toBe(true);
+      expect(b.channel.messages().some((m) => m.type === "bye")).toBe(true);
+      expect(logged("screen.codec_fallback")[0]?.fields).toEqual({ from: "h264", to: "vp8", reason: "not_decoded" });
+      expect(logged("screen.switch_restarted")[0]?.fields).toEqual({ cause: "no_picture", codec_fallback: "vp8" });
+      await until(() => commands("screen.session_stop").length === 1);
+      expect(commands("screen.session_stop")[0]!.params).toEqual({ screen_session_id: NEW_ID }); // the new session; the old one is gone
+      socket.receive(iceServers());
+      await until(() => commands("screen.session_start").length === 3);
+      expect(commands("screen.session_start")[2]!.params).toMatchObject({ surface: 1 });
+      expect(peers[peers.length - 1]!.transceivers[0]!.codecs!.map((c) => c.mimeType)).toEqual(["video/VP8", "video/rtx"]);
+      expect(rt.screen.snapshot.switching).toBeNull();
+      // the old session's late end changes nothing now
+      socket.receive(sessionFrame("ended", "replaced"));
+      await flush();
+      expect(rt.screen.snapshot.phase).toBe("starting");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a switch keeps how long the picture was live: Stop during it says how long it was watched", async () => {
+    await goLiveTwo();
+    await watch(120_000);
+    await switchTo(1);
+    expect(rt.screen.snapshot.phase).toBe("starting");
+    await rt.screen.stop("stopped");
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ended", endReason: "stopped", liveSeconds: 120 });
+  });
+
+  it("a switch keeps the consent the PC asked for: hidden during it offers Resume, it never starts by itself", async () => {
+    await goLiveTwo({ consent: "granted" });
+    await switchTo(1);
+    expect(rt.screen.snapshot.phase).toBe("starting");
+    expect(rt.screen.snapshot.consent).toBe("granted");
+    await rt.screen.onHidden();
+    expect(rt.screen.snapshot.phase).toBe("idle");
+    expect(rt.screen.snapshot.resume).toBe("manual");
+  });
+
+  it("a switch tapped while the relay socket is down is restored with clicks still paused", async () => {
+    await goLiveTwo();
+    socket.serverClose(1006);
+    await flush();
+    expect(rt.screen.snapshot.relayDown).toBe(true);
+    await rt.screen.switchSurface(1);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "live", sessionId: SESSION_ID, relayDown: true, switching: null, switchFailed: { code: "PC_RECONNECTING", human: 1 } });
+  });
+
+  it("the old session's pause during a switch is kept: a refused switch restores it paused, and no stall restart stops it", async () => {
+    const { peer: a } = await goLiveTwo();
+    let start = await switchTo(1);
+    socket.receive(sessionFrame("paused", "secure_desktop")); // a Windows prompt on the PC, for the old session
+    await flush();
+    expect(rt.screen.snapshot.phase).toBe("starting"); // nothing changes on screen
+    expect(rt.screen.snapshot.pcState).toBe("sending");
+    // a 1.4 agent in ask mode: its consent runs before it ends anything, and the window is declined
+    socket.receive({ type: "result", command_id: start.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 2, error: { code: "SCREEN_CONSENT_DECLINED", message: "no", retryable: false } });
+    await until(() => rt.screen.snapshot.switching === null);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "paused", pcState: "paused", pauseReason: "secure_desktop", sessionId: SESSION_ID });
+    await timers.advance(STALL_RESTART_MS + 2000);
+    expect(frames("screen_ice_request")).toHaveLength(2);
+    expect(commands("screen.session_stop")).toHaveLength(0);
+    expect(a.closed).toBe(false);
+    socket.receive(sessionFrame("resumed", "secure_desktop"));
+    await flush();
+    expect(rt.screen.snapshot).toMatchObject({ phase: "live", pcState: "sending", pauseReason: null });
+    // paused and resumed again while a second switch is in flight: restored live and sending
+    start = await switchTo(1);
+    socket.receive(sessionFrame("paused", "indicator"));
+    socket.receive(sessionFrame("resumed", "indicator", { path: "relayed" }));
+    await flush();
+    socket.receive({ type: "result", command_id: start.command_id, origin: "relay", state: "failed", at: TS, duration_ms: 2, error: { code: "RATE_LIMITED", message: "slow down", retryable: true } });
+    await until(() => rt.screen.snapshot.switching === null);
+    expect(rt.screen.snapshot).toMatchObject({ phase: "live", pcState: "sending", pauseReason: null, path: "relayed" });
+  });
+
+  it("a switch refused because the Free time ran out keeps the old picture with the allowance at 0 and the refusal's resets_at", async () => {
+    await goLiveTwo();
+    expect(rt.screen.snapshot.allowance).toMatchObject({ remainingSeconds: 540 });
+    void rt.screen.switchSurface(1);
+    await until(() => frames("screen_ice_request").length === 2);
+    socket.receive({ type: "error", error: { code: "SCREEN_ALLOWANCE_EXHAUSTED", message: "used", retryable: false, detail: { resets_at: "2026-10-21T17:12:00.000Z" } }, ref_pc_id: PC });
+    await until(() => rt.screen.snapshot.switching === null);
+    const s = rt.screen.snapshot;
+    expect(s.phase).toBe("live");
+    expect(s.sessionId).toBe(SESSION_ID);
+    expect(s.problem).toBeNull();
+    expect(s.allowance).toMatchObject({ unlimited: false, remainingSeconds: 0, resetsAt: "2026-10-21T17:12:00.000Z" });
+    expect(s.switchFailed).toMatchObject({ code: "SCREEN_ALLOWANCE_EXHAUSTED", human: 1 });
+    // the PC ends the old session when its last chunk runs out: the exhausted state keeps when it refreshes
+    socket.receive(sessionFrame("ended", "allowance_exhausted"));
+    await flush();
+    expect(rt.screen.snapshot).toMatchObject({ phase: "ended", endReason: "allowance_exhausted", allowance: { remainingSeconds: 0, resetsAt: "2026-10-21T17:12:00.000Z" } });
+    expect(screenStatus({ state: rt.screen.snapshot, switchOn: "on", grant: undefined, pin: pcKey.pin(PC), pcName: "Office PC", pcOnline: true, remoteEnabled: true, relayUp: true, now: timers.now }).kind).toBe("exhausted");
+  });
+
+  it("a switch whose new session delivers no picture at all is not stuck: at 15 s it fails and the old session is restored", async () => {
+    const { peer: a } = await goLiveTwo();
+    const start = await switchTo(1);
+    const b = peers[peers.length - 1]!;
+    b.trackOnAnswer = false; // the new session never delivers a track
+    socket.receive(result(start.command_id, { screen_session_id: NEW_ID, surfaces: TWO_SURFACES, surface_index: 1, gen: 1 }));
+    socket.receive(await answerAs(start, NEW_ID));
+    await until(() => rt.screen.snapshot.verified);
+    b.connect();
+    await timers.advance(NO_PICTURE_RESTART_MS + 1000);
+    const s = rt.screen.snapshot;
+    expect(s.phase).toBe("live");
+    expect(s.sessionId).toBe(SESSION_ID);
+    expect(s.switchFailed).toMatchObject({ code: "SCREEN_CONNECTION_FAILED", human: 1 });
+    expect(a.closed).toBe(false);
+    expect(b.closed).toBe(true);
+    expect(frames("screen_ice_request")).toHaveLength(2); // restored, not restarted
+  });
+
+  it("frames of the old picture during a switch are not the new session's first frame", async () => {
+    await goLiveTwo();
+    const start = await switchTo(1);
+    socket.receive(result(start.command_id, { screen_session_id: NEW_ID, surfaces: TWO_SURFACES, surface_index: 1, gen: 1 }));
+    rt.screen.onVideoFrame(timers.now); // the old <video> still plays: no incoming stream yet
+    expect(rt.screen.snapshot.switching).not.toBeNull();
+    expect(rt.screen.snapshot.phase).toBe("starting");
+    const during = rt.screen.snapshot;
+    await expect(rt.screen.switchSurface(0)).resolves.toBe(during); // a second switch while one is in flight: nothing
+    await flush();
+    expect(frames("screen_ice_request")).toHaveLength(2);
+  });
+
+  it("a switch the relay refuses (RATE_LIMITED) keeps the old session: same peer, same picture, its heartbeat, its messages, a short note", async () => {
+    const { peer: a } = await goLiveTwo();
+    const shown = rt.screen.snapshot.stream;
+    const start = await switchTo(1);
+    const aHb = hbCount(a.channel);
+    socket.receive({ type: "result", command_id: start.command_id, origin: "relay", state: "failed", at: TS, duration_ms: 2, error: { code: "RATE_LIMITED", message: "slow down", retryable: true } });
+    await until(() => rt.screen.snapshot.switching === null);
+    const s = rt.screen.snapshot;
+    expect(s.phase).toBe("live");
+    expect(s.sessionId).toBe(SESSION_ID);
+    expect(s.surfaceIndex).toBe(0);
+    expect(s.stream).toBe(shown);
+    expect(s.problem).toBeNull();
+    expect(s.switchFailed).toMatchObject({ code: "RATE_LIMITED", human: 1 });
+    expect(a.closed).toBe(false);
+    expect(peers[peers.length - 1]!.closed).toBe(true); // the refused attempt's peer
+    expect(logged("screen.switch_failed").map((l) => l.fields)).toEqual([{ code: "RATE_LIMITED", origin: "relay" }]);
+    expect(rt.screen.facts.surfaces).toMatchObject({ switches: 0, switchFailures: 1 });
+    await timers.advance(HEARTBEAT_MS);
+    expect(hbCount(a.channel)).toBe(aHb + 1);
+    // the old channel is current again: its messages apply, taps have their geometry
+    a.channel.receive({ type: "geometry", gen: 2, surface_index: 0, width: 2560, height: 1440, rotation: 0, reserved: [] });
+    expect(rt.screen.snapshot.geometry?.gen).toBe(2);
+    expect(rt.screen.tapGeometry().geometry?.gen).toBe(2);
+    // and a later end of that session is an ordinary end
+    socket.receive(sessionFrame("ended", "replaced"));
+    await flush();
+    expect(rt.screen.snapshot.phase).toBe("ended");
+    expect(a.closed).toBe(true);
+  });
+
+  it("a switch that fails after the PC already ended the old session is an ordinary failure (nothing left to restore)", async () => {
+    const { peer: a } = await goLiveTwo();
+    const start = await switchTo(1);
+    socket.receive(sessionFrame("ended", "replaced"));
+    await flush();
+    socket.receive({ type: "result", command_id: start.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 2, error: { code: "SCREEN_CAPTURE_UNAVAILABLE", message: "no", retryable: false } });
+    await until(() => rt.screen.snapshot.phase === "failed");
+    const s = rt.screen.snapshot;
+    expect(s.problem?.code).toBe("SCREEN_CAPTURE_UNAVAILABLE");
+    expect(s.switching).toBeNull();
+    expect(s.stream).toBeNull();
+    expect(s.switchFailed).toBeNull();
+    expect(a.closed).toBe(true);
+  });
+
+  it("Stop during a switch ends both: bye on the old channel, both peers closed", async () => {
+    const { peer: a } = await goLiveTwo();
+    await switchTo(1);
+    await rt.screen.stop("stopped");
+    expect(a.channel.messages().some((m) => m.type === "bye")).toBe(true);
+    expect(a.closed).toBe(true);
+    expect(peers[peers.length - 1]!.closed).toBe(true);
+    expect(rt.screen.snapshot.phase).toBe("ended");
+    expect(rt.screen.snapshot.switching).toBeNull();
+  });
+
+  it("the watched screen is remembered for the app run: the next start, a resume and a fresh restart go back to it", async () => {
+    const { peer } = await goLiveTwo({ surface_index: 1 }, { surface: 1 });
+    expect(commands("screen.session_start")[0]!.params).toMatchObject({ surface: 1 });
+    expect(rt.screen.snapshot.switched).toMatchObject({ index: 1, count: 2 }); // started on a screen that is not the main one
+    // a stall: the fresh session asks for the same screen
+    await timers.advance(STALL_RESTART_MS + 1100);
+    await until(() => frames("screen_ice_request").length === 2);
+    expect(peer.closed).toBe(true);
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 2);
+    expect(commands("screen.session_start")[1]!.params).toMatchObject({ surface: 1 });
+    await rt.screen.stop("stopped");
+    const next = await startAndOffer();
+    expect(next.params).toMatchObject({ surface: 1 });
+  });
+
+  it("INVALID_PARAMETERS for a remembered screen (unplugged): once again on the main screen, with the 'isn't connected any more' note", async () => {
+    await goLiveTwo({ surface_index: 1 }, { surface: 1 });
+    await rt.screen.stop("stopped");
+    const start = await startAndOffer();
+    expect(start.params).toMatchObject({ surface: 1 });
+    socket.receive({ type: "result", command_id: start.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 2, error: { code: "INVALID_PARAMETERS", message: "This PC has no monitor with that surface index.", retryable: false } });
+    await until(() => frames("screen_ice_request").length === 3);
+    expect(rt.screen.snapshot.switchedGone).toMatchObject({ human: 2 });
+    expect(rt.screen.snapshot.phase).toBe("ice");
+    socket.receive(iceServers());
+    await until(() => commands("screen.session_start").length === 3);
+    expect(commands("screen.session_start")[2]!.params).toMatchObject({ surface: "primary" });
+    expect(rt.screen.facts.surfaces?.gone).toBe(1);
+    // the main screen refused the same way: reported, not retried again
+    socket.receive({ type: "result", command_id: commands("screen.session_start")[2]!.command_id, origin: "agent", state: "failed", at: TS, duration_ms: 2, error: { code: "INVALID_PARAMETERS", message: "no", retryable: false } });
+    await until(() => rt.screen.snapshot.phase === "failed");
+    expect(frames("screen_ice_request")).toHaveLength(3);
+    // and the next start goes to the main screen
+    expect((await startAndOffer()).params).toMatchObject({ surface: "primary" });
+  });
+
+  it("zoom and follow pans are counted for the readout, across a switch", async () => {
+    await goLiveTwo();
+    rt.screen.noteZoom(2.64);
+    rt.screen.noteZoom(1.5);
+    rt.screen.noteFollowPan();
+    rt.screen.noteFollowPan();
+    expect(rt.screen.facts.zoom).toEqual({ maxScale: 2.6, followPans: 2 });
+    await switchTo(1);
+    expect(rt.screen.facts.zoom).toEqual({ maxScale: 2.6, followPans: 2 });
   });
 });

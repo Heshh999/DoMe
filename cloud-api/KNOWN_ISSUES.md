@@ -174,3 +174,17 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     username in `turn_pending_revocations`, retried by the sweeper every 30 s until the provider confirms or the
     credential expires (Free ≤ 3600 s, unlimited ≤ 14400 s). Until then the credential can still relay; the security
     events say `turn_revoke_failed`, not `turn_credential_revoked`. Never run against the real provider (#27).
+
+## Screen view round 2a (protocol 1.5)
+
+37. **`protocol_versions` is as announced at the last hello** (DECISIONS #115). An agent that goes back to an older
+    version shows its shorter list only after it reconnects: while that PC is offline, `GET /v1/pcs` still shows the
+    longer list, and a phone that read it may send a 1.5 start once the PC is back, which the relay refuses (#116)
+    before the phone retries without `cursor`. A PC whose agent has not connected since this relay was deployed shows
+    `[]`.
+38. **A Next screen switch on a TURN-relayed path is not device-verified** (DECISIONS #117). When the phone mints for
+    its switch, the relay keeps the credential its live session relays through (set aside in
+    `turn_deferred_revocations`, revoked when that session ends), and a refused switch revokes only the credential
+    minted for it. That is integration-tested against `FakeTurn` only. Two things are unchecked: whether the old picture
+    survives a switch on mobile data, and whether a refused switch restores a relayed session. Both depend on the real
+    provider and the phone's TURN allocation (never run against Cloudflare: #27, #34) and belong to the device round.

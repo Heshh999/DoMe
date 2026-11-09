@@ -33,12 +33,13 @@ def nonce() -> str:
     return b64url_encode(secrets.token_bytes(16))
 
 
-def stamp_for(action: str) -> str:
+def stamp_for(action: str, params: dict[str, Any] | None = None) -> str:
     """The protocol_version a phone stamps on a command (rules.command_version_stamping): the lowest
-    version that defines the action (its ``since``). Unknown actions get "1.0" so the agent's own
-    UNKNOWN_ACTION path is what a test sees."""
+    version that defines the action and every param it carries (its ``since``, raised by the ``param_since``
+    of a present param: a ``screen.session_start`` with ``cursor`` is 1.5, without it 1.4). Unknown actions
+    get "1.0" so the agent's own UNKNOWN_ACTION path is what a test sees."""
     registry = load_registry()
-    return registry.min_version(action) if action in registry.actions else "1.0"
+    return registry.min_version(action, params) if action in registry.actions else "1.0"
 
 
 class Controller:
@@ -97,7 +98,7 @@ class Controller:
         issued = issued_at or now_utc()
         payload: dict[str, Any] = {
             "type": "command",
-            "protocol_version": protocol_version or stamp_for(action),
+            "protocol_version": protocol_version or stamp_for(action, params),
             "command_id": command_id or str(uuid.uuid4()),
             "account_id": account_id or self.account_id,
             "controller_id": controller_id or self.controller_id,

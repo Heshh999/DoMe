@@ -8,6 +8,8 @@ import pytest
 
 from dome_protocol import (
     ProtocolError,
+    load_registry,
+    loads_strict,
     parse_rfc3339,
     verify_envelope,
     verify_screen_answer_payload,
@@ -68,6 +70,12 @@ def test_fixture_file(path):
             assert ei.value.code == case["expect"], case["name"]
             if "cause" in case:
                 assert ei.value.detail["cause"] == case["cause"], case["name"]
+    # 1.5: the accepted answer carries this library's version, the refused one exactly one MINOR above it (computed by both
+    # generators from their library's version, so the case keeps meaning "newer" after every bump)
+    major, minor = (int(x) for x in load_registry().protocol_version.split("."))
+    stamps = {case["name"]: loads_strict(case["envelope"]["payload"])["protocol_version"] for case in sc["cases"]}
+    assert stamps["PC-signed answer"] == f"{major}.{minor}"
+    assert stamps["stamped with a MINOR this library does not speak"] == f"{major}.{minor + 1}"
     assert offer_digest(sc["offer_sdp"]) == sc["offer_digest"]
     assert sdp_fingerprints(sc["answer_sdp"]) and set(sdp_fingerprints(sc["answer_sdp"])) == {sc["fingerprint"]}
     assert pc_key_mac(d["pairing_code"], d["pairing_id"], d["pc_id"], kid, sc["pc_kid"]) == sc["pc_key_mac"]

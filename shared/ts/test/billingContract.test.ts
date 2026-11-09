@@ -100,7 +100,7 @@ describe("billing REST bodies (protocol 1.3)", () => {
       ok(name, value);
       bad(name, { ...(value as object), extra: 1 });
     }
-    expect(PROTOCOL_VERSION).toBe("1.4"); // 1.3 added the billing shapes; 1.4 (Screen view) is current
+    expect(PROTOCOL_VERSION).toBe("1.5"); // 1.3 added the billing shapes; 1.5 (Screen view round 2a) is current
   });
 
   it("pins plan ids, intervals and modes", () => {

@@ -32,6 +32,7 @@ def pc_body(pc: PC, relay: ConnectionManager) -> dict[str, Any]:
         "created_at": ts_required(pc.created_at),
         "platform": pc.platform,
         "agent_version": pc.agent_version or "",
+        "protocol_versions": list(pc.protocol_versions or []),
         "remote_enabled_reported": bool(pc.remote_enabled_reported),
         "last_power_request": pc.last_power_request,
     }

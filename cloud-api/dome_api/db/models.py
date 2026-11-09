@@ -177,6 +177,10 @@ class PC(Base):
     remote_enabled_reported: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     agent_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # the protocol versions the agent announced in its last relay hello (REST pc.protocol_versions, protocol 1.5)
+    protocol_versions: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list
+    )
     created_at: Mapped[datetime] = created_at_col()
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_power_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -664,9 +668,10 @@ class ScreenReservation(Base):
 
 
 class TurnCredential(Base):
-    """The one TURN credential a controller may hold (rules.screen_signaling (1)): the primary key is the controller,
-    so minting replaces the previous row after revoking it at the provider. Only the provider's username is kept
-    (for revocation and reconciliation); the credential itself is handed to the phone once and never stored."""
+    """The controller's current TURN credential (rules.screen_signaling (1)): the primary key is the controller, so
+    minting replaces the previous row after revoking it at the provider, unless that one carries a live session (it
+    moves to ``turn_deferred_revocations`` first). Only the provider's username is kept (for revocation and
+    reconciliation); the credential itself is handed to the phone once and never stored."""
 
     __tablename__ = "turn_credentials"
     __table_args__ = (
@@ -707,6 +712,23 @@ class TurnPendingRevocation(Base):
     last_error: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TurnDeferredRevocation(Base):
+    """A phone TURN username still carrying a live screen session after its controller minted the next credential (a
+    Next screen switch keeps the old session up and restores it when the switch fails, DECISIONS #117): kept apart
+    from ``turn_credentials`` (whose row that mint replaces) and revoked when its own session ends, on every path that
+    ends one, or with the controller or the account. No foreign key, as for ``turn_pending_revocations``. Ids, a
+    username and timestamps only."""
+
+    __tablename__ = "turn_deferred_revocations"
+
+    username: Mapped[str] = mapped_column(String(256), primary_key=True)
+    screen_session_id: Mapped[str] = mapped_column(String(22), nullable=False, index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    controller_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class TurnMintDay(Base):

@@ -194,15 +194,16 @@
     device bundle (`hardware.dxgi_adapters` next to `hardware.monitors`) are the checks. Not device-tested either: the
     `UserGpuPreferences` value format and whether the advanced-colour query needs a newer Windows than the probe's
     `IDXGIOutput5` (Windows 10 1703).
-35. **The hardware H.264 transform is not used yet** (deferred; DECISIONS #98). Device round 2 encoded with the
-    synchronous Microsoft software transform: every candidate asks for `yuv420p`, and `mfenc`'s input scoring refuses
-    any transform input type that is not exactly `avctx->pix_fmt` (`mfenc.c` `mf_encv_input_score`), while GPU
-    transforms offer NV12. Enabling it (a per-candidate `pix_fmt="nv12"`, converting in the sources, or `AV_PIX_FMT_D3D11`
-    input) brings the asynchronous transform path into play: output fetched only on the next input, extradata that
-    some Quick Sync transforms never fill, and an Intel-or-NVIDIA choice on a hybrid laptop, none of it exercised.
-    Decide after the next bundle shows the hardware probe's failure reason (`screen encoder candidate unavailable`)
-    and the software transform's real latency (`screen first keyframe ms=...`, `frames_in=...`). If it is enabled,
-    keep the drain pump (#100) and test still-screen time to first packet on Intel and NVIDIA.
+35. **Hardware H.264 is enabled but not yet verified on a device** (DECISIONS #105). Both `h264_mf` candidates open
+    with NV12 input, the sources deliver NV12 (Desktop Duplication natively, Windows.Graphics.Capture by a libswscale
+    conversion), and the hardware candidate is used only after the probe got a slice packet with SPS and PPS out of it
+    within 16 frames at the session's real size (`screen encoder probed` lines; `media.encoders` in the bundle).
+    Unverified: which transform Media Foundation picks on the hybrid laptop (`mft`), its latency (`frames_in`), bitrate
+    reopens, long sessions (a transform that stops producing is reported `encoder_stalled` and the next start offers
+    VP8 first), extradata-less transforms (in-band sets preferred; neither: skipped with that reason), picture quality.
+    The software transform keeps the acceptance it had (open and one encoded frame), but it is now fed NV12 instead of
+    yuv420p: that path is not re-verified on a device either. `DOME_SCREEN_H264_HW=0` turns the hardware candidate
+    off.
 36. **The low-latency flag may be ignored by the transform** (DECISIONS #98). `mfenc.c` sends
     `CODECAPI_AVLowLatencyMode` as `VT_UI4` and ignores the HRESULT, while Microsoft documents `VT_BOOL` for its H.264
     encoder ("All other implementations, including the H.264 encoder, use the type VT_BOOL"). Whether the software
@@ -235,3 +236,40 @@
     within about a second of "Connecting" and a click on a still screen within a second; whether Safari's receiver
     reports arrive (`rr=True`, `rtt_ms`) and packets are lost (`lost`, `nack`) on Wi-Fi, cellular and an IPv6 or VPN
     path at 1200-byte payloads; and that an H.264 stall leads to a VP8 picture on the phone's automatic restart.
+40. **The pointer drawn by the phone is not yet verified on a device** (DECISIONS #106). Untested on Windows:
+    custom cursors (`GetIconInfo`, `DrawIconEx` into a DIB, the alpha of a cursor without its own, the premultiplied
+    colours `DrawIconEx` is taken to leave for a cursor with its own alpha), 150 % and 200 %
+    display scaling (the poller's thread is made per-monitor DPI aware so positions are physical pixels), monochrome
+    (mask-only) cursors, whose "invert the screen" pixels are drawn opaque white, Windows pointer schemes (a system
+    cursor of a scheme is drawn with the phone's own glyph, as its handle is the system one), and a cursor handle that
+    Windows reuses for another cursor within the cache's 10 s, which shows one wrong shape until the next change.
+41. **Windows.Graphics.Capture on Windows 10 before 1903 keeps the pointer in the picture** (DECISIONS #106): the
+    package refuses `cursor_capture=False` there, the source starts again without the setting and the session reports
+    `state.cursor: drawn` (the phone then draws no pointer of its own). The refusal is recognised by its text (the
+    package raises a bare `Exception`); a refusal worded without the word "cursor" would end the start as
+    `SCREEN_CAPTURE_UNAVAILABLE` instead.
+42. **Unplugging the watched monitor still ends Screen view** (`capture_failed`; round 2a design D16). When the
+    monitor the phone watches disappears, the session ends at once, as in round 1, instead of moving the picture to
+    the main screen; the phone has to start Screen view again. Moving to the main screen by itself is a Phase 2b
+    candidate (rebuild the source onto the primary with a new geometry generation).
+43. **Keeping the pointer on the watched screen is not yet verified on a device** (DECISIONS #107): physical-pixel
+    rectangles on mixed-DPI and rotated layouts, and a correction racing the person's own mouse. `GetCursorPos`
+    cannot tell the two apart, so if the person moves the mouse across the watched monitor's edge in the very moment
+    a phone's move does the same, the pointer is placed back inside once. Confinement also assumes that `GetCursorPos`
+    right after a relative `SendInput` already shows the move (SendInput queues the event for the raw-input thread;
+    nothing waits for it to be applied). If it does not, the agent sees the pointer where it was, corrects nothing,
+    the queued move takes the pointer onto the other monitor and the batch's next event (a click) lands there; every
+    later move then starts outside and is left alone. The agent reads once more when the pointer reads as not moved
+    although the move would have left the monitor, which helps only if Windows applied it in that moment. Device
+    checklist: on Windows, with and without *Enhance pointer precision* and with a low-level mouse hook installed,
+    call `SendInput(MOUSEEVENTF_MOVE)` followed at once by `GetCursorPos` a few thousand times and count the reads
+    that still show the old position; then watch a Touchpad move, click, move batch at the watched monitor's edge.
+44. **A lost pointer report is repaired only by the next pointer change** (DECISIONS #106, #111; pc-agent
+    CONTRACT_ISSUES #29). Positions travel on the unordered no-retransmit `dome-screen-cursor-v1` channel and are sent
+    only when they change, as `rules.screen_cursor` (3) says. The one position re-sent after a geometry, a resume or
+    the channel opening can arrive before the geometry or shape it follows (those travel on the reliable channel and
+    may be retransmitted) and is then dropped by the phone as of another generation, or it can be lost outright, like
+    the last position before the pointer comes to rest or the `visible: false` when it leaves the monitor. The phone
+    then shows no pointer, or one at a stale place, until the pointer at the PC next moves or changes shape. Visual
+    only. Repairing it (that position on the reliable channel, one repeat once the pointer settled) needs the rule
+    changed first.

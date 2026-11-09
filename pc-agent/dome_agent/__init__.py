@@ -11,5 +11,7 @@ __version__ = "0.1.0"
 COMPONENT_NAME = "agent"
 # Every MINOR this agent speaks (DECISIONS.md #38). 1.3 (billing) changed nothing on the agent; 1.4 is Screen view
 # (docs/design/screen-view.md, PROTOCOL.md §20): the relay forwards screen.* commands and 1.4-stamped input batches
-# only to agents that announce it.
-SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3", "1.4")
+# only to agents that announce it. 1.5 is Screen view round 2a (PROTOCOL.md §21: the `cursor` param of
+# screen.session_start, cursor_pos / cursor_shape on the data channel): the relay forwards a 1.5-stamped command only
+# to an agent that announces 1.5.
+SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = ("1.0", "1.1", "1.2", "1.3", "1.4", "1.5")

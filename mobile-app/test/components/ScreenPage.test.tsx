@@ -9,8 +9,15 @@
  * (2026-10-27): the track that arrives inside setRemoteDescription reaches the `<video>`; the stage carries the
  * test-build readout (never in production); "Connected. Waiting for the picture…" once DTLS is up; the client's
  * play hint asks for one tap.
+ *
+ * Protocol 1.5 (design screen-view-2a §4.8): the screens button only with two or more screens, its label and number,
+ * disabled with a spinner while switching; a switch keeps the stage and the last picture under "Switching to screen
+ * 2…" (no idle card) and ends with "Screen 2 of 2"; the switching line gives way to "Tap to show the picture" and to
+ * the consent wait; the short notes, their timings and order; the pointer note once per session after
+ * `state{cursor: "drawn"}` in a session that asked for the pointer, never in a 1.4 session; the time left on line
+ * two; the three gesture lists, the explainer and the "newer DoMe is ready" notice.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,7 +29,9 @@ import { configureApi } from "../../src/lib/api.ts";
 import { writePin } from "../../src/lib/controllerKey.ts";
 import { EMPTY_INPUT_STATE, FLUSH_INTERVAL_MS } from "../../src/lib/input.ts";
 import { EMPTY_SCREEN_STATE, type ScreenSessionState } from "../../src/lib/screen.ts";
-import { COPY } from "../../src/lib/screenStatus.ts";
+import { DIRECT_GESTURES } from "../../src/lib/directGestures.ts";
+import { TOUCHPAD_SCREEN_GESTURES } from "../../src/lib/gestures.ts";
+import { COPY, SCREEN_BETA_LABEL, SWITCH_COPY } from "../../src/lib/screenStatus.ts";
 import { ScreenPage } from "../../src/pages/app/ScreenPage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useInputStore } from "../../src/store/input.ts";
@@ -76,22 +85,34 @@ function renderPage() {
   );
 }
 
-/** "Show screen" → ICE servers → the signed start → result + PC-signed answer → DTLS → first frame. */
-async function goLive(): Promise<FakePeerConnection> {
+const ICE_SERVERS = { type: "screen_ice_servers", pc_id: PC, ice_servers: [{ urls: ["stun:stun.example.net:3478"] }], expires_at: null, allowance: { unlimited: false, remaining_seconds: 600, resets_at: null }, turn: "available" };
+
+function screenResult(commandId: unknown, extra: Record<string, unknown> = {}) {
+  return { type: "result", command_id: commandId, origin: "agent", state: "succeeded", at: TS, duration_ms: 900, result: { screen_session_id: SCREEN_SESSION, surfaces: [{ index: 0, width: 2560, height: 1440, primary: true }], surface_index: 0, gen: 1, audio: false, lease_seconds: 8, allowance: { unlimited: false, remaining_seconds: 420, resets_at: "2026-10-21T17:00:00.000Z" }, consent: "not_required", encoder: "h264", ...extra } };
+}
+
+/** The PC-signed answer to `start`, stamped like the start (as the agent signs it). */
+async function answerTo(start: Record<string, unknown>, sessionId: string = SCREEN_SESSION) {
+  const envelope = await pcKey.signAnswer({ accountId: ACCOUNT, pcId: PC, controllerId: CONTROLLER, commandId: String(start.command_id), screenSessionId: sessionId, offerSdp: (start.params as { offer_sdp: string }).offer_sdp, protocolVersion: String(start.protocol_version), now: new Date(timers.now) });
+  return { type: "screen_answer", pc_id: PC, envelope };
+}
+
+/** "Show screen" → ICE servers → the signed start → result + PC-signed answer → DTLS → first frame. `extra` goes into the result. */
+async function goLive(extra: Record<string, unknown> = {}): Promise<FakePeerConnection> {
   const asked = sent("screen_ice_request").length;
   const startsBefore = commands("screen.session_start").length;
   await userEvent.click(screen.getByRole("button", { name: "Show screen" }));
   await waitFor(() => expect(sent("screen_ice_request").length).toBeGreaterThan(asked));
   await act(async () => {
-    socket.receive({ type: "screen_ice_servers", pc_id: PC, ice_servers: [{ urls: ["stun:stun.example.net:3478"] }], expires_at: null, allowance: { unlimited: false, remaining_seconds: 600, resets_at: null }, turn: "available" });
+    socket.receive(ICE_SERVERS);
     await flush();
   });
   await waitFor(() => expect(commands("screen.session_start").length).toBeGreaterThan(startsBefore));
   const start = commands("screen.session_start")[startsBefore]!;
-  const envelope = await pcKey.signAnswer({ accountId: ACCOUNT, pcId: PC, controllerId: CONTROLLER, commandId: String(start.command_id), screenSessionId: SCREEN_SESSION, offerSdp: (start.params as { offer_sdp: string }).offer_sdp, now: new Date(timers.now) });
+  const answer = await answerTo(start);
   await act(async () => {
-    socket.receive({ type: "result", command_id: start.command_id, origin: "agent", state: "succeeded", at: TS, duration_ms: 900, result: { screen_session_id: SCREEN_SESSION, surfaces: [{ index: 0, width: 2560, height: 1440, primary: true }], surface_index: 0, gen: 1, audio: false, lease_seconds: 8, allowance: { unlimited: false, remaining_seconds: 420, resets_at: "2026-10-21T17:00:00.000Z" }, consent: "not_required", encoder: "h264" } });
-    socket.receive({ type: "screen_answer", pc_id: PC, envelope });
+    socket.receive(screenResult(start.command_id, extra));
+    socket.receive(answer);
     await flush();
   });
   await waitFor(() => expect(rt.screen.snapshot.verified).toBe(true));
@@ -615,5 +636,330 @@ describe("ScreenPage: every §16 state, with its copy", () => {
     restricted.unmount();
     show(live, () => useInputStore.setState({ session: { ...EMPTY_INPUT_STATE, phase: "live", pcId: PC, pointer: true, problem: { code: "INPUT_PAUSED_ON_PC" } } }));
     expect(await screen.findByTestId("screen-input-notice")).toHaveTextContent(COPY.pausedOnPc);
+  });
+});
+
+// ---- protocol 1.5: Next screen, the pointer note, the header, the gesture sheet (design screen-view-2a §4.8) ----------
+
+const TWO_SURFACES = [
+  { index: 0, width: 2560, height: 1440, primary: true },
+  { index: 1, width: 1920, height: 1080, primary: false },
+];
+const NEW_SESSION = "U2NyZWVuU2Vzc2lvbjA0VF";
+const V15 = ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"];
+const EXPLAINER = "Tap what you see to click it. Pinch to zoom in; press and hold for a magnifier. Touchpad moves the pointer like a laptop touchpad and lets you drag. If your PC has two screens, the screens button at the top switches between them.";
+
+describe("ScreenPage: Next screen (1.5)", () => {
+  it("the screens button exists only with two or more screens; a switch keeps the picture under 'Switching to screen 2…' and ends with 'Screen 2 of 2'", async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    await goLive(); // one screen: no button
+    expect(screen.queryByTestId("screen-next")).toBeNull();
+    await act(async () => {
+      await client().stop("stopped");
+    });
+    const a = await goLive({ surfaces: TWO_SURFACES });
+    const next = screen.getByTestId("screen-next");
+    expect(next).toHaveAccessibleName("Next screen. Showing screen 1 of 2. Switch to screen 2.");
+    expect(next).toHaveTextContent("1/2");
+    expect(next).toBeEnabled();
+    expect(next.compareDocumentPosition(screen.getByRole("button", { name: "Touchpad" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy(); // before Touchpad
+    const shown = screen.getByTestId("screen-video");
+    const asked = sent("screen_ice_request").length;
+    const before = commands("screen.session_start").length;
+    const stops = commands("screen.session_stop").length; // the one-screen session's Stop above
+    await userEvent.click(next);
+    await waitFor(() => expect(sent("screen_ice_request").length).toBeGreaterThan(asked));
+    await act(async () => {
+      socket.receive(ICE_SERVERS);
+      await flush();
+    });
+    await waitFor(() => expect(commands("screen.session_start").length).toBeGreaterThan(before));
+    const start = commands("screen.session_start")[before]!;
+    expect(start.params).toMatchObject({ surface: 1, takeover: false });
+    // in flight: the button spins and is disabled, the stage and the last picture stay, no idle card
+    expect(screen.getByTestId("screen-next")).toBeDisabled();
+    expect(within(screen.getByTestId("screen-next")).getByRole("status", { name: "Switching" })).toBeInTheDocument();
+    expect(screen.getByTestId("screen-overlay")).toHaveTextContent(SWITCH_COPY.switching(2));
+    expect(SWITCH_COPY.switching(2)).toBe("Switching to screen 2…");
+    expect(screen.getByTestId("screen-video")).toBe(shown);
+    expect(screen.queryByTestId("screen-status")).toBeNull();
+    expect(a.channel.messages().some((m) => m.type === "bye")).toBe(false);
+    const answer = await answerTo(start, NEW_SESSION);
+    await act(async () => {
+      socket.receive(screenResult(start.command_id, { screen_session_id: NEW_SESSION, surfaces: TWO_SURFACES, surface_index: 1 }));
+      socket.receive(answer);
+      await flush();
+    });
+    await waitFor(() => expect(rt.screen.snapshot.incomingStream).not.toBeNull());
+    const b = peers[peers.length - 1]!;
+    await act(async () => {
+      b.connect();
+      await flush();
+    });
+    expect(screen.getByTestId("screen-overlay")).toHaveTextContent("Switching to screen 2…"); // still the old picture
+    expect(screen.getByTestId("screen-video")).toBe(shown);
+    // the new picture's first frame, on the hidden element
+    await act(async () => {
+      fireEvent(screen.getByTestId("screen-video-incoming"), new Event("timeupdate"));
+      await flush();
+    });
+    await waitFor(() => expect(rt.screen.snapshot.switching).toBeNull());
+    expect(screen.getByTestId("screen-video")).not.toBe(shown); // the hidden element is the shown one now
+    expect(screen.queryByTestId("screen-overlay")).toBeNull();
+    expect(screen.getByTestId("screen-note")).toHaveTextContent("Screen 2 of 2");
+    expect(screen.getByTestId("screen-next")).toHaveAccessibleName("Next screen. Showing screen 2 of 2. Switch to screen 1.");
+    expect(screen.getByTestId("screen-next")).toHaveTextContent("2/2");
+    expect(screen.getByTestId("screen-next")).toBeEnabled();
+    expect(a.closed).toBe(true);
+    expect(commands("screen.session_stop")).toHaveLength(stops); // a switch is never a stop
+  });
+
+  it("while switching: the line names the screen over the kept picture; it gives way to 'Tap to show the picture' and to the consent wait", async () => {
+    const stream = { id: "s" } as unknown as MediaStream;
+    const switching: Partial<ScreenSessionState> = { phase: "starting", stream, surfaces: TWO_SURFACES, surfaceIndex: 0, switching: { to: 1, from: 0, startedAt: Date.now() } };
+    const a = show(switching);
+    const overlay = await screen.findByTestId("screen-overlay");
+    expect(overlay).toHaveTextContent("Switching to screen 2…");
+    expect(within(overlay).getByRole("status", { name: "Switching to screen 2…" })).toBeInTheDocument(); // the spinner
+    expect(overlay).not.toHaveTextContent(COPY.connecting);
+    expect(screen.getByTestId("screen-surface")).toBeInTheDocument();
+    expect(screen.getByTestId("screen-next")).toBeDisabled();
+    a.unmount();
+    // the new picture's play() was refused (Low Power Mode): the tap comes first
+    const b = show({ ...switching, phase: "connecting", verified: true, playHint: true });
+    expect(await screen.findByRole("button", { name: COPY.tapToPlay })).toBeInTheDocument();
+    expect(screen.queryByTestId("screen-overlay")).toBeNull();
+    b.unmount();
+    // the PC asks someone (a 1.4 agent in ask mode): the consent wait shows as always
+    show({ ...switching, consentWaiting: true, consentDeadlineAt: Date.now() + 25_000 });
+    expect(await screen.findByTestId("screen-overlay")).toHaveTextContent(/^Waiting for someone at the PC to allow this… \(2[45]\)/);
+  });
+
+  it("the short notes: 'Screen 2 of 2' for 1.5 s, a gone screen and a failed switch for 3 s (none when the Free time ran out), in that order, under the input notice", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const stream = { id: "s" } as unknown as MediaStream;
+      const base: Partial<ScreenSessionState> = { phase: "live", verified: true, stream, sessionId: SCREEN_SESSION, surfaces: TWO_SURFACES, surfaceIndex: 1 };
+      const update = (patch: Partial<ScreenSessionState>) => act(() => useScreenStore.setState({ session: { ...EMPTY_SCREEN_STATE, pcId: PC, ...base, ...patch } }));
+      show({ ...base, switched: { index: 1, count: 2, at: 1 } });
+      const note = () => screen.queryByTestId("screen-note");
+      expect(note()).toHaveTextContent(SWITCH_COPY.switched(2, 2));
+      expect(note()).toHaveAttribute("role", "status");
+      act(() => vi.advanceTimersByTime(1499));
+      expect(note()).not.toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(note()).toBeNull();
+      update({ switched: null, switchedGone: { human: 2, at: 2 }, surfaceIndex: 0 });
+      expect(note()).toHaveTextContent("Screen 2 isn't connected any more. Showing screen 1.");
+      act(() => vi.advanceTimersByTime(2999));
+      expect(note()).not.toBeNull();
+      act(() => vi.advanceTimersByTime(1));
+      expect(note()).toBeNull();
+      // a failed switch wins over a fresh "Screen 1 of 2" (the old screen is still shown)
+      update({ switchedGone: null, surfaceIndex: 0, switched: { index: 0, count: 2, at: 3 }, switchFailed: { code: "RATE_LIMITED", human: 1, at: 3 } });
+      expect(note()).toHaveTextContent("Couldn't switch screens. Still showing screen 1.");
+      act(() => vi.advanceTimersByTime(3000));
+      expect(note()).toBeNull();
+      // the Free time ran out: the exhausted state takes over, no note in between
+      update({ switched: null, switchFailed: { code: "SCREEN_ALLOWANCE_EXHAUSTED", human: 1, at: 4 } });
+      expect(note()).toBeNull();
+      // the input notice ("View only") comes first
+      act(() => useDevicesStore.setState({ grantsByPc: { [PC]: [VIEW_ONLY] } }));
+      update({ switchFailed: null, switched: { index: 0, count: 2, at: 5 } });
+      expect(screen.getByTestId("screen-input-notice")).toHaveTextContent(COPY.viewOnly);
+      expect(note()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the time left sits on line two, after 'Encrypted…' or the beta label; amber only on its own span when low", async () => {
+    const stream = { id: "s" } as unknown as MediaStream;
+    const live = show({ phase: "live", verified: true, stream, allowance: { unlimited: false, remainingSeconds: 420, resetsAt: null, at: Date.now() } });
+    const left = await screen.findByTestId("screen-time-left");
+    expect(left).toHaveTextContent(/About [67] min left/);
+    expect(left.parentElement).toBe(screen.getByTestId("screen-encrypted").parentElement);
+    expect(left.parentElement).toHaveTextContent("·");
+    expect(left).not.toHaveClass("text-amber-200");
+    live.unmount();
+    show({ phase: "connecting", allowance: { unlimited: false, remainingSeconds: 40, resetsAt: null, at: Date.now() } });
+    const low = await screen.findByTestId("screen-time-left");
+    expect(low.parentElement).toHaveTextContent(SCREEN_BETA_LABEL);
+    expect(low).toHaveClass("text-amber-200");
+    expect(low.parentElement).not.toHaveClass("text-amber-200");
+  });
+});
+
+describe("ScreenPage: a switch and what stays on the stage (1.5)", () => {
+  it("a switch refused because the Free time ran out: no 'Couldn't switch' note, the time left reads 0 over the kept picture, then the exhausted state", async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    await goLive({ surfaces: TWO_SURFACES });
+    const asked = sent("screen_ice_request").length;
+    await userEvent.click(screen.getByTestId("screen-next"));
+    await waitFor(() => expect(sent("screen_ice_request").length).toBeGreaterThan(asked));
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+    await act(async () => {
+      socket.receive({ type: "error", error: { code: "SCREEN_ALLOWANCE_EXHAUSTED", message: "used", retryable: false, detail: { resets_at: resetsAt } }, ref_pc_id: PC });
+      await flush();
+    });
+    await waitFor(() => expect(rt.screen.snapshot.switching).toBeNull());
+    expect(rt.screen.snapshot.phase).toBe("live");
+    expect(screen.getByTestId("screen-time-left")).toHaveTextContent("About 0 s left");
+    expect(screen.getByTestId("screen-time-left")).toHaveClass("text-amber-200");
+    expect(screen.queryByTestId("screen-note")).toBeNull();
+    // the PC ends the old session when its last chunk runs out: the existing exhausted state, with when it refreshes
+    await act(async () => {
+      socket.receive({ type: "screen_session", pc_id: PC, screen_session_id: SCREEN_SESSION, controller_id: CONTROLLER, event: "ended", reason: "allowance_exhausted", live_seconds: 30, at: TS });
+      await flush();
+    });
+    const card = await screen.findByTestId("screen-status");
+    expect(card).toHaveAttribute("data-kind", "exhausted");
+    expect(within(card).getByText(/^You've used Free Screen view for now\. Refreshes .+\. The touchpad and remote still work\.$/)).toBeInTheDocument();
+  });
+
+  it("Touchpad mode: the Drag row stays through a switch, so the kept picture is not laid out again and End Drag stays reachable", async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    await goLive({ surfaces: TWO_SURFACES });
+    await answerInputStart();
+    await userEvent.click(screen.getByRole("button", { name: "Touchpad" }));
+    await userEvent.click(screen.getByRole("button", { name: "Drag" }));
+    expect(screen.getByRole("button", { name: "End Drag" })).toBeEnabled();
+    const asked = sent("screen_ice_request").length;
+    await userEvent.click(screen.getByTestId("screen-next"));
+    await waitFor(() => expect(sent("screen_ice_request").length).toBeGreaterThan(asked));
+    expect(rt.screen.snapshot.switching).not.toBeNull();
+    expect(rt.screen.snapshot.phase).not.toBe("live");
+    expect(screen.getByTestId("screen-overlay")).toHaveTextContent("Switching to screen 2…");
+    const endDrag = screen.getByRole("button", { name: "End Drag" });
+    expect(endDrag).toBeEnabled();
+    await userEvent.click(endDrag);
+    expect(screen.getByRole("button", { name: "Drag" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("zoomed with a view-only grant: the 1× button is drawn above the 'View only' line that covers the bottom of the picture", async () => {
+    const stream = { id: "s" } as unknown as MediaStream;
+    show({ phase: "live", verified: true, stream, sessionId: SCREEN_SESSION }, () => useDevicesStore.setState({ grantsByPc: { [PC]: [VIEW_ONLY] } }));
+    const surface = await screen.findByTestId("screen-surface");
+    boxed(surface);
+    // a pinch zooms without any grant (nothing is sent)
+    pointer(surface, "pointerdown", 1, 150, 150, 600);
+    pointer(surface, "pointerdown", 2, 250, 150);
+    pointer(surface, "pointermove", 1, 110, 150);
+    pointer(surface, "pointermove", 2, 290, 150);
+    pointer(surface, "pointerup", 1, 110, 150);
+    pointer(surface, "pointerup", 2, 290, 150);
+    const reset = await screen.findByRole("button", { name: "Back to the whole screen" });
+    const notice = screen.getByTestId("screen-input-notice");
+    expect(notice).toHaveTextContent(COPY.viewOnly);
+    // the same stacking context, both at the bottom, the notice later in the tree: only a higher z-index keeps the
+    // button visible (the notice lets touches through)
+    const z = (el: HTMLElement) => Number(/(?:^|\s)z-\[?(\d+)\]?(?=\s|$)/.exec(el.className)?.[1] ?? NaN);
+    expect(reset.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(z(reset)).toBeGreaterThan(z(notice));
+    expect(notice).toHaveClass("pointer-events-none");
+  });
+});
+
+describe("ScreenPage: the pointer drawn by the phone (1.5)", () => {
+  it("a PC that announced 1.5 is asked for the pointer; `state{cursor: \"drawn\"}` says once that it stays in the picture", async () => {
+    useDevicesStore.setState({ pcs: [{ ...OFFICE_PC, protocol_versions: V15 as never }] });
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    const peer = await goLive({ cursor: "overlay" });
+    const start = commands("screen.session_start")[0]!;
+    expect(start.params).toMatchObject({ cursor: "overlay" });
+    expect(start.protocol_version).toBe("1.5");
+    expect(screen.queryByTestId("screen-note")).toBeNull();
+    await act(async () => {
+      peer.channel.receive({ type: "state", state: "sending", cursor: "drawn" });
+      await flush();
+    });
+    expect(rt.screen.snapshot.cursorMode).toBe("drawn");
+    expect(screen.getByTestId("screen-note")).toHaveTextContent(COPY.pointerInPicture);
+    expect(COPY.pointerInPicture).toBe("On this PC the pointer stays in the picture, so it can lag a little behind your finger.");
+  });
+
+  it("a 1.4 PC was never asked: no note, whatever it says", async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    const peer = await goLive();
+    expect(commands("screen.session_start")[0]!.params).not.toHaveProperty("cursor");
+    await act(async () => {
+      peer.channel.receive({ type: "state", state: "sending" });
+      await flush();
+    });
+    expect(screen.queryByTestId("screen-note")).toBeNull();
+    expect(screen.queryByTestId("screen-pointer")).toBeNull();
+  });
+
+  it("the note shows once per session, for 3 s", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const stream = { id: "s" } as unknown as MediaStream;
+      const base: Partial<ScreenSessionState> = { phase: "live", verified: true, stream, sessionId: SCREEN_SESSION, pointerOverlayAsked: true, cursorMode: "drawn" };
+      const update = (patch: Partial<ScreenSessionState>) => act(() => useScreenStore.setState({ session: { ...EMPTY_SCREEN_STATE, pcId: PC, ...base, ...patch } }));
+      const note = () => screen.queryByTestId("screen-note");
+      show(base);
+      expect(note()).toHaveTextContent(COPY.pointerInPicture);
+      act(() => vi.advanceTimersByTime(3000));
+      expect(note()).toBeNull();
+      update({ dataSaver: true }); // a later state message of the same session
+      expect(note()).toBeNull();
+      update({ sessionId: NEW_SESSION }); // a new session (a switch, a fresh start)
+      expect(note()).toHaveTextContent(COPY.pointerInPicture);
+      act(() => vi.advanceTimersByTime(3000));
+      update({ sessionId: SCREEN_SESSION, pointerOverlayAsked: false, cursorMode: "drawn" });
+      expect(note()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("ScreenPage: the gesture sheet, the explainer, a newer app (1.5)", () => {
+  it("the explainer before the first session; three gesture lists with their exact rows", async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("screen-status")).toHaveAttribute("data-kind", "ready"));
+    expect(screen.getByText(EXPLAINER)).toBeInTheDocument();
+    expect(screen.queryByTestId("screen-update-ready")).toBeNull();
+    await userEvent.click(screen.getByText("Gestures on the picture"));
+    const rows = (title: string) =>
+      within(screen.getByRole("heading", { name: title }).closest("section")!)
+        .getAllByRole("listitem")
+        .map((li) => [li.children[0]!.textContent, li.children[1]!.textContent]);
+    expect(rows("With Touchpad off")).toEqual([
+      ["Tap", "Clicks right there"],
+      ["Tap twice, quickly", "Double-click"],
+      ["Tap with two fingers", "Right-click"],
+      ["Press and hold, then slide", "A magnifier to aim with; let go to click"],
+      ["Slide two fingers", "Scrolls"],
+      ["Pinch", "Zooms the picture on your phone only; nothing is sent to the PC"],
+      ["Slide one finger while zoomed", "Moves the zoomed picture"],
+    ]);
+    expect(rows("With Touchpad off")).toEqual(DIRECT_GESTURES.map((g) => [g.phone, g.pc]));
+    expect(rows("With Touchpad on")).toEqual([
+      ["Slide one finger", "Moves the pointer, like a laptop touchpad"],
+      ["Tap", "Clicks where the pointer is"],
+      ["Tap with two fingers", "Right-click"],
+      ["Slide two fingers", "Scrolls"],
+      ["Pinch", "Zooms the picture; the view follows the pointer"],
+      ["Drag, then slide", "Holds the mouse button while you move; End Drag lets go"],
+    ]);
+    expect(rows("With Touchpad on")).toEqual(TOUCHPAD_SCREEN_GESTURES.map((g) => [g.phone, g.pc]));
+    expect(rows("Either way")).toEqual([
+      ["Screens button (top), only with two or more screens", "Shows the PC's other screen. On an up-to-date PC the pointer comes along. DoMe calls the main screen 1; Windows may number them differently."],
+      ["1× (bottom left, while zoomed)", "Back to the whole screen"],
+      ["The pointer you see", "Drawn by your phone so it moves at once; the picture catches up. On some PCs it stays in the picture instead."],
+    ]);
+  });
+
+  it("a newer DoMe waiting (the device list came back in a newer shape) is said on the page", async () => {
+    useDevicesStore.setState({ updateReady: true });
+    renderPage();
+    expect(await screen.findByTestId("screen-update-ready")).toHaveTextContent("A newer DoMe is ready. Close and reopen the app to update.");
+    expect(COPY.updateReady).toBe("A newer DoMe is ready. Close and reopen the app to update.");
   });
 });

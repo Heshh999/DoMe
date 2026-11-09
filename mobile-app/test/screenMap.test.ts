@@ -1,10 +1,11 @@
 /**
  * screenMap.ts (design §8.3): letterbox fit, zoom and pan inverse, rounding to 0..65535, taps in the bars and in the PC's
- * reserved rectangles dropped (never clamped), and the geometry generation held back after a video resize.
+ * reserved rectangles dropped (never clamped), and the geometry generation held back after a video resize. 1.5: the
+ * inverse `fromSurface` (where a normalised point is drawn), the zoomed view following the pointer, the snap to 1×.
  */
 import { describe, expect, it } from "vitest";
 
-import { clampView, fitContent, GEOMETRY_STALE_MS, GeometryTracker, IDENTITY_VIEW, inReserved, mapPoint, normalise, panBy, toSurface, viewTransform, zoomAt, ZOOM_MAX } from "../src/lib/screenMap.ts";
+import { clampView, fitContent, followPointer, fromSurface, GEOMETRY_STALE_MS, GeometryTracker, IDENTITY_VIEW, inReserved, mapPoint, normalise, NORM_MAX, panBy, snapIdentity, toSurface, viewTransform, zoomAt, ZOOM_MAX, ZOOM_SNAP_IDENTITY } from "../src/lib/screenMap.ts";
 
 const BOX = { width: 400, height: 300 };
 const GEOMETRY = { type: "geometry" as const, gen: 2, surface_index: 0, width: 2560, height: 1440, rotation: 0 as const, reserved: [] };
@@ -105,5 +106,71 @@ describe("GeometryTracker", () => {
     expect(t.current(5001)?.gen).toBe(3);
     t.reset();
     expect(t.known).toBeNull();
+  });
+});
+
+describe("1.5: fromSurface, followPointer, snapIdentity", () => {
+  const fit = fitContent(BOX, 1920, 1080)!;
+
+  it("fromSurface is the inverse of toSurface through fit and view, at 1× and zoomed", () => {
+    for (const view of [IDENTITY_VIEW, { s: 2.5, tx: -300, ty: -120 }]) {
+      for (const [x, y] of [
+        [0, 0],
+        [32768, 16384],
+        [65535, 65535],
+        [1234, 54321],
+      ] as const) {
+        const { px, py } = fromSurface(x, y, fit, view);
+        const back = toSurface(px - 1e-9, py - 1e-9, fit, view) ?? toSurface(px, py, fit, view);
+        if (x < NORM_MAX && y < NORM_MAX) {
+          expect(back!.u * NORM_MAX).toBeCloseTo(x, 3);
+          expect(back!.v * NORM_MAX).toBeCloseTo(y, 3);
+        }
+      }
+      // and the other way round: a box point maps there and back
+      const uv = toSurface(123, 160, fit, view)!;
+      const again = fromSurface(uv.u * NORM_MAX, uv.v * NORM_MAX, fit, view);
+      expect(again.px).toBeCloseTo(123, 6);
+      expect(again.py).toBeCloseTo(160, 6);
+    }
+    expect(fromSurface(0, 0, fit, IDENTITY_VIEW)).toEqual({ px: 0, py: 37.5 }); // the letterbox offset
+  });
+
+  it("followPointer: nothing moves at 1× or while the point is inside the inner window", () => {
+    expect(followPointer(IDENTITY_VIEW, { px: 0, py: 0 }, BOX)).toBe(IDENTITY_VIEW);
+    const view = { s: 2, tx: -200, ty: -150 };
+    // window margin: max(48, 0.2 · 300) = 60 → [60, 340] × [60, 240]
+    expect(followPointer(view, { px: 200, py: 150 }, BOX)).toBe(view);
+    expect(followPointer(view, { px: 60, py: 240 }, BOX)).toBe(view); // on the edges: inside
+  });
+
+  it("followPointer: a point outside pans the view by the overshoot so it sits on the window's edge", () => {
+    const view = { s: 2, tx: -200, ty: -150 };
+    const right = followPointer(view, { px: 370, py: 150 }, BOX);
+    expect(right).toEqual({ s: 2, tx: -230, ty: -150 }); // 30 px beyond 340
+    const up = followPointer(view, { px: 200, py: 20 }, BOX);
+    expect(up).toEqual({ s: 2, tx: -200, ty: -110 }); // 40 px above 60
+    const corner = followPointer(view, { px: 10, py: 290 }, BOX);
+    expect(corner).toEqual({ s: 2, tx: -150, ty: -200 });
+  });
+
+  it("followPointer stays within the content's edges (clampView) and keeps the 48 px floor on a small box", () => {
+    const view = { s: 2, tx: -390, ty: -290 }; // near the bottom-right edge already
+    expect(followPointer(view, { px: 399, py: 299 }, BOX)).toEqual({ s: 2, tx: -400, ty: -300 });
+    const small = { width: 200, height: 150 }; // 0.2 · 150 = 30 → the 48 px floor
+    expect(followPointer({ s: 2, tx: -100, ty: -75 }, { px: 20, py: 75 }, small)).toEqual({ s: 2, tx: -72, ty: -75 });
+    // a box so small that 48 px exceeds half of it: the margin is half the box, never an inverted window
+    const tiny = { width: 80, height: 60 };
+    expect(followPointer({ s: 2, tx: -40, ty: -30 }, { px: 70, py: 30 }, tiny)).toEqual({ s: 2, tx: -60, ty: -30 }); // margin 30: window [30, 50]
+  });
+
+  it("snapIdentity: a zoom ending under 1.1× is the whole picture again", () => {
+    expect(ZOOM_SNAP_IDENTITY).toBe(1.1);
+    expect(snapIdentity({ s: 1.09, tx: -5, ty: -3 })).toBe(IDENTITY_VIEW);
+    const kept = { s: 1.1, tx: -5, ty: -3 };
+    expect(snapIdentity(kept)).toBe(kept);
+    expect(snapIdentity(zoomAt(IDENTITY_VIEW, 1.05, 200, 150, BOX))).toBe(IDENTITY_VIEW);
+    expect(snapIdentity(zoomAt(IDENTITY_VIEW, 2, 200, 150, BOX)).s).toBe(2);
+    expect(clampView(snapIdentity({ s: 1, tx: 0, ty: 0 }), BOX)).toBe(IDENTITY_VIEW);
   });
 });

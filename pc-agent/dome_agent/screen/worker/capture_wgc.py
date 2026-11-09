@@ -11,13 +11,16 @@ Windows.Graphics.Capture composes the desktop whatever adapter drives the monito
 
   - ``NativeWindowsCapture(on_frame_arrived, on_closed, cursor_capture, draw_border, secondary_window,
     minimum_update_interval, dirty_region, monitor_index, window_name, window_hwnd)``; ``None`` keeps Windows' default
-    for a setting. DoMe sets only ``monitor_index``: every other setting stays at Windows' default (the cursor IS drawn
-    by default), because the package refuses any explicit cursor, border, secondary-window or update-interval setting
-    on a Windows 10 whose ``GraphicsCaptureSession`` lacks the property (``graphics_capture_api.rs``:
-    ``CursorConfigUnsupported`` etc.; ``IsCursorCaptureEnabled`` exists from 1903, the API itself from 1803).
+    for a setting. DoMe sets ``monitor_index`` and, in an overlay session only, ``cursor_capture=False``; every other
+    setting stays at Windows' default (the cursor IS drawn by default), because the package refuses any explicit
+    cursor, border, secondary-window or update-interval setting on a Windows 10 whose ``GraphicsCaptureSession`` lacks
+    the property (``graphics_capture_api.rs``: ``CursorConfigUnsupported`` etc.; ``IsCursorCaptureEnabled`` exists
+    from 1903, the API itself from 1803).
   - ``start_free_threaded()`` sets the session up and starts capturing on the package's own thread, raising when it
-    cannot (no Windows.Graphics.Capture, no such monitor). It returns a control whose ``stop()`` posts ``WM_QUIT`` to
-    that thread and joins it (the GIL released meanwhile) and whose ``is_finished()`` tells whether it ended.
+    cannot (no Windows.Graphics.Capture, no such monitor, a setting this Windows refuses: that refusal surfaces HERE,
+    not in the constructor, and always as a bare ``Exception``). It returns a control whose ``stop()`` posts
+    ``WM_QUIT`` to that thread and joins it (the GIL released meanwhile) and whose ``is_finished()`` tells whether it
+    ended.
   - ``on_frame_arrived(frame, buffer_len, width, height, stop_list, timespan)`` runs on that thread, holding the GIL;
     an exception in it ends the capture. ``frame`` is a ``NativeMappedFrame``: a D3D11 staging copy of the frame,
     mapped until the object is released, always ``bgra8`` (the package asks for ``ColorFormat::Bgra8``), its rows
@@ -32,9 +35,14 @@ Windows.Graphics.Capture composes the desktop whatever adapter drives the monito
   ``capture_failed``) rather than a picture whose taps land elsewhere.
 * **Frames.** The callback only hands the mapped frame over, through a one-slot queue where the newest frame wins (a
   slow encoder never builds a backlog; a superseded frame is released unread). :meth:`WgcSource.read` copies it into
-  a BGRA ``av.VideoFrame`` honouring both row pitches (:func:`bgra_frame`) and converts it to yuv420p at the track's
-  size with libswscale (``reformat``), never per pixel in Python: the size ``ddagrab`` delivers, in a format both
-  encoders take.
+  a BGRA ``av.VideoFrame`` honouring both row pitches (:func:`bgra_frame`) and converts it with libswscale
+  (``reformat``), never per pixel in Python, to the track's size and to ``pix_fmt``: the encoder's format (NV12 for
+  H.264, yuv420p for VP8), so the track converts nothing more.
+* **The pointer left out** (2a §3.6, rules.screen_cursor (1)): ``WgcSource(cursor_capture=False)`` constructs AND
+  starts with ``cursor_capture=False``; when that raises and the text names the cursor (the class is always
+  ``Exception``, so the words are all there is), the source logs once that the pointer stays drawn, starts again with
+  the 1.4 call (``monitor_index`` only) and reports ``cursor_drawn`` True, so the phone never draws a second pointer.
+  Any other failure is the usual ``SCREEN_CAPTURE_UNAVAILABLE``.
 * Windows draws its yellow capture border around the monitor meanwhile: Windows' own indicator, not DoMe's.
 
 **Not yet verified on a device.**
@@ -135,8 +143,12 @@ def bgra_frame(data: Any, width: int, height: int, stride: int) -> Any:
 
 
 class WgcSource:
+    kind = "wgc"
     # declared here because the constructor's platform guard hides the assignments from the Linux type-check
     monitor_index: int
+    cursor_capture: bool | None
+    cursor_drawn: bool
+    pix_fmt: str
     width: int
     height: int
     fps: int
@@ -159,6 +171,8 @@ class WgcSource:
         primary: bool = True,
         expected_size: tuple[int, int] | None = None,
         origin: tuple[int, int] = (0, 0),
+        cursor_capture: bool | None = None,
+        pix_fmt: str = "yuv420p",
     ) -> None:
         if sys.platform != "win32":
             raise ProtocolError(
@@ -173,6 +187,11 @@ class WgcSource:
         self.origin = (int(origin[0]), int(origin[1]))  # the monitor's top-left corner, physical pixels
         self.expected_size = expected_size  # the streamed monitor's physical size, as the agent maps taps
         self.capture_index = None  # windows-capture's one-based monitor_index, once open
+        self.cursor_capture = (
+            cursor_capture  # False: leave the pointer out (an overlay session); None: Windows' default
+        )
+        self.cursor_drawn = cursor_capture is not False
+        self.pix_fmt = pix_fmt
         self._frames = queue.Queue(maxsize=1)
         self._control = None
         self._stopped = threading.Event()
@@ -212,16 +231,22 @@ class WgcSource:
                 "Windows.Graphics.Capture cannot find the monitor to stream among Windows' monitors",
                 detail={"detail": "unsupported_display"},
             )
-        try:
-            capture = native.NativeWindowsCapture(self._on_frame_arrived, self._on_closed, monitor_index=position)
-            self._control = capture.start_free_threaded()
-        except Exception as exc:  # noqa: BLE001 - the package raises a bare Exception with Windows' reason
-            reason = sanitise_reason(f"{exc.__class__.__name__}: {exc}")
-            raise ProtocolError(
-                "SCREEN_CAPTURE_UNAVAILABLE",
-                f"Windows.Graphics.Capture could not start: {reason}",
-                detail={"detail": classify_wgc_error(reason)},
-            ) from None
+        if self.cursor_capture is False:
+            try:
+                self._start(native, position, cursor_capture=False)
+            except Exception as exc:  # noqa: BLE001 - the package raises a bare Exception with Windows' reason
+                if "cursor" not in str(exc).lower():
+                    raise _start_error(exc) from None
+                log.warning(
+                    "Windows.Graphics.Capture cannot leave the pointer out; it stays drawn",
+                    reason=sanitise_reason(str(exc)),
+                )
+                self.cursor_drawn = True
+                self._start_or_raise(native, position)
+            else:
+                self.cursor_drawn = False
+        else:
+            self._start_or_raise(native, position)
         self.capture_index = position
         log.info(
             "screen capture source running",
@@ -230,6 +255,20 @@ class WgcSource:
             capture_index=position,
             size=f"{self.width}x{self.height}",
         )
+
+    def _start(self, native: Any, position: int, **settings: Any) -> None:
+        """Construct and start: windows-capture reports a refused setting from ``start_free_threaded()``."""
+        capture = native.NativeWindowsCapture(
+            self._on_frame_arrived, self._on_closed, monitor_index=position, **settings
+        )
+        self._control = capture.start_free_threaded()
+
+    def _start_or_raise(self, native: Any, position: int) -> None:
+        """The 1.4 call (``monitor_index`` only): every other setting at Windows' default."""
+        try:
+            self._start(native, position)
+        except Exception as exc:  # noqa: BLE001 - the package raises a bare Exception with Windows' reason
+            raise _start_error(exc) from None
 
     def _on_frame_arrived(
         self, frame: Any, _buffer_len: int, width: int, height: int, stop_list: Any, _timespan: int
@@ -296,7 +335,7 @@ class WgcSource:
                 ) from None
         finally:
             del frame  # the last reference: the staging copy is unmapped now
-        out = image.reformat(width=self.width, height=self.height, format="yuv420p")
+        out = image.reformat(width=self.width, height=self.height, format=self.pix_fmt)
         out.time_base = VIDEO_TIME_BASE
         return out
 
@@ -313,6 +352,16 @@ class WgcSource:
                 self._frames.get_nowait()
             except queue.Empty:
                 break
+
+
+def _start_error(exc: BaseException) -> ProtocolError:
+    """Windows' reason for a start that failed, as the honest capture error (its detail from the words)."""
+    reason = sanitise_reason(f"{exc.__class__.__name__}: {exc}")
+    return ProtocolError(
+        "SCREEN_CAPTURE_UNAVAILABLE",
+        f"Windows.Graphics.Capture could not start: {reason}",
+        detail={"detail": classify_wgc_error(reason)},
+    )
 
 
 __all__ = ["NATIVE_MODULE", "WgcSource", "bgra_frame", "capture_position", "classify_wgc_error", "load_native"]

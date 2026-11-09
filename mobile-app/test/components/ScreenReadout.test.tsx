@@ -4,7 +4,8 @@
  * without a stream (the case it exists for); the gate checklist leads; it refreshes once a second from the session
  * client; "Hide readout" is remembered on the phone (and survives storage that throws); taps pass through it except on
  * its buttons and it sits under the page's overlays; Copy writes the text to the clipboard, and a refused copy opens a
- * small box with the text to select, the readout itself still letting taps through.
+ * small box with the text to select, the readout itself still letting taps through. Protocol 1.5 adds three lines at
+ * the end: the pointer, the screens and the zoom (design screen-view-2a §4.11).
  */
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -12,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ScreenReadout, type ScreenReadoutSource } from "../../src/components/ScreenReadout.tsx";
 import { EMPTY_SCREEN_STATE, type ScreenSessionState } from "../../src/lib/screen.ts";
-import { emptyTimeline, type ScreenClientFacts } from "../../src/lib/screenStats.ts";
+import { EMPTY_POINTER_FACTS, EMPTY_SURFACE_FACTS, EMPTY_ZOOM_FACTS, emptyTimeline, type ScreenClientFacts } from "../../src/lib/screenStats.ts";
 
 const KEY = "dome.screen.readout.hidden";
 
@@ -169,5 +170,37 @@ describe("ScreenReadout", () => {
     render(<ScreenReadout source={source()} state={CONNECTING} />);
     await userEvent.click(screen.getByRole("button", { name: "Copy" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Copy failed");
+  });
+
+  it("ends with the three 1.5 lines: the pointer, the screens, the zoom (numbers and short words only)", async () => {
+    const src = source(
+      facts({
+        pointer: { ...EMPTY_POINTER_FACTS, mode: "overlay", shapes: 3, custom: 1, rejected: 0, positions: 412, unreliable: 400, droppedGen: 2, lastKind: "ibeam", predErrMaxPx: 9 },
+        surfaces: { count: 2, showing: 2, switches: 1, switchFailures: 0, gone: 0 },
+        zoom: { maxScale: 2.64, followPans: 83 },
+      }),
+    );
+    render(<ScreenReadout source={src} state={CONNECTING} />);
+    await act(async () => undefined);
+    const lines = screen.getByTestId("screen-readout-text").textContent!.split("\n");
+    expect(lines.slice(-3)).toEqual(["pointer: overlay · shapes 3 custom 1 rejected 0 · pos 412 old-gen 2 · pred err max 9 px", "screens: 2 · showing 2 · switches 1 failed 0 · gone 0", "zoom: max 2.6x · follow pans 83"]);
+  });
+
+  it("the pointer line says when the pointer is in the picture or the PC speaks 1.4; unknown numbers read '-'", async () => {
+    const src = source(facts({ pointer: { ...EMPTY_POINTER_FACTS, mode: "drawn" }, surfaces: EMPTY_SURFACE_FACTS, zoom: EMPTY_ZOOM_FACTS }));
+    const view = render(<ScreenReadout source={src} state={CONNECTING} />);
+    await act(async () => undefined);
+    let text = screen.getByTestId("screen-readout-text");
+    expect(text).toHaveTextContent("pointer: in picture · shapes 0 custom 0 rejected 0 · pos 0 old-gen 0 · pred err max -");
+    expect(text).toHaveTextContent("screens: 0 · showing - · switches 0 failed 0 · gone 0");
+    expect(text).toHaveTextContent("zoom: max 1.0x · follow pans 0");
+    view.unmount();
+    // facts without the 1.5 groups (a client that never started one): the same lines with their defaults
+    render(<ScreenReadout source={source()} state={CONNECTING} />);
+    await act(async () => undefined);
+    text = screen.getByTestId("screen-readout-text");
+    const lines = text.textContent!.split("\n");
+    expect(lines.slice(-3)).toEqual(["pointer: none (PC speaks 1.4) · shapes 0 custom 0 rejected 0 · pos 0 old-gen 0 · pred err max -", "screens: 0 · showing - · switches 0 failed 0 · gone 0", "zoom: max 1.0x · follow pans 0"]);
+    expect(text.textContent).not.toMatch(/png/i);
   });
 });

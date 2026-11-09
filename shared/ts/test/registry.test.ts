@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { CAPABILITIES, ERRORS, LIMITS, PROTOCOL_VERSION, REGISTRY_VERSION, ProtocolError, minVersion, negotiateVersion, protocolCompatible, registry, schemas, capabilitySatisfied, versionBelow } from "../src/index.ts";
+import { paramsProtocolVersion, parseParamSince } from "../src/versions.ts";
+import actionsJson from "../../protocol/actions.json" with { type: "json" };
 
 const NEW_IN_1_2 = ["app.maximize", "app.restore", "app.set_fullscreen", "youtube.search", "youtube.open_result"];
 const TAB = { browser_instance_id: "abcdefgh", tab_id: 5, tab_token: "AAAAAAAAAAAAAAAAAAAAAA" };
@@ -8,8 +10,8 @@ const RESULTS_TAB = { ...TAB, tab_token: "BBBBBBBBBBBBBBBBBBBBBB", script_attach
 
 describe("registry", () => {
   it("loads a consistent action registry", () => {
-    expect(PROTOCOL_VERSION).toBe("1.4");
-    expect(REGISTRY_VERSION).toBe("1.4");
+    expect(PROTOCOL_VERSION).toBe("1.5");
+    expect(REGISTRY_VERSION).toBe("1.5");
     const start = registry.get("input.session_start");
     expect(capabilitySatisfied(start, ["keyboard"])).toBe(true);
     expect(capabilitySatisfied(start, ["media"])).toBe(false);
@@ -79,7 +81,9 @@ describe("registry", () => {
     expect(protocolCompatible("1.3", ["1.4"])).toBe(true); // a 1.3 relay build keeps talking to a 1.4 one
     expect(protocolCompatible("1.3", ["1.2"])).toBe(false);
     expect(protocolCompatible("1.4", ["1.3"])).toBe(false);
-    expect(protocolCompatible("1.5", ["1.4"])).toBe(false);
+    expect(protocolCompatible("1.4", ["1.5"])).toBe(true); // a 1.4 agent keeps talking to a 1.5 relay
+    expect(protocolCompatible("1.5", ["1.4"])).toBe(false); // a 1.5-stamped start never suits a 1.4 agent (the relay refuses it)
+    expect(protocolCompatible("1.6", ["1.5"])).toBe(false);
     expect(protocolCompatible("2.0", ["1.2"])).toBe(false);
     expect(protocolCompatible("x", ["1.0"])).toBe(false);
     expect(protocolCompatible("1.0\n", ["1.0"])).toBe(false);
@@ -173,5 +177,55 @@ describe("protocol 1.2", () => {
     expect(() => schemas.validateBridgeFrame("agent_to_extension", { type: "bridge_request", request_id: rid, op: "read_results", args: {} })).toThrow(ProtocolError);
     schemas.validateBridgeFrame("extension_to_agent", { type: "bridge_response", request_id: rid, ok: true, result: { tab: RESULTS_TAB, results: [{ index: 1, video_id: "v1", title: "t" }] } });
     schemas.validateBridgeFrame("extension_to_agent", { type: "bridge_response", request_id: rid, ok: true, result: { tab: RESULTS_TAB } });
+  });
+});
+
+describe("protocol 1.5: param_since", () => {
+  const raw = actionsJson.actions["screen.session_start"] as unknown as { params: { properties: Record<string, Record<string, unknown>> }; param_since?: unknown };
+  const withStart = (mutate: (spec: typeof raw) => void) => {
+    const copy = JSON.parse(JSON.stringify(raw)) as typeof raw;
+    mutate(copy);
+    return copy;
+  };
+
+  it("loads screen.session_start with param_since {cursor: 1.5} and no other action with one", () => {
+    expect(registry.get("screen.session_start").paramSince).toEqual({ cursor: "1.5" });
+    for (const [name, spec] of registry.actions()) if (name !== "screen.session_start") expect([name, spec.paramSince]).toEqual([name, {}]);
+    expect(parseParamSince("screen.session_start", raw, "1.4", PROTOCOL_VERSION)).toEqual({ cursor: "1.5" });
+  });
+
+  it("refuses an invalid param_since while loading, as the Python registry does", () => {
+    const bad: Record<string, (spec: typeof raw) => void> = {
+      "unknown param": (s) => (s.param_since = { cursr: "1.5" }),
+      "below since": (s) => (s.param_since = { cursor: "1.3" }),
+      "above protocol": (s) => (s.param_since = { cursor: "1.6" }),
+      "another major": (s) => (s.param_since = { cursor: "2.0" }),
+      "not a version": (s) => (s.param_since = { cursor: "1.x" }),
+      "trailing newline": (s) => (s.param_since = { cursor: "1.5\n" }),
+      empty: (s) => (s.param_since = { cursor: "" }),
+      "a number": (s) => (s.param_since = { cursor: 15 }),
+      "not an object": (s) => (s.param_since = ["cursor"]),
+      null: (s) => (s.param_since = null),
+      "inherited name": (s) => (s.param_since = { toString: "1.5" }),
+      "a default on the param": (s) => (s.params.properties.cursor!.default = "drawn"),
+    };
+    for (const [why, mutate] of Object.entries(bad)) {
+      expect(() => parseParamSince("screen.session_start", withStart(mutate), "1.4", PROTOCOL_VERSION), why).toThrow(/screen\.session_start/);
+    }
+    expect(parseParamSince("screen.session_start", withStart((s) => (s.param_since = { cursor: "1.4" })), "1.4", PROTOCOL_VERSION)).toEqual({ cursor: "1.4" });
+    expect(parseParamSince("screen.session_start", withStart((s) => delete s.param_since), "1.4", PROTOCOL_VERSION)).toEqual({});
+  });
+
+  it("raises the stamp only for params present in the object given (never for defaults)", () => {
+    expect(minVersion("screen.session_start")).toBe("1.4");
+    expect(minVersion("screen.session_start", { offer_sdp: "v=0\r\n", surface: 1 })).toBe("1.4");
+    expect(minVersion("screen.session_start", { offer_sdp: "v=0\r\n", cursor: "overlay" })).toBe("1.5");
+    expect(registry.minVersion("screen.session_start", { cursor: "drawn" })).toBe("1.5");
+    const filled = registry.validateParams("screen.session_start", { offer_sdp: "v=0\r\n" });
+    expect("cursor" in filled).toBe(false);
+    expect(registry.minVersion("screen.session_start", filled)).toBe("1.4");
+    expect(paramsProtocolVersion("1.4", { cursor: "1.5" }, Object.create({ cursor: "overlay" }) as Record<string, unknown>)).toBe("1.4"); // own keys only
+    expect(paramsProtocolVersion("1.4", { cursor: "1.5" }, null)).toBe("1.4");
+    expect(() => registry.minVersion("app.nope", {})).toThrow(/UNKNOWN_ACTION/);
   });
 });

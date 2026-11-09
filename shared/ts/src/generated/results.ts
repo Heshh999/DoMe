@@ -922,6 +922,10 @@ export interface ScreenSessionResult {
    * The video encoder in use; vp8 is the basic picture mode.
    */
   encoder?: "h264" | "vp8";
+  /**
+   * Since 1.5; present ONLY when the start carried the `cursor` param (a 1.4 phone validates this result with additionalProperties:false). The pointer mode the PC will try: `overlay` when the start asked for it and this PC can capture without the pointer, else `drawn`. The data-channel `state.cursor` is authoritative once capture is open (rules.screen_cursor).
+   */
+  cursor?: "drawn" | "overlay";
 }
 /**
  * The Free allowance as the relay knows it (rules.screen_metering): unlimited: true on plans with screen_view_seconds_per_window null (then both other fields are null). Display only on the phone; the ledger is authoritative.

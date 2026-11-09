@@ -107,7 +107,7 @@ def test_batches_are_stamped_with_the_version_that_defined_them() -> None:
     assert load_registry().get("input.session_start").since == INPUT_BATCH_PROTOCOL_VERSION
     env = sign_payload(key, dumps_compact(payload))  # type: ignore[arg-type]
     verify_and_parse_input_batch(env.to_dict(), lambda k: record if k == kid else None)
-    for stamp in ("1.0", "1.5", "2.1"):
+    for stamp in ("1.0", "1.6", "2.1"):
         env = sign_payload(key, dumps_compact({**payload, "protocol_version": stamp}))  # type: ignore[arg-type]
         with pytest.raises(ProtocolError) as exc:
             verify_and_parse_input_batch(env.to_dict(), lambda k: record if k == kid else None)

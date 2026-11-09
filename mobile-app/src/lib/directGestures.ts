@@ -14,10 +14,13 @@
  *                     midpoint moves scrollStartPx
  *                     otherwise                                          → `scroll` (midpoint + wheel units, 120 = one
  *                                                                          notch, direction preference applied)
- *                     (decided on pairs of moves, never on one finger's half of a move: see `twoPending`)
+ *                     (decided on pairs of moves, never on one finger's half of a move: `twoFinger.ts`)
  *   one-finger drag   at zoom > 1                                        → `pan` (local); at 1× nothing at all
  *   cancel            releases the current gesture; a loupe is cancelled, never completed as a click
+ *
+ * The pinch-or-scroll decision (and its pair guard) lives in `twoFinger.ts`, shared with the touchpad machine.
  */
+import { spread, TwoFingerClassifier } from "./twoFinger.ts";
 
 export type DirectOutput =
   | { type: "tap"; button: "left" | "right"; x: number; y: number }
@@ -89,13 +92,8 @@ export class DirectGestureMachine {
   private twoPrevMid: { x: number; y: number } | null = null;
   /** In two_release: the first of two still fingers lifted quickly, so a quick second lift is a right click. */
   private twoTapCandidate = false;
-  /**
-   * In two_undecided: fingers that reported a move since the last decision check. Browsers deliver two fingers'
-   * moves one at a time, so between the two events one finger has moved and the other not yet: judged then, a fast
-   * two-finger scroll would look like a spread change (a pinch). The check therefore runs once both fingers have
-   * reported, or when one finger moves again before the other did (the other is really still, e.g. an anchored thumb).
-   */
-  private twoPending = new Set<number>();
+  /** In two_undecided: pinch or scroll, decided on completed pairs of moves (`twoFinger.ts`). */
+  private two: TwoFingerClassifier | null = null;
   private wheelAccX = 0;
   private wheelAccY = 0;
   private readonly out: DirectOutput[] = [];
@@ -149,7 +147,7 @@ export class DirectGestureMachine {
     this.twoStart = null;
     this.twoPrevMid = null;
     this.twoTapCandidate = false;
-    this.twoPending.clear();
+    this.two?.reset();
     this.wheelAccX = this.wheelAccY = 0;
   }
 
@@ -177,12 +175,13 @@ export class DirectGestureMachine {
         return;
       }
       const [a, b] = [...this.fingers.values()];
-      const d = Math.hypot(b!.lastX - a!.lastX, b!.lastY - a!.lastY);
       this.phase = "two_undecided";
-      this.twoStart = { d: Math.max(d, 1), mx: (a!.lastX + b!.lastX) / 2, my: (a!.lastY + b!.lastY) / 2, at: t };
-      this.twoPrevDistance = Math.max(d, 1);
-      this.twoPrevMid = { x: this.twoStart.mx, y: this.twoStart.my };
-      this.twoPending.clear();
+      this.two = new TwoFingerClassifier({ pinchRatio: this.opts.pinchRatio, scrollStartPx: this.opts.scrollStartPx });
+      this.two.start({ x: a!.lastX, y: a!.lastY }, { x: b!.lastX, y: b!.lastY });
+      const mid = this.two.startMid;
+      this.twoStart = { d: this.two.startDistance, mx: mid.x, my: mid.y, at: t };
+      this.twoPrevDistance = this.twoStart.d;
+      this.twoPrevMid = mid;
       this.wheelAccX = this.wheelAccY = 0;
       return;
     }
@@ -223,14 +222,17 @@ export class DirectGestureMachine {
         this.out.push({ type: "loupe", phase: "move", x, y });
         return;
       case "two_undecided": {
-        const pairComplete = this.twoPending.size === 1 && !this.twoPending.has(id);
-        const movedAgain = this.twoPending.has(id);
-        if (!pairComplete && !movedAgain) {
-          this.twoPending.add(id);
-          return;
-        }
-        this.twoPending.clear();
-        if (movedAgain) this.twoPending.add(id);
+        if (this.fingers.size !== 2 || !this.two || !this.twoStart) return;
+        const [a, b] = [...this.fingers.values()];
+        const pa = { x: a!.lastX, y: a!.lastY };
+        const pb = { x: b!.lastX, y: b!.lastY };
+        const decision = this.two.move(id, pa, pb);
+        if (decision === "undecided") return;
+        this.phase = decision === "pinch" ? "two_pinch" : "two_scroll";
+        // the decision point: start measuring from here so the dead zone itself is not replayed as a jump
+        const now = spread(pa, pb);
+        this.twoPrevDistance = decision === "pinch" ? this.twoStart.d : now.distance;
+        this.twoPrevMid = decision === "scroll" ? { x: this.twoStart.mx, y: this.twoStart.my } : now.mid;
         this.twoFingerMove();
         return;
       }
@@ -243,25 +245,11 @@ export class DirectGestureMachine {
     }
   }
 
+  /** A move in a decided two-finger gesture: a pinch step, or wheel units for the midpoint's travel. */
   private twoFingerMove(): void {
     if (this.fingers.size !== 2 || !this.twoStart) return;
     const [a, b] = [...this.fingers.values()];
-    const d = Math.max(Math.hypot(b!.lastX - a!.lastX, b!.lastY - a!.lastY), 1);
-    const mid = { x: (a!.lastX + b!.lastX) / 2, y: (a!.lastY + b!.lastY) / 2 };
-    if (this.phase === "two_undecided") {
-      const ratioChange = Math.abs(d / this.twoStart.d - 1);
-      const midTravel = Math.hypot(mid.x - this.twoStart.mx, mid.y - this.twoStart.my);
-      if (ratioChange > this.opts.pinchRatio) this.phase = "two_pinch";
-      else if (midTravel > this.opts.scrollStartPx) this.phase = "two_scroll";
-      else {
-        this.twoPrevDistance = d;
-        this.twoPrevMid = mid;
-        return;
-      }
-      // the decision point: start measuring from here so the dead zone itself is not replayed as a jump
-      this.twoPrevDistance = this.phase === "two_pinch" ? this.twoStart.d : d;
-      this.twoPrevMid = this.phase === "two_scroll" ? { x: this.twoStart.mx, y: this.twoStart.my } : mid;
-    }
+    const { distance: d, mid } = spread({ x: a!.lastX, y: a!.lastY }, { x: b!.lastX, y: b!.lastY });
     if (this.phase === "two_pinch") {
       const scale = d / this.twoPrevDistance;
       this.twoPrevDistance = d;
@@ -362,14 +350,13 @@ export class DirectGestureMachine {
   }
 }
 
-/** The direct-mode gesture guide, rendered by the Screen page's help sheet. */
+/** The direct-mode gesture guide ("With Touchpad off"), rendered by the Screen page's help sheet. */
 export const DIRECT_GESTURES: Array<{ phone: string; pc: string }> = [
-  { phone: "Tap the picture", pc: "Left click exactly there" },
-  { phone: "Two quick taps in the same spot", pc: "Double click (Windows pairs the two clicks)" },
-  { phone: "Two-finger tap", pc: "Right click at the midpoint" },
-  { phone: "Press and hold, then slide", pc: "A magnifier for aiming; lifting clicks at the crosshair" },
-  { phone: "Two fingers sliding", pc: "Smooth scroll under the fingers" },
-  { phone: "Pinch", pc: "Zooms the picture on the phone only; nothing is sent" },
-  { phone: "One finger while zoomed", pc: "Pans the picture on the phone only" },
-  { phone: "Touchpad mode", pc: "The relative touchpad over the picture, for drags and precision" },
+  { phone: "Tap", pc: "Clicks right there" },
+  { phone: "Tap twice, quickly", pc: "Double-click" },
+  { phone: "Tap with two fingers", pc: "Right-click" },
+  { phone: "Press and hold, then slide", pc: "A magnifier to aim with; let go to click" },
+  { phone: "Slide two fingers", pc: "Scrolls" },
+  { phone: "Pinch", pc: "Zooms the picture on your phone only; nothing is sent to the PC" },
+  { phone: "Slide one finger while zoomed", pc: "Moves the zoomed picture" },
 ];

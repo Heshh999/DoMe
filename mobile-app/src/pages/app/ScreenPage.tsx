@@ -13,6 +13,15 @@
  * The picture is a `<video>` fed by `srcObject` only; this page never reads a pixel, records nothing and logs no SDP,
  * address or credential (rules.screen_content; test/no-pixel-access.test.ts). Builds other than production add the
  * readout in the stage's corner (`ScreenReadout`): which stage a picture got to, from metadata only.
+ *
+ * Protocol 1.5 (design screen-view-2a §4.8): the time left sits on the second line under the PC name; with two or
+ * more screens a screens button before Touchpad switches to the next one ("1/2"; a spinner while switching). A
+ * switch keeps the stage and the last picture under "Switching to screen 2…" (which gives way to "Tap to show the
+ * picture" when the new picture's play() was refused, and to the consent wait when the PC asks someone), then a short
+ * note says which screen is shown, that a remembered screen is gone, or that the switch failed and the old screen is
+ * still shown. The pointer drawn by the phone, the Touchpad pinch zoom and the 1× button live in `ScreenSurface`;
+ * when this PC keeps the pointer in the picture although the phone asked for it, a note says so once per session.
+ * A newer app version waiting (the devices store's `updateReady`) is said on this page.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
@@ -23,14 +32,15 @@ import { Icon } from "../../components/icons.tsx";
 import { KeyboardPanel } from "../../components/KeyboardPanel.tsx";
 import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { ScreenReadout } from "../../components/ScreenReadout.tsx";
-import { ScreenSurface, type SurfaceMode } from "../../components/ScreenSurface.tsx";
+import { ScreenSurface, STRIP_BUTTON, type SurfaceMode } from "../../components/ScreenSurface.tsx";
 import { Button, Card, Notice, PageHeader, Pill, Spinner, Steps, type Tone } from "../../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES } from "../../content/plans.ts";
 import { DIRECT_GESTURES } from "../../lib/directGestures.ts";
+import { TOUCHPAD_SCREEN_GESTURES } from "../../lib/gestures.ts";
 import type { InputEvent } from "../../lib/input.ts";
 import { recoverySteps, SCREEN_SCOPE_EXPLANATION } from "../../lib/labels.ts";
-import { EMPTY_SCREEN_STATE } from "../../lib/screen.ts";
-import { allowanceLow, allowanceText, COPY, inputNotice, remainingSeconds, SCREEN_BETA_LABEL, screenStatus, type ScreenStatus } from "../../lib/screenStatus.ts";
+import { EMPTY_SCREEN_STATE, humanSurface } from "../../lib/screen.ts";
+import { allowanceLow, allowanceText, COPY, inputNotice, remainingSeconds, SCREEN_BETA_LABEL, screenStatus, SWITCH_COPY, type ScreenStatus } from "../../lib/screenStatus.ts";
 import type { ScreenMediaFacts } from "../../lib/screenStats.ts";
 import { WakeLockHolder } from "../../lib/wakeLock.ts";
 import { useDevicesStore } from "../../store/devices.ts";
@@ -41,8 +51,50 @@ const IN_SESSION = new Set(["ice", "offering", "starting", "connecting", "live",
 const FREE_SECONDS = FREE_SCREEN_VIEW_MINUTES * 60;
 /** How long the "View only" line stays after a tap a view-only grant could not send. */
 const VIEW_ONLY_FLASH_MS = 2500;
+/** How long "Screen 2 of 2" stays after a switch (or a start on another screen). */
+export const SWITCHED_NOTE_MS = 1500;
+/** How long the other short notes stay: a screen gone, a failed switch, the pointer kept in the picture. */
+export const SCREEN_NOTE_MS = 3000;
 
-const STRIP_BUTTON = "tap dome-press inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-white/25 bg-white/10 px-3 text-xs font-semibold text-white disabled:opacity-40";
+/** Before the first session: what the picture does with a finger, in one breath. */
+const GESTURE_EXPLAINER = "Tap what you see to click it. Pinch to zoom in; press and hold for a magnifier. Touchpad moves the pointer like a laptop touchpad and lets you drag. If your PC has two screens, the screens button at the top switches between them.";
+
+/** The gesture sheet's third list: what works the same with Touchpad on or off. */
+const SCREEN_COMMON_GESTURES: Array<{ phone: string; pc: string }> = [
+  { phone: "Screens button (top), only with two or more screens", pc: "Shows the PC's other screen. On an up-to-date PC the pointer comes along. DoMe calls the main screen 1; Windows may number them differently." },
+  { phone: "1× (bottom left, while zoomed)", pc: "Back to the whole screen" },
+  { phone: "The pointer you see", pc: "Drawn by your phone so it moves at once; the picture catches up. On some PCs it stays in the picture instead." },
+];
+
+/**
+ * True for `ms` after `token` appeared (a new object, or a new value), false while it is null. Drives the short notes
+ * over the picture: each switch, gone screen or failed switch is a new object from the session client.
+ */
+function useFlash(token: unknown, ms: number): boolean {
+  const [expired, setExpired] = useState<unknown>(null);
+  useEffect(() => {
+    if (token === null) return;
+    const h = setTimeout(() => setExpired(token), ms);
+    return () => clearTimeout(h);
+  }, [token, ms]);
+  return token !== null && expired !== token;
+}
+
+function GestureList({ title, gestures }: { title: string; gestures: Array<{ phone: string; pc: string }> }) {
+  return (
+    <section className="mt-4 first:mt-3">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-text-faint">{title}</h3>
+      <ul className="mt-2 space-y-2">
+        {gestures.map((g) => (
+          <li key={g.phone} className="flex justify-between gap-4">
+            <span className="font-medium">{g.phone}</span>
+            <span className="text-right text-text-muted">{g.pc}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 /** The Free allowance as a thin bar plus its line ("About 7 min left"); nothing for unlimited plans. */
 function AllowanceMeter({ remaining, text, low }: { remaining: number | null; text: string | null; low: boolean }) {
@@ -109,6 +161,7 @@ export function ScreenPage() {
   const switchOn = useScreenSwitch();
   const grant = useMyGrant(pcId);
   const loadGrants = useDevicesStore((s) => s.loadGrants);
+  const updateReady = useDevicesStore((s) => s.updateReady);
   const relayStatus = useLiveStore((s) => s.relayStatus);
   const pin = usePcKeyPin(switchOn === "on" ? pcId : null);
   const lastAllowance = useScreenStore((s) => (pcId ? (s.lastAllowanceByPc[pcId] ?? null) : null));
@@ -238,29 +291,87 @@ export function ScreenPage() {
   const viewOnly = state.phase === "live" && !pointerGranted;
   const flashViewOnly = viewOnlyAt !== null && now - viewOnlyAt < VIEW_ONLY_FLASH_MS;
 
+  // the short notes over the picture (lowest priority, after the input notice and "View only")
+  const failedSwitch = state.switchFailed !== null && state.switchFailed.code !== "SCREEN_ALLOWANCE_EXHAUSTED" ? state.switchFailed : null; // the exhausted state says it all
+  const failedNote = useFlash(failedSwitch, SCREEN_NOTE_MS);
+  const goneNote = useFlash(state.switchedGone, SCREEN_NOTE_MS);
+  const switchedNote = useFlash(state.switched, SWITCHED_NOTE_MS);
+  const pointerNote = useFlash(state.pointerOverlayAsked && state.cursorMode === "drawn" ? state.sessionId : null, SCREEN_NOTE_MS); // once per session; never asked of a 1.4 PC
+  const note =
+    failedNote && failedSwitch
+      ? SWITCH_COPY.switchFailed(failedSwitch.human)
+      : goneNote && state.switchedGone
+        ? SWITCH_COPY.screenGone(state.switchedGone.human)
+        : switchedNote && state.switched
+          ? SWITCH_COPY.switched(humanSurface(state.surfaces, state.switched.index), state.switched.count)
+          : pointerNote
+            ? COPY.pointerInPicture
+            : null;
+
   if (inSession) {
+    const tapNeeded = (playBlocked || state.playHint) && state.stream !== null;
+    // a switch keeps the last picture under its own line; it gives way to the tap a refused play() needs, and the
+    // consent wait (a PC that asks someone) shows as it always does
     const overlay: { title: string; text: string | null; tone: Tone; spinner: boolean } | null =
-      state.phase === "live" && !state.stalled && !state.relayDown
-        ? null
-        : { title: status.title, text: status.kind === "live_relay_down" ? status.text : status.kind === "consent" || status.kind === "paused" ? status.text : null, tone: status.tone, spinner: state.phase !== "live" && state.phase !== "paused" };
+      state.switching !== null && status.kind !== "consent"
+        ? tapNeeded
+          ? null
+          : { title: SWITCH_COPY.switching(humanSurface(state.surfaces, state.switching.to)), text: null, tone: "info", spinner: true }
+        : state.phase === "live" && !state.stalled && !state.relayDown
+          ? null
+          : { title: status.title, text: status.kind === "live_relay_down" ? status.text : status.kind === "consent" || status.kind === "paused" ? status.text : null, tone: status.tone, spinner: state.phase !== "live" && state.phase !== "paused" };
+    const shownScreen = humanSurface(state.surfaces, state.surfaceIndex);
+    const nextScreen = client.nextSurfaceIndex();
     return (
       <div role="region" aria-label={`Screen view of ${pcName ?? "the PC"}`} data-testid="screen-stage" className="fixed inset-0 z-50 flex flex-col bg-black text-white" style={{ paddingTop: "var(--safe-top)", paddingBottom: "var(--safe-bottom)", paddingLeft: "var(--safe-left)", paddingRight: "var(--safe-right)" }}>
         <header className="flex items-center gap-2 px-3 py-2">
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold">{pcName ?? "Your PC"}</p>
-            {state.verified ? (
-              <p className="flex items-center gap-1 truncate text-[11px] text-white/75" data-testid="screen-encrypted">
-                <Icon name="lock" size={12} />
-                {COPY.encrypted}
-              </p>
-            ) : (
-              <p className="truncate text-[11px] text-white/60">{SCREEN_BETA_LABEL}</p>
-            )}
+            {/* line two: "Encrypted…" (or the beta label) · the Free time left */}
+            <p className="flex min-w-0 items-center gap-1 text-[11px] text-white/75">
+              {state.verified ? (
+                <>
+                  <Icon name="lock" size={12} />
+                  <span className="truncate" data-testid="screen-encrypted">
+                    {COPY.encrypted}
+                  </span>
+                </>
+              ) : (
+                <span className="truncate text-white/60">{SCREEN_BETA_LABEL}</span>
+              )}
+              {leftText && !allowance?.unlimited ? (
+                <>
+                  <span aria-hidden="true" className="shrink-0">
+                    ·
+                  </span>
+                  <span className={`shrink-0 font-semibold tabular-nums ${low ? "text-amber-200" : "text-white/80"}`} data-testid="screen-time-left">
+                    {leftText}
+                  </span>
+                </>
+              ) : null}
+            </p>
           </div>
-          {leftText && !allowance?.unlimited ? (
-            <span className={`shrink-0 text-[11px] font-semibold tabular-nums ${low ? "text-amber-200" : "text-white/80"}`} data-testid="screen-time-left">
-              {leftText}
-            </span>
+          {state.surfaces.length >= 2 ? (
+            <button
+              type="button"
+              className={STRIP_BUTTON}
+              data-testid="screen-next"
+              disabled={state.switching !== null || !(state.phase === "live" || state.phase === "paused")}
+              aria-label={`Next screen. Showing screen ${shownScreen} of ${state.surfaces.length}. Switch to screen ${humanSurface(state.surfaces, nextScreen)}.`}
+              onClick={() => {
+                const n = client.nextSurfaceIndex();
+                if (n !== null) void client.switchSurface(n);
+              }}
+            >
+              <Icon name="layout" size={14} />
+              {state.switching ? (
+                <Spinner small label="Switching" />
+              ) : (
+                <span className="tabular-nums">
+                  {shownScreen}/{state.surfaces.length}
+                </span>
+              )}
+            </button>
           ) : null}
           <button type="button" className={STRIP_BUTTON} aria-pressed={mode === "touchpad"} onClick={toggleMode} disabled={!pointerGranted}>
             <Icon name="cursor" size={14} />
@@ -300,6 +411,15 @@ export function ScreenPage() {
               playEpoch={playEpoch}
               label={`Picture of ${pcName ?? "the PC"}'s screen. Tap to click.`}
               onProbe={onProbe}
+              pointer={client.pointer}
+              incomingStream={state.incomingStream}
+              surfaceSize={() => client.surfaceSize()}
+              cursorMode={state.cursorMode}
+              pcPaused={state.pcState === "paused"}
+              switching={state.switching !== null}
+              onFollowPan={() => client.noteFollowPan()}
+              onIncomingFrame={() => client.onVideoFrame()}
+              onZoom={(scale) => client.noteZoom(scale)}
             />
           ) : null}
           {overlay ? (
@@ -311,7 +431,7 @@ export function ScreenPage() {
               </div>
             </div>
           ) : null}
-          {(playBlocked || state.playHint) && state.stream ? (
+          {tapNeeded ? (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60">
               <Button
                 variant="primary"
@@ -330,10 +450,17 @@ export function ScreenPage() {
             <p role="status" className="pointer-events-none absolute inset-x-3 bottom-3 z-10 rounded-2xl bg-black/75 px-4 py-2 text-center text-xs text-white" data-testid="screen-input-notice">
               {notice ? notice.text : COPY.viewOnly}
             </p>
+          ) : note ? (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center">
+              <p role="status" className="rounded-full bg-black/75 px-4 py-2 text-center text-xs text-white" data-testid="screen-note">
+                {note}
+              </p>
+            </div>
           ) : null}
         </div>
 
-        {mode === "touchpad" && state.phase === "live" ? (
+        {/* kept through a switch: the kept picture is not laid out again, and End Drag stays reachable while held */}
+        {mode === "touchpad" && (state.phase === "live" || state.switching !== null) ? (
           <div className="flex justify-end gap-2 px-3 py-2">
             <button type="button" className={STRIP_BUTTON} aria-pressed={dragMode} onClick={() => setDragMode((v) => !v)} disabled={!canSend}>
               {dragMode ? "End Drag" : "Drag"}
@@ -354,6 +481,11 @@ export function ScreenPage() {
   return (
     <div className="space-y-4">
       <PageHeader title={SCREEN_BETA_LABEL} back={{ to: "/app/remote", label: "Remote", ariaLabel: "Back to the remote" }} />
+      {updateReady ? (
+        <Notice tone="info">
+          <p data-testid="screen-update-ready">{COPY.updateReady}</p>
+        </Notice>
+      ) : null}
       {switchOn === "on" ? <PcSwitcher pc={pc} live={live} /> : null}
 
       <Card data-testid="screen-status" data-kind={status.kind}>
@@ -376,21 +508,16 @@ export function ScreenPage() {
       {switchOn === "on" && status.kind === "ready" && !prefs.explainerSeen ? (
         <Notice tone="info" title="Before you start">
           <p>{COPY.protectedContent}</p>
-          <p className="mt-1">Pinch to zoom on the phone; press and hold for a magnifier; switch on Touchpad for drags.</p>
+          <p className="mt-1">{GESTURE_EXPLAINER}</p>
         </Notice>
       ) : null}
 
       {switchOn === "on" ? (
         <details className="dome-card p-4 text-sm">
           <summary className="cursor-pointer font-semibold">Gestures on the picture</summary>
-          <ul className="mt-3 space-y-2">
-            {DIRECT_GESTURES.map((g) => (
-              <li key={g.phone} className="flex justify-between gap-4">
-                <span className="font-medium">{g.phone}</span>
-                <span className="text-right text-text-muted">{g.pc}</span>
-              </li>
-            ))}
-          </ul>
+          <GestureList title="With Touchpad off" gestures={DIRECT_GESTURES} />
+          <GestureList title="With Touchpad on" gestures={TOUCHPAD_SCREEN_GESTURES} />
+          <GestureList title="Either way" gestures={SCREEN_COMMON_GESTURES} />
           <p className="mt-3 text-xs text-text-faint">{COPY.protectedContent}</p>
           <p className="mt-2 text-xs text-text-faint">{SCREEN_SCOPE_EXPLANATION}</p>
         </details>

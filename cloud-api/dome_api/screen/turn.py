@@ -7,11 +7,15 @@
 * :class:`TurnService` owns ``turn_credentials``: at most one outstanding credential per controller (the row's primary
   key), minting a new one first revokes the previous, and every path of §13 revokes (no start within 60 s, a refused
   start, the end of the session, the sweeper, controller revocation, grant narrowing, logout, plan change). A
-  revocation that belongs to ONE start (its failure, a lost forward, a reservation swept without a session) revokes
-  only that start's credential (:meth:`TurnService.revoke_for_start`), never a newer one the same phone minted for its
-  next start. A confirmed revocation is a ``turn_credential_revoked{reason}`` security event; one the provider refused
-  or timed out is ``turn_revoke_failed{reason}``, its username waits in ``turn_pending_revocations`` (the next mint
-  cannot erase it) and the sweeper retries it until the provider confirms or the credential expires.
+  revocation that belongs to ONE start (its failure, a refusal at the relay, a lost forward, a reservation swept
+  without a session) revokes only that start's credential (:meth:`TurnService.revoke_for_start`), never a newer one
+  the same phone minted for its next start, nor one carrying a live session. A previous credential that carries a
+  live session is not revoked by the next mint (a Next screen switch keeps that session up and restores it when the
+  switch fails): its username moves to ``turn_deferred_revocations`` and is revoked when that session ends, or with
+  the controller or the account (DECISIONS #117). A confirmed revocation is a ``turn_credential_revoked{reason}``
+  security event; one the provider refused or timed out is ``turn_revoke_failed{reason}``, its username waits in
+  ``turn_pending_revocations`` (the next mint cannot erase it) and the sweeper retries it until the provider confirms
+  or the credential expires.
 * Caps: a Free account's daily relayed GB checks the larger of the reconciled figure (``turn_usage_days``, filled
   hourly from the provider) and a **provisional upper bound computed here**: every ticketed second of every session
   counted as relayed at the relayed cap (0.5 GB/h) plus, at cap, the TTL of every credential that is not bound to a
@@ -33,7 +37,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, Protocol
 
 import httpx
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +45,7 @@ from dome_api.db.models import (
     Account,
     ScreenReservation,
     TurnCredential,
+    TurnDeferredRevocation,
     TurnMintDay,
     TurnPendingRevocation,
     TurnReconcilePass,
@@ -520,9 +525,10 @@ class TurnService:
         remaining_seconds: int | None,
         now: datetime,
     ) -> MintOutcome:
-        """One credential for this controller (the previous one is revoked first), unless a cap or the guard refuses
-        (``disabled``) or no provider can mint (``unavailable``). Caps check the larger of the reconciled and the
-        provisional figure. The account row is locked for the mint counter."""
+        """One credential for this controller (the previous one is revoked first, or set aside while it carries a live
+        session), unless a cap or the guard refuses (``disabled``) or no provider can mint (``unavailable``). Caps
+        check the larger of the reconciled and the provisional figure. The account row is locked for the mint
+        counter."""
         if not self.config.configured:
             return MintOutcome("unavailable", None, None, "unconfigured")
         if self.breaker_open_until is not None:
@@ -559,8 +565,8 @@ class TurnService:
             )
             log.warning("turn.cap_reached", cap=cap, account_id=str(account_id))
             return MintOutcome("disabled", None, None, f"cap_{cap}" if cap != "hard" else "guard_hard")
-        # one outstanding credential per controller: the previous one goes first
-        await self.revoke_controller(db, controller_id, "replaced", now)
+        # one outstanding credential per controller: the previous one goes first, unless it carries a live session
+        await self._replace_previous(db, controller_id, now)
         ttl = self.ttl_for(free_plan=free_plan, remaining_seconds=remaining_seconds)
         try:
             minted = await self.provider.mint(ttl_seconds=ttl, custom_identifier=str(account_id), now=now)
@@ -606,6 +612,45 @@ class TurnService:
         log.info("turn.minted", account_id=str(account_id), controller_id=str(controller_id), ttl=ttl)
         ice_server = {"urls": minted.urls, "username": minted.username, "credential": minted.credential}
         return MintOutcome("available", ice_server, minted.expires_at, "ok")
+
+    async def _replace_previous(self, db: AsyncSession, controller_id: uuid.UUID, now: datetime) -> None:
+        """Before a mint: the controller's previous credential is revoked (``replaced``), except one bound to a session
+        the ledger still holds open. A Next screen switch is a fresh start from the same phone while the old session
+        stays up, and the phone restores that session when the switch fails (design D14, review finding 17), so its
+        credential must keep relaying: the username moves to ``turn_deferred_revocations`` (the row is deleted, so the
+        upsert below starts afresh) and is revoked when that session ends (DECISIONS #117)."""
+        c, r, d = TurnCredential, ScreenReservation, TurnDeferredRevocation
+        row = await db.scalar(
+            select(c).where(c.controller_id == controller_id, c.state.in_(("outstanding", "bound"))).with_for_update()
+        )
+        if row is None:
+            return
+        sid = row.screen_session_id
+        if row.state == "bound" and sid is not None:
+            open_session = await db.scalar(
+                select(r.id).where(r.screen_session_id == sid, r.state.in_(("reserved", "live"))).limit(1)
+            )
+            if open_session is not None:
+                await db.execute(
+                    pg_insert(d)
+                    .values(
+                        username=row.username,
+                        screen_session_id=sid,
+                        account_id=row.account_id,
+                        controller_id=controller_id,
+                        expires_at=row.expires_at,
+                        created_at=now,
+                    )
+                    .on_conflict_do_nothing(index_elements=[d.username])
+                )
+                # a Core DELETE, not an ORM one, for the reason given in ``_revoke_row``
+                await db.execute(
+                    delete(c).where(c.controller_id == controller_id).execution_options(synchronize_session=False)
+                )
+                db.expunge(row)
+                log.info("turn.revocation_deferred", controller_id=str(controller_id))
+                return
+        await self._revoke_row(db, row, "replaced", now)
 
     async def bind_start(self, db: AsyncSession, controller_id: uuid.UUID, command_id: uuid.UUID) -> None:
         """A ``screen.session_start`` from this controller was forwarded: the no-start revocation no longer applies."""
@@ -783,14 +828,62 @@ class TurnService:
             log.info("turn.revoked", reason=reason, controller_id=str(controller_id), retried=True)
         return {"confirmed": confirmed, "expired": int(getattr(expired, "rowcount", 0) or 0)}
 
+    async def _revoke_deferred(self, db: AsyncSession, where: ColumnElement[bool], reason: str, now: datetime) -> int:
+        """Revoke the set-aside credentials (``turn_deferred_revocations``) that match ``where``, as ``_revoke_row``
+        does: the row goes either way, a confirmed revocation is ``turn_credential_revoked``, an unconfirmed one waits
+        in ``turn_pending_revocations`` for the sweeper (``turn_revoke_failed``). Bound to a session, their TTL has
+        already left the guard's session-less term. Returns how many there were."""
+        d = TurnDeferredRevocation
+        rows = (await db.scalars(select(d).where(where).order_by(d.created_at).with_for_update())).all()
+        for row in rows:
+            account_id, controller_id, username, expires_at = (
+                row.account_id,
+                row.controller_id,
+                row.username,
+                row.expires_at,
+            )
+            error: str | None = None
+            try:
+                await self.provider.revoke(username)
+            except TurnProviderError as exc:
+                error = exc.reason
+                log.warning("turn.revoke_failed", reason=exc.reason, controller_id=str(controller_id))
+            await db.execute(delete(d).where(d.username == username).execution_options(synchronize_session=False))
+            db.expunge(row)
+            if error is not None:
+                await self._queue_revocation(db, username, account_id, controller_id, reason, expires_at, error, now)
+                events.record(
+                    db,
+                    account_id=account_id,
+                    kind="turn_revoke_failed",
+                    severity="warning",
+                    actor="system",
+                    subject_id=controller_id,
+                    detail={"reason": reason, "error": error},
+                )
+                continue
+            events.record(
+                db,
+                account_id=account_id,
+                kind="turn_credential_revoked",
+                severity="info",
+                actor="system",
+                subject_id=controller_id,
+                detail={"reason": reason},
+            )
+            log.info("turn.revoked", reason=reason, controller_id=str(controller_id))
+        return len(rows)
+
     async def revoke_controller(self, db: AsyncSession, controller_id: uuid.UUID, reason: str, now: datetime) -> bool:
-        """Revoke the controller's outstanding or bound credential, if any. Returns whether one was revoked."""
+        """Revoke the controller's outstanding or bound credential, if any, and every one it set aside for a live
+        session. Returns whether one was revoked."""
         c = TurnCredential
         row = await db.scalar(
             select(c).where(c.controller_id == controller_id, c.state.in_(("outstanding", "bound"))).with_for_update()
         )
+        deferred = await self._revoke_deferred(db, TurnDeferredRevocation.controller_id == controller_id, reason, now)
         if row is None:
-            return False
+            return deferred > 0
         await self._revoke_row(db, row, reason, now)
         return True
 
@@ -832,19 +925,25 @@ class TurnService:
                 select(c).where(c.account_id == account_id, c.state.in_(("outstanding", "bound"))).with_for_update()
             )
         ).all()
+        deferred = await self._revoke_deferred(db, TurnDeferredRevocation.account_id == account_id, reason, now)
         for row in rows:
             await self._revoke_row(db, row, reason, now)
-        return len(rows)
+        return len(rows) + deferred
 
     async def revoke_session(self, db: AsyncSession, screen_session_id: str, reason: str, now: datetime) -> bool:
+        """Revoke the credential that carries this session: the controller's current one, or the one it set aside
+        when it minted the next (a Next screen switch, DECISIONS #117)."""
         c = TurnCredential
         row = await db.scalar(
             select(c)
             .where(c.screen_session_id == screen_session_id, c.state.in_(("outstanding", "bound")))
             .with_for_update()
         )
+        deferred = await self._revoke_deferred(
+            db, TurnDeferredRevocation.screen_session_id == screen_session_id, reason, now
+        )
         if row is None:
-            return False
+            return deferred > 0
         await self._revoke_row(db, row, reason, now)
         return True
 
@@ -866,6 +965,9 @@ class TurnService:
             .values(state="expired")
             .execution_options(synchronize_session=False)
         )
+        # a set-aside credential that expired before its session ended needs no call any more
+        d = TurnDeferredRevocation
+        await db.execute(delete(d).where(d.expires_at <= now).execution_options(synchronize_session=False))
         await self.retry_revocations(db, now)
         return len(stale)
 

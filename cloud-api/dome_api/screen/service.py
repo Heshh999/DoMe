@@ -257,11 +257,14 @@ class ScreenService:
                     db, controller_id, settled.command_id, settled.forwarded_at, "start_refused", now
                 )
 
-    async def on_start_refused(self, controller_id: uuid.UUID, code: str) -> None:
-        """Any relay-side refusal of a screen.session_start revokes the controller's credential (design §13)."""
+    async def on_start_refused(self, controller_id: uuid.UUID, command_id: uuid.UUID, code: str) -> None:
+        """Any relay-side refusal of a screen.session_start revokes that start's credential (design §13): the one the
+        phone minted for it, still outstanding. Never one bound to an earlier start or carrying a live session: a
+        refused Next screen switch restores the old session, which still relays through its own (DECISIONS #117)."""
         now = self.now()
         async with transaction(self.db) as db:
-            await self.turn.revoke_controller(db, controller_id, "start_refused", now)
+            # never forwarded, so never bound to this command: only an outstanding credential minted before now matches
+            await self.turn.revoke_for_start(db, controller_id, command_id, now, "start_refused", now)
         log.info("screen.start_refused", controller_id=str(controller_id), code=code)
 
     async def allowance_exhausted_event(

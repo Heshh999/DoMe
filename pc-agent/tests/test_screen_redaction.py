@@ -1,12 +1,19 @@
 """rules.screen_content on the PC (design §4.4): IPv4 / IPv6 addresses with an optional port are masked in free text
 (redact_text_line), in structured values (redact_value) and in crash.log (crashguard.redact), loopback included; the
-Screen view keys are sensitive; the aiortc / aioice loggers are pinned to WARNING whatever LOG_LEVEL says."""
+Screen view keys are sensitive (since 1.5 the cursor bitmap's ``png`` too, never the cursor counters); the new worker
+log lines carry no position, handle or bitmap; the aiortc / aioice loggers are pinned to WARNING whatever LOG_LEVEL
+says."""
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import logging
+from collections.abc import Iterator, MutableMapping
+from typing import Any
 
 import pytest
+import structlog
 
 from dome_agent import crashguard
 from dome_agent.logsetup import (
@@ -15,6 +22,7 @@ from dome_agent.logsetup import (
     is_sensitive_key,
     mask_addresses,
     pin_media_loggers,
+    redact_event,
     redact_text_line,
     redact_value,
 )
@@ -52,6 +60,21 @@ SENTENCES = [
     ("host 2001:db8::1. gone", "2001:db8::1", "host [redacted]. gone"),
     ("ip_192.168.1.5 seen", "192.168.1.5", "ip_[redacted] seen"),
 ]
+
+
+@contextlib.contextmanager
+def debug_lines() -> Iterator[list[MutableMapping[str, Any]]]:
+    """structlog's events at DEBUG too (the shape lines are debug lines), the configuration restored afterwards:
+    nothing here touches the stdlib handlers other tests read."""
+    previous = structlog.get_config()
+    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG))
+    try:
+        with structlog.testing.capture_logs() as logs:
+            yield logs
+    finally:
+        structlog.configure(**previous)
+
+
 SDP_LINES = [
     "a=fingerprint:sha-256 01:02:03:04:05:06:07:08:09:0A:0B:0C:0D:0E:0F:10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F:20",
     "a=ice-pwd:phonephonephonephonephon",
@@ -103,6 +126,96 @@ def test_screen_keys_are_sensitive() -> None:
     for key in ("offer_sdp", "answer_sdp", "sdp", "candidate", "ice_servers", "credential", "username"):
         assert is_sensitive_key(key), key
     assert redact_value({"offer_sdp": "v=0", "gen": 1}) == {"offer_sdp": "[redacted]", "gen": 1}
+
+
+def test_a_cursor_bitmap_is_redacted_and_the_cursor_counters_are_not() -> None:
+    """rules.screen_cursor (4), design 2a §3.10: ``png`` is a sensitive key part (substring rule), so the bitmap of a
+    ``cursor_shape`` never reaches a log line or the bundle; every counter and log key of the cursor path says
+    ``bitmap`` instead and survives."""
+    from dome_agent.screen.worker.main import CURSOR_COUNTERS
+
+    bitmap = base64.b64encode(b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4).decode()
+    for key in ("png", "cursor_png", "PNG", "png_chars"):
+        assert is_sensitive_key(key), key
+    shape = {"type": "cursor_shape", "kind": "custom", "width": 24, "height": 24, "png": bitmap}
+    assert redact_value({"message": shape}) == {"message": {**shape, "png": "[redacted]"}}
+    event = redact_event(None, "info", {"event": "x", "png": bitmap, "kind": "custom"})
+    assert event == {"event": "x", "png": "[redacted]", "kind": "custom"}
+    counters = [
+        *CURSOR_COUNTERS,
+        "cursor_pos_unreliable",
+        "cursor_bitmap_too_large",
+        "cursor_poll_errors",
+        "cursor_last_kind",
+        "dropped_1_4",
+        "encoder_hw",
+        "bitmap_chars",
+        "kind",
+        "w",
+        "h",
+        "gated",
+        "parameter_sets",
+        "frames_in",
+        "mft",
+    ]
+    for key in counters:
+        assert "png" not in key and not is_sensitive_key(key), key
+    stats = dict.fromkeys(counters, 7)
+    assert redact_value(stats) == stats
+
+
+def test_the_new_worker_log_lines_carry_no_position_handle_or_bitmap() -> None:
+    """``cursor reporting stopped``, ``screen cursor shape`` and ``screen encoder probed`` as the worker really logs
+    them: no coordinate pair, no cursor handle, no base64 run."""
+    from dome_agent.screen.worker import cursor, fake
+
+    class Failing(fake.FakeCursorReader):
+        failing = False
+
+        def read(self) -> tuple[int, int, int, int] | None:
+            if self.failing:
+                raise OSError("GetCursorInfo failed for 0x10001 at 1234,567")
+            return super().read()
+
+    shapes = {"c": {"custom": {"w": 24, "h": 24, "hx": 3, "hy": 2}}}
+    reader = Failing({"samples": [[1, "c", 1234, 567]], "shapes": shapes})
+    sent: list[dict[str, object]] = []
+    poller = cursor.CursorPoller(reader, on_pos=sent.append, on_shape=sent.append)
+    poller.set_surface((0, 0, 1920, 1080), 1)
+    logs = _worker_lines(poller, reader)
+    png = next(str(m["png"]) for m in sent if m.get("kind") == "custom")
+    position = next(m for m in sent if m.get("type") == "cursor_pos")
+    handle = str(0x10000)
+    lines = [
+        e for e in logs if e["event"] in ("cursor reporting stopped", "screen cursor shape", "screen encoder probed")
+    ]
+    assert sorted(e["event"] for e in lines) == [
+        "cursor reporting stopped",
+        "screen cursor shape",
+        "screen encoder probed",
+    ]
+    for entry in lines:
+        text = " ".join(f"{k}={v}" for k, v in entry.items())
+        for needle in (png[:24], "1234", "567", handle, hex(0x10000), str(position["x"]), str(position["y"])):
+            assert needle not in text, (needle, text)
+        assert not any("png" in key for key in entry), entry
+
+
+def _worker_lines(poller: object, reader: object) -> list[dict[str, object]]:
+    """One custom shape, ten failed reads and one probe row, logged as the worker logs them."""
+    from dome_agent.screen.worker import cursor, encode
+
+    assert isinstance(poller, cursor.CursorPoller)
+    with debug_lines() as logs:  # "screen cursor shape" is a debug line
+        poller.tick(0.0)
+        reader.failing = True  # type: ignore[attr-defined]
+        for i in range(cursor.CURSOR_POLL_ERRORS_MAX):
+            poller.tick(1.0 + i)
+        failures: list[encode.ProbeFailure] = []
+        results: list[encode.ProbeResult] = []
+        encode.probe_encoders([encode.EncoderChoice("vp8", "")], 64, 36, failures, results)
+        structlog.get_logger("dome_agent.screen.worker.main").info("screen encoder probed", **results[0].as_dict())
+    return [dict(e) for e in logs]
 
 
 def test_media_loggers_are_pinned_to_warning_whatever_the_level(tmp_path) -> None:  # type: ignore[no-untyped-def]

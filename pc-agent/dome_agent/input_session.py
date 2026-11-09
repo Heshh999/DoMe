@@ -54,6 +54,16 @@ current geometry generation (``SCREEN_GEOMETRY_CHANGED``), is mapped to physical
 (pairing approval, grant window, consent window) every button and keyboard event of every phone is dropped
 (``INPUT_PAUSED_ON_PC``, one frame per second), and a press whose cursor sits on one of DoMe's own bars or windows
 is dropped (``INPUT_TARGET_RESERVED``): a phone cannot click its own Allow or Stop.
+
+The pointer stays on the watched screen (protocol 1.5, ``rules.screen_cursor`` (5), DECISIONS #107): while a
+connected screen session owned by the batch's controller exists, every injected relative ``pointer_move`` that took
+the pointer from inside the streamed monitor to outside it is pulled back to the nearest point inside (physical
+pixels), before the next event of the batch runs (a ``move, click, move`` batch is meant never to click on the other
+monitor; that assumes ``GetCursorPos`` already shows a relative ``SendInput`` when it returned, not yet verified on a
+device: KNOWN_ISSUES #43). The position is read before and after OUR move: ``GetCursorPos`` cannot tell our ``SendInput`` from the person's
+mouse, so a pointer that was already elsewhere is left alone, and no clip rectangle (``ClipCursor``) is ever set; the
+person at the PC is never constrained. Best effort and counted (``confined_moves``, ``confine_failures``); a failed
+correction never fails the batch.
 """
 
 from __future__ import annotations
@@ -104,6 +114,7 @@ KEYBOARD_EVENTS = frozenset({"text", "key", "shortcut"})
 # Events DoMe never injects while one of its own permission windows is open (rules.local_permission_ui).
 PERMISSION_UI_BLOCKED_EVENTS = frozenset({"pointer_button", "text", "key", "shortcut"})
 ScreenTarget = Callable[[str, int], tuple[Monitor | None, str | None]]
+StreamedMonitor = Callable[[str], Monitor | None]
 RETIRED_IDS_KEPT = 64
 ERROR_FRAME_INTERVAL = 1.0  # per code per session
 CLOCK_WINDOW_SECONDS = 30.0  # > input_batch_lifetime + 2 x max_clock_skew: older batches fail the envelope window
@@ -181,6 +192,9 @@ class InputSession:
     stale_batches: int = 0
     max_phone_age_ms: int = 0
     max_relay_age_ms: int | None = None  # None until the relay stamped a batch
+    # injected relative moves pulled back onto the watched monitor, and corrections that failed (rules.screen_cursor)
+    confined_moves: int = 0
+    confine_failures: int = 0
 
     @property
     def live(self) -> bool:
@@ -202,6 +216,8 @@ class InputSession:
             "stale_batches": self.stale_batches,
             "max_phone_age_ms": self.max_phone_age_ms,
             "max_relay_age_ms": self.max_relay_age_ms,
+            "confined_moves": self.confined_moves,
+            "confine_failures": self.confine_failures,
         }
 
     def lease_expires_text(self) -> str:
@@ -273,6 +289,14 @@ class _DispatchOutcome:
     dropped: int = 0
     errors: list[tuple[str, str]] = field(default_factory=list)
     target_changed: bool = False
+    confined: int = 0  # injected relative moves pulled back onto the watched monitor
+    confine_failures: int = 0
+
+
+def _inside(pos: tuple[int, int], m: Monitor) -> bool:
+    """Is a physical virtual-desktop pixel on monitor ``m``?"""
+    x, y = pos
+    return m.left <= x < m.left + m.width and m.top <= y < m.top + m.height
 
 
 def coalesce_events(events: Iterable[dict[str, Any]], motion_max: int = 1 << 20) -> list[tuple[dict[str, Any], int]]:
@@ -317,6 +341,7 @@ class InputSessionManager:
         permission_ui: PermissionUiState | None = None,
         screen_target: ScreenTarget | None = None,
         on_restricted: Callable[[bool, str | None], Awaitable[None]] | None = None,
+        streamed_monitor: StreamedMonitor | None = None,
     ) -> None:
         limits = load_registry().limits
         self._platform = platform
@@ -328,6 +353,7 @@ class InputSessionManager:
         self._on_state_change = on_state_change
         self._permission_ui = permission_ui
         self._screen_target = screen_target
+        self._streamed_monitor = streamed_monitor  # the monitor a controller's Screen view shows (confinement)
         self._on_restricted = on_restricted
         self.lease_seconds = float(lease_seconds if lease_seconds is not None else limits["input_lease_seconds"])
         self.age_budget_ms = int(age_budget_ms if age_budget_ms is not None else limits["input_age_budget_ms"])
@@ -790,6 +816,8 @@ class InputSessionManager:
                 self._inflight = None
             session.accepted_events += outcome.accepted
             session.dropped_events += outcome.dropped
+            session.confined_moves += outcome.confined
+            session.confine_failures += outcome.confine_failures
             if outcome.target_changed:
                 await self.refresh_foreground(force=True)  # state frame: the phone sees the new window
             if any(code == "INPUT_RESTRICTED" for code, _m in outcome.errors):
@@ -847,8 +875,13 @@ class InputSessionManager:
                         out.dropped += n
                         continue
                 if kind == "pointer_move":
-                    if ev["dx"] or ev["dy"]:
-                        adapter.move(int(ev["dx"]), int(ev["dy"]))
+                    dx, dy = int(ev["dx"]), int(ev["dy"])
+                    if dx or dy:
+                        monitor = self._confine_monitor(session)  # None: no connected screen session of this phone
+                        before = self._cursor_quietly() if monitor is not None else None
+                        adapter.move(dx, dy)
+                        if monitor is not None and before is not None:
+                            self._confine_after_move(session, out, monitor, before, (dx, dy))
                 elif kind == "pointer_move_to":
                     if self._screen_target is None:
                         raise ProtocolError("SCREEN_SESSION_REQUIRED", "no screen session")
@@ -906,6 +939,52 @@ class InputSessionManager:
                 out.errors.append((exc.code, exc.message))
                 break
         return out
+
+    def _confine_monitor(self, session: InputSession) -> Monitor | None:
+        """The monitor this controller's connected Screen view shows, or None (no confinement)."""
+        if self._streamed_monitor is None:
+            return None
+        try:
+            return self._streamed_monitor(session.controller_id)
+        except Exception:  # noqa: BLE001 - an unreadable screen session confines nothing
+            return None
+
+    def _cursor_quietly(self) -> tuple[int, int] | None:
+        """``GetCursorPos`` before our move; None when it cannot be read (the move is then not confined)."""
+        try:
+            return self._platform.input.cursor_position()
+        except Exception:  # noqa: BLE001 - an unknown position is not evidence of anything
+            return None
+
+    def _confine_after_move(
+        self,
+        session: InputSession,
+        out: _DispatchOutcome,
+        monitor: Monitor,
+        before: tuple[int, int],
+        delta: tuple[int, int],
+    ) -> None:
+        """rules.screen_cursor (5): only a move WE injected that crossed the streamed monitor's edge is pulled back.
+        GetCursorPos cannot tell our SendInput from the person's mouse, so a pointer that was already elsewhere
+        before our move is left alone (no clip rectangle, ever). ``delta``: the move just injected. When the pointer
+        reads as not moved at all although that move would have left the monitor, the position is read once more
+        before deciding (whether GetCursorPos shows a relative SendInput as soon as it returned is not yet verified on
+        a device: KNOWN_ISSUES #43)."""
+        if not _inside(before, monitor):
+            return
+        try:
+            after = self._platform.input.cursor_position()
+            if after == before and not _inside((before[0] + delta[0], before[1] + delta[1]), monitor):
+                after = self._platform.input.cursor_position()
+            if after is None or _inside(after, monitor):
+                return
+            cx = min(max(after[0], monitor.left), monitor.left + monitor.width - 1)
+            cy = min(max(after[1], monitor.top), monitor.top + monitor.height - 1)
+            self._platform.input.move_to(cx, cy)
+            out.confined += 1
+        except ProtocolError as exc:  # best effort: the batch is never failed by its confinement
+            out.confine_failures += 1
+            log.debug("pointer confinement failed", code=exc.code)
 
     def _restricted_now(self) -> bool:
         try:

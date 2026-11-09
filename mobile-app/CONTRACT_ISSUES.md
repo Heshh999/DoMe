@@ -121,3 +121,8 @@ modified; each item records the workaround used here.
     `lib/signing.ts::signInputBatchWithKid` (the same envelope and schema check, the kid computed once;
     DECISIONS 79). Suggested: an optional precomputed `kid` on `signPayload` / `signInputBatch` in the
     shared library, so the phone can drop its copy.
+
+22. **`pc.protocol_versions` is `[]` until the agent's first hello to a 1.5 relay** (rest `$defs/pc`, protocol 1.5).
+    A PC whose agent has not connected since the relay began recording the list reads as "speaks nothing", so the
+    phone sends no `cursor` to it and the pointer stays in the picture until the agent reconnects; the list is also
+    as announced at the last hello, so a stale one costs one `PROTOCOL_INCOMPATIBLE` round trip (DECISIONS 87).

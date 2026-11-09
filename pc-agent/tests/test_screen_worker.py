@@ -14,6 +14,7 @@ capture (``ddagrab`` / WGC) and ``h264_mf`` encoding are **not yet verified on a
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import io
 import json
@@ -27,7 +28,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from dome_protocol import ProtocolError, parse_screen_dc_message, sdp_fingerprints
+from dome_protocol import (
+    SCREEN_CURSOR_CHANNEL_LABEL,
+    SCREEN_DATA_CHANNEL_LABEL,
+    ProtocolError,
+    dumps_compact,
+    parse_screen_dc_message,
+    sdp_fingerprints,
+)
 
 from dome_agent.screen.sdp_check import check_offer
 from dome_agent.screen.supervisor import ProcessWorkerLauncher, WorkerSupervisor, worker_command
@@ -405,7 +413,10 @@ def _modules_after_importing(name: str) -> list[str]:
 def test_worker_imports_no_agent_relay_api_or_recording_code() -> None:
     """Design §5.1 / §17.2: the worker cannot talk to the relay or the API and has no MediaRecorder; the agent, in
     turn, runs without aiortc or PyAV (the `screen` extra is optional)."""
-    worker = _modules_after_importing(f"{MODULE}.main, {MODULE}.rtc, {MODULE}.track, {MODULE}.encode, {MODULE}.fake")
+    worker = _modules_after_importing(
+        f"{MODULE}.main, {MODULE}.rtc, {MODULE}.track, {MODULE}.encode, {MODULE}.fake, {MODULE}.cursor,"
+        f" {MODULE}.cursor_win"
+    )
     forbidden = {
         "dome_agent.api",
         "dome_agent.relay_client",
@@ -756,7 +767,10 @@ class Phone:
         self.pc = aiortc.RTCPeerConnection(aiortc.RTCConfiguration(iceServers=[]))
         self.track: Any = None
         self.channel: Any = None
+        self.cursor_channel: Any = None
         self.dc_messages: list[dict[str, Any]] = []
+        self.labelled: list[tuple[str, dict[str, Any]]] = []  # (channel label, message) from either channel, in order
+        self.raw_lengths: list[tuple[str, int]] = []  # (type, UTF-8 bytes) of every message received
         self.frames: list[Any] = []
         self._recv_task: asyncio.Task[None] | None = None
 
@@ -765,16 +779,31 @@ class Phone:
             if track.kind == "video":
                 self.track = track
 
-    async def offer(self) -> str:
+    async def offer(self, *, cursor_channel: bool = False) -> str:
+        """``cursor_channel``: also open ``dome-screen-cursor-v1`` unordered without retransmits, as a 1.5 phone does
+        in a start that carries ``cursor`` (and only then)."""
         self.pc.addTransceiver("video", direction="recvonly")
         self.pc.addTransceiver("audio", direction="recvonly")
         self.channel = self.pc.createDataChannel("dome-screen-v1", ordered=True)
 
+        def record(label: str, message: Any) -> dict[str, Any]:
+            parsed = parse_screen_dc_message(message, "pc_to_phone")  # every PC message is in the vocabulary
+            self.labelled.append((label, parsed))
+            self.raw_lengths.append((parsed["type"], len(message.encode() if isinstance(message, str) else message)))
+            return parsed
+
         @self.channel.on("message")
         def on_message(message: Any) -> None:
-            self.dc_messages.append(
-                parse_screen_dc_message(message, "pc_to_phone")
-            )  # every PC message is in the vocabulary
+            self.dc_messages.append(record(SCREEN_DATA_CHANNEL_LABEL, message))
+
+        if cursor_channel:
+            self.cursor_channel = self.pc.createDataChannel(
+                SCREEN_CURSOR_CHANNEL_LABEL, ordered=False, maxRetransmits=0
+            )
+
+            @self.cursor_channel.on("message")
+            def on_cursor(message: Any) -> None:
+                record(SCREEN_CURSOR_CHANNEL_LABEL, message)
 
         await self.pc.setLocalDescription(await self.pc.createOffer())
         return str(self.pc.localDescription.sdp)
@@ -795,6 +824,20 @@ class Phone:
 
     def dc_of(self, kind: str) -> list[dict[str, Any]]:
         return [m for m in self.dc_messages if m["type"] == kind]
+
+    def cursor_messages(self) -> list[tuple[str, dict[str, Any]]]:
+        return [(label, m) for label, m in self.labelled if m["type"] in ("cursor_pos", "cursor_shape")]
+
+    def positions(self) -> list[dict[str, Any]]:
+        return [m for _label, m in self.cursor_messages() if m["type"] == "cursor_pos"]
+
+    def shape_kinds(self) -> list[str]:
+        """The cursor_shape kinds received, a repeat of the same one (a re-send) counted once."""
+        kinds: list[str] = []
+        for _label, m in self.cursor_messages():
+            if m["type"] == "cursor_shape" and (not kinds or kinds[-1] != m["kind"]):
+                kinds.append(m["kind"])
+        return kinds
 
     async def close(self) -> None:
         if self._recv_task is not None:
@@ -1023,8 +1066,8 @@ def test_build_source_constructs_the_windows_sources_without_opening_them(monkey
     calls: list[str] = []
 
     class Dda:
-        def __init__(self, index: int, width: int, height: int, fps: int) -> None:
-            calls.append("dda.init")
+        def __init__(self, index: int, width: int, height: int, fps: int, *, draw_mouse: bool = True) -> None:
+            calls.append(f"dda.init draw_mouse={draw_mouse}")
             self.width, self.height = width, height
 
         def open(self) -> None:
@@ -1039,7 +1082,10 @@ def test_build_source_constructs_the_windows_sources_without_opening_them(monkey
 
     class Wgc:
         def __init__(self, index: int, width: int, height: int, fps: int, **kw: Any) -> None:
-            calls.append(f"wgc.init primary={kw['primary']} expected={kw['expected_size']}")
+            calls.append(
+                f"wgc.init primary={kw['primary']} expected={kw['expected_size']} cursor_capture={kw['cursor_capture']}"
+                f" pix_fmt={kw['pix_fmt']}"
+            )
             self.width, self.height = width, height
 
         def open(self) -> None:
@@ -1055,13 +1101,14 @@ def test_build_source_constructs_the_windows_sources_without_opening_them(monkey
     monkeypatch.setattr(capture_wgc, "WgcSource", Wgc)
     monkeypatch.setattr(sys, "platform", "win32")
     spec = {"surface_index": 0, "primary": True, "width": 2560, "height": 1440}
-    source = worker_main._build_source("ddagrab", spec, 1280, 720, 30)  # noqa: SLF001
-    wgc_only = worker_main._build_source("wgc", spec, 1280, 720, 30)  # noqa: SLF001
+    source = worker_main._build_source("ddagrab", spec, 1280, 720, 30, cursor_drawn=True, pix_fmt="nv12")  # noqa: SLF001
+    wgc_only = worker_main._build_source("wgc", spec, 1280, 720, 30, cursor_drawn=True, pix_fmt="nv12")  # noqa: SLF001
     monkeypatch.setattr(sys, "platform", "linux")
-    assert calls == ["dda.init", "wgc.init primary=True expected=(2560, 1440)"]  # constructed, never opened
+    wgc_init = "wgc.init primary=True expected=(2560, 1440) cursor_capture=None pix_fmt=nv12"  # the 1.4 call
+    assert calls == ["dda.init draw_mouse=True", wgc_init]  # constructed, never opened
     calls.clear()
     source.open()  # the track's one open, after DTLS: Desktop Duplication fails here, WGC takes over
-    assert calls == ["dda.open", "wgc.init primary=True expected=(2560, 1440)", "wgc.open"]
+    assert calls == ["dda.open", wgc_init, "wgc.open"]
     source.close()
     wgc_only.open()
     assert calls[-2:] == ["wgc.close", "wgc.open"]
@@ -1099,7 +1146,7 @@ async def test_no_windows_source_opens_before_dtls_connects_even_across_a_rebuil
     log: list[tuple[str, int]] = []
     built: list[Recording] = []
 
-    def build(kind: str, spec: dict[str, Any], width: int, height: int, fps: int) -> Recording:
+    def build(kind: str, spec: dict[str, Any], width: int, height: int, fps: int, **_kw: Any) -> Recording:
         assert kind == "ddagrab"
         source = Recording(log, len(built), width, height)
         built.append(source)
@@ -1326,3 +1373,435 @@ def test_a_graph_that_ends_is_rebuilt_not_read_for_ever(monkeypatch: pytest.Monk
         for _ in range(10):
             source.read()
     assert exc.value.code == "SCREEN_CAPTURE_UNAVAILABLE" and source.rebuilds == capture_dda.REBUILD_LIMIT + 1
+
+
+# ----- 1.5: the pointer drawn by the phone (design 2a §3.5-§3.7) --------------------------------------------------------
+CURSOR_SOURCE = {
+    "kind": "fake",
+    "pattern": "synthetic",
+    "surface_index": 0,
+    "left": 0,
+    "top": 0,
+    "width": 1920,
+    "height": 1080,
+    "rotation": 0,
+    "fps": 15,
+}
+CURSOR_SHAPES = {"a": "arrow", "i": "ibeam", "c": {"custom": {"w": 24, "h": 24, "hx": 3, "hy": 2}}}
+
+
+def nx(px: int) -> int:
+    return round(px * 65535 / 1919)
+
+
+def ny(py: int) -> int:
+    return round(py * 65535 / 1079)
+
+
+def scripted_source(*samples: list[Any]) -> dict[str, Any]:
+    return {**CURSOR_SOURCE, "cursor_script": {"samples": list(samples), "shapes": CURSOR_SHAPES}}
+
+
+def cursor_reader(w: InProcessWorker) -> fake.FakeCursorReader:
+    poller = w.app._cursor_poller  # noqa: SLF001
+    assert poller is not None
+    reader = poller._reader  # noqa: SLF001
+    assert isinstance(reader, fake.FakeCursorReader)
+    return reader
+
+
+async def test_loopback_overlay_session_reports_the_pointer_on_the_cursor_channel(worker: InProcessWorker) -> None:
+    """A start with ``cursor: "overlay"`` on the fake source: the agent hears ``encoders`` right after ``answer`` and
+    ``cursor{overlay, fake}`` once the source opened; the phone gets ``state.cursor``, then shapes (arrow, ibeam, a
+    24 x 24 custom one over 1 KiB) and positions on the unordered cursor channel, the first shape before the first
+    position, the pause's one ``visible: false`` and the resume's re-send, and an off-monitor sample as ``visible:
+    false`` at the last position inside. Every message is validated by the receiving side's parser (Phone)."""
+    phone = Phone()
+    w = worker
+    try:
+        offer = await phone.offer(cursor_channel=True)
+        w.start()
+        w.send(
+            start_message(
+                offer,
+                cursor="overlay",
+                hw_encoding=True,
+                encoder_preference=["vp8"],
+                source=scripted_source([1, "a", 960, 540]),
+            )
+        )
+        answer = await w.expect("answer", timeout=20)
+        encoders = await w.expect("encoders", timeout=5)
+        assert [e["ev"] for e in w.seen[-2:]] == ["answer", "encoders"]  # right after the answer
+        assert encoders["probed"] == [
+            {
+                "encoder": "vp8 (aiortc libvpx)",
+                "ok": True,
+                "gated": False,
+                "reason": "",
+                "frames_in": 0,
+                "open_ms": 0,
+                "mft": None,
+                "parameter_sets": "",
+            }
+        ]
+        await phone.accept(str(answer["answer_sdp"]))
+        assert await w.expect("cursor", timeout=20) == {"ev": "cursor", "mode": "overlay", "source": "fake"}
+        await wait_for(lambda: any(p["x"] == nx(960) for p in phone.positions()), timeout=20)
+        assert phone.cursor_messages()[0][1]["type"] == "cursor_shape"  # the first shape precedes the first position
+        first = phone.positions()[0]
+        assert first == {"type": "cursor_pos", "gen": 1, "x": nx(960), "y": ny(540), "visible": True}
+        await wait_for(lambda: any(m.get("cursor") == "overlay" for m in phone.dc_of("state")), timeout=10)
+        assert all(m.get("cursor") == "overlay" for m in phone.dc_of("state")[1:])  # every state after the open
+        reader = cursor_reader(w)
+        reader.add_samples([[1, "i", 1500, 200]])
+        await wait_for(lambda: any(p["x"] == nx(1500) for p in phone.positions()), timeout=10)
+        reader.add_samples([[1, "c", 1500, 200]])
+        await wait_for(lambda: "custom" in phone.shape_kinds(), timeout=10)
+        assert phone.shape_kinds() == ["arrow", "ibeam", "custom"]
+        custom = next(m for _label, m in phone.cursor_messages() if m.get("kind") == "custom")
+        assert (custom["width"], custom["height"], custom["hotspot_x"], custom["hotspot_y"]) == (24, 24, 3, 2)
+        assert len(custom["png"]) <= 8192
+        custom_lengths = [n for kind, n in phone.raw_lengths if kind == "cursor_shape" and n > 200]
+        assert custom_lengths and all(1024 < n <= 12288 for n in custom_lengths)
+        # positions travel on the cursor channel once it is open; shapes on the reliable one
+        assert {label for label, m in phone.cursor_messages() if m["type"] == "cursor_shape"} == {
+            SCREEN_DATA_CHANNEL_LABEL
+        }
+        assert phone.cursor_messages()[-1] == (SCREEN_DATA_CHANNEL_LABEL, custom)
+        assert any(
+            label == SCREEN_CURSOR_CHANNEL_LABEL for label, m in phone.cursor_messages() if m["type"] == "cursor_pos"
+        )
+        assert w.app._peer.cursor_pos_unreliable >= 1  # noqa: SLF001
+        # pause: one visible false, then nothing; resume: shape and position again
+        count = len(phone.cursor_messages())
+        w.send({"op": "pause", "reason": "indicator"})
+        await wait_for(lambda: phone.dc_of("state")[-1]["state"] == "paused", timeout=5)
+        # the paused state repeats the mode too (rules.screen_cursor (2): every state message of the session)
+        assert phone.dc_of("state")[-1] == {
+            "type": "state",
+            "state": "paused",
+            "reason": "indicator",
+            "cursor": "overlay",
+        }
+        await wait_for(lambda: not phone.positions()[-1]["visible"], timeout=5)
+        hidden = phone.positions()[-1]
+        assert (hidden["x"], hidden["y"]) == (nx(1500), ny(200))
+        await asyncio.sleep(0.3)
+        assert len(phone.cursor_messages()) == count + 1
+        w.send({"op": "resume"})
+        await wait_for(lambda: phone.positions()[-1]["visible"], timeout=5)
+        assert [m["type"] for _label, m in phone.cursor_messages()[count + 1 :]][:2] == ["cursor_shape", "cursor_pos"]
+        # off the monitor: not visible, at the last position inside
+        reader.add_samples([[1, "c", 3000, 200]])
+        await wait_for(lambda: not phone.positions()[-1]["visible"], timeout=10)
+        assert phone.positions()[-1] == {"type": "cursor_pos", "gen": 1, "x": nx(1500), "y": ny(200), "visible": False}
+        stats = await w.expect("stats", timeout=8)
+        for key in (
+            "cursor_pos_sent",
+            "cursor_pos_unreliable",
+            "cursor_shape_sent",
+            "cursor_custom_sent",
+            "cursor_bitmap_max_chars",
+            "cursor_bitmap_too_large",
+            "cursor_dropped_gen",
+            "cursor_poll_errors",
+            "cursor_last_kind",
+            "encoder_hw",
+        ):
+            assert key in stats, key
+        assert stats["cursor_custom_sent"] >= 1 and stats["cursor_bitmap_max_chars"] == len(custom["png"])
+        assert stats["cursor_pos_sent"] >= 4 and stats["cursor_last_kind"] == "custom" and stats["encoder_hw"] is False
+        assert not [key for key in stats if "png" in key]
+        w.send({"op": "stop"})
+        assert await w.finish() == 0
+        assert w.app._cursor_poller is None  # noqa: SLF001  # stopped with the session
+    finally:
+        await phone.close()
+
+
+async def test_loopback_overlay_session_without_a_cursor_channel_uses_the_reliable_one(worker: InProcessWorker) -> None:
+    """A phone that did not open ``dome-screen-cursor-v1`` still gets every position, on ``dome-screen-v1``. It waits
+    for one position (re-sent when the channel opened), never for a count of them, so it does not depend on timing
+    (2a Part 0)."""
+    phone = Phone()
+    w = worker
+    try:
+        offer = await phone.offer()
+        w.start()
+        w.send(
+            start_message(offer, cursor="overlay", encoder_preference=["vp8"], source=scripted_source([1, "a", 10, 20]))
+        )
+        answer = await w.expect("answer", timeout=20)
+        await phone.accept(str(answer["answer_sdp"]))
+        await wait_for(lambda: bool(phone.positions()), timeout=30)
+        assert {label for label, _m in phone.cursor_messages()} == {SCREEN_DATA_CHANNEL_LABEL}
+        assert phone.positions()[0] == {"type": "cursor_pos", "gen": 1, "x": nx(10), "y": ny(20), "visible": True}
+        assert w.app._peer.cursor_channel is None and w.app._peer.cursor_pos_unreliable == 0  # noqa: SLF001
+    finally:
+        await phone.close()
+
+
+async def test_loopback_drawn_session_says_drawn_and_sends_no_cursor_message(worker: InProcessWorker) -> None:
+    phone = Phone()
+    w = worker
+    try:
+        offer = await phone.offer(cursor_channel=True)
+        w.start()
+        w.send(start_message(offer, cursor="drawn", encoder_preference=["vp8"], source=dict(CURSOR_SOURCE)))
+        answer = await w.expect("answer", timeout=20)
+        await phone.accept(str(answer["answer_sdp"]))
+        assert await w.expect("cursor", timeout=20) == {"ev": "cursor", "mode": "drawn", "source": "fake"}
+        await wait_for(lambda: len(phone.frames) >= 3 and bool(phone.dc_of("state")), timeout=20)
+        await asyncio.sleep(0.5)
+        assert all(m.get("cursor") == "drawn" for m in phone.dc_of("state"))
+        assert phone.cursor_messages() == [] and w.app._cursor_poller is None  # noqa: SLF001
+    finally:
+        await phone.close()
+
+
+async def test_loopback_a_start_without_cursor_sends_no_1_5_key_or_message(worker: InProcessWorker) -> None:
+    """A 1.4-stamped start (no ``cursor``): no ``cursor`` event, no poller, and the phone, which validates with
+    additionalProperties:false, sees only the 1.4 vocabulary and no ``cursor`` key."""
+    phone = Phone()
+    w = worker
+    try:
+        offer = await phone.offer()
+        w.start()
+        w.send(start_message(offer, encoder_preference=["vp8"], source=dict(CURSOR_SOURCE)))
+        answer = await w.expect("answer", timeout=20)
+        await phone.accept(str(answer["answer_sdp"]))
+        await w.expect("first_frame", timeout=20)
+        await wait_for(lambda: len(phone.frames) >= 20 and bool(phone.dc_of("geometry")), timeout=30)
+        w.send({"op": "pause"})
+        w.send({"op": "resume"})
+        await wait_for(lambda: len(phone.dc_of("state")) >= 3, timeout=10)
+        assert {m["type"] for m in phone.dc_messages} <= {"geometry", "state", "allowance", "restricted"}
+        assert not any("cursor" in m for m in phone.dc_messages)
+        assert w.app._cursor_poller is None  # noqa: SLF001
+        while not w.events.empty():
+            w.seen.append(w.events.get_nowait())
+        assert "cursor" not in [e.get("ev") for e in w.seen]
+    finally:
+        await phone.close()
+
+
+async def test_loopback_a_rebuild_is_followed_only_by_positions_of_the_new_generation(worker: InProcessWorker) -> None:
+    """The walk (a new position at every read) across a rebuild: once the worker has sent ``geometry`` gen 2, every
+    ``cursor_pos`` it sends is of gen 2 (the poller is handed over before the geometry goes out, older positions still
+    waiting are dropped and counted), the shape and a position follow at once, and the reopened source reports its
+    pointer mode again."""
+    phone = Phone()
+    w = worker
+    try:
+        offer = await phone.offer(cursor_channel=True)
+        w.start()
+        w.send(start_message(offer, cursor="overlay", encoder_preference=["vp8"], source=dict(CURSOR_SOURCE)))
+        answer = await w.expect("answer", timeout=20)
+        await phone.accept(str(answer["answer_sdp"]))
+        await w.expect("cursor", timeout=20)
+        await wait_for(lambda: len(phone.positions()) >= 3, timeout=20)
+        peer = w.app._peer  # noqa: SLF001
+        sent: list[dict[str, Any]] = []
+        send_dc, send_cursor_pos = peer.send_dc, peer.send_cursor_pos
+
+        def recording_dc(message: dict[str, Any]) -> bool:
+            sent.append(message)
+            return bool(send_dc(message))
+
+        def recording_pos(message: dict[str, Any]) -> bool:
+            sent.append(message)
+            return bool(send_cursor_pos(message))
+
+        peer.send_dc, peer.send_cursor_pos = recording_dc, recording_pos
+        w.send({"op": "rebuild", "source": {"surface_index": 0, "width": 1280, "height": 720, "rotation": 0}})
+        assert (await w.expect("geometry", timeout=10))["gen"] == 2
+        assert (await w.expect("cursor", timeout=20))["mode"] == "overlay"  # the rebuilt source opened
+        await wait_for(lambda: any(p["gen"] == 2 for p in phone.positions()), timeout=10)
+        at = next(i for i, m in enumerate(sent) if m["type"] == "geometry" and m["gen"] == 2)
+        after = [m for m in sent[at:] if m["type"] == "cursor_pos"]
+        assert after and all(m["gen"] == 2 for m in after)
+        assert [m["type"] for m in sent[at:] if m["type"] != "state"][1] == "cursor_shape"  # re-sent after geometry
+    finally:
+        await phone.close()
+
+
+async def test_loopback_a_source_that_keeps_the_pointer_makes_the_session_drawn(
+    worker: InProcessWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows.Graphics.Capture on a Windows that refuses ``cursor_capture=False`` keeps the pointer in the picture:
+    asked for overlay, the session reports ``drawn`` (the phone never draws a second pointer) and no poller runs."""
+    from dome_agent.screen.worker import main as worker_main
+
+    def build(kind: str, spec: dict[str, Any], width: int, height: int, fps: int, **kw: Any) -> Any:
+        assert kw == {"cursor_drawn": False, "pix_fmt": "yuv420p"}  # overlay asked; VP8 takes yuv420p
+        return fake.SyntheticSource(width, height, fps, cursor_drawn=True)
+
+    monkeypatch.setattr(worker_main, "_build_source", build)
+    phone = Phone()
+    w = worker
+    try:
+        offer = await phone.offer(cursor_channel=True)
+        w.start()
+        w.send(start_message(offer, cursor="overlay", encoder_preference=["vp8"], source=dict(CURSOR_SOURCE)))
+        answer = await w.expect("answer", timeout=20)
+        await phone.accept(str(answer["answer_sdp"]))
+        assert await w.expect("cursor", timeout=20) == {"ev": "cursor", "mode": "drawn", "source": "fake"}
+        await wait_for(lambda: any(m.get("cursor") == "drawn" for m in phone.dc_of("state")), timeout=10)
+        await asyncio.sleep(0.3)
+        assert w.app._cursor_poller is None and phone.cursor_messages() == []  # noqa: SLF001
+    finally:
+        await phone.close()
+
+
+class FakeChannel:
+    def __init__(self, label: str, state: str = "open") -> None:
+        self.label, self.readyState = label, state
+        self.sent: list[str] = []
+        self.closed = False
+        self.handlers: dict[str, Callable[[Any], None]] = {}
+
+    def send(self, text: str) -> None:
+        self.sent.append(text)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def on(self, name: str, handler: Callable[[Any], None]) -> None:
+        self.handlers[name] = handler
+
+
+def bare_peer(events: list[dict[str, Any]] | None = None) -> ScreenPeer:
+    track = types.SimpleNamespace(choice=encode.EncoderChoice("vp8", ""), force_keyframe=lambda **_kw: None)
+    return ScreenPeer(
+        offer_sdp="",
+        stun_urls=[],
+        track=track,  # type: ignore[arg-type]
+        capture_allowed=asyncio.Event(),
+        emit=(events if events is not None else []).append,
+        bitrate_kbps={},
+    )
+
+
+def test_the_peer_dispatches_channels_by_label_and_keeps_the_size_rules() -> None:
+    """``dome-screen-v1`` carries the vocabulary; ``dome-screen-cursor-v1`` carries positions only (anything the phone
+    sends on it is dropped and counted); any other label is closed and counted. ``send_dc`` keeps the 1 KiB rule for
+    every message but ``cursor_shape`` (12 KiB): the worker's own parser check."""
+    events: list[dict[str, Any]] = []
+    peer = bare_peer(events)
+    main, cursor_dc, other = (
+        FakeChannel(SCREEN_DATA_CHANNEL_LABEL),
+        FakeChannel(SCREEN_CURSOR_CHANNEL_LABEL),
+        FakeChannel("x"),
+    )
+    for channel in (cursor_dc, main, other):
+        peer._on_datachannel(channel)  # noqa: SLF001
+    assert peer.channel is main and peer.cursor_channel is cursor_dc and other.closed and peer.dc_unknown_channels == 1
+    main.handlers["message"](json.dumps({"type": "hb"}))
+    cursor_dc.handlers["message"](json.dumps({"type": "hb"}))  # nothing travels from the phone on the cursor channel
+    assert events == [{"ev": "hb"}] and peer.dc_dropped == 1 and peer.dc_received == 1
+    # a cursor shape up to 12 KiB goes; any other message over 1 KiB does not
+    png = base64.b64encode(bytes(6144)).decode()
+    shape = {
+        "type": "cursor_shape",
+        "kind": "custom",
+        "width": 64,
+        "height": 64,
+        "hotspot_x": 0,
+        "hotspot_y": 0,
+        "png": png,
+    }
+    assert peer.send_dc(shape) is True and 1024 < len(main.sent[-1].encode()) <= 12288
+    with pytest.raises(ProtocolError) as caught:
+        peer.send_dc({**shape, "png": png + "AAAA"})  # 8196 characters: not a cursor_shape any more
+    assert caught.value.code == "MALFORMED_MESSAGE"
+    with pytest.raises(ProtocolError):
+        peer.send_dc({"type": "restricted", "restricted": True, "reason": "x" * 2000})
+    # positions on the cursor channel while it is open, else the reliable one
+    pos = {"type": "cursor_pos", "gen": 1, "x": 1, "y": 2, "visible": True}
+    assert peer.send_cursor_pos(pos) is True and cursor_dc.sent == [dumps_compact(pos)]
+    assert peer.cursor_pos_unreliable == 1
+    cursor_dc.readyState = "closing"
+    assert peer.send_cursor_pos(pos) is True and main.sent[-1] == dumps_compact(pos) and peer.cursor_pos_unreliable == 1
+    main.readyState = "closed"
+    assert peer.send_cursor_pos(pos) is False
+    with pytest.raises(ProtocolError):
+        peer.send_cursor_pos({**pos, "visible": None})
+
+
+class RecordingPeer:
+    data_saver = False
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, dict[str, Any]]] = []
+
+    def send_dc(self, message: dict[str, Any]) -> bool:
+        parse_screen_dc_message(dumps_compact(message), "pc_to_phone")
+        self.sent.append(("dc", message))
+        return True
+
+    def send_cursor_pos(self, message: dict[str, Any]) -> bool:
+        parse_screen_dc_message(dumps_compact(message), "pc_to_phone")
+        self.sent.append(("cursor", message))
+        return True
+
+
+def test_shape_for_vocabulary_keeps_a_1_4_session_free_of_1_5_keys_and_messages() -> None:
+    app = WorkerApp(io.BytesIO(), io.BytesIO())
+    peer = RecordingPeer()
+    app._peer = peer  # noqa: SLF001
+    pos = {"type": "cursor_pos", "gen": 1, "x": 1, "y": 2, "visible": True}
+    shape = {"type": "cursor_shape", "kind": "arrow"}
+    assert app._state_message() == {"type": "state", "state": "sending"}  # noqa: SLF001
+    assert app._send_dc({"type": "state", "state": "sending", "cursor": "overlay"}) is True  # noqa: SLF001
+    assert app._send_dc(pos) is False and app._send_dc(shape) is False  # noqa: SLF001
+    assert peer.sent == [("dc", {"type": "state", "state": "sending"})] and app.dropped_1_4 == 2
+    # a session whose start carried cursor: the key and the messages go, positions through send_cursor_pos
+    app._cursor_requested = app._cursor_effective = "overlay"  # noqa: SLF001
+    assert app._state_message() == {"type": "state", "state": "sending", "cursor": "overlay"}  # noqa: SLF001
+    assert app._send_dc(pos) is True and app._send_dc(shape) is True  # noqa: SLF001
+    assert peer.sent[1:] == [("cursor", pos), ("dc", shape)]
+
+
+def test_the_cursor_flush_sends_shapes_first_drops_old_generations_and_counts() -> None:
+    app = WorkerApp(io.BytesIO(), io.BytesIO())
+    peer = RecordingPeer()
+    app._peer = peer  # noqa: SLF001
+    app._cursor_requested = app._cursor_effective = "overlay"  # noqa: SLF001
+    app._gen = 3  # noqa: SLF001
+    png = base64.b64encode(bytes(60)).decode()
+    custom = {
+        "type": "cursor_shape",
+        "kind": "custom",
+        "width": 2,
+        "height": 2,
+        "hotspot_x": 0,
+        "hotspot_y": 0,
+        "png": png,
+    }
+    app._cursor_on_pos({"type": "cursor_pos", "gen": 3, "x": 5, "y": 6, "visible": True})  # noqa: SLF001
+    app._cursor_on_shape({"type": "cursor_shape", "kind": "ibeam"})  # noqa: SLF001
+    app._cursor_on_shape(custom)  # noqa: SLF001
+    app._cursor_flush()  # noqa: SLF001
+    assert [m["type"] for _channel, m in peer.sent] == ["cursor_shape", "cursor_shape", "cursor_pos"]
+    app._cursor_on_pos({"type": "cursor_pos", "gen": 2, "x": 5, "y": 6, "visible": True})  # noqa: SLF001
+    app._cursor_flush()  # noqa: SLF001
+    assert len(peer.sent) == 3  # an older generation's position is dropped
+    stats = app._cursor_stats()  # noqa: SLF001
+    assert stats == {
+        "cursor_pos_sent": 1,
+        "cursor_shape_sent": 2,
+        "cursor_custom_sent": 1,
+        "cursor_bitmap_max_chars": len(png),
+        "cursor_dropped_gen": 1,
+        "cursor_bitmap_too_large": 0,
+        "cursor_poll_errors": 0,
+        "cursor_last_kind": "custom",
+        "dropped_1_4": 0,
+    }
+    assert not [key for key in stats if "png" in key]
+    # a drawn session sends nothing the poller may still have handed over
+    app._cursor_effective = "drawn"  # noqa: SLF001
+    app._cursor_on_shape({"type": "cursor_shape", "kind": "arrow"})  # noqa: SLF001
+    app._cursor_flush()  # noqa: SLF001
+    assert len(peer.sent) == 3

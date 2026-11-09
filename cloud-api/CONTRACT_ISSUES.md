@@ -136,3 +136,12 @@ next protocol MINOR bump.
     stream (mobile-app DECISIONS 79). Proposed wording for §17.6: "`INPUT_STALE` — relay: outside the 5 s window, or
     the batch waited longer than `input_age_budget_ms` at the relay behind a newer batch (`ref_pc_id` only); PC: older
     than the 1 s age budget at dispatch". The agent's side of the same round is pc-agent CONTRACT_ISSUES #26.
+25. **`rules.screen_signaling` (1) does not say what a mint does to a credential that carries a live session**
+    (2026-11-09, DECISIONS #117). The rule says "at most one outstanding credential per controller (minting a new one
+    first revokes the previous)" and lists "at the end of the session" among the revocation paths. Since 1.5 a Next
+    screen switch mints while the old session is still up, and the phone restores that session when the switch fails,
+    so revoking its credential at the mint would cut a relayed picture before the switch has even been signed.
+    Implemented reading: the previous outstanding credential is revoked at the mint; one bound to a session the relay
+    still holds open is revoked when that session ends; a start refusal revokes only the credential minted for that
+    start. Proposed wording: "at most one outstanding credential per controller (minting a new one first revokes the
+    previous one, unless it is bound to a live screen session: that one is revoked when its session ends)".

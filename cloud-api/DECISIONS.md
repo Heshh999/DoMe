@@ -627,3 +627,68 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     the change helps staging only, would need a per-environment setting, and after #110 the input path touches the
     pool once per second per socket, where a recycle costs one ~0.1–0.3 s read per pooled connection per 10 minutes,
     far inside the 1 s budget. Left as is.
+
+## Screen view round 2a (protocol 1.5, 2026-11-09)
+
+115. **`pc.protocol_versions` is a persisted REST field, not a `pc_status` field.** The phone sends the 1.5 `cursor`
+    param of `screen.session_start` only to a PC whose agent announced 1.5, so it needs to know what the agent speaks.
+    The relay learns it from the agent's `hello` and now stores it on the `pcs` row next to `agent_version`
+    (`pcs.protocol_versions`, JSONB list, default `[]`, migration `0006_pc_protocol_versions`; `relay/agent_ws.py`
+    keeps only well-formed `MAJOR.MINOR` strings, at most 8, as the hello schema already allows), and
+    `GET /v1/pcs` / `PATCH /v1/pcs/{id}` return it as `protocol_versions` (`routes/pcs.py::pc_body`): the list from
+    the last hello, kept while the PC is offline, `[]` for a PC whose agent has not connected since this relay was
+    deployed. Not a `pc_status` field, because that frame's schema is `additionalProperties:false` and
+    `broadcast_to_subscribers` sends one frame to every subscriber, so an older phone would refuse it; REST answers for
+    an offline PC too and follows the precedent of `agent_version`. The cost: REST bodies are validated strictly by
+    the PWA as well, so a PWA left open from before the deploy gets `MALFORMED_MESSAGE` on `/v1/pcs` until it reloads,
+    which the new PWA turns into an "update ready" notice. Integration-tested (Linux, fakes: real PostgreSQL, simulated
+    agents): `[]` before the first hello, the full list while online and after the agent left, the shorter list after a
+    1.4 hello, the PATCH body, and the 0006 round trip with an existing row reading `[]`.
+116. **The relay refuses any command whose stamp the agent did not announce, before forwarding.** Since 1.5 a command is
+    stamped by content (rules.command_version_stamping): `screen.session_start` is 1.4 without `cursor` and 1.5 with it.
+    Forwarded, a shipped 1.4 agent would refuse a 1.5 start itself (its library checks the stamp before the schema and
+    the params) with `PROTOCOL_INCOMPATIBLE{peer: "1.5", supported: ["1.4"]}`: that detail has no `required`, so the
+    phone cannot tell it to retry without `cursor`, and the refusal arrives only after the relay has spent a start token
+    and reserved allowance. So `route_command` (step 8b, right after the `supports_screen` gate) refuses a command whose
+    `protocol_version` is not compatible with the agent's announced versions before any of that:
+    `result{origin: relay, state: failed, error: PROTOCOL_INCOMPATIBLE, detail: {peer: "agent", required: <stamp>}}`
+    ("The PC's DoMe agent needs an update for this feature"). This generalises the 1.4 input-batch gate (#93) to every
+    command. It sits before the operator switch (`SCREEN_VIEW_DISABLED`), the start rate limiter
+    (`screen_start_rate_limit`) and `reserve_start`, so a refused start reserves no allowance, writes no commands row
+    and spends no start token; it still spends the token of the per-plan command bucket (step 7), as `PC_OFFLINE` does,
+    and revokes the TURN credential the phone minted for that start, like every other relay-side refusal of a start
+    (#117). The phone retries once without `cursor`. Integration-tested (Linux, fakes): a 1.5 start to a simulated 1.4
+    agent is refused and never reaches it, with no reservation, no ledger change and six starts still allowed
+    afterwards; a 1.4 start reaches the same agent; both stamps reach a 1.5 agent, and a result without `cursor` is
+    relayed unchanged; any other command stamped above what a 1.1 agent announced is refused the same way. The test
+    harness stamps by content too (`tests/conftest.py ControllerSim.envelope`: `REGISTRY.min_version(action, params)`;
+    an explicit `protocol_version=` still overrides), and the repository's e2e suite relies on it.
+117. **A credential that carries a live session is not revoked by the phone's next mint; it is revoked when that session
+    ends, and a relay-side start refusal revokes only that start's own credential.** In 2a a Next screen switch is a
+    fresh start from the same phone while the old session stays up (old heartbeat kept, picture kept), and the phone
+    restores that session when the switch fails (design D14, review finding 17). Every start sends `screen_ice_request`
+    first, and minting used to revoke the controller's previous credential (`replaced`) even when it was bound to the
+    live session, so on a TURN-relayed path (a phone on mobile data) the old picture could stop as soon as the switch
+    began, and a switch refused by the relay (`RATE_LIMITED`, `SCREEN_ALLOWANCE_EXHAUSTED`, `PC_OFFLINE`, the stamp
+    gate) or by the PC restored a session whose credential was gone. Now `TurnService.mint` first checks the previous
+    row: one bound to a session the ledger still holds open (`screen_reservations` state `reserved` / `live`) moves to
+    `turn_deferred_revocations` (username, session id, controller, account, expiry; migration
+    `0007_turn_deferred_revocations`; no foreign key, as for `turn_pending_revocations`) and the controller's row starts
+    afresh; anything else is still revoked `replaced`. A set-aside credential is revoked on every path that ends its
+    session (`revoke_session`: `session_ended`, including the old session's `ended{replaced}`, `swept`,
+    `controller_offline`, `plan_change` from a ticket), with the controller (`revoke_controller`: logout, revocation,
+    absence, grant narrowing) or the account (`revoke_account`: plan change, a cap), with the same events and the same
+    retry through `turn_pending_revocations` when the provider does not confirm; the sweeper drops it once expired.
+    `ScreenService.on_start_refused` now calls `revoke_for_start` with the refused command and the refusal time, so it
+    revokes only an outstanding credential minted before the refusal (the one the phone minted for that start), never
+    one bound to an earlier start or carrying a live session; a refusal at the PC already used `revoke_for_start`.
+    Reading of `rules.screen_signaling (1)`: "at most one outstanding credential per controller" still holds (a
+    set-aside credential is bound to a session, not outstanding), and "minting a new one first revokes the previous"
+    applies to the previous outstanding one; a credential that carries a session is revoked "at the end of the session",
+    a path the same rule lists. The cost: while a switch is pending, and for as long as a phone keeps sessions open on
+    several PCs, a controller holds one credential per open session plus its current one, each bounded by its session's
+    ledger and by its TTL. Integration-tested (Linux, real PostgreSQL, `FakeTurn`): a mint while a session is live
+    leaves its credential unrevoked until that session's `ended`, a refused switch revokes only the new credential and
+    the old one goes with the old session's end, a set-aside credential goes with the controller, the account or the
+    sweeper's expiry, and a revocation the provider does not confirm is retried like any other. Not verified against the
+    real provider or on a device (KNOWN_ISSUES #38).

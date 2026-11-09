@@ -5,6 +5,11 @@ heartbeats ride the data channel, and taps stay on the signed ``input_batch`` pa
 ``ai_eligible: false``. The result strips everything but ids, geometry, flags and the allowance: the PC-signed
 answer leaves in a ``screen_answer`` frame (``ScreenSessionManager``), never in a result, because results are
 journaled and SDP is never persisted (``rules.screen_content``).
+
+Since 1.5 (``rules.screen_cursor``): the ``cursor`` param is read from the RAW signed params, so its presence is what
+the phone signed (``VerifiedCommand.payload["params"]``; no default ever fills it in), and the result carries
+``cursor`` only when the start carried it, because a 1.4 phone validates the result with additionalProperties:false.
+The PC-signed answer is stamped with the start's own ``protocol_version`` (``rules.screen_signaling`` (5)).
 """
 
 from __future__ import annotations
@@ -32,6 +37,8 @@ async def session_start(ctx: ExecutionContext) -> dict[str, Any]:
             "GRANT_MISSING", "This phone does not have the 'screen' permission on this PC."
         )
     manager = services.screen
+    raw_params = ctx.command.payload.get("params")
+    cursor = raw_params.get("cursor") if isinstance(raw_params, dict) else None
     session = await manager.start_session(
         controller_id=ctx.command.controller_id,
         kid=ctx.command.envelope.kid,
@@ -40,6 +47,8 @@ async def session_start(ctx: ExecutionContext) -> dict[str, Any]:
         offer_sdp=str(ctx.params["offer_sdp"]),
         surface=ctx.params.get("surface", "primary"),
         takeover=bool(ctx.params.get("takeover", False)),
+        protocol_version=str(ctx.command.payload["protocol_version"]),
+        cursor=str(cursor) if cursor is not None else None,
     )
     # PC sound is Phase 2: the audio transceiver is negotiated inactive, so `audio` is false whatever was asked.
     result: dict[str, Any] = {
@@ -56,6 +65,9 @@ async def session_start(ctx: ExecutionContext) -> dict[str, Any]:
     }
     if session.encoder in ("h264", "vp8"):
         result["encoder"] = session.encoder
+    if cursor is not None:
+        # the mode the PC will try (the data channel's state.cursor is authoritative once capture is open)
+        result["cursor"] = session.cursor_mode if session.cursor_mode in ("drawn", "overlay") else "drawn"
     return result
 
 

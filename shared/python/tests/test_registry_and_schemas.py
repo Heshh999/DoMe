@@ -70,7 +70,7 @@ def signer():
 
 def test_registry_loads_and_is_consistent():
     reg = load_registry()
-    assert reg.protocol_version == "1.4" and reg.registry_version == "1.4"
+    assert reg.protocol_version == "1.5" and reg.registry_version == "1.5"
     assert "youtube.next" in reg.actions
     # manual input (rules.input_sessions / ai_eligibility): either capability permits the session actions,
     # and the human-only actions can never be AI tools or routine steps
@@ -244,7 +244,9 @@ def test_minor_version_compat():
     assert protocol_compatible("1.3", ("1.4",))  # a 1.3 relay build keeps talking to a 1.4 one
     assert not protocol_compatible("1.3", ("1.2",))
     assert not protocol_compatible("1.4", ("1.3",))
-    assert not protocol_compatible("1.5", ("1.4",))
+    assert protocol_compatible("1.4", ("1.5",))  # a 1.4 agent keeps talking to a 1.5 relay
+    assert not protocol_compatible("1.5", ("1.4",))  # a 1.5-stamped start never suits a 1.4 agent (the relay refuses it)
+    assert not protocol_compatible("1.6", ("1.5",))
     assert not protocol_compatible("2.0", ("1.2",))
     assert not protocol_compatible("x", ("1.0",))
     assert not protocol_compatible("1.0\n", ("1.0",))
@@ -357,11 +359,55 @@ def test_registry_refuses_an_invalid_since():
 
     docs = [_load_json(n) for n in ("actions.json", "errors.json", "version.json", "plans.json")]
     Registry(*docs)
-    for bad in ("1.5", "2.0", "0.9", "1.x", "1.2\n", ""):
+    for bad in ("1.6", "2.0", "0.9", "1.x", "1.2\n", ""):
         raw = copy.deepcopy(docs[0])
         raw["actions"]["system.ping"]["since"] = bad
         with pytest.raises(ValueError):
             Registry(raw, *docs[1:])
+
+
+def test_registry_refuses_an_invalid_param_since():
+    """actions.json `param_since` (1.5), checked while loading in both libraries: a known param without a default, a
+    MAJOR.MINOR between the action's `since` and this protocol."""
+    from dome_protocol.registry import Registry, _load_json
+
+    docs = [_load_json(n) for n in ("actions.json", "errors.json", "version.json", "plans.json")]
+    reg = Registry(*docs)
+    start = reg.get("screen.session_start")
+    assert start.param_since == {"cursor": "1.5"}
+    assert all(spec.param_since == {} for name, spec in reg.actions.items() if name != "screen.session_start")
+
+    def with_start(mutate):
+        raw = copy.deepcopy(docs[0])
+        mutate(raw["actions"]["screen.session_start"])
+        return raw
+
+    def set_param_since(value):
+        return lambda spec: spec.__setitem__("param_since", value)
+
+    def add_default(spec):
+        spec["params"]["properties"]["cursor"]["default"] = "drawn"
+
+    bad = {
+        "unknown param": set_param_since({"cursr": "1.5"}),
+        "below since": set_param_since({"cursor": "1.3"}),
+        "above protocol": set_param_since({"cursor": "1.6"}),
+        "another major": set_param_since({"cursor": "2.0"}),
+        "not a version": set_param_since({"cursor": "1.x"}),
+        "trailing newline": set_param_since({"cursor": "1.5\n"}),
+        "empty": set_param_since({"cursor": ""}),
+        "a number": set_param_since({"cursor": 15}),
+        "not an object": set_param_since(["cursor"]),
+        "null": set_param_since(None),
+        "a default on the param": add_default,
+    }
+    for why, mutate in bad.items():
+        with pytest.raises(ValueError):
+            Registry(with_start(mutate), *docs[1:])
+        assert why
+    # equal to the action's since is allowed (pointless, not wrong), and an action without the key has none
+    assert Registry(with_start(set_param_since({"cursor": "1.4"})), *docs[1:]).get("screen.session_start").param_since == {"cursor": "1.4"}
+    assert Registry(with_start(lambda spec: spec.pop("param_since")), *docs[1:]).get("screen.session_start").param_since == {}
 
 
 def test_search_limits_match_the_schemas():
@@ -402,9 +448,9 @@ def test_1_2_commands_verify(signer, action, params, target):
 @pytest.mark.parametrize(
     "action, params, target, stamps",
     [
-        ("system.ping", {}, None, ("1.0", "1.1", "1.2")),
-        ("youtube.next", {}, TARGET, ("1.0", "1.2")),
-        ("input.session_start", {}, None, ("1.1", "1.2")),
+        ("system.ping", {}, None, ("1.0", "1.1", "1.2", "1.5")),
+        ("youtube.next", {}, TARGET, ("1.0", "1.2", "1.5")),
+        ("input.session_start", {}, None, ("1.1", "1.2", "1.5")),
     ],
 )
 def test_older_actions_accept_every_stamp_from_their_since(signer, action, params, target, stamps):
@@ -422,7 +468,7 @@ def test_older_actions_accept_every_stamp_from_their_since(signer, action, param
         ({"action": "app.maximize", "params": {}, "target": WINDOW, "protocol_version": "1.1"}, "PROTOCOL_INCOMPATIBLE"),
         ({"action": "app.maximize", "params": {}, "target": WINDOW, "protocol_version": "1.0"}, "PROTOCOL_INCOMPATIBLE"),
         ({"protocol_version": "1.1"}, "PROTOCOL_INCOMPATIBLE"),
-        ({"protocol_version": "1.5"}, "PROTOCOL_INCOMPATIBLE"),
+        ({"protocol_version": "1.6"}, "PROTOCOL_INCOMPATIBLE"),
         ({"action": "input.session_start", "params": {}, "target": None, "protocol_version": "1.0"}, "PROTOCOL_INCOMPATIBLE"),
         ({"params": {}}, "INVALID_PARAMETERS"),
         ({"params": {"query": ""}}, "INVALID_PARAMETERS"),

@@ -31,13 +31,29 @@
  * The phone never reads pixels: the stream only ever becomes a `<video>.srcObject` (test/no-pixel-access.test.ts).
  * Nothing here logs an SDP, a candidate, an address or a credential (log.ts also redacts those keys). The Free
  * allowance shown is a countdown for display; the PC's `ended{allowance_exhausted}` is authoritative.
+ *
+ * Protocol 1.5 (design screen-view-2a §4.1):
+ *   - the pointer drawn by the phone: a start carries `cursor: "overlay"` only to a PC whose agent announced 1.5
+ *     (`pcProtocolVersions`), and only such a start opens the second, unordered data channel `dome-screen-cursor-v1`
+ *     (a 1.4 PC's worker sends on the channel announced last). `cursor_pos` goes into one slot drained once per
+ *     animation frame by `pointer` (no React state per message); `cursor_shape` is checked by `cursorShape.ts`. A relay
+ *     refusal `PROTOCOL_INCOMPATIBLE {required: "1.5"}` marks the PC and starts once more without `cursor`;
+ *   - Next screen (`switchSurface`): a fresh signed start on the other monitor while the old session stays up (no
+ *     `bye`, no stop, its heartbeat kept so the lease never lapses); the picture swaps on the new session's first frame
+ *     and a failed switch restores the old session unless the PC already ended it (a new picture that arrived but
+ *     never showed means it did: a fresh session on the new screen). Every handler checks that its channel or peer is
+ *     still the current one, so the old peer's late events change nothing (the old session's pause and resume are
+ *     kept for a restore);
+ *   - the last screen watched per PC is remembered for the app run (restarts and resumes go back to it).
  */
-import { LIMITS, parseScreenDcMessage, ProtocolError, SCREEN_DATA_CHANNEL_LABEL, screenSdpAcceptable, verifyScreenAnswer, type relayFrames, type results, type ScreenDcPcToPhone } from "@dome/protocol";
+import { LIMITS, parseScreenDcMessage, protocolCompatible, ProtocolError, SCREEN_CURSOR_CHANNEL_LABEL, SCREEN_DATA_CHANNEL_LABEL, screenSdpAcceptable, verifyScreenAnswer, type relayFrames, type results, type ScreenDcPcToPhone } from "@dome/protocol";
 
 import type { CommandRecord, Identity } from "./commands.ts";
 import type { PcKeyPin } from "./controllerKey.ts";
+import { parseCursorShape } from "./cursorShape.ts";
 import { SCREEN_UNSUPPORTED_BROWSER } from "./labels.ts";
 import { errorSummary, log } from "./log.ts";
+import { PointerModel, type PointerReport } from "./pointer.ts";
 import { GeometryTracker, type Geometry } from "./screenMap.ts";
 import { emptyTimeline, mediaSummary, reduceStats, statsSummary, type CodecFallback, type ScreenClientFacts, type ScreenMediaFacts, type ScreenStatsSnapshot, type ScreenTimeline, type StatsReportLike, type TimelineMark } from "./screenStats.ts";
 
@@ -114,6 +130,22 @@ export interface ScreenSessionState {
   /** Ms when the start command was acknowledged by the PC; null before. */
   ackAt: number | null;
   sentAt: number | null;
+  /** The screen shown: `result.surface_index`, then `geometry.surface_index` (1.5 Next screen). */
+  surfaceIndex: number | null;
+  /** A switch to another screen is in flight; the old picture stays until the new session's first frame. */
+  switching: { to: number; from: number | null; startedAt: number } | null;
+  /** The last switch landed (drives the short "Screen 2 of 2" chip); also set when a session starts on a non-main screen. */
+  switched: { index: number; count: number; at: number } | null;
+  /** The remembered screen is not connected any more; the picture went back to the main one (`human` counts from 1). */
+  switchedGone: { human: number; at: number } | null;
+  /** A switch was refused or failed and the old session was kept (`human`: the screen still shown). */
+  switchFailed: { code: string; human: number; at: number } | null;
+  /** The new session's stream during a switch, for a second, hidden `<video>` (the visible `stream` is untouched). */
+  incomingStream: MediaStream | null;
+  /** The pointer mode: `result.cursor` (provisional), then `state.cursor` (authoritative); null = a 1.4 session. */
+  cursorMode: "drawn" | "overlay" | null;
+  /** This start carried `cursor: "overlay"` (the PC announced 1.5). */
+  pointerOverlayAsked: boolean;
 }
 
 export const EMPTY_SCREEN_STATE: ScreenSessionState = {
@@ -152,6 +184,14 @@ export const EMPTY_SCREEN_STATE: ScreenSessionState = {
   relayDown: false,
   ackAt: null,
   sentAt: null,
+  surfaceIndex: null,
+  switching: null,
+  switched: null,
+  switchedGone: null,
+  switchFailed: null,
+  incomingStream: null,
+  cursorMode: null,
+  pointerOverlayAsked: false,
 };
 
 /** The subset of RTCDataChannel this client uses (so tests can inject a fake). */
@@ -171,7 +211,8 @@ export interface TransceiverLike {
 /** The subset of RTCPeerConnection this client uses. `RTCPeerConnection` satisfies it structurally (see `defaultPeerFactory`). */
 export interface PeerConnectionLike {
   addTransceiver(kind: "video" | "audio", init: { direction: "recvonly" }): TransceiverLike;
-  createDataChannel(label: string, init: { ordered: boolean }): DataChannelLike;
+  /** `maxRetransmits: 0` with `ordered: false` for the 1.5 cursor channel (partial reliability: a late position is useless). */
+  createDataChannel(label: string, init: { ordered: boolean; maxRetransmits?: number }): DataChannelLike;
   createOffer(): Promise<{ type?: string; sdp?: string }>;
   setLocalDescription(description: { type?: string; sdp?: string }): Promise<void>;
   setRemoteDescription(description: { type: "answer"; sdp: string }): Promise<void>;
@@ -220,6 +261,8 @@ export interface ScreenClientDeps {
   getPin(pcId: string): Promise<PcKeyPin | null>;
   /** null = no WebRTC in this browser: every start fails honestly with SCREEN_UNSUPPORTED_BROWSER. */
   peerFactory: PeerFactory | null;
+  /** The protocol versions the PC's agent announced (REST `pc.protocol_versions`; [] when unknown). */
+  pcProtocolVersions(pcId: string): readonly string[];
   onChange(state: ScreenSessionState): void;
   timers?: ScreenTimers;
   now?: () => Date;
@@ -274,6 +317,52 @@ function allowanceFrom(a: relayFrames.ScreenAllowanceState, at: number): ScreenA
   return { unlimited: a.unlimited, remainingSeconds: a.remaining_seconds, resetsAt: a.resets_at, at };
 }
 
+/** The protocol MINOR that added the pointer drawn by the phone (`screen.session_start.cursor`). */
+export const CURSOR_PROTOCOL_VERSION = "1.5";
+
+/** What `start()` takes. `switching` makes it a switch of screens: the live session stays up until the new one shows. */
+export interface ScreenStartOptions {
+  takeover?: boolean;
+  retries?: number;
+  /** A screen index of the PC, or its main screen. Default: the screen last watched on this PC in this app run. */
+  surface?: number | "primary";
+  switching?: { from: number | null };
+}
+
+/** DoMe's number for a screen (counted from 1): its position among the PC's screens sorted by index, + 1. */
+export function humanSurface(surfaces: readonly ScreenSurface[], index: number | null): number {
+  if (index === null) return 1;
+  const sorted = [...surfaces].sort((a, b) => a.index - b.index);
+  const at = sorted.findIndex((s) => s.index === index);
+  return at >= 0 ? at + 1 : index + 1;
+}
+
+/** The live session kept aside during a switch (its peer, channels and heartbeat stay up until the new one shows). */
+interface PreviousSession {
+  pc: PeerConnectionLike | null;
+  dc: DataChannelLike | null;
+  cdc: DataChannelLike | null;
+  sessionId: string | null;
+  surfaceIndex: number | null;
+  phase: ScreenPhase;
+  stream: MediaStream | null;
+  hbTimer: unknown;
+  /** The PC's `ended` for this id was seen (it replaced the session): nothing to restore any more. */
+  endedByPc: boolean;
+  /** What a failed switch restores: the state and the per-session facts of the old session. */
+  state: ScreenSessionState;
+  geometry: Geometry | null;
+  lastFrame: number | null;
+  pauseCauses: Set<"secure_desktop" | "indicator">;
+  timeline: ScreenTimeline;
+  answerAt: number | null;
+  dtlsAt: number | null;
+  hbSent: number;
+  dcReceived: number;
+  dcDropped: number;
+  lastStats: ScreenStatsSnapshot | null;
+}
+
 export class ScreenSessionClient {
   private readonly deps: ScreenClientDeps;
   private readonly timers: ScreenTimers;
@@ -326,10 +415,32 @@ export class ScreenSessionClient {
   private pauseCauses = new Set<"secure_desktop" | "indicator">();
   /** Ids of sessions this phone stopped, saw end or failed, oldest first (at most RETIRED_SESSIONS_MAX; DECISIONS 83). */
   private retiredSessionIds = new Set<string>();
+  /** The 1.5 cursor channel (`dome-screen-cursor-v1`, unordered, no retransmits); only in a start that carried `cursor`. */
+  private cdc: DataChannelLike | null = null;
+  /** The PC refused `cursor` (PROTOCOL_INCOMPATIBLE required 1.5) for this PC in this app run… */
+  private noCursorFor: string | null = null;
+  /** …while its announced versions read like this (a changed list that includes 1.5 clears the mark). */
+  private noCursorVersions: string | null = null;
+  /** The live session kept aside while a switch is in flight. */
+  private previous: PreviousSession | null = null;
+  /** The screen watched last per PC, for the app run only (never persisted). */
+  private readonly lastSurfaceByPc = new Map<string, number>();
+  /** The surface the current start asked for. */
+  private startSurface: number | "primary" = "primary";
+  /** One slot: the latest accepted `cursor_pos`, drained once per animation frame by `pointer.sample()`. */
+  private latestCursorPos: PointerReport | null = null;
+  /** Set by an automatic retry of a refused start: what the next `start()` carries over. */
+  private retryCarry: { gone: { human: number; at: number } | null } | null = null;
+  private pointerFacts = { shapes: 0, custom: 0, rejected: 0, positions: 0, unreliable: 0, droppedGen: 0, lastKind: null as string | null };
+  private surfaceFacts = { switches: 0, switchFailures: 0, gone: 0 };
+  private zoomFacts = { maxScale: 1, followPans: 0 };
+  /** The pointer drawn by the phone (lib/pointer.ts): fed here and by the page's gestures, read once per frame. */
+  readonly pointer: PointerModel;
 
   constructor(deps: ScreenClientDeps) {
     this.deps = deps;
     this.timers = deps.timers ?? globalTimers;
+    this.pointer = new PointerModel({ pending: () => this.takeLatestCursorPos(), surface: () => this.surfaceSize() });
   }
 
   get snapshot(): ScreenSessionState {
@@ -356,21 +467,51 @@ export class ScreenSessionClient {
    * (SCREEN_SESSION_OWNED sets `owned` for the takeover prompt). A session on another PC, or an earlier one on this PC,
    * is stopped first (a same-phone restart replaces its own session on the PC: `replaced`).
    */
-  async start(pcId: string, options: { takeover?: boolean; retries?: number } = {}): Promise<ScreenSessionState> {
-    if (this.state.phase !== "idle" && this.state.phase !== "ended" && this.state.phase !== "failed") await this.stop(this.state.pcId === pcId ? "restart" : "pc_switch");
+  async start(pcId: string, options: ScreenStartOptions = {}): Promise<ScreenSessionState> {
+    const carry = this.retryCarry;
+    this.retryCarry = null;
+    const switching = options.switching && this.state.pcId === pcId ? options.switching : undefined;
+    if (switching) {
+      // a switch: the live session stays up (no bye, no stop) until the new one shows its first frame
+      if (this.previous === null) this.setPreviousAside();
+      else this.closePeer(); // a retry within the switch: only the refused attempt's peer goes
+    } else if (this.state.phase !== "idle" && this.state.phase !== "ended" && this.state.phase !== "failed") {
+      await this.stop(this.state.pcId === pcId ? "restart" : "pc_switch");
+    }
     const nonce = ++this.nonce;
-    const kept = { allowance: this.state.pcId === pcId ? this.state.allowance : null, otherViewer: this.state.pcId === pcId ? this.state.otherViewer : false };
+    const surface = options.surface ?? this.lastSurfaceByPc.get(pcId) ?? "primary";
+    this.startSurface = surface;
+    const now = this.now();
+    const samePc = this.state.pcId === pcId;
+    const kept: Partial<ScreenSessionState> = { allowance: samePc ? this.state.allowance : null, otherViewer: samePc ? this.state.otherViewer : false };
+    if (switching) {
+      const to = surface === "primary" ? (this.state.surfaces.find((s) => s.primary)?.index ?? 0) : surface;
+      // the viewing goes on: how long it was live (Stop), the consent the PC asked for (a hidden page offers Resume
+      // instead of starting by itself) and a relay socket that is down (clicks paused) stay until the new session says
+      Object.assign(kept, { surfaces: this.state.surfaces, surfaceIndex: this.state.surfaceIndex, stream: this.state.stream, startedAt: this.state.startedAt, consent: this.state.consent, relayDown: this.state.relayDown, switching: { to, from: switching.from, startedAt: this.state.switching?.startedAt ?? now } });
+    }
+    if (carry?.gone) kept.switchedGone = carry.gone;
     this.clearTimers();
     this.geometry.reset();
     this.offerSdp = null;
     this.answerApplied = false;
     this.pendingStream = null;
+    this.latestCursorPos = null;
     this.dcDropped = 0;
     this.pauseCauses.clear();
     this.resetFacts();
+    // the owner's own start (not a switch, not an automatic retry) starts the run's counts again
+    if (!switching && !options.retries && !carry) this.resetRunFacts();
     // the VP8 retry applies to the automatic fresh session only; the owner's own start offers H.264 first again
     if (!options.retries) this.codecFallback = null;
-    this.set({ ...EMPTY_SCREEN_STATE, ...kept, phase: "ice", pcId, retries: options.retries ?? 0 });
+    // 1.5: the pointer drawn by the phone only for a PC whose agent announced 1.5 (and did not refuse it in this run)
+    const versions = this.deps.pcProtocolVersions(pcId);
+    if (this.noCursorFor === pcId && versions.join(",") !== this.noCursorVersions) {
+      if (protocolCompatible(CURSOR_PROTOCOL_VERSION, versions)) this.noCursorFor = this.noCursorVersions = null;
+      else this.noCursorVersions = versions.join(",");
+    }
+    const overlay = protocolCompatible(CURSOR_PROTOCOL_VERSION, versions) && this.noCursorFor !== pcId;
+    this.set({ ...EMPTY_SCREEN_STATE, ...kept, phase: "ice", pcId, retries: options.retries ?? 0, pointerOverlayAsked: overlay });
     if (!this.deps.peerFactory) return this.fail(SCREEN_UNSUPPORTED_BROWSER);
     if (!this.deps.connected()) return this.fail("PC_RECONNECTING");
     const identity = this.deps.identity();
@@ -398,7 +539,8 @@ export class ScreenSessionClient {
     // 3. the offer
     let offerSdp: string;
     try {
-      offerSdp = await this.buildOffer(servers.ice_servers as RTCIceServer[]);
+      // the second channel only in a start that carries `cursor`: a 1.4 PC's worker sends on the channel announced last
+      offerSdp = await this.buildOffer(servers.ice_servers as RTCIceServer[], overlay);
     } catch (e) {
       log.warn("screen.offer_failed", errorSummary(e));
       if (nonce !== this.nonce) return this.state;
@@ -409,8 +551,10 @@ export class ScreenSessionClient {
     this.offerSdp = offerSdp;
     // 4. the signed start command, with the lifetime a consent wait needs
     let record: CommandRecord;
+    // the shared builder stamps 1.5 exactly when `cursor` is present (no default fills it in), else 1.4
+    const params: Record<string, string | number | boolean> = { offer_sdp: offerSdp, surface, audio: false, takeover: options.takeover === true, ...(overlay ? { cursor: "overlay" } : {}) };
     try {
-      record = await this.deps.sendCommand({ pcId, action: "screen.session_start", params: { offer_sdp: offerSdp, surface: "primary", audio: false, takeover: options.takeover === true }, lifetimeSeconds: LIMITS.screen_start_command_lifetime_seconds, source: "system" });
+      record = await this.deps.sendCommand({ pcId, action: "screen.session_start", params, lifetimeSeconds: LIMITS.screen_start_command_lifetime_seconds, source: "system" });
     } catch (e) {
       log.warn("screen.start_send_failed", errorSummary(e));
       if (nonce !== this.nonce) return this.state;
@@ -418,8 +562,80 @@ export class ScreenSessionClient {
     }
     if (nonce !== this.nonce) return this.state;
     this.set({ phase: "starting", commandId: record.commandId, sentAt: this.now() });
-    log.info("screen.start_sent", { pc_id: pcId, command_id: record.commandId, takeover: options.takeover === true, turn: servers.turn });
+    log.info("screen.start_sent", { pc_id: pcId, command_id: record.commandId, takeover: options.takeover === true, turn: servers.turn, surface, cursor: overlay ? "overlay" : null, switching: switching !== undefined });
     return this.state;
+  }
+
+  /**
+   * A switch starts: the live session's peer, channels and heartbeat are kept aside (handlers detached so its late
+   * events change nothing, the heartbeat still renewing the PC's lease on the old channel), and its id is NOT retired
+   * yet: its `ended` frame must still be recognised.
+   */
+  private setPreviousAside(): void {
+    this.previous = {
+      pc: this.pc,
+      dc: this.dc,
+      cdc: this.cdc,
+      sessionId: this.state.sessionId,
+      surfaceIndex: this.state.surfaceIndex,
+      phase: this.state.phase,
+      stream: this.state.stream,
+      hbTimer: this.hbTimer,
+      endedByPc: false,
+      state: this.state,
+      geometry: this.geometry.known,
+      lastFrame: this.lastFrame,
+      pauseCauses: new Set(this.pauseCauses),
+      timeline: { ...this.timeline },
+      answerAt: this.answerAt,
+      dtlsAt: this.dtlsAt,
+      hbSent: this.hbSent,
+      dcReceived: this.dcReceived,
+      dcDropped: this.dcDropped,
+      lastStats: this.lastStats,
+    };
+    detach(this.pc, this.dc, this.cdc);
+    this.pc = this.dc = this.cdc = null;
+    this.hbTimer = null;
+  }
+
+  /** Next screen: a fresh signed start on screen `index` while this session stays up (no-op unless live and idle). */
+  async switchSurface(index: number): Promise<ScreenSessionState> {
+    const s = this.state;
+    if (!(s.phase === "live" || s.phase === "paused") || s.switching !== null || index === s.surfaceIndex || !s.surfaces.some((x) => x.index === index) || !s.pcId) return s;
+    log.info("screen.switch_started", { to: index, from: s.surfaceIndex });
+    return this.start(s.pcId, { surface: index, retries: s.retries, switching: { from: s.surfaceIndex } });
+  }
+
+  /** The screen after the one shown, in index order, wrapping; null with fewer than two screens. */
+  nextSurfaceIndex(): number | null {
+    const sorted = [...this.state.surfaces].sort((a, b) => a.index - b.index);
+    if (sorted.length < 2) return null;
+    const at = sorted.findIndex((x) => x.index === this.state.surfaceIndex);
+    return sorted[(at + 1) % sorted.length]!.index;
+  }
+
+  /** The shown screen's PHYSICAL size (`screen_surface`), never the encode size of the picture; null before a result. */
+  surfaceSize(): { width: number; height: number } | null {
+    const s = this.state.surfaces.find((x) => x.index === this.state.surfaceIndex);
+    return s ? { width: s.width, height: s.height } : null;
+  }
+
+  /** The latest accepted `cursor_pos`, once (the slot is emptied): `pointer.sample()` drains it every frame. */
+  takeLatestCursorPos(): PointerReport | null {
+    const r = this.latestCursorPos;
+    this.latestCursorPos = null;
+    return r;
+  }
+
+  /** The page zoomed the picture to `scale` (readout `zoom: max`). */
+  noteZoom(scale: number): void {
+    if (Number.isFinite(scale) && scale > this.zoomFacts.maxScale) this.zoomFacts.maxScale = scale;
+  }
+
+  /** The zoomed Touchpad view panned to keep the pointer in sight (readout `follow pans`). */
+  noteFollowPan(): void {
+    this.zoomFacts.followPans += 1;
   }
 
   private waitForIce(): Promise<IceOutcome> {
@@ -440,8 +656,12 @@ export class ScreenSessionClient {
     w.resolve(outcome);
   }
 
-  /** The receive-only offer (§4.2 step 2). The peer connection and data channel stay in this client. */
-  private async buildOffer(iceServers: RTCIceServer[]): Promise<string> {
+  /**
+   * The receive-only offer (§4.2 step 2). The peer connection and data channels stay in this client. With
+   * `cursorChannel` (the same flag that puts `cursor: "overlay"` into the params) the 1.5 cursor channel is opened too,
+   * unordered and without retransmits, after the main one in the same offer (no renegotiation).
+   */
+  private async buildOffer(iceServers: RTCIceServer[], cursorChannel: boolean): Promise<string> {
     const factory = this.deps.peerFactory;
     if (!factory) throw new ProtocolError(SCREEN_UNSUPPORTED_BROWSER, "no WebRTC");
     const pc = factory({ iceServers });
@@ -454,18 +674,30 @@ export class ScreenSessionClient {
     preferCodecs(audio, "audio");
     const dc = pc.createDataChannel(SCREEN_DATA_CHANNEL_LABEL, { ordered: true });
     this.dc = dc;
-    dc.onopen = () => this.onChannelOpen();
-    dc.onmessage = (ev) => this.onChannelMessage(ev.data);
-    dc.onclose = () => this.stopHeartbeat();
-    pc.ontrack = (ev) => this.onTrack(ev);
-    pc.onconnectionstatechange = () => this.onPeerState(pc);
-    pc.oniceconnectionstatechange = () => this.onPeerState(pc);
+    const cdc = cursorChannel ? pc.createDataChannel(SCREEN_CURSOR_CHANNEL_LABEL, { ordered: false, maxRetransmits: 0 }) : null;
+    this.cdc = cdc;
+    this.attach(pc, dc, cdc);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await this.waitForGathering(pc);
     const sdp = pc.localDescription?.sdp ?? offer.sdp;
     if (typeof sdp !== "string") throw new ProtocolError("SCREEN_OFFER_INVALID", "no local description");
     return sdp;
+  }
+
+  /** Every handler checks that its peer or channel is still the current one: an old object's late event changes nothing. */
+  private attach(pc: PeerConnectionLike, dc: DataChannelLike, cdc: DataChannelLike | null): void {
+    dc.onopen = () => {
+      if (dc === this.dc) this.onChannelOpen(dc);
+    };
+    dc.onmessage = (ev) => this.onChannelMessage(dc, ev.data);
+    dc.onclose = () => {
+      if (dc === this.dc) this.stopHeartbeat();
+    };
+    if (cdc) cdc.onmessage = (ev) => this.onCursorChannelMessage(cdc, ev.data);
+    pc.ontrack = (ev) => this.onTrack(pc, ev);
+    pc.onconnectionstatechange = () => this.onPeerState(pc);
+    pc.oniceconnectionstatechange = () => this.onPeerState(pc);
   }
 
   /** Vanilla ICE: every candidate is in the offer. Gathering complete, or GATHER_TIMEOUT_MS. */
@@ -501,7 +733,9 @@ export class ScreenSessionClient {
       }
       const code = t.error?.code ?? (t.state === "succeeded" ? "MALFORMED_MESSAGE" : t.state === "outcome_unknown" ? "OUTCOME_UNKNOWN" : "COMMAND_EXPIRED");
       log.info("screen.start_refused", { code, state: t.state, origin: t.origin });
-      this.fail(code, t.error?.message, t.error?.detail as Record<string, unknown> | undefined);
+      const detail = t.error?.detail as Record<string, unknown> | undefined;
+      if (this.retryRefusedStart(code, t.error?.message, detail)) return;
+      this.fail(code, t.error?.message, detail, t.origin);
       return;
     }
     if (record.noAnswer) {
@@ -520,6 +754,43 @@ export class ScreenSessionClient {
     }
   }
 
+  /**
+   * The two automatic retries of a refused start (each happens at most once by construction):
+   *   - PROTOCOL_INCOMPATIBLE `required: "1.5"` on a start that carried `cursor` (the PC's announced versions were
+   *     stale): the PC is marked for this app run and the start goes again without `cursor` (same screen, same retry
+   *     count, a switch stays a switch; not counted as a retry);
+   *   - INVALID_PARAMETERS on a start for a numbered screen that carried no `cursor` (or whose message names the
+   *     surface): that screen is not connected any more, so the start goes again on the main screen. A pre-1.5 agent
+   *     answers INVALID_PARAMETERS for an unknown param too, so a start with `cursor` is never retried as a screen problem.
+   */
+  private retryRefusedStart(code: string, message: string | undefined, detail: Record<string, unknown> | undefined): boolean {
+    const pcId = this.state.pcId;
+    if (!pcId) return false;
+    const switching = this.state.switching ? { from: this.state.switching.from } : undefined;
+    const retries = this.state.retries;
+    if (code === "PROTOCOL_INCOMPATIBLE" && detail?.required === CURSOR_PROTOCOL_VERSION && this.state.pointerOverlayAsked) {
+      this.noCursorFor = pcId;
+      this.noCursorVersions = this.deps.pcProtocolVersions(pcId).join(",");
+      log.info("screen.cursor_param_refused", { pc_id: pcId });
+      this.retryWith(pcId, { surface: this.startSurface, retries, ...(switching ? { switching } : {}) }, null);
+      return true;
+    }
+    if (code === "INVALID_PARAMETERS" && this.startSurface !== "primary" && (!this.state.pointerOverlayAsked || /surface/i.test(message ?? ""))) {
+      const gone = { human: humanSurface(this.state.surfaces, this.startSurface), at: this.now() };
+      this.lastSurfaceByPc.delete(pcId);
+      this.surfaceFacts.gone += 1;
+      log.info("screen.surface_gone", { pc_id: pcId, surface: this.startSurface });
+      this.retryWith(pcId, { surface: "primary", retries, ...(switching ? { switching } : {}) }, gone);
+      return true;
+    }
+    return false;
+  }
+
+  private retryWith(pcId: string, options: ScreenStartOptions, gone: { human: number; at: number } | null): void {
+    this.retryCarry = { gone };
+    void this.start(pcId, options);
+  }
+
   private onResult(r: results.ScreenSessionResult): void {
     if (this.state.sessionId && this.state.sessionId !== r.screen_session_id) {
       // the signed answer named another session than the result: the two must agree, or nothing is shown
@@ -530,9 +801,18 @@ export class ScreenSessionClient {
     this.consentTimer = null;
     const primary = r.surfaces.find((s) => s.index === r.surface_index) ?? r.surfaces[0];
     if (primary) this.geometry.seed(r.gen, r.surface_index, primary.width, primary.height);
+    const cursorMode = r.cursor ?? null;
+    if (this.state.pcId) this.lastSurfaceByPc.set(this.state.pcId, r.surface_index);
+    this.pointer.reset();
+    this.pointer.setMode(cursorMode);
+    // a switch: the new session is real, so late frames of the old one are dropped from now on (its `ended` is still
+    // matched by id in onSessionFrame before the retired check)
+    if (this.previous) this.retire(this.previous.sessionId);
     this.set({
       sessionId: r.screen_session_id,
       surfaces: [...r.surfaces],
+      surfaceIndex: r.surface_index,
+      cursorMode,
       geometry: this.geometry.known,
       consent: r.consent,
       consentWaiting: false,
@@ -540,7 +820,7 @@ export class ScreenSessionClient {
       allowance: allowanceFrom(r.allowance, this.now()),
       encoder: r.encoder ?? this.state.encoder,
     });
-    log.info("screen.session_result", { pc_id: this.state.pcId, consent: r.consent, encoder: r.encoder ?? null, surfaces: r.surfaces.length });
+    log.info("screen.session_result", { pc_id: this.state.pcId, consent: r.consent, encoder: r.encoder ?? null, surfaces: r.surfaces.length, surface_index: r.surface_index, cursor: cursorMode });
   }
 
   /** Returns true when the frame concerned this client (consumed). */
@@ -621,8 +901,10 @@ export class ScreenSessionClient {
       return;
     }
     if (nonce !== this.nonce) return;
-    // the stream becomes visible only together with `verified` (nothing is shown before verification)
-    this.set({ verified: true, phase: "connecting", sessionId: this.state.sessionId ?? verified.payload.screen_session_id, consentWaiting: false, consentDeadlineAt: null, stream: this.pendingStream ?? this.state.stream });
+    // the stream becomes visible only together with `verified` (nothing is shown before verification); during a
+    // switch it goes to the hidden second <video> and the old picture stays where it is
+    const media = this.state.switching ? { incomingStream: this.pendingStream ?? this.state.incomingStream } : { stream: this.pendingStream ?? this.state.stream };
+    this.set({ verified: true, phase: "connecting", sessionId: this.state.sessionId ?? verified.payload.screen_session_id, consentWaiting: false, consentDeadlineAt: null, ...media });
     this.pendingStream = null;
     log.info("screen.answer_verified", { pc_id: this.state.pcId, stream: this.state.stream !== null });
     this.armConnectTimers();
@@ -652,7 +934,8 @@ export class ScreenSessionClient {
    * PeerConnectionBackend::setRemoteDescriptionSucceeded), so `verified` is still false here. `answerApplied` is the
    * guard: it is set only after the signed answer verified, so a track can only come from the verified answer.
    */
-  private onTrack(ev: TrackEventLike): void {
+  private onTrack(pc: PeerConnectionLike, ev: TrackEventLike): void {
+    if (pc !== this.pc) return; // an old peer's late track
     if (ev.track.kind !== "video") return;
     log.info("screen.track", { streams: ev.streams.length, answer_applied: this.answerApplied, verified: this.state.verified });
     if (!this.answerApplied) {
@@ -665,8 +948,9 @@ export class ScreenSessionClient {
       log.warn("screen.track_without_stream");
       return;
     }
-    if (this.state.verified) this.set({ stream: media });
-    else this.pendingStream = media;
+    if (!this.state.verified) this.pendingStream = media;
+    else if (this.state.switching) this.set({ incomingStream: media }); // the visible `stream` stays the old picture
+    else this.set({ stream: media });
   }
 
   private onPeerState(pc: PeerConnectionLike): void {
@@ -778,6 +1062,21 @@ export class ScreenSessionClient {
       this.codecFallback = { from: "h264", to: "vp8", reason: "not_decoded" };
       log.info("screen.codec_fallback", { ...this.codecFallback });
     }
+    if (this.state.switching !== null) {
+      const previous = this.previous;
+      if (previous !== null && !previous.endedByPc && this.state.incomingStream === null) {
+        // the new session delivered no picture at all and the PC still runs the old one: the switch failed, the old
+        // session is restored
+        this.fail("SCREEN_CONNECTION_FAILED", undefined, { cause: "no_picture" });
+        return;
+      }
+      // the new picture arrived but never showed (H.264 this phone does not decode, say): the PC replaced the old
+      // session when the new one started, so nothing is left to restore. A fresh session on the new screen, with the
+      // VP8 retry recorded above, as after any start whose picture never came
+      log.info("screen.switch_restarted", { cause: "no_picture", codec_fallback: this.codecFallback?.to ?? null });
+      this.closePrevious(false);
+      this.set({ switching: null });
+    }
     void this.restartFresh("no_picture");
   }
 
@@ -835,6 +1134,9 @@ export class ScreenSessionClient {
       channel: { open: this.dc?.readyState === "open", hb_sent: this.hbSent, received: this.dcReceived, dropped: this.dcDropped },
       transport_connected: this.timeline.dtls_connected !== null,
       codec_fallback: this.codecFallback ? { ...this.codecFallback } : null,
+      pointer: { mode: this.state.cursorMode, ...this.pointerFacts, predErrMaxPx: this.pointer.predErrMaxPx },
+      surfaces: { count: this.state.surfaces.length, showing: this.state.surfaces.length > 0 && this.state.surfaceIndex !== null ? humanSurface(this.state.surfaces, this.state.surfaceIndex) : null, ...this.surfaceFacts },
+      zoom: { maxScale: Math.round(this.zoomFacts.maxScale * 10) / 10, followPans: this.zoomFacts.followPans },
     };
   }
 
@@ -868,17 +1170,37 @@ export class ScreenSessionClient {
     this.waitingForTap = false;
     this.hbSent = 0;
     this.dcReceived = 0;
+    this.pointerFacts = { shapes: 0, custom: 0, rejected: 0, positions: 0, unreliable: 0, droppedGen: 0, lastKind: null };
+  }
+
+  /** The counts that span a whole viewing (switches, zoom): reset by the owner's own start only. */
+  private resetRunFacts(): void {
+    this.surfaceFacts = { switches: 0, switchFailures: 0, gone: 0 };
+    this.zoomFacts = { maxScale: 1, followPans: 0 };
   }
 
   /** The `<video>` decoded a frame (requestVideoFrameCallback; metadata only, never pixels). */
   onVideoFrame(nowMs: number = this.now()): void {
     if (this.state.phase === "connecting" && this.state.verified) {
+      // during a switch only the new session's (hidden) <video> counts; it has a stream only once the new track came
+      if (this.state.switching !== null && this.state.incomingStream === null) return;
       this.lastFrame = nowMs;
       this.stopPictureWatchdog();
       this.mark("first_frame");
       this.mark("live");
       log.info("screen.first_frame", { ms_since_dtls: this.since(this.dtlsAt), ms_since_answer: this.since(this.answerAt) });
-      this.set({ phase: "live", startedAt: nowMs, lastFrameAt: nowMs, stalled: false, playHint: false });
+      const s = this.state;
+      const onOtherScreen = s.surfaces.find((x) => x.index === s.surfaceIndex)?.primary === false;
+      const switched = s.switching !== null || onOtherScreen ? { switched: { index: s.surfaceIndex ?? 0, count: s.surfaces.length, at: nowMs } } : {};
+      if (s.switching !== null) {
+        // the new picture is there: the roles of the two <video> elements swap, and the old session goes
+        this.surfaceFacts.switches += 1;
+        log.info("screen.switched", { to: s.surfaceIndex, from: s.switching.from, ms: Math.max(0, nowMs - s.switching.startedAt) });
+        this.closePrevious(false);
+        this.set({ phase: "live", startedAt: nowMs, lastFrameAt: nowMs, stalled: false, playHint: false, stream: s.incomingStream, incomingStream: null, switching: null, ...switched });
+      } else {
+        this.set({ phase: "live", startedAt: nowMs, lastFrameAt: nowMs, stalled: false, playHint: false, ...switched });
+      }
       log.info("screen.live", { pc_id: this.state.pcId, retries: this.state.retries });
       this.startStallWatchdog();
       return;
@@ -956,24 +1278,41 @@ export class ScreenSessionClient {
     const pcId = this.state.pcId;
     const retries = this.state.retries;
     if (!pcId) return;
+    if (this.state.switching !== null) {
+      // a switch in flight is never restarted underneath; its own failure restores the old session
+      log.info("screen.restart_skipped", { cause, switching: true });
+      return;
+    }
     if (retries >= MAX_RETRIES) {
       log.info("screen.retries_exhausted", { cause });
       await this.stop("restart");
       this.set({ phase: "failed", problem: { code: "SCREEN_CONNECTION_FAILED", detail: { cause } }, resume: "none" });
       return;
     }
+    const surface = this.state.surfaceIndex ?? undefined;
     await this.stop("restart");
-    await this.start(pcId, { retries: retries + 1 });
+    await this.start(pcId, { retries: retries + 1, ...(surface !== undefined ? { surface } : {}) });
   }
 
   // ---- the data channel -------------------------------------------------------------------------------
 
-  private onChannelOpen(): void {
+  private onChannelOpen(dc: DataChannelLike): void {
     this.mark("dc_open");
     log.info("screen.dc_open", { ms_since_answer: this.since(this.answerAt) });
-    this.sendChannel({ type: "hb" });
+    this.sendHeartbeat(dc);
     this.stopHeartbeat();
-    this.hbTimer = this.timers.setInterval(() => this.sendChannel({ type: "hb" }), HEARTBEAT_MS);
+    // bound to THIS channel: during a switch the old session's heartbeat goes on renewing its lease on its own channel
+    this.hbTimer = this.timers.setInterval(() => this.sendHeartbeat(dc), HEARTBEAT_MS);
+  }
+
+  private sendHeartbeat(dc: DataChannelLike): void {
+    if (dc.readyState !== "open") return;
+    try {
+      dc.send(JSON.stringify({ type: "hb" }));
+      this.hbSent += 1;
+    } catch (e) {
+      log.info("screen.dc_send_failed", errorSummary(e));
+    }
   }
 
   private stopHeartbeat(): void {
@@ -994,32 +1333,59 @@ export class ScreenSessionClient {
     }
   }
 
-  /** rules.screen_content: the closed inbound vocabulary; anything else is dropped (counted, never shown or run). */
-  private onChannelMessage(data: unknown): void {
+  /** Parse one inbound message for the receiving side, or null (dropped and counted; never shown, logged or run). */
+  private parseInbound(data: unknown): ScreenDcPcToPhone | null {
     this.dcReceived += 1;
     if (typeof data !== "string") {
       this.dcDropped += 1;
-      return;
+      return null;
     }
-    let msg: ScreenDcPcToPhone;
     try {
-      msg = parseScreenDcMessage(data, "pc_to_phone");
+      return parseScreenDcMessage(data, "pc_to_phone");
     } catch (e) {
       this.dcDropped += 1;
       if (this.dcDropped <= 3) log.info("screen.dc_message_dropped", { ...errorSummary(e), dropped: this.dcDropped });
-      return;
+      return null;
     }
+  }
+
+  /**
+   * rules.screen_content: the closed inbound vocabulary on `dome-screen-v1`; anything else is dropped (counted, never
+   * shown or run). A message of a channel that is not the current one (the old session's, during a switch) is ignored,
+   * and a handler that throws drops the message (its error name is logged, never the message).
+   */
+  private onChannelMessage(dc: DataChannelLike, data: unknown): void {
+    if (dc !== this.dc) return;
+    const msg = this.parseInbound(data);
+    if (!msg) return;
+    try {
+      this.applyMessage(msg);
+    } catch (e) {
+      this.dcDropped += 1;
+      log.info("screen.dc_handler_failed", { name: e instanceof Error ? e.name : "Error", type: msg.type });
+    }
+  }
+
+  private applyMessage(msg: ScreenDcPcToPhone): void {
     switch (msg.type) {
       case "geometry":
-        if (this.geometry.apply(msg)) this.set({ geometry: this.geometry.known });
+        if (this.geometry.apply(msg)) {
+          // the old positions mean nothing on the new generation: the pointer waits for the next report
+          this.pointer.geometryChanged();
+          this.latestCursorPos = null;
+          this.set({ geometry: this.geometry.known, surfaceIndex: msg.surface_index });
+        }
         return;
       case "state": {
         const paused = msg.state === "paused";
         if (!paused) this.lastFrame = this.now(); // the stall clock starts again from a resume
         if (paused && msg.reason) this.pauseCauses.add(msg.reason);
         if (!paused) this.pauseCauses.clear(); // the worker sends `sending` only once no cause is left
+        if (paused) this.pointer.hide(); // the PC sends no pointer while paused and re-sends it after the resume
+        const cursorMode = msg.cursor ?? this.state.cursorMode;
+        if (cursorMode !== this.state.cursorMode) this.pointer.setMode(cursorMode);
         const phase = this.state.phase === "live" && paused ? "paused" : this.state.phase === "paused" && !paused ? "live" : this.state.phase;
-        this.set({ pcState: msg.state, pauseReason: paused ? (this.pauseShown() ?? msg.reason ?? null) : null, phase, ...(msg.encoder ? { encoder: msg.encoder } : {}), ...(msg.data_saver !== undefined ? { dataSaver: msg.data_saver } : {}), ...(paused ? {} : { stalled: false, lastFrameAt: this.now() }) });
+        this.set({ pcState: msg.state, pauseReason: paused ? (this.pauseShown() ?? msg.reason ?? null) : null, phase, cursorMode, ...(msg.encoder ? { encoder: msg.encoder } : {}), ...(msg.data_saver !== undefined ? { dataSaver: msg.data_saver } : {}), ...(paused ? {} : { stalled: false, lastFrameAt: this.now() }) });
         return;
       }
       case "allowance":
@@ -1028,13 +1394,65 @@ export class ScreenSessionClient {
       case "restricted":
         this.set({ restricted: { restricted: msg.restricted, reason: msg.reason ?? null } });
         return;
+      case "cursor_pos":
+        // the reliable channel carries it when the cursor channel is not open (the PC's fallback)
+        this.acceptCursorPos(msg, false);
+        return;
+      case "cursor_shape": {
+        const shape = parseCursorShape(msg);
+        if (!shape) {
+          this.pointerFacts.rejected += 1;
+          return;
+        }
+        this.pointer.shape(shape);
+        this.pointerFacts.shapes += 1;
+        if (shape.kind === "custom") this.pointerFacts.custom += 1;
+        this.pointerFacts.lastKind = shape.kind;
+        return;
+      }
     }
+  }
+
+  /** `dome-screen-cursor-v1` (unordered, no retransmits): `cursor_pos` only; anything else is dropped and counted. */
+  private onCursorChannelMessage(cdc: DataChannelLike, data: unknown): void {
+    if (cdc !== this.cdc) return;
+    const msg = this.parseInbound(data);
+    if (!msg) return;
+    if (msg.type !== "cursor_pos") {
+      this.dcDropped += 1;
+      return;
+    }
+    try {
+      this.acceptCursorPos(msg, true);
+    } catch (e) {
+      this.dcDropped += 1;
+      log.info("screen.dc_handler_failed", { name: e instanceof Error ? e.name : "Error", type: msg.type });
+    }
+  }
+
+  /** One slot, last wins: the pointer reads it once per animation frame. No state change, no React render. */
+  private acceptCursorPos(msg: Extract<ScreenDcPcToPhone, { type: "cursor_pos" }>, unreliable: boolean): void {
+    if (msg.gen !== this.geometry.known?.gen) {
+      this.pointerFacts.droppedGen += 1;
+      return;
+    }
+    this.latestCursorPos = { x: msg.x, y: msg.y, visible: msg.visible, gen: msg.gen };
+    this.pointerFacts.positions += 1;
+    if (unreliable) this.pointerFacts.unreliable += 1;
   }
 
   // ---- lifecycle frames from the relay ----------------------------------------------------------------
 
   private onSessionFrame(frame: relayFrames.AgentScreenSession): boolean {
     if (frame.pc_id !== this.state.pcId) return false;
+    const previous = this.previous;
+    if (previous !== null && previous.sessionId !== null && frame.screen_session_id === previous.sessionId) {
+      // the session kept aside during a switch changes nothing on screen: its end means the PC replaced it, and its
+      // pause and resume are kept for a restore (a failed switch must not show a paused PC as sending)
+      if (frame.event === "ended") this.onPreviousEnded(previous, frame.reason);
+      else if (frame.event === "paused" || frame.event === "resumed") this.notePreviousPause(previous, frame);
+      return true;
+    }
     if (frame.screen_session_id !== this.state.sessionId && this.retiredSessionIds.has(frame.screen_session_id)) {
       // a session this phone already left: its late `ended` (the PC's answer to our `bye`, up to 2 s later) must not
       // end the automatic fresh session that is in flight with no id yet, nor count as another phone's (DECISIONS 83)
@@ -1078,11 +1496,49 @@ export class ScreenSessionClient {
     return true;
   }
 
-  /** The PC ended the session (rules.screen_sessions (6)): close the transport and show the reason. */
+  /**
+   * The PC ended the session kept aside during a switch (normally `replaced`, once the new start landed): there is
+   * nothing to restore any more. Its heartbeat stops; its peer closes at once if the new session's media already came,
+   * else when the new picture shows (so the last picture stays as long as possible).
+   */
+  private onPreviousEnded(previous: PreviousSession, reason: ScreenEndReason): void {
+    previous.endedByPc = true;
+    if (previous.hbTimer !== null) this.timers.clearInterval(previous.hbTimer);
+    previous.hbTimer = null;
+    this.retire(previous.sessionId);
+    log.info("screen.previous_ended", { reason });
+    if (this.state.incomingStream !== null || this.state.stream === null) {
+      closeObjects(previous.pc, previous.dc, previous.cdc);
+      previous.pc = previous.dc = previous.cdc = null;
+    }
+  }
+
+  /**
+   * The PC paused or resumed the session kept aside during a switch: recorded in what a failed switch restores (its
+   * pause causes, its state and its stall clock), exactly as the live session would have applied it.
+   */
+  private notePreviousPause(previous: PreviousSession, frame: relayFrames.AgentScreenSession): void {
+    const cause = frame.reason === "indicator" ? "indicator" : "secure_desktop";
+    const s = previous.state;
+    if (frame.event === "paused") {
+      previous.pauseCauses.add(cause);
+      previous.state = { ...s, pcState: "paused", pauseReason: pauseShownOf(previous.pauseCauses), phase: s.phase === "live" ? "paused" : s.phase };
+    } else {
+      previous.pauseCauses.delete(cause);
+      if (previous.pauseCauses.size > 0) {
+        previous.state = { ...s, pauseReason: pauseShownOf(previous.pauseCauses), ...(frame.path ? { path: frame.path } : {}) };
+      } else {
+        previous.lastFrame = this.now();
+        previous.state = { ...s, pcState: "sending", pauseReason: null, phase: s.phase === "paused" ? "live" : s.phase, ...(frame.path ? { path: frame.path } : {}), lastFrameAt: previous.lastFrame, stalled: false };
+      }
+    }
+    previous.phase = previous.state.phase;
+    log.info(frame.event === "paused" ? "screen.previous_paused" : "screen.previous_resumed", { reason: cause });
+  }
+
   /** The cause the page explains while paused: a Windows prompt first (someone must answer it), else a missing bar. */
   private pauseShown(): "secure_desktop" | "indicator" | null {
-    if (this.pauseCauses.has("secure_desktop")) return "secure_desktop";
-    return this.pauseCauses.has("indicator") ? "indicator" : null;
+    return pauseShownOf(this.pauseCauses);
   }
 
   /** Remember a session this phone has left, so its late lifecycle frames change nothing (bounded, oldest forgotten first). */
@@ -1103,8 +1559,10 @@ export class ScreenSessionClient {
     this.clearTimers();
     this.probeMedia(); // the <video>'s last facts, for the diagnostics bundle
     this.closePeer();
+    this.closePrevious(false);
+    this.pointer.reset();
     const resume: ScreenResume = NO_RESUME.has(reason) ? "none" : "manual";
-    this.set({ phase: "ended", endReason: reason, liveSeconds, stream: null, verified: false, transportConnected: false, playHint: false, resume, consentWaiting: false, consentDeadlineAt: null, stalled: false, tryingRelay: false, owned: reason === "takeover" });
+    this.set({ phase: "ended", endReason: reason, liveSeconds, stream: null, incomingStream: null, switching: null, verified: false, transportConnected: false, playHint: false, resume, consentWaiting: false, consentDeadlineAt: null, stalled: false, tryingRelay: false, owned: reason === "takeover" });
     log.info("screen.session_ended", { pc_id: this.state.pcId, reason, live_seconds: liveSeconds });
   }
 
@@ -1127,6 +1585,10 @@ export class ScreenSessionClient {
     if (inSession) this.sendChannel({ type: "bye" });
     this.probeMedia(); // the <video>'s last facts, for the diagnostics bundle
     this.closePeer();
+    // a stop during a switch ends the session kept aside too (`bye` on its own channel; its lease lapses otherwise)
+    this.closePrevious(true);
+    this.pointer.reset();
+    this.latestCursorPos = null;
     const resume: ScreenResume = reason === "hidden" && (inSession || phase === "ice" || phase === "offering") ? (consent === "granted" ? "manual" : "auto") : "none";
     if (reason === "stopped") this.set({ ...EMPTY_SCREEN_STATE, pcId, allowance, otherViewer, phase: "ended", endReason: "stopped", liveSeconds, resume: "none" });
     else this.set({ ...EMPTY_SCREEN_STATE, pcId, allowance, otherViewer, phase: "idle", resume, retries: reason === "restart" ? retries : 0 });
@@ -1161,6 +1623,8 @@ export class ScreenSessionClient {
     if (this.state.phase === "ice" || this.state.phase === "offering" || this.state.phase === "starting") {
       this.resolveIce({ kind: "aborted" });
       this.fail("PC_RECONNECTING");
+      // a switch in flight restored the old session: its picture continues like any live one
+      if (this.isLive) this.set({ relayDown: true });
       return;
     }
     if (this.state.phase === "connecting" || this.state.phase === "live" || this.state.phase === "paused") this.set({ relayDown: true });
@@ -1186,28 +1650,114 @@ export class ScreenSessionClient {
     this.resolveIce({ kind: "aborted" });
     this.clearTimers();
     this.closePeer();
+    this.closePrevious(false);
     this.geometry.reset();
     this.offerSdp = null;
     this.pin = null;
     this.resetFacts();
+    this.resetRunFacts();
     this.codecFallback = null;
+    this.pointer.reset();
+    this.latestCursorPos = null;
+    this.lastSurfaceByPc.clear();
+    this.noCursorFor = this.noCursorVersions = null;
+    this.retryCarry = null;
     this.set({ ...EMPTY_SCREEN_STATE });
   }
 
   // ---- failures ------------------------------------------------------------------------------------
 
-  private fail(code: string, message?: string, detail?: Record<string, unknown>): ScreenSessionState {
+  private fail(code: string, message?: string, detail?: Record<string, unknown>, origin?: string): ScreenSessionState {
+    const previous = this.previous;
+    // a switch that failed before its new picture arrived, while the PC still runs the old session: keep that one
+    if (previous !== null && !previous.endedByPc && this.state.incomingStream === null) return this.restorePrevious(previous, code, origin, detail);
     this.nonce += 1;
     this.retire(this.state.sessionId);
     this.resolveIce({ kind: "aborted" });
     this.clearTimers();
     this.probeMedia();
     this.closePeer();
+    this.closePrevious(false);
+    this.pointer.reset();
     const resetsAt = typeof detail?.resets_at === "string" ? detail.resets_at : null;
     const allowance = code === "SCREEN_ALLOWANCE_EXHAUSTED" ? { unlimited: false, remainingSeconds: 0, resetsAt, at: this.now() } : this.state.allowance;
-    this.set({ phase: "failed", problem: { code, ...(message ? { message } : {}), ...(detail ? { detail } : {}) }, owned: code === "SCREEN_SESSION_OWNED", stream: null, verified: false, transportConnected: false, playHint: false, consentWaiting: false, consentDeadlineAt: null, tryingRelay: false, stalled: false, resume: "none", allowance });
+    this.set({ phase: "failed", problem: { code, ...(message ? { message } : {}), ...(detail ? { detail } : {}) }, owned: code === "SCREEN_SESSION_OWNED", stream: null, incomingStream: null, switching: null, verified: false, transportConnected: false, playHint: false, consentWaiting: false, consentDeadlineAt: null, tryingRelay: false, stalled: false, resume: "none", allowance });
     log.info("screen.failed", { code, phase: this.state.phase });
     return this.state;
+  }
+
+  /**
+   * A switch failed (refused by the relay: RATE_LIMITED, SCREEN_ALLOWANCE_EXHAUSTED, PC_OFFLINE, the stamp gate; a
+   * 1.4 agent's SCREEN_CONSENT_DECLINED, whose consent runs before it ends anything; no answer; a local error) and
+   * the PC still runs the old session: the old peer, channels and heartbeat become current again and the old picture
+   * simply stays, with a short "Couldn't switch screens" note. A later `ended{replaced}` for it ends it as usual. For
+   * SCREEN_ALLOWANCE_EXHAUSTED the allowance reads 0 (with the refusal's `resets_at`) over the old picture instead: the
+   * page's out-of-minutes countdown, then the PC's `ended{allowance_exhausted}` and its exhausted state, no note.
+   */
+  private restorePrevious(previous: PreviousSession, code: string, origin: string | undefined, detail: Record<string, unknown> | undefined): ScreenSessionState {
+    this.previous = null;
+    this.nonce += 1;
+    this.retire(this.state.sessionId); // the failed attempt's own id, if it had one
+    this.resolveIce({ kind: "aborted" });
+    this.clearTimers();
+    this.closePeer(); // the failed attempt's peer and its heartbeat
+    this.pc = previous.pc;
+    this.dc = previous.dc;
+    this.cdc = previous.cdc;
+    this.hbTimer = previous.hbTimer;
+    if (this.pc && this.dc) this.attach(this.pc, this.dc, this.cdc);
+    this.answerApplied = this.pc !== null;
+    if (previous.sessionId) this.retiredSessionIds.delete(previous.sessionId);
+    this.geometry.reset();
+    if (previous.geometry) this.geometry.apply(previous.geometry);
+    // the old picture stayed on screen the whole time: the stall clock counts again from now
+    const now = this.now();
+    this.lastFrame = previous.lastFrame === null ? null : now;
+    this.pauseCauses = new Set(previous.pauseCauses);
+    this.timeline = { ...previous.timeline };
+    this.answerAt = previous.answerAt;
+    this.dtlsAt = previous.dtlsAt;
+    this.hbSent = previous.hbSent;
+    this.dcReceived = previous.dcReceived;
+    this.dcDropped = previous.dcDropped;
+    this.lastStats = previous.lastStats;
+    this.latestCursorPos = null;
+    if (this.pointer.pointerMode !== previous.state.cursorMode) this.pointer.setMode(previous.state.cursorMode);
+    if (previous.state.pcId && previous.surfaceIndex !== null) this.lastSurfaceByPc.set(previous.state.pcId, previous.surfaceIndex);
+    this.surfaceFacts.switchFailures += 1;
+    const human = humanSurface(previous.state.surfaces, previous.surfaceIndex);
+    const known = this.state.allowance ?? previous.state.allowance;
+    const resetsAt = typeof detail?.resets_at === "string" ? detail.resets_at : (known?.resetsAt ?? null);
+    const allowance: ScreenAllowance | null = code === "SCREEN_ALLOWANCE_EXHAUSTED" ? { unlimited: false, remainingSeconds: 0, resetsAt, at: now } : known;
+    // the relay socket may have gone during the switch (or been down when it began): clicks stay paused
+    const relayDown = this.state.relayDown || !this.deps.connected();
+    if (previous.state.pcState === "paused") this.pointer.hide(); // the PC sends no pointer while paused
+    this.set({ ...previous.state, ...(this.lastFrame !== null ? { lastFrameAt: now, stalled: false } : {}), allowance, otherViewer: this.state.otherViewer, relayDown, switching: null, incomingStream: null, switched: null, switchedGone: this.state.switchedGone, switchFailed: { code, human, at: now } });
+    log.info("screen.switch_failed", { code, origin: origin ?? "phone" });
+    if (this.isLive) {
+      this.startStallWatchdog();
+      this.startStatsLoop();
+    }
+    // the old transport may have gone while it was aside
+    if (this.pc) this.onPeerState(this.pc);
+    return this.state;
+  }
+
+  /** The session kept aside during a switch goes: its heartbeat stops, its peer closes (`bye` first when asked). */
+  private closePrevious(bye: boolean): void {
+    const previous = this.previous;
+    if (!previous) return;
+    this.previous = null;
+    if (previous.hbTimer !== null) this.timers.clearInterval(previous.hbTimer);
+    if (bye && !previous.endedByPc && previous.dc?.readyState === "open") {
+      try {
+        previous.dc.send(JSON.stringify({ type: "bye" }));
+      } catch (e) {
+        log.info("screen.dc_send_failed", errorSummary(e));
+      }
+    }
+    this.retire(previous.sessionId);
+    closeObjects(previous.pc, previous.dc, previous.cdc);
   }
 
   /** The answer did not verify: abandon the session (rules.pc_key_pinning (5)); the PC's own stop is best effort. */
@@ -1221,29 +1771,14 @@ export class ScreenSessionClient {
   }
 
   private closePeer(): void {
-    const dc = this.dc;
-    const pc = this.pc;
+    const { pc, dc, cdc } = this;
     this.dc = null;
+    this.cdc = null;
     this.pc = null;
     this.answerApplied = false;
     this.pendingStream = null;
     this.stopHeartbeat();
-    if (dc) {
-      dc.onopen = dc.onmessage = dc.onclose = null;
-      try {
-        dc.close();
-      } catch {
-        /* already closed */
-      }
-    }
-    if (pc) {
-      pc.ontrack = pc.onconnectionstatechange = pc.oniceconnectionstatechange = pc.onicegatheringstatechange = null;
-      try {
-        pc.close();
-      } catch {
-        /* already closed */
-      }
-    }
+    closeObjects(pc, dc, cdc);
   }
 
   private clearTimers(): void {
@@ -1252,6 +1787,38 @@ export class ScreenSessionClient {
     this.connectTimer = this.relayHintTimer = this.consentTimer = null;
     for (const h of [this.stallTimer, this.statsTimer, this.pictureTimer]) if (h !== null) this.timers.clearInterval(h);
     this.stallTimer = this.statsTimer = this.pictureTimer = null;
+  }
+}
+
+/** The pause cause the page explains: a Windows prompt first (someone must answer it), else a missing bar. */
+function pauseShownOf(causes: ReadonlySet<"secure_desktop" | "indicator">): "secure_desktop" | "indicator" | null {
+  if (causes.has("secure_desktop")) return "secure_desktop";
+  return causes.has("indicator") ? "indicator" : null;
+}
+
+/** Detach every handler of a peer and its channels (they stay open): their late events reach nothing. */
+function detach(pc: PeerConnectionLike | null, dc: DataChannelLike | null, cdc: DataChannelLike | null): void {
+  for (const ch of [dc, cdc]) if (ch) ch.onopen = ch.onmessage = ch.onclose = null;
+  if (pc) pc.ontrack = pc.onconnectionstatechange = pc.oniceconnectionstatechange = pc.onicegatheringstatechange = null;
+}
+
+/** Detach, then close the channels and the peer (each may already be closed). */
+function closeObjects(pc: PeerConnectionLike | null, dc: DataChannelLike | null, cdc: DataChannelLike | null): void {
+  detach(pc, dc, cdc);
+  for (const ch of [dc, cdc]) {
+    if (!ch) continue;
+    try {
+      ch.close();
+    } catch {
+      /* already closed */
+    }
+  }
+  if (pc) {
+    try {
+      pc.close();
+    } catch {
+      /* already closed */
+    }
   }
 }
 

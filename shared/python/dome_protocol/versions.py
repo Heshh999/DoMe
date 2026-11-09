@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # the registry imports this module while loading; the function below imports it lazily
+    from .registry import Registry
 
 _VERSION_RE = re.compile(r"\A([0-9]+)\.([0-9]+)\Z", re.ASCII)
 
@@ -42,6 +45,19 @@ def input_batch_protocol_version(events: Iterable[Mapping[str, Any]]) -> str:
         if version_below(best, since):
             best = since
     return best
+
+
+def command_protocol_version(action: str, params: Mapping[str, Any], *, registry: Registry | None = None) -> str:
+    """rules.command_version_stamping (1.5): the stamp of a command for ``action`` carrying ``params``, i.e. the lowest
+    version that defines every param it carries: the action's ``since`` raised to the ``param_since`` of any present param
+    (``Registry.min_version``). Pass the raw params the controller signs, never the default-filled output of
+    ``validate_params``. So ``screen.session_start`` is 1.4 without ``cursor`` and 1.5 with it. Unknown actions raise
+    UNKNOWN_ACTION."""
+    if registry is None:
+        from .registry import load_registry  # local import: registry depends on this module
+
+        registry = load_registry()
+    return registry.min_version(action, params)
 
 
 def parse_version(version: object) -> tuple[int, int] | None:
@@ -103,6 +119,7 @@ def negotiate_version(peer_versions: Iterable[str], supported: Iterable[str]) ->
 __all__ = [
     "INPUT_BATCH_PROTOCOL_VERSION",
     "SCREEN_INPUT_PROTOCOL_VERSION",
+    "command_protocol_version",
     "input_batch_protocol_version",
     "input_event_since",
     "negotiate_version",

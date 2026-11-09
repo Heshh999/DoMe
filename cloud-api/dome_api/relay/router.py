@@ -294,8 +294,10 @@ async def route_command(
     envelope = frame["envelope"]
     received_at = utcnow()
     command_id: str | None = None
-    # a refused screen.session_start also revokes the phone's TURN credential (design §13): remembered once parsed
+    # a refused screen.session_start also revokes the TURN credential the phone minted for it (design §13):
+    # the controller and the command are remembered once parsed
     screen_start_by: uuid.UUID | None = None
+    screen_start_command: uuid.UUID | None = None
     try:
         # 2. socket binding
         if envelope.get("kid") != conn.kid:
@@ -328,7 +330,7 @@ async def route_command(
                 raise Rejection(exc.code, exc.message, detail=exc.detail or None) from None
             command_id = cmd.command_id
             if cmd.spec.name == SCREEN_START_ACTION:
-                screen_start_by = ctrl.id
+                screen_start_by, screen_start_command = ctrl.id, uuid.UUID(cmd.command_id)
             if ctrl.id not in enabled_ids:
                 raise Rejection("CONTROLLER_PLAN_DISABLED")
             # 4. frame/payload PC agreement
@@ -382,6 +384,21 @@ async def route_command(
                     "PROTOCOL_INCOMPATIBLE",
                     "The PC's DoMe agent needs an update for Screen view",
                     detail={"peer": "agent", "required": SCREEN_PROTOCOL_VERSION},
+                )
+            # 8b. the stamp gate for commands (rules.command_version_stamping, 1.5; DECISIONS #116): a command stamped
+            # with a MINOR the agent did not announce (a screen.session_start carrying `cursor` to a 1.4 agent) is
+            # refused here, as 1.4-stamped input batches are in route_input_batch. Forwarded, the shipped agent would
+            # refuse it itself (its stamp check runs first) with PROTOCOL_INCOMPATIBLE {peer: "1.5", supported:
+            # ["1.4"]}, which carries no `required`, so the phone could not tell to retry without `cursor`, and only
+            # after the relay had spent a start token and reserved allowance; here it gets {peer: "agent", required:
+            # <stamp>}. The gate sits before the operator switch, the start budget and the ledger, so a refused start
+            # reserves nothing and spends no start token
+            stamp = str(cmd.payload["protocol_version"])
+            if not protocol_compatible(stamp, agent.protocol_versions):
+                raise Rejection(
+                    "PROTOCOL_INCOMPATIBLE",
+                    "The PC's DoMe agent needs an update for this feature",
+                    detail={"peer": "agent", "required": stamp},
                 )
             if cmd.spec.name == SCREEN_START_ACTION:
                 if not svc.screen.config.enabled:
@@ -470,8 +487,8 @@ async def route_command(
             log.info("command.forwarded", action=cmd.spec.name, pc_id=pc_id_str, controller_id=str(ctrl.id))
     except Rejection as rej:
         await _reject(mgr, limiters, conn, pc_id_str, command_id, rej, received_at)
-        if screen_start_by is not None:
-            await svc.screen.on_start_refused(screen_start_by, rej.code)
+        if screen_start_by is not None and screen_start_command is not None:
+            await svc.screen.on_start_refused(screen_start_by, screen_start_command, rej.code)
 
 
 async def route_input_batch(

@@ -22,7 +22,7 @@ import { foregroundParts, sessionStatus } from "../../lib/inputStatus.ts";
 import { errorMessage, INPUT_SCOPE_EXPLANATION, recoverySteps } from "../../lib/labels.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
-function toEvent(o: GestureOutput): InputEvent {
+function toEvent(o: Exclude<GestureOutput, { type: "pinch" }>): InputEvent {
   switch (o.type) {
     case "move":
       return { type: "pointer_move", dx: o.dx, dy: o.dy };
@@ -46,7 +46,9 @@ export function TouchpadPage() {
   const [dragMode, setDragMode] = useState(false);
   const [leftHeld, setLeftHeld] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [machine] = useState(() => new GestureMachine({ sensitivity: prefs.sensitivity, scrollDirection: prefs.scrollDirection })); // one machine per page instance; options follow below
+  // one machine per page instance; options follow below. Nothing here zooms, so two fingers never classify as a pinch
+  // (a pinch would drop the scroll or the right click they are on this page: an anchored thumb, a sloppy slide)
+  const [machine] = useState(() => new GestureMachine({ sensitivity: prefs.sensitivity, scrollDirection: prefs.scrollDirection, pinchRatio: Number.POSITIVE_INFINITY }));
   const sessionLive = session.phase === "live" && session.pcId === pcId;
   const pointerOk = sessionLive && session.pointer;
   const relayUp = live.connection === "online";
@@ -107,7 +109,8 @@ export function TouchpadPage() {
   }, [sessionOver]);
 
   const drain = useCallback(() => {
-    for (const o of machine.take()) client.enqueue(toEvent(o));
+    // this page's machine never emits a pinch (pinchRatio: ∞); one would be sent nowhere
+    for (const o of machine.take()) if (o.type !== "pinch") client.enqueue(toEvent(o));
     setLeftHeld(machine.isLeftHeld);
   }, [machine, client]);
 

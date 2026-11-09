@@ -1,6 +1,6 @@
 {
-  "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), target (name in target_schemas or null), result (name of a $def in schemas/results.schema.json; the agent validates before emitting, the controller before rendering), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: the coalescing GROUP is (coalesce key, canonical target JSON or '' when null) per PC across all controllers; a later command in the same group replaces queued earlier ones, which terminate as canceled/COMMAND_SUPERSEDED), routine_allowed (may appear in Pro routines), idempotent (safe to re-emit the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts). `alternate_capabilities` (optional): the action is permitted when the grant holds `capability` OR any listed alternate. `ai_eligible: false` marks human-only actions that must never enter an AI tool catalogue or a saved routine (rules.ai_eligibility). `since` (optional): the protocol version that introduced the action (absent means 1.0). A controller stamps a command with its action's `since`, and verifiers refuse a command whose protocol_version is below it (PROTOCOL_INCOMPATIBLE; version.json rules.command_version_stamping).",
-  "registry_version": "1.4",
+  "$comment": "DoMe action registry v1.0. Every action declares: params (JSON Schema, additionalProperties always false), target (name in target_schemas or null), result (name of a $def in schemas/results.schema.json; the agent validates before emitting, the controller before rendering), capability (grant scope the controller must hold), risk (low|moderate|disruptive), confirmation (none|challenge), timeout_ms, availability (conditions the PC checks before executing), verification (how success is established), coalesce (optional: the coalescing GROUP is (coalesce key, canonical target JSON or '' when null) per PC across all controllers; a later command in the same group replaces queued earlier ones, which terminate as canceled/COMMAND_SUPERSEDED), routine_allowed (may appear in Pro routines), idempotent (safe to re-emit the previous result for an identical duplicate; non-idempotent actions are never auto-retried). youtube_target requires tab_token so a command can never silently re-bind to a different tab (tab ids are reused across browser restarts). `alternate_capabilities` (optional): the action is permitted when the grant holds `capability` OR any listed alternate. `ai_eligible: false` marks human-only actions that must never enter an AI tool catalogue or a saved routine (rules.ai_eligibility). `since` (optional): the protocol version that introduced the action (absent means 1.0). A controller stamps a command with its action's `since`, and verifiers refuse a command whose protocol_version is below it (PROTOCOL_INCOMPATIBLE; version.json rules.command_version_stamping). `param_since` (optional, since 1.5): {param name: version} for params a later MINOR added to an existing action; such a param has no default, and a command that carries one is stamped at least that version (the action's `since` raised to it) and refused below it.",
+  "registry_version": "1.5",
   "capabilities": {
     "status": "Read PC, media and browser state.",
     "media": "Control YouTube (including search) and Windows media sessions.",
@@ -1085,6 +1085,9 @@
     "screen.session_start": {
       "summary": "Start, or take over, this PC's Screen view session. The phone's WebRTC offer travels inside this signed command; the PC answers with a screen_answer frame signed by its identity key (rules.screen_signaling) and captures only after DTLS connects to the certificate named in the offer (rules.screen_sessions). The result carries ids, geometry, flags and the allowance; never SDP.",
       "since": "1.4",
+      "param_since": {
+        "cursor": "1.5"
+      },
       "params": {
         "type": "object",
         "additionalProperties": false,
@@ -1122,6 +1125,14 @@
             "type": "boolean",
             "default": false,
             "description": "Replace another controller's live session (it ends `takeover`). Ask mode, the post-Stop cooldown and the consent back-off still apply."
+          },
+          "cursor": {
+            "type": "string",
+            "enum": [
+              "drawn",
+              "overlay"
+            ],
+            "description": "Since 1.5. Who draws the pointer. `drawn`: the PC paints its pointer into the picture (the 1.4 behaviour). `overlay`: the PC captures WITHOUT the pointer and reports its position and shape on the data channel (cursor_pos, cursor_shape) so the phone draws it itself. The result's `cursor` is the mode the PC will try and the data-channel `state.cursor` the mode in effect (rules.screen_cursor). No default: a start without it is a 1.4 start and the PC draws the pointer. A command carrying this param is stamped 1.5 (rules.command_version_stamping, param_since); a phone sends it only to a PC whose agent announced 1.5 (rest $defs/pc.protocol_versions)."
           }
         }
       },

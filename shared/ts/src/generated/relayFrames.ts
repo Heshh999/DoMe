@@ -193,7 +193,7 @@ export type ScreenDcPhoneToPc =
       on: boolean;
     };
 /**
- * Data-channel messages the PC may send: geometry (a new generation: the streamed surface, its size and rotation, and DoMe's own reserved rectangles that taps must avoid), state (sending, or paused with the cause; encoder and data_saver as hints for the Health note and the badge), allowance (the ticket the PC last received, for the countdown) and restricted (input is currently refused on the PC and why). Phase 2/3 add cursor_shape, cursor_pos and roi.
+ * Data-channel messages the PC may send: geometry (a new generation: the streamed surface, its size and rotation, and DoMe's own reserved rectangles that taps must avoid), state (sending, or paused with the cause; encoder and data_saver as hints for the Health note and the badge), allowance (the ticket the PC last received, for the countdown) and restricted (input is currently refused on the PC and why). 1.5 adds cursor_pos and cursor_shape (the pointer drawn by the phone, rules.screen_cursor); Phase 3 adds roi.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "screen_dc_pc_to_phone".
@@ -226,6 +226,10 @@ export type ScreenDcPcToPhone =
       reason?: "secure_desktop" | "indicator";
       encoder?: "h264" | "vp8";
       data_saver?: boolean;
+      /**
+       * Since 1.5. The pointer mode in effect; present in every state message of a session whose start carried `cursor`, absent otherwise.
+       */
+      cursor?: "drawn" | "overlay";
     }
   | {
       type: "allowance";
@@ -237,9 +241,12 @@ export type ScreenDcPcToPhone =
       type: "restricted";
       restricted: boolean;
       reason?: "elevated" | "secure_desktop" | "locked" | "permission_ui";
-    };
+    }
+  | ScreenDcCursorPos
+  | ScreenDcCursorShapeNamed
+  | ScreenDcCursorShapeCustom;
 /**
- * Every message on the dome-screen-v1 data channel, in either direction (rules.screen_content): a JSON object of at most screen_dc_message_max_bytes with a closed vocabulary; each side validates against its own inbound direction (screen_dc_phone_to_pc on the PC, screen_dc_pc_to_phone on the phone) and drops anything else.
+ * Every message on the screen data channels, in either direction (rules.screen_content): dome-screen-v1 and, since 1.5 and only in a session whose start carried `cursor`, dome-screen-cursor-v1 (unordered, no retransmissions; it carries cursor_pos from the PC only, and the PC drops anything the phone sends on it). A JSON object of at most screen_dc_message_max_bytes with a closed vocabulary, except cursor_shape, which may be up to screen_dc_cursor_shape_max_bytes; each side validates against its own inbound direction (screen_dc_phone_to_pc on the PC, screen_dc_pc_to_phone on the phone) and drops anything else.
  *
  * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
  * via the `definition` "screen_dc_message".
@@ -3587,4 +3594,56 @@ export interface ScreenAnswerPayload {
   answer_sdp: string;
   issued_at: Timestamp;
   expires_at: Timestamp;
+}
+/**
+ * Since 1.5. The real pointer's hotspot over the streamed surface of geometry generation `gen`, normalised 0..65535 like pointer_move_to. `visible` is false when Windows hides the pointer or it is on another monitor; x and y then hold the last position inside the surface. Sent only in an overlay session, when changed, coalesced to at most 60 per second, on dome-screen-cursor-v1 (unordered, no retransmissions) when the phone opened it, else on dome-screen-v1; the phone keeps the latest report only.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_dc_cursor_pos".
+ */
+export interface ScreenDcCursorPos {
+  type: "cursor_pos";
+  gen: number;
+  x: number;
+  y: number;
+  visible: boolean;
+}
+/**
+ * Since 1.5. The pointer took one of Windows' system shapes (IDC_*); the phone draws it with its own crisp vector art and hotspot.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_dc_cursor_shape_named".
+ */
+export interface ScreenDcCursorShapeNamed {
+  type: "cursor_shape";
+  kind:
+    | "arrow"
+    | "ibeam"
+    | "hand"
+    | "wait"
+    | "appstarting"
+    | "cross"
+    | "no"
+    | "sizeall"
+    | "sizens"
+    | "sizewe"
+    | "sizenesw"
+    | "sizenwse"
+    | "uparrow"
+    | "help";
+}
+/**
+ * Since 1.5. An application's own pointer as a 32-bit RGBA PNG of exactly width x height (at most 64 x 64; the PC scales larger cursors down, hotspot included), standard base64 (base64-valid length and padding; the PC's base64.b64encode output always matches) of at most 8192 characters, with its hotspot in bitmap pixels. A cursor bitmap is screen content (rules.screen_content): never logged, stored or put in a diagnostics bundle by either side. This is the only data-channel message that may exceed screen_dc_message_max_bytes; it is bounded by screen_dc_cursor_shape_max_bytes instead.
+ *
+ * This interface was referenced by `DoMeRelayWebSocketFrames`'s JSON-Schema
+ * via the `definition` "screen_dc_cursor_shape_custom".
+ */
+export interface ScreenDcCursorShapeCustom {
+  type: "cursor_shape";
+  kind: "custom";
+  width: number;
+  height: number;
+  hotspot_x: number;
+  hotspot_y: number;
+  png: string;
 }

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ProtocolError, challengeDigest, commandDigest, dumpsCompact, offerDigest, pairingCodeHandle, pairingVerificationCode, parseRfc3339, pcKeyMac, sdpFingerprints, verifyEnvelope, verifyScreenAnswer, type EcPublicJwk } from "../src/index.ts";
+import { PROTOCOL_VERSION, ProtocolError, challengeDigest, commandDigest, dumpsCompact, loadsStrict, offerDigest, pairingCodeHandle, pairingVerificationCode, parseRfc3339, parseVersion, pcKeyMac, sdpFingerprints, verifyEnvelope, verifyScreenAnswer, type EcPublicJwk } from "../src/index.ts";
 
 const fixtureDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../protocol/fixtures");
 const files = readdirSync(fixtureDir).filter((f) => /^es256-.*\.json$/.test(f)).sort();
@@ -27,7 +27,7 @@ interface Fixture {
     answer_sdp: string;
     fingerprint: string;
     now: string;
-    cases: Array<{ name: string; envelope: unknown; expect: string; cause?: string }>;
+    cases: Array<{ name: string; envelope: { payload: string }; expect: string; cause?: string }>;
     pc_key_mac: string;
   };
 }
@@ -82,6 +82,12 @@ describe("cross-language fixtures", () => {
           if (c.cause) expect(err?.detail.cause, c.name).toBe(c.cause);
         }
       }
+      // 1.5: the accepted answer carries this library's version, the refused one exactly one MINOR above it (computed by both
+      // generators from their library's version, so the case keeps meaning "newer" after every bump)
+      const [major, minor] = parseVersion(PROTOCOL_VERSION)!;
+      const stamps = Object.fromEntries(sc.cases.map((c) => [c.name, (loadsStrict(c.envelope.payload) as { protocol_version: string }).protocol_version]));
+      expect(stamps["PC-signed answer"]).toBe(`${major}.${minor}`);
+      expect(stamps["stamped with a MINOR this library does not speak"]).toBe(`${major}.${minor + 1}`);
       expect(await offerDigest(sc.offer_sdp)).toBe(sc.offer_digest);
       expect(new Set(sdpFingerprints(sc.answer_sdp))).toEqual(new Set([sc.fingerprint]));
       expect(await pcKeyMac(d.pairing_code, d.pairing_id, d.pc_id, data.kid, sc.pc_kid)).toBe(sc.pc_key_mac);

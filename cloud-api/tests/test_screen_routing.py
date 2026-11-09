@@ -2,9 +2,10 @@
 rules.screen_signaling, screen_sessions, screen_metering, pc_key_pinning): the ICE request and its refusals, the start
 hook (the agent must have announced 1.4; the first chunk is reserved; ``relay.screen`` rides along), the PC-signed
 answer reaching only the issuing socket, lifecycle frames to the owner and 1.4 subscribers, allowance tickets, the
-input-batch stamp gate that shields 1.2 agents, SCREEN_* rejections routed like INPUT_*, logout / session revocation /
-controller revocation ending a stream within one ticket with the credential revoked, the lying agent, pairing with the
-PC key MAC, and no SDP or credential in any row, event or log line."""
+input-batch stamp gate that shields 1.2 agents, the command stamp gate that shields 1.4 agents from a 1.5 start
+(protocol 1.5), SCREEN_* rejections routed like INPUT_*, logout / session revocation / controller revocation ending a
+stream within one ticket with the credential revoked, the lying agent, pairing with the PC key MAC, and no SDP or
+credential in any row, event or log line."""
 
 from __future__ import annotations
 
@@ -98,6 +99,16 @@ def credential(env: Env, controller_id: str) -> dict[str, Any] | None:
     return (
         dict(zip(("state", "revoke_reason", "command_id", "screen_session_id"), rows[0], strict=True)) if rows else None
     )
+
+
+def deferred(env: Env, controller_id: str) -> list[tuple[str, str]]:
+    """The credentials this phone set aside for a live session when it minted the next one (DECISIONS #117)."""
+    rows = sql(
+        env.database_url,
+        "SELECT username, screen_session_id FROM turn_deferred_revocations WHERE controller_id = %s",
+        (controller_id,),
+    )
+    return [(username, sid) for (username, sid) in rows]
 
 
 def window(env: Env, account_id: str) -> dict[str, Any] | None:
@@ -536,6 +547,106 @@ async def test_start_rate_limit_refuses_the_seventh_start_in_a_minute_and_revoke
         await ctrl.close()
 
 
+NEXT_SCREEN = {"offer_sdp": OFFER_SDP, "surface": 1, "audio": True, "takeover": False}
+
+
+async def test_a_next_screen_switch_keeps_the_live_sessions_credential_until_the_pc_replaces_that_session(
+    env: Env, alice: Browser, online_agent: AgentSim, screen: ScreenService
+) -> None:
+    """DECISIONS #117 (design D14, review finding 17): Next screen is a fresh start from the same phone while the old
+    session stays up, and its ICE request mints a new credential. The credential the live session relays through is
+    set aside, not revoked, so on a TURN path the old picture keeps coming during the switch; it is revoked when the
+    PC ends that session `replaced`, and the new credential carries the new session."""
+    pc = online_agent.pc_id
+    ctrl = await screen_phone(env, alice, online_agent)
+    turn = fake_turn(screen)
+    try:
+        _, sid1, _ = await start_session(env, ctrl, online_agent)
+        old = turn.minted[-1]["username"]
+        assert (await ctrl.screen_ice_request(pc))["turn"] == "available"  # the switch's ICE request
+        new = turn.minted[-1]["username"]
+        assert new != old and turn.revoked == []
+        assert deferred(env, ctrl.controller_id or "") == [(old, sid1)]
+        cred = credential(env, ctrl.controller_id or "")
+        assert cred is not None and cred["state"] == "outstanding" and cred["screen_session_id"] is None
+        # the old session's tickets still renew while the switch is pending
+        await online_agent.screen_usage(sid1)
+        assert (await online_agent.recv_type("screen_allowance", screen_session_id=sid1))["final"] is False
+        cid = await ctrl.command(pc, "screen.session_start", NEXT_SCREEN, None, lifetime=60)
+        await online_agent.recv_type("command")
+        await asyncio.sleep(0.2)
+        assert turn.revoked == []  # the forward binds the new credential to its start and touches nothing else
+        # the PC ends the old session `replaced` first, then answers the new one
+        await online_agent.screen_session(sid1, ctrl.controller_id or "", "ended", "replaced", live_seconds=3)
+        assert (await ctrl.recv_type("screen_session", screen_session_id=sid1))["event"] == "ended"
+        assert turn.revoked == [old] and deferred(env, ctrl.controller_id or "") == []
+        sid2 = new_screen_session_id()
+        await online_agent.ack(cid, "accepted")
+        await online_agent.result(cid, "succeeded", result=online_agent.screen_result(sid2))
+        await ctrl.recv_type("result", command_id=cid)
+        await asyncio.sleep(0.2)
+        cred = credential(env, ctrl.controller_id or "")
+        assert cred is not None and cred["state"] == "bound" and cred["screen_session_id"] == sid2
+        assert turn.revoked == [old]
+        assert [e["detail"]["reason"] for e in await events(alice, "turn_credential_revoked")] == ["session_ended"]
+    finally:
+        await ctrl.close()
+
+
+async def test_a_refused_switch_revokes_only_its_own_credential_and_the_restored_session_keeps_its_own(
+    env: Env, alice: Browser, online_agent: AgentSim, screen: ScreenService
+) -> None:
+    """DECISIONS #117: a switch the relay refuses (here the operator switch) or the PC refuses (consent) revokes the
+    credential the phone minted for that start, never the one the live session relays through, which the phone keeps
+    using when it restores that session; that one is revoked with the session's own end."""
+    import dataclasses
+
+    pc = online_agent.pc_id
+    ctrl = await screen_phone(env, alice, online_agent)
+    turn = fake_turn(screen)
+    try:
+        _, sid1, _ = await start_session(env, ctrl, online_agent)
+        old = turn.minted[-1]["username"]
+        # refused by the relay
+        assert (await ctrl.screen_ice_request(pc))["turn"] == "available"
+        refused = turn.minted[-1]["username"]
+        screen.config = dataclasses.replace(screen.config, enabled=False)
+        cid = await ctrl.command(pc, "screen.session_start", NEXT_SCREEN, None, lifetime=60)
+        await expect_relay_failure(ctrl, cid, "SCREEN_VIEW_DISABLED")
+        await expect_nothing(online_agent.ws)  # type: ignore[arg-type]
+        assert turn.revoked == [refused]
+        cred = credential(env, ctrl.controller_id or "")
+        assert cred is not None and cred["state"] == "revoked" and cred["revoke_reason"] == "start_refused"
+        assert deferred(env, ctrl.controller_id or "") == [(old, sid1)]
+        screen.config = dataclasses.replace(screen.config, enabled=True)
+        # refused at the PC
+        assert (await ctrl.screen_ice_request(pc))["turn"] == "available"
+        declined = turn.minted[-1]["username"]
+        cid = await ctrl.command(pc, "screen.session_start", NEXT_SCREEN, None, lifetime=60)
+        await online_agent.recv_type("command")
+        consent = {
+            "code": "SCREEN_CONSENT_DECLINED",
+            "message": "Not allowed at the PC.",
+            "retryable": False,
+            "detail": {"reason": "denied"},
+        }
+        await online_agent.result(cid, "failed", error=consent)
+        assert (await ctrl.recv_type("result", command_id=cid))["state"] == "failed"
+        await asyncio.sleep(0.2)
+        assert turn.revoked == [refused, declined]
+        assert deferred(env, ctrl.controller_id or "") == [(old, sid1)]
+        # the restored session still renews, and its own end revokes its credential
+        await online_agent.screen_usage(sid1)
+        assert (await online_agent.recv_type("screen_allowance", screen_session_id=sid1))["final"] is False
+        await online_agent.screen_session(sid1, ctrl.controller_id or "", "ended", "stopped", live_seconds=5)
+        assert (await ctrl.recv_type("screen_session", screen_session_id=sid1))["event"] == "ended"
+        assert turn.revoked == [refused, declined, old] and deferred(env, ctrl.controller_id or "") == []
+        reasons = sorted(e["detail"]["reason"] for e in await events(alice, "turn_credential_revoked"))
+        assert reasons == ["session_ended", "start_refused", "start_refused"]
+    finally:
+        await ctrl.close()
+
+
 async def test_stop_passes_the_switch_and_a_running_session_is_not_cut_by_it(
     env: Env, alice: Browser, online_agent: AgentSim, screen: ScreenService
 ) -> None:
@@ -827,7 +938,7 @@ async def test_grant_narrowing_that_removes_screen_revokes_the_credential(
         await ctrl.close()
 
 
-# ----- the input-batch stamp gate and SCREEN_* rejections ----------------------------------------------------------------
+# ----- the input-batch and command stamp gates and SCREEN_* rejections ---------------------------------------------------
 
 
 async def test_stamp_gate_shields_a_1_2_agent_from_1_4_batches(
@@ -854,6 +965,87 @@ async def test_stamp_gate_shields_a_1_2_agent_from_1_4_batches(
         # the session continues: seq 2 was never forwarded, so it is still valid
         await ctrl.input_batch(pc, sid, 2, [MOVE])
         assert loads_strict((await linked_agent.recv_type("input_batch"))["envelope"]["payload"])["seq"] == 2
+    finally:
+        await ctrl.close()
+
+
+async def test_stamp_gate_shields_a_1_4_agent_from_a_1_5_start(
+    env: Env, alice: Browser, linked_agent: AgentSim, screen: ScreenService
+) -> None:
+    """rules.command_version_stamping (1.5): a start carrying ``cursor`` is stamped 1.5 and refused by the relay before
+    forwarding to an agent that announced only up to 1.4 (that agent would refuse it itself with PROTOCOL_INCOMPATIBLE
+    {peer: "1.5", supported: ["1.4"]}, which has no ``required`` to tell the phone to retry without ``cursor``, and only
+    after the relay spent a start token and reserved allowance), before the operator switch, the start budget and the
+    ledger: nothing reserved, no commands row, no start token spent, and the detail names the stamp it needs. A start
+    without ``cursor`` stays 1.4 and is forwarded; a 1.5 agent gets both, and a result without ``cursor`` is relayed
+    unchanged."""
+    pc = linked_agent.pc_id
+    await linked_agent.connect(protocol_versions=("1.0", "1.1", "1.2", "1.3", "1.4"), registry_version="1.4")
+    ctrl = await screen_phone(env, alice, linked_agent)
+    start = {"offer_sdp": OFFER_SDP, "surface": "primary", "audio": False, "takeover": False}
+    owned = {"code": "SCREEN_SESSION_OWNED", "message": "Another phone is viewing this PC.", "retryable": False}
+
+    async def forwarded(stamp: str, *, cursor: str | None = None) -> str:
+        """Send a start, check it reached the agent verbatim with ``stamp``, and return its command id."""
+        params = dict(start, cursor=cursor) if cursor is not None else dict(start)
+        cid, envl = ctrl.envelope(pc, "screen.session_start", params, None, lifetime=60)
+        assert loads_strict(envl["payload"])["protocol_version"] == stamp
+        await ctrl.send_envelope(pc, envl)
+        cmd = await linked_agent.recv_type("command")
+        assert cmd["envelope"] == envl
+        return cid
+
+    try:
+        assert (await ctrl.screen_ice_request(pc))["turn"] == "available"
+        ledger = window(env, alice.account_id)
+        # the 1.5-stamped start never reaches the 1.4 agent
+        cid, envl = ctrl.envelope(pc, "screen.session_start", dict(start, cursor="overlay"), None, lifetime=60)
+        assert loads_strict(envl["payload"])["protocol_version"] == "1.5"
+        await ctrl.send_envelope(pc, envl)
+        failure = await expect_relay_failure(ctrl, cid, "PROTOCOL_INCOMPATIBLE")
+        assert failure["error"]["detail"] == {"peer": "agent", "required": "1.5"}
+        await expect_nothing(linked_agent.ws)  # type: ignore[arg-type]
+        await asyncio.sleep(0.2)
+        assert reservation_rows(env, alice.account_id) == []
+        assert window(env, alice.account_id) == ledger
+        assert sql(env.database_url, "SELECT count(*) FROM commands WHERE id = %s", (cid,)) == [(0,)]
+        rejected = await events(alice, "command_rejected")
+        assert rejected and rejected[0]["detail"] == {"reason": "PROTOCOL_INCOMPATIBLE", "pc_id": pc}
+        cred = credential(env, ctrl.controller_id or "")  # like every relay-side refusal of a start
+        assert cred is not None and cred["state"] == "revoked" and cred["revoke_reason"] == "start_refused"
+        # the same start without `cursor` is stamped 1.4 and forwarded to the same agent (start 1 of 6)
+        cid = await forwarded("1.4")
+        await linked_agent.result(cid, "failed", error=owned)
+        assert (await ctrl.recv_type("result", command_id=cid))["error"]["code"] == "SCREEN_SESSION_OWNED"
+        # the agent is updated: both stamps reach a 1.5 agent (starts 2 and 3)
+        await linked_agent.close()
+        await asyncio.sleep(0.2)
+        await linked_agent.connect()
+        cid = await forwarded("1.5", cursor="overlay")
+        sid = new_screen_session_id()
+        await linked_agent.ack(cid, "accepted")
+        envelope = await linked_agent.screen_answer(ctrl.controller_id or "", cid, sid, protocol_version="1.5")
+        assert (await ctrl.recv_type("screen_answer"))["envelope"] == envelope
+        with_cursor = dict(linked_agent.screen_result(sid), cursor="overlay")
+        await linked_agent.result(cid, "succeeded", result=with_cursor)
+        assert (await ctrl.recv_type("result", command_id=cid))["result"] == with_cursor
+        cid = await forwarded("1.4")
+        sid = new_screen_session_id()
+        without_cursor = linked_agent.screen_result(sid)
+        await linked_agent.result(cid, "succeeded", result=without_cursor)
+        relayed = (await ctrl.recv_type("result", command_id=cid))["result"]
+        assert relayed == without_cursor and "cursor" not in relayed
+        # the refused start spent no start token: starts 4 to 6 still pass and the seventh is RATE_LIMITED
+        for _ in range(3):
+            cid = await forwarded("1.4")
+            await linked_agent.result(cid, "failed", error=owned)
+            await ctrl.recv_type("result", command_id=cid)
+        cid, envl = ctrl.envelope(pc, "screen.session_start", dict(start), None, lifetime=60)
+        await ctrl.send_envelope(pc, envl)
+        await expect_relay_failure(ctrl, cid, "RATE_LIMITED")
+        await expect_nothing(linked_agent.ws)  # type: ignore[arg-type]
+        await asyncio.sleep(0.2)
+        assert len(reservation_rows(env, alice.account_id)) == 6
     finally:
         await ctrl.close()
 

@@ -1,5 +1,5 @@
 /**
- * Screen view (protocol 1.4): the PC-signed answer, the strict SDP helper and the data-channel vocabulary.
+ * Screen view (protocol 1.4, extended in 1.5): the PC-signed answer, the strict SDP helper and the data-channel vocabulary.
  *
  * The phone's offer travels inside the signed `screen.session_start` command (an ordinary command built with
  * `buildCommandPayload`). The PC answers with `screen_answer_payload` signed by its identity key; the phone verifies it
@@ -15,9 +15,15 @@ import { signPayload, verifyEnvelope, type Envelope } from "./signing.ts";
 import { dumpsCompact, loadsStrict, utf8ByteLength, type JsonValue } from "./strictJson.ts";
 import { checkCommandWindow, formatRfc3339 } from "./time.ts";
 import { protocolCompatible } from "./versions.ts";
+import type { ScreenDcCursorShapeNamed } from "./generated/relayFrames.ts";
 
 export const SCREEN_ANSWER_TYPE = "screen_answer";
 export const SCREEN_DATA_CHANNEL_LABEL = "dome-screen-v1";
+/**
+ * Since 1.5: the second data channel (unordered, no retransmissions) that carries cursor_pos only (rules.screen_cursor (3)).
+ * The phone opens it only in a start that carries `cursor`; the PC drops anything the phone sends on it.
+ */
+export const SCREEN_CURSOR_CHANNEL_LABEL = "dome-screen-cursor-v1";
 /** actions.json screen.session_start.params.offer_sdp and screen_answer_payload.answer_sdp share this pattern. */
 export const SCREEN_SDP_PATTERN = /^[\x20-\x7E\r\n]*$/;
 const FINGERPRINT_RE = /^a=fingerprint:sha-256[ \t]+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){31})[ \t]*$/;
@@ -73,20 +79,26 @@ export interface BuildScreenAnswerInput {
   screenSessionId: string;
   offerSdp: string;
   answerSdp: string;
+  /** The stamp of the screen.session_start being answered (1.5): a 1.4 start gets a 1.4 answer, one with `cursor` 1.5. */
+  protocolVersion: string;
   now?: Date;
 }
 
 /**
  * The payload the PC signs with its identity key to answer one `screen.session_start` (rules.screen_signaling (5)). The PC
  * is Python; this builder exists for the cross-language fixtures and for tests of the phone's verifier. Lifetime =
- * screen_answer_lifetime_seconds.
+ * screen_answer_lifetime_seconds. It carries the stamp of the start it answers; a stamp this library does not speak is
+ * refused (PROTOCOL_INCOMPATIBLE).
  */
 export async function buildScreenAnswerPayload(input: BuildScreenAnswerInput): Promise<ScreenAnswerPayload> {
+  if (!protocolCompatible(input.protocolVersion, [PROTOCOL_VERSION])) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", "unsupported protocol version", false, { peer: input.protocolVersion, supported: [PROTOCOL_VERSION] });
+  }
   if (!screenSdpAcceptable(input.answerSdp)) throw new ProtocolError("MALFORMED_MESSAGE", "answer_sdp is not an acceptable SDP");
   const now = input.now ?? new Date();
   return {
     type: SCREEN_ANSWER_TYPE,
-    protocol_version: PROTOCOL_VERSION,
+    protocol_version: input.protocolVersion,
     account_id: input.accountId,
     pc_id: input.pcId,
     controller_id: input.controllerId,
@@ -188,24 +200,45 @@ export async function verifyScreenAnswer(raw: unknown, expected: ScreenAnswerExp
   return { envelope, payload: answer, pcKid: pinnedKid, fingerprint: prints[0]! };
 }
 
+/** Since 1.5: one of Windows' system pointer shapes (relay-frames `screen_dc_cursor_shape_named.kind`). */
+export type CursorKind = ScreenDcCursorShapeNamed["kind"];
+
 export type ScreenDcPhoneToPc = { type: "hb" } | { type: "keyframe" } | { type: "bye" } | { type: "audio"; on: boolean };
 export type ScreenDcPcToPhone =
   | { type: "geometry"; gen: number; surface_index: number; width: number; height: number; rotation: 0 | 90 | 180 | 270; reserved: Array<{ x: number; y: number; w: number; h: number }> }
-  | { type: "state"; state: "sending" | "paused"; reason?: "secure_desktop" | "indicator"; encoder?: "h264" | "vp8"; data_saver?: boolean }
+  | { type: "state"; state: "sending" | "paused"; reason?: "secure_desktop" | "indicator"; encoder?: "h264" | "vp8"; data_saver?: boolean; cursor?: "drawn" | "overlay" }
   | { type: "allowance"; unlimited: boolean; remaining_seconds: number | null; resets_at: string | null }
-  | { type: "restricted"; restricted: boolean; reason?: "elevated" | "secure_desktop" | "locked" | "permission_ui" };
+  | { type: "restricted"; restricted: boolean; reason?: "elevated" | "secure_desktop" | "locked" | "permission_ui" }
+  /** Since 1.5: the real pointer over the streamed surface of generation `gen` (0..65535), in an overlay session only. */
+  | { type: "cursor_pos"; gen: number; x: number; y: number; visible: boolean }
+  /** Since 1.5: a Windows system shape, drawn by the phone with its own art. */
+  | { type: "cursor_shape"; kind: CursorKind }
+  /** Since 1.5: an application's own pointer as a width x height RGBA PNG in standard base64 (screen content: never logged or stored). */
+  | { type: "cursor_shape"; kind: "custom"; width: number; height: number; hotspot_x: number; hotspot_y: number; png: string };
 export type ScreenDcMessage = ScreenDcPhoneToPc | ScreenDcPcToPhone;
 
 /**
- * Strict-parse one `dome-screen-v1` data-channel message and validate it for the receiving side (rules.screen_content): at
- * most screen_dc_message_max_bytes, a JSON object, one of the closed vocabulary for `direction` (`pc_to_phone` on the
+ * Strict-parse one data-channel message (`dome-screen-v1` or, since 1.5, `dome-screen-cursor-v1`) and validate it for the
+ * receiving side (rules.screen_content): a JSON object, one of the closed vocabulary for `direction` (`pc_to_phone` on the
  * phone). Anything else throws and the receiver drops it; no message here can inject input or run anything.
+ *
+ * Size (1.5): every message is at most screen_dc_message_max_bytes except a `pc_to_phone` `cursor_shape`, which may be up
+ * to screen_dc_cursor_shape_max_bytes. Anything above that cap, and anything above the small cap sent `phone_to_pc`, is
+ * refused before parsing; a longer `pc_to_phone` message of any other type is refused after it. Every refusal is
+ * MALFORMED_MESSAGE.
  */
 export function parseScreenDcMessage(text: string, direction: "pc_to_phone"): ScreenDcPcToPhone;
 export function parseScreenDcMessage(text: string, direction: "phone_to_pc"): ScreenDcPhoneToPc;
 export function parseScreenDcMessage(text: string, direction: ScreenDcDirection): ScreenDcMessage {
   if (typeof text !== "string") throw new ProtocolError("MALFORMED_MESSAGE", "data-channel message must be text");
-  const parsed = loadsStrict(text, { maxBytes: LIMITS.screen_dc_message_max_bytes, maxDepth: LIMITS.max_json_depth, requireObject: true });
+  const small = LIMITS.screen_dc_message_max_bytes;
+  const large = LIMITS.screen_dc_cursor_shape_max_bytes;
+  const size = utf8ByteLength(text);
+  if (size > large || (size > small && direction === "phone_to_pc")) throw new ProtocolError("MALFORMED_MESSAGE", "data-channel message too long");
+  const parsed = loadsStrict(text, { maxBytes: size > small ? large : small, maxDepth: LIMITS.max_json_depth, requireObject: true });
   schemas.validateScreenDcMessage(direction, parsed);
+  if (size > small && (parsed as { type?: unknown }).type !== "cursor_shape") {
+    throw new ProtocolError("MALFORMED_MESSAGE", "only cursor_shape may exceed screen_dc_message_max_bytes");
+  }
   return parsed as unknown as ScreenDcMessage;
 }

@@ -1,6 +1,8 @@
 /**
  * Devices and permissions: PCs (rename, enable/disable, unlink), controller installations (this
- * phone highlighted by its kid, rename, revoke), grants per PC, and the entry to pairing.
+ * phone highlighted by its kid, rename, revoke), grants per PC, and the entry to pairing. An app left
+ * open across a deploy says that a newer DoMe is ready (the devices store's `updateReady`) instead of
+ * claiming this phone is not paired.
  */
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
@@ -11,6 +13,7 @@ import { api, ApiError } from "../../lib/api.ts";
 import { getControllerIdentity, KeyStorageError } from "../../lib/controllerKey.ts";
 import { absoluteTime, relativeTime } from "../../lib/format.ts";
 import { capabilityLabel, errorMessage, INPUT_SCOPE_EXPLANATION, isInputCapability, isScreenCapability, SCREEN_SCOPE_EXPLANATION } from "../../lib/labels.ts";
+import { COPY } from "../../lib/screenStatus.ts";
 import { connectionOf } from "../../lib/connection.ts";
 import { Icon } from "../../components/icons.tsx";
 import { Button, Card, EmptyState, HeaderPill, IconWell, inputClass, KeyValue, Notice, PageHeader, Pill, SectionLabel } from "../../components/ui.tsx";
@@ -103,7 +106,7 @@ function ConfirmButton({ label, confirmLabel, onConfirm, variant = "danger-ghost
 }
 
 export function DevicesPage() {
-  const { pcs, controllers, grantsByPc, loaded, loading, error, refresh, loadGrants, selectedPcId, select } = useDevicesStore();
+  const { pcs, controllers, grantsByPc, loaded, loading, error, refresh, loadGrants, selectedPcId, select, updateReady } = useDevicesStore();
   const livePcs = useLivePcs();
   const limits = useSessionStore((s) => s.session?.limits);
   const { kid, problem } = useThisKid();
@@ -138,6 +141,11 @@ export function DevicesPage() {
           </HeaderPill>
         }
       />
+      {updateReady ? (
+        <Notice tone="info">
+          <p data-testid="devices-update-ready">{COPY.updateReady}</p>
+        </Notice>
+      ) : null}
       {error ? (
         <Notice tone="danger">
           <p>{errorMessage(error)}</p>
@@ -174,7 +182,8 @@ export function DevicesPage() {
             </div>
             <Pill tone="success">This phone</Pill>
           </Card>
-        ) : kid ? (
+        ) : kid && !(updateReady && controllers.length === 0) ? (
+          // with a newer DoMe waiting and nothing loaded, nothing is known about this phone: say nothing false
           <EmptyState icon="phone" title="Not paired yet">
             <p>This installation is not known to your PCs. On the PC open the DoMe tray menu, choose Pair a phone, then scan the code here.</p>
           </EmptyState>

@@ -10,6 +10,8 @@ This package gives the backend and the Windows agent one tested implementation o
 * relay / bridge frame validation by direction
 * protocol version compatibility, negotiation and per-action stamping (``since``)
 * Screen view (1.4): the PC-signed answer, the strict SDP helper, the data-channel vocabulary, PC key pinning
+* protocol 1.5: content-based command stamping (``param_since``, ``command_protocol_version``), the answer carries the
+  start's stamp, the pointer messages and their size cap, the second data-channel label
 * small helpers (timestamps, digests, pairing verification codes)
 """
 
@@ -23,6 +25,7 @@ from .commands import (
     VerifiedInputBatch,
     build_hello_proof_payload,
     build_input_batch_payload,
+    command_protocol_version,
     input_batch_protocol_version,
     input_event_capabilities,
     input_event_since,
@@ -57,6 +60,7 @@ from .keys import (
 from .registry import ActionSpec, Registry, load_registry
 from .schemas import Schemas, load_schemas
 from .screen import (
+    SCREEN_CURSOR_CHANNEL_LABEL,
     SCREEN_DATA_CHANNEL_LABEL,
     SCREEN_SDP_PATTERN,
     VerifiedScreenAnswer,
@@ -73,6 +77,7 @@ from .timeutil import format_rfc3339, now_utc, parse_rfc3339
 
 __all__ = [
     "INPUT_BATCH_PROTOCOL_VERSION",
+    "SCREEN_CURSOR_CHANNEL_LABEL",
     "SCREEN_DATA_CHANNEL_LABEL",
     "SCREEN_INPUT_PROTOCOL_VERSION",
     "SCREEN_SDP_PATTERN",
@@ -92,6 +97,7 @@ __all__ = [
     "build_screen_answer_payload",
     "challenge_digest",
     "command_digest",
+    "command_protocol_version",
     "dumps_compact",
     "format_pairing_code",
     "format_rfc3339",

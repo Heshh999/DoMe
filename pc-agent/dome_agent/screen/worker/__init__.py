@@ -9,7 +9,8 @@ loggers to WARNING; it is send-only and no decoder runs on network input.
 Modules: :mod:`main` (the pipe loop, liveness, ``--self-test``), :mod:`rtc` (the peer: strict offer use, the
 PLI → IDR hook, the data channel, path detection, bitrate steps from ``getStats()``), :mod:`track` (the pre-encoded
 track with SPS/PPS before every IDR and the 1 fps floor), :mod:`encode` (H.264 through PyAV codec contexts, level
-3.1 sizing, Annex B helpers), :mod:`fake` (``lavfi testsrc`` or synthetic frames: the only sources that run on
-Linux), :mod:`capture_dda` and :mod:`capture_wgc` (the Windows sources, written against the design, **not yet
-verified on a device**).
+3.1 sizing, Annex B helpers, the hardware candidate's probe), :mod:`fake` (``lavfi testsrc`` or synthetic frames and a
+scripted pointer: the only sources that run on Linux), :mod:`cursor` (since 1.5: the pointer drawn by the phone, its
+poller and messages) and :mod:`cursor_win` (the Windows pointer through ctypes), :mod:`capture_dda` and
+:mod:`capture_wgc` (the Windows sources, written against the design, **not yet verified on a device**).
 """

@@ -48,6 +48,8 @@ export interface RuntimeOptions {
 
 /** How often the live store's clock advances so the 75 s freshness rule is re-evaluated without a frame. */
 export const CLOCK_INTERVAL_MS = 5_000;
+/** A PC's connection flipped: `/v1/pcs` is read again this long after the last flip (its agent version may have changed). */
+export const DEVICES_REFRESH_DEBOUNCE_MS = 2_000;
 
 export class Runtime {
   readonly relay: RelayClient;
@@ -59,6 +61,7 @@ export class Runtime {
   private started = false;
   private detach: Array<() => void> = [];
   private readonly clockIntervalMs: number;
+  private devicesRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: RuntimeOptions = {}) {
     const live = useLiveStore.getState();
@@ -102,6 +105,7 @@ export class Runtime {
       connected: () => this.relay.isOpen,
       getPin: (pcId) => getPin(pcId),
       peerFactory: options.peerFactory === undefined ? defaultPeerFactory() : options.peerFactory,
+      pcProtocolVersions: (pcId) => useDevicesStore.getState().pcProtocolVersions(pcId),
       onChange: (state) => useScreenStore.getState().setSession(state),
       ...(options.screenTimers ? { timers: options.screenTimers } : {}),
       ...(options.screenNow ? { now: options.screenNow } : {}),
@@ -270,16 +274,32 @@ export class Runtime {
     for (const d of this.detach) d();
     this.detach = [];
     this.started = false;
+    if (this.devicesRefreshTimer !== null) clearTimeout(this.devicesRefreshTimer);
+    this.devicesRefreshTimer = null;
     this.input.reset();
     this.screen.reset();
     this.relay.close();
+  }
+
+  /** One `/v1/pcs` read DEVICES_REFRESH_DEBOUNCE_MS after the last connection flip (a burst of flips reads once). */
+  private scheduleDevicesRefresh(): void {
+    if (this.devicesRefreshTimer !== null) clearTimeout(this.devicesRefreshTimer);
+    this.devicesRefreshTimer = setTimeout(() => {
+      this.devicesRefreshTimer = null;
+      if (useSessionStore.getState().status !== "signed_in") return;
+      void useDevicesStore.getState().refresh();
+    }, DEVICES_REFRESH_DEBOUNCE_MS);
   }
 
   private onFrame(frame: relayFrames.RelayToController): void {
     const live = useLiveStore.getState();
     switch (frame.type) {
       case "pc_status": {
+        // a PC that came online (or went) may run another agent now: its protocol_versions and agent_version come
+        // from REST, so the list is read again shortly after a flip (not on every status frame)
+        const before = live.pcs[frame.pc_id]?.connection;
         live.onPcStatus(frame);
+        if (before !== undefined && before !== frame.connection) this.scheduleDevicesRefresh();
         // The relay also sends pc_status after the PC owner changed this phone's touchpad/keyboard
         // permission on the PC (grant_update): re-read grants already on screen so the Touchpad page
         // follows without reloading the app.

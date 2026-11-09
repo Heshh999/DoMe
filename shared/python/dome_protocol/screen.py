@@ -1,4 +1,4 @@
-"""Screen view (protocol 1.4): the PC-signed answer, the strict SDP helper and the data-channel vocabulary.
+"""Screen view (protocol 1.4, extended in 1.5): the PC-signed answer, the strict SDP helper and the data-channel vocabulary.
 
 The phone's offer travels inside the signed ``screen.session_start`` command (an ordinary command, verified by
 ``verify_and_parse_command``). The PC answers with ``screen_answer_payload`` signed by its identity key; the phone
@@ -25,6 +25,7 @@ from .versions import protocol_compatible
 
 __all__ = [
     "SCREEN_ANSWER_TYPE",
+    "SCREEN_CURSOR_CHANNEL_LABEL",
     "SCREEN_DATA_CHANNEL_LABEL",
     "SCREEN_SDP_PATTERN",
     "ScreenDcDirection",
@@ -39,6 +40,9 @@ __all__ = [
 
 SCREEN_ANSWER_TYPE = "screen_answer"
 SCREEN_DATA_CHANNEL_LABEL = "dome-screen-v1"
+# Since 1.5: the second data channel (unordered, no retransmissions) that carries cursor_pos only (rules.screen_cursor (3)).
+# The phone opens it only in a start that carries `cursor`; the PC drops anything the phone sends on it.
+SCREEN_CURSOR_CHANNEL_LABEL = "dome-screen-cursor-v1"
 # actions.json screen.session_start.params.offer_sdp and screen_answer_payload.answer_sdp share this pattern.
 SCREEN_SDP_PATTERN = r"^[\x20-\x7E\r\n]*$"
 _SDP_RE = re.compile(SCREEN_SDP_PATTERN, re.ASCII)
@@ -89,20 +93,30 @@ def build_screen_answer_payload(
     screen_session_id: str,
     offer_sdp: str,
     answer_sdp: str,
+    protocol_version: str,
     now: datetime | None = None,
     registry: Registry | None = None,
 ) -> dict[str, Any]:
     """The payload the PC signs with its identity key to answer one ``screen.session_start``
     (``rules.screen_signaling`` (5)). Lifetime = ``screen_answer_lifetime_seconds``; the SDP must already have passed
     ``screen_sdp_acceptable``. The caller signs ``dumps_compact(payload)`` with the PC key and sends it in a
-    ``screen_answer`` frame; it never goes into a result or a journal."""
+    ``screen_answer`` frame; it never goes into a result or a journal.
+
+    ``protocol_version`` is the stamp of the ``screen.session_start`` being answered (1.5): a 1.4 phone gets a 1.4 answer,
+    one that sent ``cursor`` a 1.5 answer. A stamp this library does not speak is refused (PROTOCOL_INCOMPATIBLE)."""
     registry = registry or load_registry()
+    if not protocol_compatible(protocol_version, (registry.protocol_version,)):
+        raise ProtocolError(
+            "PROTOCOL_INCOMPATIBLE",
+            "unsupported protocol version",
+            detail={"peer": protocol_version, "supported": [registry.protocol_version]},
+        )
     if not screen_sdp_acceptable(answer_sdp, max_bytes=registry.limits["screen_sdp_max_bytes"]):
         raise ProtocolError("MALFORMED_MESSAGE", "answer_sdp is not an acceptable SDP")
     issued = now or now_utc()
     return {
         "type": SCREEN_ANSWER_TYPE,
-        "protocol_version": registry.protocol_version,
+        "protocol_version": protocol_version,
         "account_id": account_id,
         "pc_id": pc_id,
         "controller_id": controller_id,
@@ -220,12 +234,25 @@ def parse_screen_dc_message(
     registry: Registry | None = None,
     schemas: Schemas | None = None,
 ) -> dict[str, Any]:
-    """Strict-parse one ``dome-screen-v1`` data-channel message and validate it for the receiving side
-    (``rules.screen_content``): at most ``screen_dc_message_max_bytes``, a JSON object, one of the closed vocabulary
-    for ``direction`` (``phone_to_pc`` on the PC, ``pc_to_phone`` on the phone). Anything else raises and the receiver
-    drops it; no message here can inject input or run anything."""
+    """Strict-parse one data-channel message (``dome-screen-v1`` or, since 1.5, ``dome-screen-cursor-v1``) and validate it
+    for the receiving side (``rules.screen_content``): a JSON object, one of the closed vocabulary for ``direction``
+    (``phone_to_pc`` on the PC, ``pc_to_phone`` on the phone). Anything else raises and the receiver drops it; no message
+    here can inject input or run anything.
+
+    Size (1.5): every message is at most ``screen_dc_message_max_bytes`` except a ``pc_to_phone`` ``cursor_shape``, which
+    may be up to ``screen_dc_cursor_shape_max_bytes``. Anything above that cap, and anything above the small cap sent
+    ``phone_to_pc``, is refused before parsing; a longer ``pc_to_phone`` message of any other type is refused after it.
+    Every refusal is MALFORMED_MESSAGE."""
     registry = registry or load_registry()
     schemas = schemas or load_schemas()
+    small = int(registry.limits["screen_dc_message_max_bytes"])
+    large = int(registry.limits["screen_dc_cursor_shape_max_bytes"])
+    if isinstance(text, bytes | bytearray):
+        size = len(text)
+    else:
+        size = len(text.encode("utf-8", errors="surrogatepass"))
+    if size > large or (size > small and direction == "phone_to_pc"):
+        raise ProtocolError("MALFORMED_MESSAGE", "data-channel message too long")
     if isinstance(text, bytes | bytearray):
         try:
             text = bytes(text).decode("utf-8")
@@ -233,9 +260,11 @@ def parse_screen_dc_message(
             raise ProtocolError("MALFORMED_MESSAGE", "data-channel message is not UTF-8") from None
     parsed = loads_strict(
         text,
-        max_bytes=registry.limits["screen_dc_message_max_bytes"],
+        max_bytes=large if size > small else small,
         max_depth=registry.limits["max_json_depth"],
         require_object=True,
     )
     schemas.validate_screen_dc_message(direction, parsed)
+    if size > small and parsed.get("type") != "cursor_shape":
+        raise ProtocolError("MALFORMED_MESSAGE", "only cursor_shape may exceed screen_dc_message_max_bytes")
     return parsed

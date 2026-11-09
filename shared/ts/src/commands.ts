@@ -65,18 +65,39 @@ export interface BuildCommandInput {
   commandId?: string;
 }
 
-/** The lowest protocol_version a command for `action` may carry: the action's `since` (throws UNKNOWN_ACTION). */
-export function minVersion(action: string): string {
-  return registry.get(action).since;
+/**
+ * The lowest protocol_version a command for `action` may carry: the action's `since`, raised to the `param_since` of any
+ * param PRESENT in `params` when given (the raw params, never `validateParams` output). Throws UNKNOWN_ACTION.
+ */
+export function minVersion(action: string, params?: Record<string, unknown>): string {
+  return registry.minVersion(action, params);
+}
+
+/**
+ * rules.command_version_stamping (1.5): the stamp of a command for `action` carrying `params`, i.e. the lowest version that
+ * defines every param it carries. `screen.session_start` is "1.4" without `cursor` and "1.5" with it. Lives here, where
+ * `registry` is imported (the PWA build substitutes its no-eval facade for it), not in the registry-free versions.ts.
+ */
+export function commandProtocolVersion(action: string, params: Record<string, unknown>): string {
+  return registry.minVersion(action, params);
+}
+
+function requireSince(stamp: string, required: string): void {
+  if (versionBelow(stamp, required)) {
+    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", `stamped protocol version is below ${required}, which introduced it`, false, { peer: stamp, required });
+  }
 }
 
 /**
  * Build a command payload, validating params/target locally first so bad input never gets signed. The payload is
- * stamped with the action's `since`, not this library's newest version, so a PC whose agent predates this phone keeps
- * accepting every action it knows (rules.command_version_stamping).
+ * stamped with the lowest version that defines what it carries (the action's `since`, raised by any `param_since` param
+ * present in the input), not this library's newest version, so a PC whose agent predates this phone keeps accepting
+ * every action it knows (rules.command_version_stamping).
  */
 export function buildCommandPayload(input: BuildCommandInput): CommandPayload {
   const spec = registry.get(input.action);
+  // The stamp is judged on the raw input params: validateParams fills in defaults, which never raise it.
+  const stamp = commandProtocolVersion(spec.name, input.params ?? {});
   const params = registry.validateParams(input.action, input.params ?? {}) as Record<string, JsonValue>;
   const target = registry.validateTarget(input.action, input.target ?? null) as Record<string, JsonValue> | null;
   // Disruptive actions wait for a 60 s confirmation; give them a longer default so the two
@@ -89,7 +110,7 @@ export function buildCommandPayload(input: BuildCommandInput): CommandPayload {
   const now = input.now ?? new Date();
   return {
     type: "command",
-    protocol_version: spec.since,
+    protocol_version: stamp,
     command_id: input.commandId ?? randomUuid(),
     account_id: input.accountId,
     controller_id: input.controllerId,
@@ -314,7 +335,7 @@ export async function verifyAndParseCommand(raw: unknown, resolveKey: KeyResolve
   const { envelope, payload, key } = await verifyWithRecord(raw, resolveKey);
   // Version first (compatibility and the action's `since`, when the action is one we know), schema second.
   const action = payload.action;
-  checkStamp(payload, typeof action === "string" && registry.has(action) ? registry.get(action).since : null);
+  checkStamp(payload, typeof action === "string" && registry.has(action) ? minVersion(action) : null);
   schemas.validateCommandPayload(payload);
   const cmd = payload as unknown as CommandPayload;
   bind(payload, key);
@@ -324,10 +345,11 @@ export async function verifyAndParseCommand(raw: unknown, resolveKey: KeyResolve
     maxSkewSeconds: LIMITS.max_clock_skew_seconds,
   });
   const spec = registry.get(cmd.action);
-  if (versionBelow(cmd.protocol_version, spec.since)) {
-    throw new ProtocolError("PROTOCOL_INCOMPATIBLE", `stamped protocol version is below ${spec.since}, which introduced it`, false, { peer: cmd.protocol_version, required: spec.since });
-  }
+  requireSince(cmd.protocol_version, spec.since);
   const params = registry.validateParams(spec.name, cmd.params);
+  // rules.command_version_stamping (1.5): a command stamped below what its PRESENT params need is refused, after the schema
+  // (the param must exist to be judged) and on the raw signed params, never on `params` (defaults filled in).
+  requireSince(cmd.protocol_version, minVersion(spec.name, cmd.params));
   const target = registry.validateTarget(spec.name, cmd.target);
   return { envelope, payload: cmd, key, spec, params, target, digest: await commandDigest(envelope.payload) };
 }

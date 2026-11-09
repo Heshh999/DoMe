@@ -15,7 +15,7 @@ import plansJson from "../../../shared/protocol/plans.json";
 import versionJson from "../../../shared/protocol/version.json";
 import { ProtocolError } from "../../../shared/ts/src/errors.ts";
 import { loadsStrict } from "../../../shared/ts/src/strictJson.ts";
-import { parseVersion, protocolCompatible } from "../../../shared/ts/src/versions.ts";
+import { paramsProtocolVersion, parseParamSince, parseVersion, protocolCompatible } from "../../../shared/ts/src/versions.ts";
 import * as generated from "./generated/validators.js";
 import type { Validator } from "./generated/validators.js";
 
@@ -50,6 +50,11 @@ export interface ActionSpec {
    * older PCs keep accepting older actions; verifiers refuse lower stamps (rules.command_version_stamping).
    */
   since: string;
+  /**
+   * Params a later MINOR added to the action (actions.json `param_since`, 1.5): {param name: version}. A command that carries
+   * such a param is stamped at least that version (rules.command_version_stamping); such a param has no default.
+   */
+  paramSince: Readonly<Record<string, string>>;
 }
 
 /** True when a grant holding `capabilities` may run `spec`. */
@@ -102,10 +107,13 @@ for (const [name, raw] of Object.entries(actionsJson.actions)) {
     alternateCapabilities: ((r.alternate_capabilities as string[] | undefined) ?? []) as Capability[],
     aiEligible: r.ai_eligible === undefined ? true : Boolean(r.ai_eligible),
     since: r.since === undefined ? "1.0" : String(r.since),
+    paramSince: {},
   };
   if (parseVersion(spec.since) === null || !protocolCompatible(spec.since, [PROTOCOL_VERSION])) {
     throw new Error(`action ${name} has since ${JSON.stringify(spec.since)} outside protocol ${PROTOCOL_VERSION}`);
   }
+  // the same load validation as the shared registry (one implementation in the registry-free versions.ts)
+  spec.paramSince = parseParamSince(name, r, spec.since, PROTOCOL_VERSION);
   if (spec.routineAllowed && !spec.aiEligible) throw new Error(`human-only action ${name} cannot be routine-allowed`);
   if (spec.risk === "disruptive" && spec.confirmation !== "challenge") throw new Error(`disruptive action ${name} must require a challenge`);
   validatorFor("params", name); // fail fast if the generated code is stale
@@ -123,6 +131,15 @@ export const registry = {
   },
   has(name: string): name is ActionName {
     return actionSpecs.has(name);
+  },
+  /**
+   * The lowest protocol_version a command for `action` may carry (rules.command_version_stamping): the action's `since`,
+   * raised to the highest `param_since` of the keys PRESENT in `params` (the raw params, never `validateParams` output).
+   * `buildCommandPayload` stamps through this in the shipped bundle, so without it every start would go out as 1.4.
+   */
+  minVersion(action: string, params?: Record<string, unknown>): string {
+    const spec = registry.get(action);
+    return paramsProtocolVersion(spec.since, spec.paramSince, params);
   },
   validateParams(action: string, params: unknown): Record<string, unknown> {
     const spec = registry.get(action);

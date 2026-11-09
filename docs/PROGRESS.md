@@ -2,6 +2,46 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-09 — Screen view round 2a rebuilt (protocol 1.5): built and tested on Linux, not yet on a device
+
+- **What was rebuilt.** The founder's four additions, from the saved design (`docs/design/screen-view-2a.md`,
+  including its Part 0, what the first build had learned) and without a new design phase:
+  - *Next screen:* the screens button ("1/2") on the phone; on the PC a same-phone start on another monitor
+    replaces the session, keeps the "Screen view on" bars, and does not ask the person at the PC again where
+    they already allowed this phone (never after a Stop at the PC, a block or a takeover, and never beyond the
+    4-hour maximum for the whole chain); the phone keeps the last picture under "Switching to screen 2…" and,
+    when the switch is refused, keeps the old screen. The phone's moves keep the pointer on the watched screen;
+    the person's own mouse is never limited.
+  - *The pointer drawn by the phone:* the PC captures without its pointer and reports position and shape on
+    the data channel (a second, unordered channel for positions); the phone draws it at once and reconciles
+    with the PC's reports. Only a PC that announced 1.5 is asked (the new REST field `pc.protocol_versions`),
+    and the relay refuses a 1.5-stamped command to an agent that did not announce 1.5 before forwarding it.
+  - *Zoom in Touchpad mode:* pinch zooms, the zoomed view follows the pointer, and a "1×" button shows the whole
+    screen again.
+  - *Hardware H.264:* NV12 for the Windows encoders and a probe that uses the hardware encoder only after it gave
+    a picture packet with its parameter sets; `DOME_SCREEN_H264_HW=0` turns it off.
+  - The contract came first (`docs/PROTOCOL.md` §21), then cloud-api (DECISIONS #115, #116; migration 0006),
+    pc-agent (DECISIONS #105 to #111) and mobile-app (DECISIONS 85 to 90) side by side; the docs of this
+    round are `docs/design/screen-view.md` (§5.3, §8.2, §8.3, §8.5, §16, §19), `docs/WINDOWS_INSTALL.md` §4.13,
+    `docs/ACCEPTANCE.md` Scenario 26 and `docs/HANDOFF.md` §10.
+- **The lesson from the first build, kept.** The phone opens the second data channel only in a start that carries
+  `cursor`: the shipped 1.4 worker sends on whichever channel the phone announced last, so a two-channel start to
+  a 1.4 PC would lose that PC's state, allowance and restricted messages.
+- **What was run (Linux, 2026-11-09):** shared/python 357 passed; shared/ts 198 passed; cloud-api 611 passed,
+  7 skipped (real PostgreSQL); pc-agent 1347 passed, 3 skipped; mobile-app 1604 passed, 5 skipped; `tests/` 50 passed,
+  one file at a time (`test_e2e_screen.py` 17; `tests/README.md`), with the end-to-end cases of design §5.4 and §5.5
+  (`test_e2e_screen.py`: Next screen with the pointer kept on the watched monitor, the pointer messages reaching the
+  phone, a 1.5 agent answering a 1.4 phone in 1.4; `test_e2e_versions.py`: a 1.4 agent with a 1.5 phone, a 1.5-stamped
+  start refused by the relay before a 1.4 agent, the actions an agent one MINOR behind predates refused by the
+  relay); those six cases were run again on their own the same day, 6 passed. No Windows PC and no iPhone took part.
+- **Evidence tag:** unit-tested; integration-tested (Linux, fakes) for the relay, the PC and the end-to-end cases;
+  **not yet verified on a device**.
+- **Known gaps:** unplugging the watched monitor still ends Screen view (pc-agent KNOWN_ISSUES #42); the "A newer
+  DoMe is ready" notice shows on the Screen page only (mobile-app KNOWN_ISSUES #45); with Drag on there is no
+  pinch zoom (mobile-app KNOWN_ISSUES #46).
+- Next: the review of round 2a and its fixes, then the founder's device round (`docs/HANDOFF.md` §10.4; results
+  into `docs/ACCEPTANCE.md` Scenario 26).
+
 ## 2026-11-09 — Screen view round 2a: designed, built and tested, then lost before it was saved
 
 - **What was done (2026-11-02 to 2026-11-05).** The founder's four additions (Next screen, the pointer drawn

@@ -1,6 +1,7 @@
 /**
  * Touchpad page + keyboard panel over the real Runtime and a fake socket: the session starts on
- * entry, gestures and buttons become signed batches, Drag has a conspicuous state and End Drag
+ * entry, gestures and buttons become signed batches (two fingers never pinch here: there is nothing
+ * to zoom, so they scroll or right-click as before 1.5), Drag has a conspicuous state and End Drag
  * releases, pointercancel releases a held drag without a click, the keyboard panel commits text once,
  * an uncertain edit switches to Compose and Send, Ctrl+L is gated on the browser, an uncertain send
  * enters review and never resends by itself, and leaving the page stops the session.
@@ -226,6 +227,31 @@ describe("TouchpadPage", () => {
     const after = allEvents().slice(before);
     expect(after).toEqual([{ type: "pointer_button", button: "left", action: "up" }]);
     expect(after.some((e) => e.action === "click")).toBe(false);
+  });
+
+  it("two fingers never pinch here (nothing to zoom): a jittery two-finger tap right-clicks, an anchored thumb with a sliding index scrolls", async () => {
+    renderPage();
+    await answerStart();
+    const surface = screen.getByTestId("touchpad-surface");
+    // each finger settles 4 px outward before lifting: a 13 % spread change
+    pointer(surface, "pointerdown", 1, 100, 300);
+    pointer(surface, "pointerdown", 2, 160, 300, 10);
+    pointer(surface, "pointermove", 1, 98, 300);
+    pointer(surface, "pointermove", 2, 162, 300, 5);
+    pointer(surface, "pointermove", 1, 96, 300, 15);
+    pointer(surface, "pointermove", 2, 164, 300, 5);
+    pointer(surface, "pointerup", 1, 96, 300);
+    pointer(surface, "pointerup", 2, 164, 300, 5);
+    await runFrames();
+    expect(allEvents()).toEqual([{ type: "pointer_button", button: "right", action: "click" }]);
+    // the thumb rests at y = 420 while the index slides down 100 px
+    pointer(surface, "pointerdown", 1, 200, 420, 600);
+    pointer(surface, "pointerdown", 2, 200, 300, 5);
+    for (let i = 1; i <= 20; i++) pointer(surface, "pointermove", 2, 200, 300 + 5 * i, 16);
+    pointer(surface, "pointerup", 2, 200, 400);
+    pointer(surface, "pointerup", 1, 200, 420, 5);
+    await runFrames();
+    expect(allEvents().slice(1)).toEqual([{ type: "pointer_scroll", dx: 0, dy: 1 }]);
   });
 
   it("the implicit lostpointercapture after the first finger lifts does not cancel a two-finger tap (exactly one right click)", async () => {

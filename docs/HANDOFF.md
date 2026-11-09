@@ -424,12 +424,16 @@ founder-driven; then:
    **Next (engineer):** after the device round, fix what the real PC and iPhone answer differently (the
    Windows sources, `h264_mf`, the bars' placement on scaled and multi-monitor PCs and the Job object were
    written against the design and only tested with stand-ins), then fill in ADR-0002's gate numbers.
+   **Round 2a (protocol 1.5; built 2026-11-09, rebuilt from `docs/design/screen-view-2a.md` after the first
+   build was lost before it was saved; not released):** the founder's four additions of 2026-10-30, Next screen,
+   the pointer drawn by the phone, zoom in Touchpad mode and hardware H.264. Evidence: **unit-tested**;
+   **integration-tested (Linux, fakes)** for the relay and the PC; the end-to-end cases pass (run 2026-11-09,
+   `docs/PROGRESS.md`); **not yet verified on a device**. Where it lives, how to read it and what to try: §10.
    **Phase 2 (not started, design §19, ≈ 8–12 days):** PC sound (WASAPI loopback → Opus, the `screen_audio`
-   grant; the option is labelled "coming in a later update" today), a second monitor ("Next screen" as a new
-   session) and the cursor overlay, the in-app mini view, the TV-style remote for full-screen apps with
-   "Still watching?", the Data saver badge, then the labels flip for what is delivered. Nothing is recorded and
-   the AI never sees the stream. When it ships, change `SCREEN_VIEW_STATUS` and every "in development" line
-   together (`mobile-app/DECISIONS.md` 63).
+   grant; the option is labelled "coming in a later update" today), the in-app mini view, the TV-style remote for
+   full-screen apps with "Still watching?", then the labels flip for what is delivered (the second monitor and
+   the cursor overlay came with round 2a; the Data saver badge is already on the Screen page since Phase 1). Nothing is recorded and the AI never sees the stream. When it ships,
+   change `SCREEN_VIEW_STATUS` and every "in development" line together (`mobile-app/DECISIONS.md` 63).
 3. **AI butler step 2: click by name (#42)**: "click that" / "click Subscribe" acts on a control found by
    its Windows accessibility name, shown on the phone and confirmed before it runs. The owner ruled out
    screenshots, so `docs/design/assistant.md` §7 (screenshot with a box) must be rewritten before
@@ -529,3 +533,96 @@ independent skeptical reviewer who re-ran the tests, and fixed; a second review/
 the documentation pass. Builders could not change the contract; they recorded gaps in
 `CONTRACT_ISSUES.md`. Reviews and fixes are summarised in `docs/PROGRESS.md`. The documents under
 `docs/` were written from the code after the builds, with the honesty rules above.
+
+## 10. Screen view round 2a (protocol 1.5, 2026-11-09)
+
+Built and tested on Linux only (**unit-tested**; **integration-tested (Linux, fakes)** for the relay and the PC);
+**nothing of it is verified on a device**. The design is `docs/design/screen-view-2a.md`, the contract
+`docs/PROTOCOL.md` §21, the evidence `docs/ACCEPTANCE.md` Scenario 26 (the "Round 2a" rows). Decisions:
+cloud-api #115 and #116, pc-agent #105 to #111, mobile-app 85 to 90. Known issues: cloud-api #37, pc-agent #35
+and #40 to #43, mobile-app #41 to #46.
+
+### 10.1 Where the four additions live
+
+| Addition | Contract | cloud-api | pc-agent | mobile-app |
+| --- | --- | --- | --- | --- |
+| **Next screen** | `screen.session_start{surface: N}` (already 1.4); `rules.screen_sessions` (1b) | nothing new (a switch is an ordinary start, metered like any other) | `dome_agent/screen/session.py` (`_start_session`: the replacement and the consent rule; `_bring_up`: the bars kept; `streamed_monitor`), `screen/indicator.py`; keeping the pointer on the watched screen in `dome_agent/input_session.py` (`_confine_after_move`) | `src/lib/screen.ts` (`switchSurface`, `nextSurfaceIndex`, `lastSurfaceByPc`), `src/pages/app/ScreenPage.tsx` (the screens button and the short notes), `src/components/ScreenSurface.tsx` (two `<video>` elements), copy in `src/lib/screenStatus.ts` (`SWITCH_COPY`) |
+| **The pointer drawn by the phone** | the `cursor` param, `cursor_pos`, `cursor_shape`, `state.cursor`, the channel `dome-screen-cursor-v1`, `rules.screen_cursor` | the stamp gate (`dome_api/relay/router.py`, step 8b) and `pc.protocol_versions` (`relay/agent_ws.py`, `routes/pcs.py`, migration `0006_pc_protocol_versions`) | `dome_agent/screen/worker/cursor.py` (the poller), `cursor_win.py` (the Windows calls), `capture_dda.py` / `capture_wgc.py` (capture without the pointer), `main.py` and `rtc.py` (messages and channels), `actions/screen.py` (`result.cursor`) | `src/lib/pointer.ts` (`PointerModel`), `src/lib/cursorShape.ts`, `src/lib/cursorGlyphs.ts`, `src/components/ScreenPointer.tsx`; `src/store/devices.ts` (`pcProtocolVersions`, `updateReady`), `src/pwa.ts` (`requestAppUpdate`) |
+| **Zoom in Touchpad mode** | none | none | none | `src/lib/twoFinger.ts`, `src/lib/gestures.ts` (`pinch`, `TOUCHPAD_SCREEN_GESTURES`), `src/lib/screenMap.ts` (`followPointer`, `fromSurface`, `snapIdentity`), `src/components/ScreenSurface.tsx` (the follow loop and the `1×` button) |
+| **Hardware H.264** | none (no wire change) | none | `dome_agent/screen/worker/encode.py` (`EncoderChoice.pix_fmt`, `probe_candidate`, `ProbeResult`, `H264Encoder.reopen`), `track.py`; `DOME_SCREEN_H264_HW` | none (no badge) |
+
+The tests are listed in the Scenario 26 rows. One rule the first build learned the hard way and the rebuild
+keeps: the phone opens the second data channel only in a start that carries `cursor`, because the shipped 1.4
+worker sends on whichever channel the phone announced last (mobile-app DECISIONS 87, pc-agent DECISIONS #111).
+
+### 10.2 Reading the readout (staging builds only)
+
+The readout in the corner of the Screen view picture ends with three lines (copy them with its Copy button):
+
+- `pointer: overlay · shapes 3 custom 1 rejected 0 · pos 412 old-gen 2 · pred err max 9 px`. The first word says
+  who draws the pointer: `overlay` = the phone; `in picture` = the PC keeps it in the picture (the phone asked,
+  but that PC could not leave it out); `none (PC speaks 1.4)` = the session ran without the new pointer (the PC's
+  DoMe is older, or its version was not known yet), so the pointer is in the picture as before. `shapes` counts
+  the pointer shapes received, `custom` those that were an app's own image, `rejected` those the phone refused.
+  `pos` counts the positions received, `old-gen` those thrown away because they belonged to an older picture
+  layout. `pred err max` is the furthest the phone's guess was from where the PC said the pointer was, in PC
+  pixels (`-` before the first report). These counts restart with each session.
+- `screens: 2 · showing 2 · switches 1 failed 0 · gone 0`: how many screens the PC has, which one is shown
+  (DoMe counts from 1, the main screen is 1; `-` when unknown), switches that finished, switches that failed
+  (the old screen stayed), and how often a remembered screen was not connected any more.
+- `zoom: max 2.6x · follow pans 83`: the largest zoom used and how many times the zoomed view moved to keep the
+  pointer in sight. The screens and zoom counts cover the whole viewing, across switches.
+
+### 10.3 Reading the PC's diagnostics bundle (tray → Diagnostics…)
+
+During a session the numbers are under `status.screen.session`; after Stop the media part stays in
+`status.screen.last_session_media`. Counts, kinds and short words only: never a position, a cursor handle or a
+cursor image (in the PC's log and in the bundle, any key containing `png` is `[redacted]`).
+
+- `media.encoders`: one row per encoder DoMe tried, in order. `encoder` (which one), `ok` (used or not), `gated`
+  (true when the hardware test applied), `reason` (why it was skipped, in FFmpeg's or the test's words),
+  `frames_in` (frames fed before the first packet came out), `open_ms`, `mft` (the name of the Windows encoder
+  Media Foundation picked), `parameter_sets` (`inband`, `extradata` or empty). `media.encoder_hw` is true when the
+  hardware encoder ran. The log has the same as `screen encoder probed …` lines and `screen encoder opened … hw=`.
+- `media.cursor`: `mode` (`overlay` or `drawn`), `pos_sent`, `pos_unreliable` (positions sent on the fast
+  channel), `shape_sent`, `custom_sent`, `bitmap_max_chars`, `bitmap_too_large` (custom pointers too big, sent as
+  the arrow), `dropped_gen`, `poll_errors`, `last_kind`.
+- `surface` (`index`, `switched_from`), `consent` (`value`, `inherited`: true when a switch used the earlier
+  Allow, `chain_seconds`: how long the chain of switches has run), `cursor` (`requested`, `mode`).
+- `status.input.session.confined_moves` and `confine_failures` (after the touchpad session ended,
+  `status.input.last_session`): how often a phone move was put back onto the watched screen, and how often that
+  failed.
+- `settings.screen_h264_hw`: false when `DOME_SCREEN_H264_HW=0` turned the hardware encoder off.
+
+### 10.4 What to try on your PC and iPhone (round 2a device checklist)
+
+Before you start: staging must run the round 2a code with Screen view on, the PC needs a Windows build whose
+BUILD-INFO.txt says "screen view: included", and the readout must be showing on the phone. Then:
+
+1. **The pointer.** Start Screen view. You should see a white pointer with a black edge. Turn Touchpad on and
+   slide a finger: the pointer should move with your finger at once, with the picture catching up. Move it over
+   a text box (it should become a text cursor) and over a link (a hand). Tell us the readout's `pointer:` line
+   and whether the pointer was ever somewhere the picture's pointer was not.
+2. **The pointer without Touchpad.** Tap a button: a ripple, the pointer jumps there, the click lands. Scroll with
+   two fingers: the pointer moves to between your fingers. Press and hold: the magnifier is never covered by the
+   pointer.
+3. **Next screen** (with two monitors). The new button at the top shows "1/2". Tap it: "Switching to screen 2…",
+   then the other screen and "Screen 2 of 2". With Touchpad on, slide: the pointer should stay on screen 2 (look
+   at the PC), while your own mouse at the PC can still go anywhere. Tell us the `screens:` line, how many seconds
+   the switch took, and whether the old picture stayed visible under "Switching to screen 2…" or went black.
+   Try it once on mobile data (Wi-Fi off on the phone) too: the old picture should keep playing until the new
+   one appears, and if the switch fails you should be back on the first screen, still moving.
+4. **Zoom with Touchpad on.** Pinch to zoom in, then slide one finger: the view should follow the pointer. Tap
+   "1×" (bottom left) to see the whole screen again. Tell us the `zoom:` line.
+5. **The video encoder.** After the session, on the PC: tray → Diagnostics…, and send us the file. We read which
+   encoder ran (`media.encoders`, the `screen encoder probed` and `screen encoder opened … hw=` lines). Tell us
+   whether the picture looks worse or arrives later than in device round 3. The software encoder now gets its
+   frames in a different format too, so this checks that path again as well.
+6. **An older Windows 10** (only if you have such a PC): whether the readout's `pointer:` line says
+   `in picture`.
+7. **What to send:** the readout text (Copy), the diagnostics file's name, your iPhone model and iOS version, and
+   the PC's Windows build. Please no screenshots of the PC's screen.
+
+The engineer records each result as a dated row in `docs/ACCEPTANCE.md` Scenario 26 (the "Round 2a,
+owner-reported" row and the round 2a outstanding list there, which also carries the open questions the test
+should answer).

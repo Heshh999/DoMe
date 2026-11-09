@@ -63,6 +63,7 @@ export {
 } from "./versions.ts";
 export {
   minVersion,
+  commandProtocolVersion,
   buildCommandPayload,
   signCommand,
   buildConfirmationPayload,
@@ -92,6 +93,7 @@ export {
 } from "./commands.ts";
 export {
   SCREEN_ANSWER_TYPE,
+  SCREEN_CURSOR_CHANNEL_LABEL,
   SCREEN_DATA_CHANNEL_LABEL,
   SCREEN_SDP_PATTERN,
   screenSdpAcceptable,
@@ -108,5 +110,6 @@ export {
   type ScreenDcMessage,
   type ScreenDcPhoneToPc,
   type ScreenDcPcToPhone,
+  type CursorKind,
 } from "./screen.ts";
 export type * from "./generated/index.ts";

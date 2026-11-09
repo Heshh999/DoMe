@@ -36,11 +36,14 @@ from ..platform.protocol import (
 
 @dataclass(frozen=True, slots=True)
 class InputRecord:
-    """One recorded injection call: ``name`` in move|button|scroll|text|key|shortcut|release."""
+    """One recorded injection call: ``name`` in move|move_to|wheel|button|scroll|text|key|shortcut|release.
+    ``cursor`` is where the fake's pointer was when the call was made (physical virtual-desktop pixels, before a
+    move applied), so a ``button`` record says where the click landed."""
 
     name: str
     args: tuple[object, ...]
     at: float  # time.monotonic() when the fake adapter was called
+    cursor: tuple[int, int] = (0, 0)
 
 
 @dataclass
@@ -87,9 +90,15 @@ class FakeState:
     held_buttons: set[str] = field(default_factory=set)  # readable held set
     held_keys: set[str] = field(default_factory=set)
     # ----- Screen view (FakeScreen / FakeInput.move_to) -----
-    monitors: list[Monitor] = field(default_factory=lambda: [Monitor(0, 0, 0, 1920, 1080, True)])  # settable topology
+    # settable topology, also while a session runs (then call ScreenSessionManager.on_display_change(): the watchdog
+    # re-checks the bars at once, as after WM_DISPLAYCHANGE)
+    monitors: list[Monitor] = field(default_factory=lambda: [Monitor(0, 0, 0, 1920, 1080, True)])
     screen_fail: str | None = None  # error code raised by monitors() (None = enumerate normally)
-    cursor: tuple[int, int] = (0, 0)  # where move_to last placed the cursor (physical virtual-desktop pixels)
+    # the pointer (physical virtual-desktop pixels): moved by move / move_to, settable to park it ("the person's
+    # pointer is on the other monitor")
+    cursor: tuple[int, int] = (0, 0)
+    # Windows.Graphics.Capture can leave the pointer out (Windows 10 1903+); False: an older build (protocol 1.5)
+    cursor_capture_configurable: bool = True
     # what the Desktop Duplication pre-flight answers (None: the probe cannot run here, the start proceeds as before);
     # probe_delay_seconds makes it slow, like a driver loading
     duplication_probe: DuplicationProbe | None = None
@@ -485,7 +494,7 @@ class FakeInput:
                 if self.st.input_fail_remaining == 0:
                     self.st.input_fail = None
             raise ProtocolError(code, f"fake platform refused {name}")
-        self.st.input_events.append(InputRecord(name, args, time.monotonic()))
+        self.st.input_events.append(InputRecord(name, args, time.monotonic(), self.st.cursor))
 
     def move(self, dx: int, dy: int) -> None:
         self._inject("move", int(dx), int(dy))
@@ -534,7 +543,7 @@ class FakeInput:
 
     def release(self, buttons: set[str], keys: set[str]) -> int:
         self.st.input_events.append(
-            InputRecord("release", (tuple(sorted(buttons)), tuple(sorted(keys))), time.monotonic())
+            InputRecord("release", (tuple(sorted(buttons)), tuple(sorted(keys))), time.monotonic(), self.st.cursor)
         )
         released = 0
         for b in buttons:
@@ -575,6 +584,11 @@ class FakeScreen:
             time.sleep(self.st.probe_delay_seconds)
         probe = self.st.duplication_probe
         return probe if probe is not None else DuplicationProbe(None, reason="fake platform has no DXGI")
+
+    def cursor_capture_configurable(self) -> bool:
+        """``FakeState.cursor_capture_configurable`` (False: a Windows 10 before 1903, whose Windows.Graphics.Capture
+        keeps the pointer drawn)."""
+        return self.st.cursor_capture_configurable
 
 
 class FakeNativeHost:

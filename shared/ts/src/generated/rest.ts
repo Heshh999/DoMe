@@ -451,6 +451,21 @@ export interface Pc {
   created_at: Timestamp;
   platform: "windows" | "development";
   agent_version?: string;
+  /**
+   * Since 1.5. The protocol versions the PC's agent announced in its last relay hello (empty before the agent connected to a relay that records them). A phone sends an optional param a later MINOR added (screen.session_start.cursor) only to a PC whose list includes that MINOR. A stale list costs one PROTOCOL_INCOMPATIBLE round-trip, never a wrong result.
+   *
+   * @maxItems 8
+   */
+  protocol_versions?:
+    | []
+    | [string]
+    | [string, string]
+    | [string, string, string]
+    | [string, string, string, string]
+    | [string, string, string, string, string]
+    | [string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string];
   remote_enabled_reported?: boolean;
   last_power_request?: null | {
     action: string;

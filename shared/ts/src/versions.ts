@@ -42,6 +42,43 @@ export function inputBatchProtocolVersion(events: readonly { type?: unknown; key
   return best;
 }
 
+/**
+ * actions.json `param_since` of one action (protocol 1.5), checked while a registry loads (the shared registry and the PWA's
+ * no-eval facade both call this, so they apply the same load validation): every key names a property of the params schema
+ * that has no `default` (a default would raise every stamp), and every value is a MAJOR.MINOR between the action's `since`
+ * and `protocolVersion`. Throws an Error that names the action otherwise.
+ */
+export function parseParamSince(action: string, raw: { params?: unknown; param_since?: unknown }, since: string, protocolVersion: string): Record<string, string> {
+  const value = raw.param_since === undefined ? {} : raw.param_since;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`action ${action} has a param_since that is not an object`);
+  const params = (raw.params ?? {}) as { properties?: Record<string, { default?: unknown }> };
+  const properties = params.properties ?? {};
+  const out: Record<string, string> = {};
+  for (const [param, version] of Object.entries(value as Record<string, unknown>)) {
+    const prop = Object.prototype.hasOwnProperty.call(properties, param) ? properties[param] : undefined;
+    if (prop === undefined) throw new Error(`action ${action} has param_since for unknown param ${JSON.stringify(param)}`);
+    if ("default" in prop) throw new Error(`action ${action} has param_since for ${JSON.stringify(param)}, which has a default (it would raise every stamp)`);
+    if (typeof version !== "string" || parseVersion(version) === null || !protocolCompatible(version, [protocolVersion]) || versionBelow(version, since)) {
+      throw new Error(`action ${action} has param_since ${param}=${JSON.stringify(version)} outside [${since}, ${protocolVersion}]`);
+    }
+    out[param] = version;
+  }
+  return out;
+}
+
+/**
+ * rules.command_version_stamping (1.5): `since` raised to the highest `param_since` of the keys PRESENT in `params`. Callers
+ * pass the raw params as signed (or about to be signed), never the default-filled output of `validateParams`.
+ */
+export function paramsProtocolVersion(since: string, paramSince: Readonly<Record<string, string>>, params?: Readonly<Record<string, unknown>> | null): string {
+  let best = since;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return best;
+  for (const [param, version] of Object.entries(paramSince)) {
+    if (Object.prototype.hasOwnProperty.call(params, param) && versionBelow(best, version)) best = version;
+  }
+  return best;
+}
+
 /** `[major, minor]` for a strict `MAJOR.MINOR` string (ASCII digits only), else null. */
 export function parseVersion(version: unknown): [number, number] | null {
   if (typeof version !== "string") return null;

@@ -156,3 +156,22 @@
     answers `INPUT_STALE` (with `ref_pc_id`, no session id) for a batch that waited longer than `input_age_budget_ms` in
     its own queue behind a newer one (cloud-api CONTRACT_ISSUES #24), which PROTOCOL.md §17.6 ("outside the 5 s window
     (relay)") does not list.
+27. **`screen_session_result.cursor` is sent only when the start carried the `cursor` param** (protocol 1.5,
+    `rules.screen_cursor` (6), pc-agent DECISIONS #110): a 1.4 phone validates the result with
+    `additionalProperties: false`, so a start without `cursor` (1.4-stamped) gets the 1.4 result shape exactly. The
+    agent reads the param's presence from the raw signed params (no default fills it in), and the value it reports is
+    its guess at start; the data channel's `state.cursor` is authoritative once capture is open.
+28. **The PC-signed answer's `protocol_version` follows the command** (protocol 1.5, `rules.screen_signaling` (5),
+    pc-agent DECISIONS #109): the answer carries the stamp of the `screen.session_start` it answers (1.4 or 1.5), as a
+    confirmation carries its command's, not the agent library's version; a 1.4 phone therefore accepts the answer of a
+    1.5 agent to its 1.4-stamped start.
+29. **`rules.screen_cursor` (3) leaves a lost `cursor_pos` unrepaired while the pointer rests** (protocol 1.5; pc-agent
+    KNOWN_ISSUES #44, DECISIONS #111). The rule sends `cursor_pos` on `dome-screen-cursor-v1` (unordered, no
+    retransmissions) whenever the phone opened it, and only "when position or visibility changed"; "a lost report is
+    replaced by the next one" assumes a next one comes. After a geometry, a resume or the channel opening exactly one
+    position follows the shape, and it can overtake the reliable geometry or shape (and be dropped by the phone's gen
+    check) or be lost; so can the last position before the pointer rests and the `visible: false` when it leaves the
+    monitor. The agent keeps to the rule (the end-to-end test asserts every `cursor_pos` on the cursor channel and no
+    repeat at rest). Proposal: let the position that follows a `cursor_shape` travel on `dome-screen-v1` (ordered after
+    the geometry and the shape), and let the PC repeat an unchanged position once, on `dome-screen-v1`, about 250 ms
+    after the pointer settled (never a periodic stream).

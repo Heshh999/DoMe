@@ -2,6 +2,8 @@
 
 **Status 2026-10-21: Phase 1 (WP1.1–WP1.9, the "Screen view beta") is being built as protocol 1.4.** Billing took MINOR 1.3 on 2026-10-20, so every "1.3" this brief used for Screen view's contract version now reads 1.4; the shipped agent still announces up to 1.2 and the shipped shared libraries are 1.3, so the compatibility arguments below (the relay shields pre-1.4 agents from 1.4-stamped batches) are unchanged. The contract is in `shared/protocol` and `docs/PROTOCOL.md` §20; where this brief and the contract disagree, the contract wins.
 
+**Status 2026-11-09: round 2a (protocol 1.5) is built: Next screen, the pointer drawn by the phone, zoom in Touchpad mode and hardware H.264; unit-tested; integration-tested (Linux, fakes); not yet verified on a device.** Its design is `docs/design/screen-view-2a.md`, its contract `docs/PROTOCOL.md` §21. This brief gains §8.2 (confinement), §8.3 (Touchpad pinch and follow), §8.5 (the pointer), the §16 copy rows, the §19 status rows and the §5.3 hardware paragraph; the rest of it still describes protocol 1.4.
+
 Status: design brief for the component builders, written 2026-10-16 from four research reports, three
 competing designs and the judge's verdict (the secure design as the base, with the lean design's scope
 discipline and the quality design's UX grafted in). Nothing in it is built. The transport decision is
@@ -464,8 +466,8 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
   reports come from `RTCRtpSender.getStats()` (`RTCRemoteInboundRtpStreamStats`) **[inspected]**, not from
   patching aiortc internals. No REMB wiring in Phase 1.
 - Phase 2 and 3 quality items, behind device data: a cursor overlay (`draw_mouse=0`, shape and position on
-  the data channel, drawn crisp on the phone), a sharpening refresh frame after 300 ms still, and the
-  native-resolution region crop for zoom (§8).
+  the data channel, drawn crisp on the phone; built in round 2a, §8.5), a sharpening refresh frame after
+  300 ms still, and the native-resolution region crop for zoom (§8).
 - **Implementation notes (device round 2, 2026-10-27; pc-agent/DECISIONS.md 98 to 103).** On the founder's PC the
   first encoded packet came 5.5 to 9.2 s after the first captured frame: the synchronous software transform held
   frames and the still screen fed it at the 1 fps floor. Now: `h264_mf` is opened with the low-delay flag (which is
@@ -481,6 +483,30 @@ envelope { v: 1, alg: "ES256", kid: pc_kid, payload, sig }
   profile/level bytes, time to first keyframe, a counters line every 5 s, the transport's candidate types and address
   family, never an address) and the agent keeps the counters in the diagnostics bundle. Still open: the hardware
   transform (it needs NV12 input), matching `profile-level-id` to the real SPS, and the CBR budget on a still screen.
+- **Hardware H.264 (round 2a, protocol 1.5, built 2026-11-09; pc-agent DECISIONS #105, KNOWN_ISSUES #35;
+  unit-tested on Linux with scripted encoder contexts standing in for the transforms; not yet verified on a
+  device).** The hardware transform is now tried. `mfenc.c` accepts only a transform input type that is exactly
+  the context's `pix_fmt` and GPU transforms offer NV12, so both `h264_mf` candidates (and the development-only
+  `libx264`) are fed **NV12** (`EncoderChoice.pix_fmt`; VP8 stays yuv420p): Desktop Duplication delivers NV12
+  natively, Windows.Graphics.Capture converts to it (`WgcSource(pix_fmt=...)`), and the track converts any other
+  frame just before encoding (the fake sources stay yuv420p, so that conversion runs on Linux). The order is
+  unchanged: hardware, software, VP8. `probe_candidate` (at the session's real size) feeds the **hardware**
+  candidate up to `PROBE_MAX_FRAMES = 16` black frames within `PROBE_BUDGET_SECONDS = 3.0` and uses it only when
+  a packet with a slice came out and SPS and PPS exist, in band or in extradata; otherwise it is skipped with the
+  reason ("no packet within 16 frames", "no packet within 3.0 s", "packet without SPS/PPS") and the chain falls
+  through. 16 frames, because the software transform held 6 to 9 frames on the founder's PC (DECISIONS #98). The
+  software candidate, the only encoder verified on a device, keeps the acceptance it had (it opened and encoded
+  one frame; no packet required), with the probe's facts recorded (`gated: false`); it is now fed NV12 too, which
+  is not re-verified on a device. Each candidate is logged (`screen encoder probed encoder= ok= gated=
+  frames_in= open_ms= mft= parameter_sets= reason=`, never a parameter set's bytes) and kept in the diagnostics
+  bundle (`status.screen.session.media.encoders`, `media.encoder_hw`, and after Stop in
+  `status.screen.last_session_media`); `screen encoder opened` gains `hw`, `mft` and `pix_fmt`. A bitrate reopen
+  that fails is retried once after 100 ms (`REOPEN_RETRY_SECONDS`). `DOME_SCREEN_H264_HW=0` on the PC leaves the
+  hardware candidate out (the start's `hw_encoding`; `settings.screen_h264_hw` in the bundle). No vendor is forced
+  on a hybrid laptop: Media Foundation picks the transform by merit and its name is logged (`mft`). The phone is
+  told nothing new: no badge, and "Basic picture mode" still means VP8. Still open after round 2a: which transform
+  the founder's laptop gets and its latency (`frames_in`), matching `profile-level-id` to the real SPS, and the
+  CBR budget on a still screen.
 
 ### 5.4 Audio (Phase 2)
 
@@ -706,6 +732,24 @@ per-version map is the right fix when a `pc_state.screen_session` field is wante
 - Typing after a tap keeps T17's foreground re-capture "at the phone's last click" **[repo]**.
 - `docs/INPUT_CONTROL.md` line 151 ("the phone never maps its own dimensions onto PC pixels") is amended
   for Direct mode: the phone maps onto a normalised surface; the PC maps onto pixels.
+- **Keeping the pointer on the watched screen (round 2a, protocol 1.5; `rules.screen_cursor` (5); pc-agent
+  DECISIONS #107, KNOWN_ISSUES #43).** In Touchpad mode the phone sends relative `pointer_move` events, which
+  Windows lets wander onto a monitor the phone cannot see. While a connected Screen view owned by the batch's
+  controller exists (`ScreenSessionManager.streamed_monitor(controller_id)`, at any geometry generation: a
+  relative move is not aimed at a picture), `input_session.py` reads the pointer before and after each injected
+  `pointer_move` that moved at all (`_confine_after_move`), and only when it was inside the streamed monitor's
+  rectangle before and outside it after, places it on the nearest point inside with `move_to` (physical pixels).
+  This runs per move, not per batch, so a coalesced `move, click, move` batch never clicks on the other monitor.
+  `GetCursorPos` cannot tell the phone's `SendInput` from the person's own mouse, so a pointer that was already
+  elsewhere before the move is left alone and no clip rectangle (`ClipCursor`) is ever set: the person at the PC
+  is never constrained. The one thing it cannot rule out: if the person's mouse crosses the watched monitor's edge
+  in the very moment a phone move does, the pointer is put back inside once. `pointer_move_to` never triggers it
+  (it already maps onto the streamed monitor). A failed correction is counted (`confine_failures`) and never
+  fails the batch; corrections are counted `confined_moves` (`status.input.session` in the diagnostics bundle,
+  `status.input.last_session` after the input session ended). A 1.4 agent does not confine. Unit-tested
+  (`pc-agent/tests/test_input_session_screen.py`, the fake platform with two monitors); integration-tested
+  (Linux, fakes) by `tests/test_e2e_screen.py::test_next_screen_replaces_the_session_and_keeps_the_pointer_on_the_watched_monitor`,
+  which passes (run 2026-11-09, `docs/PROGRESS.md`); not yet verified on a device (mixed-DPI and rotated layouts).
 
 ### 8.3 Phone gestures (two pure modules, unit-tested in jsdom like `gestures.ts`)
 
@@ -726,6 +770,13 @@ the matching `geometry` message arrives (taps blocked ≤ 300 ms).
 | Two fingers moving | Spread ratio changes > 10 % before the midpoint moves 8 px → **pinch**: local zoom, nothing sent. Otherwise **scroll**: `[pointer_move_to(midpoint), pointer_wheel(dx, dy)]` at 1/120-notch resolution, using the existing direction preference. |
 | One-finger drag | Pans when zoomed; nothing at 1×. |
 | Drags (select, move windows) | **Touchpad mode** toggle swaps in the existing relative `GestureMachine` over the same video (Phase 1); direct-mode long-press drag is Phase 2. |
+| Pinch in **Touchpad mode** (round 2a, 1.5) | Zooms the picture about the fingers; nothing is sent. The pinch-or-scroll rule above (spread over 10 % before the midpoint moves 8 px, decided on completed pairs of moves) now lives in `lib/twoFinger.ts` (`TwoFingerClassifier`) and serves both machines; `GestureMachine` (`lib/gestures.ts`) emits `pinch` and is fed box coordinates. A quick two-finger tap is still a right click and a second finger never clicks. With Drag on, a second finger is ignored as before, so there is no pinch zoom until End Drag (mobile-app KNOWN_ISSUES #46). |
+| One finger sliding while zoomed in **Touchpad mode** (round 2a, 1.5) | Still a relative `pointer_move`, and the zoomed view **follows the pointer**: a frame loop that runs only while zoomed in Touchpad mode reads `PointerModel.followSample()` and pans by the overshoot past an inner margin (`followPointer` in `screenMap.ts`: 20 % of the box, at least 48 px). It works whoever draws the pointer, a 1.4 PC included: a pinch with nothing to follow seeds the follow point at the fingers' centre (`seedFollow`). While two fingers pinch they own the view. |
+| `1×` button (round 2a, both modes, while zoomed) | Bottom left over the picture, labelled "Back to the whole screen": shows the whole picture again; a zoom below 1.1× also snaps back (`snapIdentity`). A mode switch and a new picture start from the whole picture. |
+
+The Touchpad pinch, the follow and the `1×` button are unit-tested (`mobile-app/test/twoFinger.test.ts`,
+`gestures.test.ts`, `screenMap.test.ts`, `components/ScreenSurface.test.tsx`; mobile-app DECISIONS 89 and 90)
+and not yet verified on a device.
 
 Overlay: reuse the device-proven `TouchpadSurface.tsx` pattern **[repo]** (`touch-action: none`, non-passive
 `touchmove` `preventDefault`, pointer capture, cancel on visibility or orientation change) above `<video
@@ -744,6 +795,85 @@ worker re-crops at native resolution (`ddagrab` `offset`/`video_size` or a `scal
 encoded size, forces an IDR and announces `geometry{gen+1, …}`; the phone switches its mapping when the
 `<video>` `resize` event shows the new frame. Because taps carry the `gen` the phone saw, a mis-attributed
 frame cannot misclick by more than the overlap of two generations.
+
+### 8.5 The pointer drawn by the phone (round 2a, protocol 1.5)
+
+Built 2026-11-09 from `docs/design/screen-view-2a.md` (D8 to D12, D17, D18); normative text
+`version.json → rules.screen_cursor`, wire details `docs/PROTOCOL.md` §21.4. Unit-tested; the PC-to-phone
+messages integration-tested (Linux, fakes); not yet verified on a device. Why: with the pointer painted into
+the video, the pointer the person sees lags the finger by the whole capture-encode-network-decode path. Drawn by
+the phone, it moves the instant the finger does and the picture catches up.
+
+**Modes.** `screen.session_start.cursor` (since 1.5, no default) is `drawn` (the PC paints its pointer into the
+picture, the 1.4 behaviour) or `overlay` (the PC captures without the pointer, `ddagrab` `draw_mouse=0` or
+Windows.Graphics.Capture `cursor_capture=False`, and reports position and shape on the data channel; the phone
+draws it). The phone asks for `overlay` only of a PC whose `pc.protocol_versions` (REST, `GET /v1/pcs`) include
+1.5, and only that start opens the second data channel `dome-screen-cursor-v1`: the shipped 1.4 worker sends on
+whichever channel the phone announced last, so a second channel in a start to a 1.4 PC would lose its state,
+allowance and restricted messages (found by the end-to-end run of the first build). When the list was stale the
+relay refuses the 1.5-stamped start (`PROTOCOL_INCOMPATIBLE {peer: "agent", required: "1.5"}`) and the phone
+starts once more without `cursor`. `result.cursor` is the PC's guess at start (`overlay`, unless the source will
+be Windows.Graphics.Capture on a Windows build below 18362: `ScreenAdapter.cursor_capture_configurable()`); the
+first `state{sending, cursor}` after the source opened is authoritative (Windows may refuse `cursor_capture=False`,
+and the picture then keeps the pointer: `drawn`). The phone draws only while the latest mode is `overlay`, so it
+never shows two pointers. A 1.4 phone never sees any of this: `result.cursor`, `state.cursor`, `cursor_pos` and
+`cursor_shape` exist only in a session whose start carried `cursor` (the worker's `_shape_for_vocabulary`).
+
+**Messages, PC to phone only.**
+- `cursor_shape{kind}` for the fourteen Windows system shapes (`arrow`, `ibeam`, `hand`, `wait`, `appstarting`,
+  `cross`, `no`, `sizeall`, `sizens`, `sizewe`, `sizenesw`, `sizenwse`, `uparrow`, `help`), recognised by
+  comparing the cursor handle with `LoadCursorW(NULL, IDC_*)`; the phone draws them with its own vector art
+  (`mobile-app/src/lib/cursorGlyphs.ts`, `CURSOR_GLYPHS`, each with its hotspot).
+- `cursor_shape{kind: "custom", width, height, hotspot_x, hotspot_y, png}` for an application's own pointer:
+  rendered with `GetIconInfo`/`DrawIconEx` into a 32-bpp bitmap (the alpha of a cursor without its own taken
+  from a `DI_MASK` pass), scaled to at most 64 × 64 with its hotspot, sent as a PNG of at most 8192 base64
+  characters (else as `arrow`, counted), at most 4 a second, the latest winning. It is the only message that may
+  exceed `screen_dc_message_max_bytes` (1024); `screen_dc_cursor_shape_max_bytes` (12288) bounds it.
+- `cursor_pos{gen, x, y, visible}`, normalised 0..65535 over the streamed surface exactly like `pointer_move_to`,
+  sent only when it changed, at most 60 a second; `visible: false` when Windows hides the pointer or it is on
+  another monitor (x and y then keep the last position inside).
+- The first shape precedes the first position; both are sent again after each `geometry` and each resume;
+  nothing while paused, nothing at all in a `drawn` session. `cursor_pos` rides `dome-screen-cursor-v1`
+  (unordered, `maxRetransmits: 0`: a lost report is replaced by the next one instead of holding later ones back)
+  while it is open, else `dome-screen-v1`; everything else rides `dome-screen-v1`.
+- On the PC a daemon thread in the worker (`CursorPoller`, `pc-agent/dome_agent/screen/worker/cursor.py`; the
+  Windows calls in `cursor_win.py`, `FakeCursorReader` on Linux) reads `GetCursorInfo` at most 60 times a second
+  (`CURSOR_POS_HZ`), keeps 8 decided shapes for 10 s, and stops after ten failed reads in a row with one
+  `visible: false` (log line `cursor reporting stopped`). The agent logs the mode in effect
+  (`screen cursor mode mode= source=`).
+
+**Prediction and reconciliation, on the phone.** `mobile-app/src/lib/pointer.ts` `PointerModel` is a plain
+object on the session client (`client.pointer`), never React state. The client keeps one slot for the latest
+`cursor_pos` (the last one wins; an older geometry generation is dropped and counted) and the overlay
+(`components/ScreenPointer.tsx`) reads `sample()` once per animation frame. In Touchpad mode the predicted point
+moves at once by each `dx, dy` the batch carries, scaled to the screen's PHYSICAL size (`client.surfaceSize()`,
+never the size of the encoded picture); in direct mode it snaps to the tap, loupe or two-finger-scroll point. A
+report then pulls the prediction `BLEND_WHILE_MOVING` (35 %) of the way while the finger moves; after `IDLE_MS`
+(120 ms) without a local move the shown point eases to the report over `EASE_MS` (80 ms); an error above
+`SNAP_FRACTION` (10 % of the screen) snaps. The four numbers are named so the device round can tune them
+(mobile-app KNOWN_ISSUES #41; the readout's `pred err max` says how far off the prediction got). The pointer is
+drawn outside the zoom layer at 24 CSS px (`POINTER_CSS_PX`; a custom bitmap is scaled down to that height,
+never up, its hotspot with it), above the readout and under the loupe (`z-[15]`), and hidden before the
+session's first report, while the PC says it is not visible, while the loupe is open, while the PC paused,
+during a switch of screens and for 150 ms after a tap's ripple (`RIPPLE_POINTER_HIDE_MS`).
+
+**The content rule.** A cursor bitmap is screen content (`rules.screen_content`, `rules.screen_cursor` (4)):
+nothing on either side writes it to disk, logs it, journals it or puts it in a diagnostics bundle; logs, the
+bundle and the readout carry kinds, sizes and counts only (`media.cursor` in the PC bundle; the readout's
+`pointer:` line on the phone). On the PC `png` is a redacted key part (`logsetup.SENSITIVE_KEY_PARTS`), so every
+counter says `bitmap` instead (`cursor_bitmap_max_chars`, `cursor_bitmap_too_large`). The phone checks a custom
+shape by its PNG header bytes only (`lib/cursorShape.ts`; no canvas, no pixel read, `test/no-pixel-access.test.ts`
+unchanged), draws it as an `<img>` from a `data:` URL, keeps only the current shape in memory and logs a refused
+one with a reason word only (`screen.cursor_shape_rejected`).
+
+Evidence: pc-agent `tests/test_screen_cursor.py`, `test_screen_worker.py`
+(`test_loopback_overlay_session_reports_the_pointer_on_the_cursor_channel`,
+`test_loopback_a_start_without_cursor_sends_no_1_5_key_or_message`), `test_screen_capture_fallback.py`,
+`test_screen_redaction.py`, `test_diagnostics_screen.py`; mobile-app `test/pointer.test.ts`,
+`cursorShape.test.ts`, `components/ScreenPointer.test.tsx`, `screen.test.ts`; the shared
+`shared/protocol/fixtures/screen-dc-cases.json`; end to end `tests/test_e2e_screen.py::test_cursor_overlay_messages_reach_the_phone_and_validate`
+and `::test_a_1_5_agent_answers_a_1_4_phone_in_1_4`, which pass (run 2026-11-09, `docs/PROGRESS.md`). Not yet
+verified on a device: pc-agent KNOWN_ISSUES #40 and #41, mobile-app KNOWN_ISSUES #41, #43 and #44.
 
 ## 9. Mini view and the TV-style remote
 
@@ -1079,7 +1209,15 @@ factory):
 | `play()` rejected (Low Power Mode) | promise rejection | "Tap to show the picture." |
 | No path | 20 s with no DTLS | "Couldn't reach your PC's picture from this network. The touchpad and remote still work." [Try again] |
 | Relay guard hard cap | `turn: disabled` | "Screen view could only try a direct connection right now. It works on most home networks." |
-| Live | first frame | top strip "Encrypted between your PC and this phone" · "About 7 min left" |
+| Live | first frame | top strip "Encrypted between your PC and this phone" · "About 7 min left" (since round 2a both on the second line under the PC name, `data-testid="screen-time-left"` on the time left) |
+| Two or more screens (round 2a) | `surfaces.length >= 2` | screens button before Touchpad showing "1/2" (`data-testid="screen-next"`), labelled "Next screen. Showing screen 1 of 2. Switch to screen 2."; a spinner "Switching" while a switch runs |
+| Switching screens (round 2a) | `switching` | over the last picture: "Switching to screen 2…" (`SWITCH_COPY.switching`); gives way to "Tap to show the picture." when play() was refused and to the consent wait when the PC asks someone |
+| Switched (round 2a) | first frame of the new screen | "Screen 2 of 2" for 1.5 s (`SWITCH_COPY.switched`) |
+| Remembered screen gone (round 2a) | `INVALID_PARAMETERS` for the remembered surface | "Screen 2 isn't connected any more. Showing screen 1." for 3 s (`SWITCH_COPY.screenGone`) |
+| Switch refused (round 2a) | a failed switching start while the old session lives | "Couldn't switch screens. Still showing screen 1." for 3 s (`SWITCH_COPY.switchFailed`; none when the Free time ran out, whose own state shows) |
+| Pointer kept in the picture (round 2a) | the start asked for `overlay`, the PC says `drawn` | "On this PC the pointer stays in the picture, so it can lag a little behind your finger." once per session for 3 s (`COPY.pointerInPicture`; never on a 1.4 PC) |
+| Zoomed (round 2a) | `view.s > 1` | "1×" button, bottom left, labelled "Back to the whole screen" (`data-testid="screen-zoom-reset"`) |
+| App older than the service (round 2a) | `/v1/pcs` answers `MALFORMED_MESSAGE` | Screen page only: "A newer DoMe is ready. Close and reopen the app to update." (`COPY.updateReady`, mobile-app KNOWN_ISSUES #45) |
 | Data saver / relayed | `path`, `relayed_max_kbps` | badge "Via relay server" / "Data saver" |
 | Weak connection | step-down | "Weak connection: lowering quality" |
 | View-only grant | no `pointer` | "View only. Allow the touchpad on your PC to tap." |
@@ -1108,6 +1246,16 @@ Product labels: "Screen view (beta)" in the app during Phase 1; the website keep
 Coming") until Phase 2 ships (founder decision, §22). The first-run explainer: "Your PC's picture goes
 straight to this phone, encrypted between the two. Nothing is recorded or stored. The AI never sees it.
 Uses about 0.7 GB per hour at full quality."
+
+Round 2a copy (`mobile-app/src/lib/screenStatus.ts` `COPY` and `SWITCH_COPY`, `pages/app/ScreenPage.tsx`;
+unit-tested in jsdom, not yet verified on a device). The "Before you start" gesture line reads: "Tap what you
+see to click it. Pinch to zoom in; press and hold for a magnifier. Touchpad moves the pointer like a laptop
+touchpad and lets you drag. If your PC has two screens, the screens button at the top switches between them."
+The gesture sheet "Gestures on the picture" has three lists, "With Touchpad off" (`DIRECT_GESTURES`), "With
+Touchpad on" (`TOUCHPAD_SCREEN_GESTURES`) and "Either way"; the last says of the screens button "Shows the PC's
+other screen. On an up-to-date PC the pointer comes along. DoMe calls the main screen 1; Windows may number them
+differently." Screens are counted from 1 in DoMe's own order (index 0, the main screen, is screen 1). There is no
+new setting and no hardware/software badge.
 
 ## 17. Security analysis
 
@@ -1289,8 +1437,9 @@ on staging and, behind the switch, on production.
 | WP | Contents | Tests |
 | --- | --- | --- |
 | WP2.1 pc-agent | `audio_loopback.py` (mix format → interleaved s16 stereo 48 kHz before each 960-sample frame, §5.4) → Opus; `screen_audio` grant plumbing; the speaker glyph; `audio{on}` message | silence generation with a fake capture client, and a **float32 fake capture client through the real `aiortc.codecs.opus.OpusEncoder`** → unit-tested; loopback → device |
-| WP2.2 pc-agent | "Next screen": a new session with `surface: N`; cursor overlay (`draw_mouse=0`, shape and position messages) behind device data | unit-tested; device |
-| WP2.3 mobile-app | In-app mini view (portal + store), Sound button and `audioSession`, `TvRemotePage`, "Still watching?", Data saver badge, direct-mode long-press drag | unit-tested lifecycle and key mapping; device |
+| WP2.2 pc-agent | "Next screen": a new session with `surface: N`; cursor overlay (`draw_mouse=0`, shape and position messages) behind device data | unit-tested; device  **Status 2026-11-09 (round 2a, protocol 1.5, `docs/design/screen-view-2a.md`; rebuilt after the first build of 2026-11-03 to 11-05 was lost before it was saved): built; unit-tested; integration-tested (Linux, fakes); not yet verified on a device.** Built with it: the contract 1.5 (`docs/PROTOCOL.md` §21), the relay's stamp gate and `pc.protocol_versions` (cloud-api DECISIONS #115, #116), the same-phone replacement that keeps the bars up and inherits an explicit Allow (pc-agent DECISIONS #108), keeping the pointer on the watched screen (§8.2), the pointer poller (§8.5) and hardware H.264 (§5.3). |
+| WP2.3 mobile-app | In-app mini view (portal + store), Sound button and `audioSession`, `TvRemotePage`, "Still watching?", Data saver badge, direct-mode long-press drag | unit-tested lifecycle and key mapping; device  **Status 2026-11-09: the round 2a phone parts are built: the screens button and the switch that keeps the last picture (§16), the pointer drawn by the phone (§8.5), pinch zoom in Touchpad mode with the view following the pointer and the `1×` button (§8.3); unit-tested (jsdom, with the fake peer); not yet verified on a device.** The end-to-end suite drives the PC side of these with a Python phone, not with the app. The mini view, the Sound button, `TvRemotePage`, "Still watching?" and direct-mode long-press drag are not built. |
+| WP2b pc-agent (Phase 2b candidate) | Rebuild onto the primary when the watched monitor vanishes: a new source on the main screen with a new geometry generation instead of ending the session `capture_failed` (round 2a decision D16; pc-agent KNOWN_ISSUES #42) | unit-tested; device |
 | WP2.4 docs | Labels flip for the delivered parts; mini-view wording per the founder's decision | website tests |
 
 **Phase 3: only where data asks**

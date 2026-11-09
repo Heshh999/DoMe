@@ -15,8 +15,15 @@
   ``relayed`` and the relayed bitrate cap (1.0 Mbps, or ``relayed_max_kbps`` for Data saver).
 * **Bitrate steps** from ``RTCRtpSender.getStats()`` (``remote-inbound-rtp`` ``fractionLost``): loss above 10 % for
   5 s steps 1500 → 800 → 500 kbps with an IDR. No REMB wiring in Phase 1.
-* **Data channel** ``dome-screen-v1``: inbound messages validated with ``parse_screen_dc_message(text, "phone_to_pc")``
-  (unknown or malformed dropped and counted), outbound ones with ``"pc_to_phone"`` before sending.
+* **Data channels, by label** (2a §3.5): ``dome-screen-v1`` (ordered, reliable): inbound messages validated with
+  ``parse_screen_dc_message(text, "phone_to_pc")`` (unknown or malformed dropped and counted), outbound ones with
+  ``"pc_to_phone"`` before sending. ``dome-screen-cursor-v1`` (since 1.5; the phone opens it unordered with
+  ``maxRetransmits: 0`` only in a start that carries ``cursor``): it carries ``cursor_pos`` from the PC
+  (:meth:`ScreenPeer.send_cursor_pos`, falling back to the reliable channel when it is not open: a 1.5 phone
+  that did not open it, or before it opened); anything the phone sends on it is dropped and counted. Any other
+  label is closed and counted (``dc_unknown_channels``). aiortc applies the phone's partial-reliability parameters to
+  its own sends on that channel (``rtcsctptransport.py``: ``_max_retransmits``, abandoned chunks, forward TSN); that
+  a lost position is never retransmitted is not asserted on Linux.
 * **What the media path did** (device round 2: the PC was ``live`` for 217 s and nothing showed which stage failed):
   the 2 s ``stats`` event carries the sender's ``outbound-rtp`` counts, whether a receiver report from the phone has
   come (``rr``), its loss, jitter and round-trip time, the PLIs and NACKed packets (``sender._retransmit`` counted on
@@ -43,7 +50,13 @@ from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSession
 from aiortc.codecs import h264 as aiortc_h264
 from aiortc.codecs import vpx as aiortc_vpx
 from aiortc.rtcrtpsender import RTCRtpSender
-from dome_protocol import ProtocolError, dumps_compact, parse_screen_dc_message
+from dome_protocol import (
+    SCREEN_CURSOR_CHANNEL_LABEL,
+    SCREEN_DATA_CHANNEL_LABEL,
+    ProtocolError,
+    dumps_compact,
+    parse_screen_dc_message,
+)
 
 from ..sdp_check import check_offer
 from .track import ScreenTrack
@@ -156,8 +169,10 @@ class ScreenPeer:
         emit: Emit,
         bitrate_kbps: dict[str, int],
         relayed_max_kbps: int | None = None,
+        extra_stats: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._offer_sdp = offer_sdp
+        self._extra_stats = extra_stats  # the worker's own counters (the cursor's) merged into every stats event
         self._stun_urls = [u for u in stun_urls if isinstance(u, str) and u.startswith(("stun:", "stuns:"))]
         self.track = track
         self._capture_allowed = capture_allowed
@@ -167,13 +182,16 @@ class ScreenPeer:
         self.pc: RTCPeerConnection | None = None
         self.sender: RTCRtpSender | None = None
         self.transceiver: Any | None = None
-        self.channel: Any | None = None
+        self.channel: Any | None = None  # dome-screen-v1
+        self.cursor_channel: Any | None = None  # dome-screen-cursor-v1 (1.5), when the phone opened it
         self.path: str | None = None
         self.pli_hook = False
         self.pli_count = 0
         self.nack_count = 0  # packets the phone NACKed (each retransmission request)
         self.dc_dropped = 0
         self.dc_received = 0
+        self.dc_unknown_channels = 0  # data channels with another label: closed at once
+        self.cursor_pos_unreliable = 0  # cursor_pos sent on the unordered cursor channel
         self.data_saver = False
         self._step = 0
         self._lossy_since: float | None = None
@@ -340,6 +358,22 @@ class ScreenPeer:
 
     # ----- data channel -----
     def _on_datachannel(self, channel: Any) -> None:
+        """Dispatch by label: the 1.4 worker took whichever channel the phone announced last, so a phone opens the
+        cursor channel only in a start that carries ``cursor`` (2a Part 0)."""
+        label = getattr(channel, "label", None)
+        if label == SCREEN_CURSOR_CHANNEL_LABEL:
+            self.cursor_channel = channel
+
+            def dropped(_message: Any) -> None:
+                self.dc_dropped += 1  # nothing travels from the phone on the cursor channel
+
+            channel.on("message", dropped)
+            return
+        if label != SCREEN_DATA_CHANNEL_LABEL:
+            self.dc_unknown_channels += 1
+            with contextlib.suppress(Exception):
+                channel.close()
+            return
         self.channel = channel
 
         def on_message(message: Any) -> None:
@@ -366,7 +400,20 @@ class ScreenPeer:
         """Validated against the PC → phone vocabulary before it leaves; False when the channel is not open."""
         text = dumps_compact(message)
         parse_screen_dc_message(text, "pc_to_phone")
-        channel = self.channel
+        return self._send_text(self.channel, text)
+
+    def send_cursor_pos(self, message: dict[str, Any]) -> bool:
+        """A ``cursor_pos``, validated like :meth:`send_dc`, on the unordered cursor channel when it is open (counted
+        ``cursor_pos_unreliable``), else on the reliable channel; False when neither is open."""
+        text = dumps_compact(message)
+        parse_screen_dc_message(text, "pc_to_phone")
+        if self._send_text(self.cursor_channel, text):
+            self.cursor_pos_unreliable += 1
+            return True
+        return self._send_text(self.channel, text)
+
+    @staticmethod
+    def _send_text(channel: Any | None, text: str) -> bool:
         if channel is None or channel.readyState != "open":
             return False
         channel.send(text)
@@ -388,8 +435,12 @@ class ScreenPeer:
             nack=self.nack_count,
             bitrate_kbps=self.track.bitrate_kbps,
             encoder_label=self.track.choice.label,
+            encoder_hw=bool(self.track.choice.hardware),
+            cursor_pos_unreliable=self.cursor_pos_unreliable,
         )
         snapshot.update(self.track.stats())
+        if self._extra_stats is not None:
+            snapshot.update(self._extra_stats())
         return snapshot
 
     async def _stats_loop(self) -> None:
