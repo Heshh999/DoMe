@@ -7,6 +7,7 @@ tested on Linux (shared 575, cloud-api 610, pc-agent 1354, mobile-app 1614, e2e 
 The cloud build machine was cleared before that work was committed, so none of the code exists any more.
 This document is what survived, reconstructed from the session record:
 
+0. **Part 0** lists what the first builders found in the tree that the design did not say.
 1. **Part 1** is the final specification as far as its text survived: the build order (section 8), the review
    log (section 9) and the final text of sections 1.4 (tail), 1.8, 1.9, 2.4, 2.5, 3.3, 3.4, 3.5, 3.9, 3.10,
    4.1, 4.7 to 4.9 and 5.1 to 5.3.
@@ -20,6 +21,73 @@ build must be kept. A 1.5 phone must open the second data channel `dome-screen-c
 carries `cursor`, because the shipped 1.4 worker sends on whichever data channel the phone announced last
 (pc-agent/dome_agent/screen/worker/rtc.py at commit bdda249, `_on_datachannel`); otherwise a 1.4 PC's state,
 allowance and restricted messages are lost. And work in progress is now saved to GitHub after every stage.
+
+---
+
+# Part 0. Notes from the first build (2026-11-03 to 2026-11-05; the code was lost, these facts were not)
+
+What the first builders found in the tree that the design did not say. A rebuild follows these; where one
+contradicts Part 1 or Part 2, this part wins.
+
+**Tooling and contract**
+- Tooling is frozen. shared/python has no ruff or mypy configuration and shared/ts has no lint script; CI runs
+  pytest for shared/python and gen:types-matches, typecheck and test for shared/ts. Do not add any.
+- Pillow is not a dependency of shared/python: the fixture PNG (a real 1x1 RGBA image) is built with the
+  standard library (struct + zlib stored deflate), and the TypeScript generator builds the same bytes with
+  node:zlib level 0. Both carry the same base64 literal and write `screen-dc-cases.json` byte-identically.
+- The parsers refuse anything above 12288 bytes, and anything above 1024 bytes sent phone_to_pc, before parsing
+  (`MALFORMED_MESSAGE`, "data-channel message too long"). The answer builders also refuse a stamp the library
+  does not speak (`PROTOCOL_INCOMPATIBLE {peer, supported}`).
+- `relay-frames.schema.json` `$defs/screen_dc_message.description` must mention the cursor_shape size exception
+  and the second channel (a description-only change, the generated files regenerated).
+- Consent inheritance follows the rule text `rules.screen_sessions (1b)`: a same-controller replacement inherits
+  an explicit `granted` only where the person would otherwise get an ask-mode window or a one-window-per-minute
+  (`backoff`) refusal; the session code and PROTOCOL.md section 21 must say the same.
+
+**The compatibility bug the end-to-end run caught (keep this fix)**
+- The phone opens the second data channel `dome-screen-cursor-v1` ONLY in a start that carries `cursor`. The
+  shipped 1.4 worker sends on whichever data channel the phone announced last
+  (`pc-agent/dome_agent/screen/worker/rtc.py` `_on_datachannel` at commit bdda249), so a two-channel offer to a
+  1.4 PC loses its state, allowance and restricted messages. `ScreenSessionClient.buildOffer(cursorChannel)` takes
+  the same flag that puts `cursor: "overlay"` into the params. The e2e Python phone (`tests/screen_phone.py`)
+  must follow the app: one channel unless `cursor` is given.
+
+**cloud-api**
+- The test harness computes the stamp in `ControllerSim.envelope` (which `ControllerSim.command` calls): stamp by
+  content there. `AgentSim.screen_answer` takes `protocol_version` (default "1.4").
+- The relay stamp gate sits after the `supports_screen` gate and before the operator switch
+  (`SCREEN_VIEW_DISABLED`), the start rate limiter and `reserve_start`. "No rate-limiter token spent" is proven
+  behaviourally: after the refused start, six starts still pass and the seventh is `RATE_LIMITED`.
+- `tests/test_e2e_versions.py::test_an_agent_one_minor_behind_refuses_only_the_actions_it_predates` expected
+  `origin == "agent"`; with the generalised relay gate those refusals come from the relay.
+
+**pc-agent**
+- `ScreenSession.protocol_version` carries the start's stamp to the signer; `start_session`/`_start_session` take
+  a required `protocol_version` keyword. `tests/helpers.py stamp_for(action, params)` stamps by content.
+- The worker's flat `cursor_*` stats are whitelisted and stored as the nested `media.cursor` object with short
+  names; `settings.screen_h264_hw` lives in the bundle's top-level `settings` section.
+- When the re-validation after the second `live_session` read re-asks consent, `inherited` resets to false. The
+  old session's `_end(..., keep_indicator=True)` is inside the try/except that closes kept bars on failure.
+- DECISIONS: #105 to #111 (#111: cursor_pos on the unordered cursor channel). The encoder references are #101
+  (encoder_stalled) and #103 (VP8 first), not #100. KNOWN_ISSUES: #35 rewritten, #40 to #43 new.
+- `tests/test_screen_worker.py::test_loopback_overlay_session_without_a_cursor_channel_uses_the_reliable_one`
+  failed once under full-suite load (it waited 10 s for three cursor_pos): make it deterministic.
+
+**mobile-app**
+- `test/screenStatus.test.ts` checks every `COPY` string against forbidden words, so the switch texts live in a
+  sibling export `SWITCH_COPY` in `lib/screenStatus.ts`. `test/directGestures.test.ts` forces the Pinch row to
+  read "Zooms the picture on your phone only; nothing is sent to the PC".
+- Component tests live in `test/components/`. `test/helpers/fakePeer.ts` must pass `protocolVersion` to
+  `buildScreenAnswerPayload`.
+- `ScreenSurface` takes `onZoom(scale)` (wired to `client.noteZoom`) so the readout's `zoom: max` moves. Within
+  one pinch the unsnapped zoom is kept and `snapIdentity` applies to what is shown. The zoom-follow frame loop
+  runs only while zoomed in Touchpad mode.
+- The back `<video>` sits under the front one (front `z-[1]` with a black background), not `display:none`, so
+  Safari keeps decoding it. No "Couldn't switch screens" chip for `SCREEN_ALLOWANCE_EXHAUSTED`. The 1x button is
+  labelled "Back to the whole screen" and stops pointer propagation. The gesture sheet's lists are headed "With
+  Touchpad off", "With Touchpad on" and "Either way".
+- The "newer DoMe is ready" notice was shown on the Screen page only (KNOWN_ISSUES #45); the review proposed one on
+  the Devices page too. KNOWN_ISSUES #46: with Drag on, Touchpad mode has no pinch zoom (pre-1.5 behaviour).
 
 ---
 
