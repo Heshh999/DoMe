@@ -314,7 +314,12 @@ never reach DoMe. Until the values below are in place, DoMe sells nothing: the B
 "Upgrading is not available yet" and everyone stays on Free. That is the state of https://domeremote.com
 today.
 
-> **Honest status (2026-10-20).** DoMe's payment code is written and tested against a stand-in for Stripe,
+> **Status (2026-11-09): tested with Stripe in test mode on staging.** On 2026-10-26, after the Managed Payments
+> fix, the founder bought DoMe Pro on staging with the test card (invoice $9.99 paid in the domeremote sandbox),
+> the account turned Pro, and cancelling in the customer portal set the end date (cancels 2026-11-26). Live mode and
+> production are not done yet (step 8).
+>
+> **Earlier status (2026-10-20).** DoMe's payment code is written and tested against a stand-in for Stripe,
 > **never against Stripe itself**. The Deploy button now carries the Stripe values to Fly (tested against a
 > stand-in for Fly, never against the real one). Your first test-mode run on staging (steps 6 and 7) is the
 > real test of both. Steps 1 and 2 are already done (you set up the Stripe sandbox and the five prices on

@@ -55,6 +55,9 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   for those three; the hardware encoder was not checked (`encoder_hw` not read), and a switch on mobile data and an
   older Windows 10 were not tried (docs/ACCEPTANCE.md Scenario 26).
 - **Founder decisions.** No 4K or paid quality tier; Screen view quality stays as it is.
+- **Payments.** Confirmed with the founder: the staging test-mode purchase of DoMe Pro worked on 2026-10-26 (sandbox
+  invoice $9.99 paid, Pro shown, cancel in the customer portal set the end date 2026-11-26). **Evidence tag:
+  tested with Stripe (test mode, owner-reported).** Live mode and production remain.
 - Next: read `encoder_hw`/`mft` from a diagnostics file when convenient; then the launch steps (production deploy,
   payment checks, publishing the signed installer, TURN relay, legal).
 
