@@ -21,7 +21,8 @@
  * note says which screen is shown, that a remembered screen is gone, or that the switch failed and the old screen is
  * still shown. The pointer drawn by the phone, the Touchpad pinch zoom and the 1× button live in `ScreenSurface`;
  * when this PC keeps the pointer in the picture although the phone asked for it, a note says so once per session.
- * A newer app version waiting (the devices store's `updateReady`) is said on this page.
+ * A newer app version waiting (the devices store's `updateReady`) is said on this page. While the page is open, a newer
+ * version never reloads the app (DECISIONS 92: the page holds the "screen" busy state until it is left).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
@@ -43,6 +44,8 @@ import { EMPTY_SCREEN_STATE, humanSurface } from "../../lib/screen.ts";
 import { allowanceLow, allowanceText, COPY, inputNotice, remainingSeconds, SCREEN_BETA_LABEL, screenStatus, SWITCH_COPY, type ScreenStatus } from "../../lib/screenStatus.ts";
 import type { ScreenMediaFacts } from "../../lib/screenStats.ts";
 import { WakeLockHolder } from "../../lib/wakeLock.ts";
+import { useAppUpdateStore } from "../../store/appUpdate.ts";
+import { useBusyHold } from "../../store/busy.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useLiveStore } from "../../store/live.ts";
 import { useScreenStore } from "../../store/screen.ts";
@@ -173,6 +176,10 @@ export function ScreenPage() {
   const [playEpoch, setPlayEpoch] = useState(0);
   const [viewOnlyAt, setViewOnlyAt] = useState<number | null>(null);
   const [wake] = useState(() => new WakeLockHolder());
+  // a newer DoMe never reloads the app while this page is open: it waits until the person leaves Screen view
+  useBusyHold("screen");
+  // once a newer version is loaded and waiting, the app-wide notice says so (and when); this page's own line until then
+  const updateWaiting = useAppUpdateStore((s) => s.ready);
 
   // a session on another PC is not this page's (the runtime stops it on a PC switch)
   const state = session.pcId === null || session.pcId === pcId ? session : EMPTY_SCREEN_STATE;
@@ -481,7 +488,7 @@ export function ScreenPage() {
   return (
     <div className="space-y-4">
       <PageHeader title={SCREEN_BETA_LABEL} back={{ to: "/app/remote", label: "Remote", ariaLabel: "Back to the remote" }} />
-      {updateReady ? (
+      {updateReady && !updateWaiting ? (
         <Notice tone="info">
           <p data-testid="screen-update-ready">{COPY.updateReady}</p>
         </Notice>

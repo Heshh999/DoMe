@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from dome_api.auth.deps import DB, Auth, Svc
+from dome_api.auth.oidc import EmailNotVerifiedError
 from dome_api.auth.sessions import clear_session_cookie, create_session, set_session_cookie
 from dome_api.db.models import Account
 from dome_api.errors import ApiError
@@ -21,6 +22,10 @@ from dome_api.util import client_ip, rest_response, ts_required, utcnow
 router = APIRouter(tags=["auth"])
 log = get_logger("dome_api.routes.auth")
 MAX_RETURN_TO = 1024
+# Where a sign-in refused for an unconfirmed email lands: the public home page, which shows "Confirm your email
+# first" for this reason (mobile-app/src/lib/signInProblem.ts). Never /app: the app shell sends a signed-out
+# browser straight back to the provider, which remembers the person and would answer unverified again, in a loop.
+EMAIL_UNVERIFIED_REDIRECT = "/?sign_in=email_unverified"
 
 
 def safe_return_to(value: str | None) -> str:
@@ -48,7 +53,12 @@ async def callback(
     if error is not None or code is None or state is None:
         log.info("oidc.callback_error", provider_error=bool(error))
         raise ApiError(400, "MALFORMED_MESSAGE", "Sign-in was cancelled or failed. Try again.")
-    identity, return_to = await svc.oidc.complete(db, code, state)
+    try:
+        identity, return_to = await svc.oidc.complete(db, code, state)
+    except EmailNotVerifiedError:
+        # Nothing about an account is read or written and no cookie is set; returning (not raising) commits the
+        # deletion of the login attempt, so this callback URL cannot be replayed.
+        return RedirectResponse(EMAIL_UNVERIFIED_REDIRECT, status_code=303, headers={"Cache-Control": "no-store"})
     now = utcnow()
     account = await db.scalar(
         select(Account).where(Account.issuer == identity.issuer, Account.subject == identity.subject)

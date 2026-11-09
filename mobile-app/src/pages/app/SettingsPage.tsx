@@ -12,7 +12,7 @@ import { AssistantSettingsCard } from "../../components/AssistantSettingsCard.ts
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Button, Card, IconWell, Notice, PageHeader, SectionLabel, type WellTone } from "../../components/ui.tsx";
-import { APP_VERSION, buildDiagnostics, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
+import { buildDiagnostics, buildLabel, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useInputStore } from "../../store/input.ts";
 import { useScreenStore } from "../../store/screen.ts";
@@ -178,7 +178,7 @@ export function SettingsPage() {
             Download diagnostics
           </Button>
           <p className="mt-3 text-xs text-text-faint">
-            DoMe app {APP_VERSION}
+            DoMe app {buildLabel()}
             {session ? ` · signed in as ${session.account.email}` : ""}
           </p>
         </SettingDisclosure>

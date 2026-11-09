@@ -555,7 +555,8 @@ left in this window", "Free Screen view refreshes today at 4:12 pm") and open th
   "coming at paid launch" from `content/plans.ts`; nothing can be bought or charged from the app.
 - **Brand**: `pnpm gen:icons` installs the brand icon (`brand/icon.svg`) renders into `public/icons`
   (192/512 + maskable, apple-touch-icon, favicon SVG/PNG/ICO); manifest and `index.html` updated.
-- **PWA / theme / accessibility**: `autoUpdate` worker precaching the shell only; 44 px targets; safe
+- **PWA / theme / accessibility**: `autoUpdate` worker precaching the shell only; an open app looks for a newer
+  version itself and reloads into it only at a safe moment, and says which build it runs (DECISIONS 92); 44 px targets; safe
   areas; reduced motion. Theme ("Midnight Studio", DECISIONS 55): follows the device by default; the
   Light / Auto / Dark switch (website header, menu and footer; More in the app) is remembered in
   `localStorage` (`dome.theme`) and applied before the first paint by `public/theme-init.js` (see

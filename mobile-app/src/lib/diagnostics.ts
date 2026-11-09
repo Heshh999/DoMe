@@ -15,6 +15,35 @@ import type { RelayStatus } from "./relay.ts";
 
 export const APP_VERSION: string = __APP_VERSION__;
 
+/** The pattern cloud-api's settings.py accepts for its build commit (/healthz "commit"), and the build applies here. */
+const COMMIT = /^[0-9a-f]{7,40}$/;
+/** How many hex digits the app shows of its build commit (the Screen view readout, Settings → Diagnostics). */
+export const BUILD_COMMIT_SHORT_LENGTH = 12;
+
+/** A build commit as the app keeps it: 7-40 lower-case hex digits, else "" (a local or development build). */
+export function normalizeBuildCommit(value: unknown): string {
+  return typeof value === "string" && COMMIT.test(value) ? value : "";
+}
+
+/**
+ * The git commit this bundle was built from (DECISIONS 92): deploy/Dockerfile passes the image's `DOME_BUILD_COMMIT` to
+ * the PWA stage, the same value /healthz reports as "commit". "" for a local build.
+ */
+export const BUILD_COMMIT: string = normalizeBuildCommit(__BUILD_COMMIT__);
+/** Its first 12 hex digits, as shown to people ("" for a local build). */
+export const BUILD_COMMIT_SHORT: string = BUILD_COMMIT.slice(0, BUILD_COMMIT_SHORT_LENGTH);
+
+/** "0.1.0 · build 6fc0951a2b3c"; "0.1.0 · build dev" for a bundle without a commit. */
+export function buildLabel(version: string = APP_VERSION, commit: string = BUILD_COMMIT): string {
+  const short = normalizeBuildCommit(commit).slice(0, BUILD_COMMIT_SHORT_LENGTH);
+  return `${version} · build ${short || "dev"}`;
+}
+
+/** The first line of the Screen view readout (test builds only): "app: 0.1.0 · build 6fc0951a2b3c". */
+export function appReadoutLine(version: string = APP_VERSION, commit: string = BUILD_COMMIT): string {
+  return `app: ${buildLabel(version, commit)}`;
+}
+
 export interface DiagnosticsInput {
   relayStatus: RelayStatus;
   controllerBound: boolean;
@@ -38,7 +67,8 @@ export interface DiagnosticsInput {
 
 export interface DiagnosticsReport {
   generated_at: string;
-  app: { version: string; protocol_version: string; registry_version: string; release_channel: string };
+  /** `build_commit`: the git commit the bundle was built from (DECISIONS 92), null for a local build. */
+  app: { version: string; build_commit: string | null; protocol_version: string; registry_version: string; release_channel: string };
   device: { user_agent: string; standalone: boolean; online: boolean; language: string; qr_support: string; indexeddb: boolean; webcrypto: boolean; viewport: string };
   session: { present: boolean; plan: string | null };
   relay: { status: string; controller_bound: boolean; key_available: boolean };
@@ -95,7 +125,7 @@ export function isStandalone(): boolean {
 export function buildDiagnostics(input: DiagnosticsInput): DiagnosticsReport {
   return {
     generated_at: new Date().toISOString(),
-    app: { version: APP_VERSION, protocol_version: PROTOCOL_VERSION, registry_version: REGISTRY_VERSION, release_channel: import.meta.env.VITE_DOME_RELEASE_CHANNEL ?? "dev" },
+    app: { version: APP_VERSION, build_commit: BUILD_COMMIT || null, protocol_version: PROTOCOL_VERSION, registry_version: REGISTRY_VERSION, release_channel: import.meta.env.VITE_DOME_RELEASE_CHANNEL ?? "dev" },
     device: {
       user_agent: navigator.userAgent,
       standalone: isStandalone(),

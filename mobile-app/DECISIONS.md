@@ -1002,3 +1002,76 @@ Choices made where `docs/design/mobile-app.md` and the spec are silent. ADR-0001
     12.9 KB → under the limit with 15 candidates in section 0) and through the session client with the fake peer
     (the signed start carries the compact string and the PC's answer verifies against it); the PC side's acceptance
     of a max-bundle offer was checked here with aiortc on Linux. Not yet verified on a device: KNOWN_ISSUES 48.
+92. **An open app looks for a newer version by itself and reloads only at a safe moment; every build says which
+    commit it is.** Why: on 2026-11-09, after a staging deploy, the founder's iPhone kept running the old bundle.
+    Closing and reopening Safari or the home-screen app brings back the page that is already loaded, so the service
+    worker never looked for an update, and Screen view failed with a bug that was already fixed until a manual reload.
+    Customers would meet this after every release, and nothing on the phone said which build it ran.
+    (1) Build identity. `deploy/Dockerfile`'s PWA stage declares the same `DOME_BUILD_COMMIT` build argument as the
+    runtime stage (one `--build-arg` from the Deploy workflow or CI reaches both; declared after the source COPY lines
+    so a new commit keeps the dependency layers) and hands it to `pnpm build`. `scripts/build-commit.ts` turns it into
+    the `__BUILD_COMMIT__` define: unset, empty or "dev" = "" (a local build), a git commit (7-40 lower-case hex, the
+    pattern cloud-api's settings accept for `/healthz` "commit") passes, anything else stops the build without
+    printing the value. `lib/diagnostics.ts` has `BUILD_COMMIT`, `BUILD_COMMIT_SHORT` (12 digits, the same short form
+    the Deploy summary prints as "built from commit …") and `buildLabel()` ("0.1.0 · build 6fc0951a2b3c", "build dev"
+    without a commit). The diagnostics bundle carries `app.build_commit` (null for a local build), Settings →
+    Diagnostics shows the label under the download button, and the staging Screen view readout's first line is
+    "app: 0.1.0 · build 6fc0951a2b3c" (so a copied readout names the bundle it came from).
+    (2) When the app looks (`lib/appUpdate.ts`, wired in `pwa.ts`): a look is the registration's `update()`, which asks
+    the server for `sw.js`. Once at start (as soon as `registerSW` hands over the registration), on every return to the
+    front (`visibilitychange` to visible, and `pageshow` with `persisted` for iOS's back-forward cache) at most once a
+    minute, and every 30 minutes while the app is in front (a tick while hidden does nothing; the 30 minutes count
+    again from each return; a return event iOS might not send never stops the timer).
+    Once a newer version is waiting, nothing looks any more. A failed look (offline) is logged by error name only.
+    (3) When it reloads. The registration stays `registerType: "autoUpdate"` with `skipWaiting`, `clientsClaim` and
+    `cleanupOutdatedCaches` unchanged, and the page reload moves into the app: `registerSW`'s `onNeedReload` (called
+    when a newer worker has taken control, instead of the plugin's own `location.reload()`) goes to
+    `AppUpdater.onNewVersion()`. At a safe moment the app reloads at once and the person never sees a choice. While
+    something is busy it shows a small notice ("A newer DoMe is ready. It will update when you leave Screen view.",
+    with the matching words for the other cases) and reloads once nothing has been busy for 1.5 s (so a Stop's signed
+    message goes out first, and moving from one busy page to another does not slip a reload in between). "Update now"
+    on the notice first says what it ends ("Updating now ends Screen view.") and reloads only on "End it and update";
+    "Hide" puts the notice away until the update waits for something else. Why not `registerType: "prompt"` (a new
+    worker waits until the app sends skip-waiting): phones running today's bundle have `autoUpdate` client code that
+    never sends it, so the first prompt-mode worker would wait behind every open page, and a manual reload does not
+    activate a waiting worker while that page is its only client (the old worker answers the reload). The founder's
+    fallback, reloading by hand, would then keep loading the old app until it is closed from the app switcher. With
+    `autoUpdate` the newer worker controls the page at once, which changes nothing for the code already running (it
+    stays in memory); only a reload loads the new bundle, and the app now chooses that moment. The app hears of a
+    newer worker in two ways: `onNeedReload` (Workbox's "activated" event) and the browser's own `controllerchange`
+    (`pwa.ts`). Why both: Workbox follows only the installs it saw start. It stops after the first update it labels
+    external (any update found more than a minute after the page registered, the usual case for an app iOS keeps
+    alive) and starts only once registering has finished, so a second release after an install iOS cut short, or a
+    release found by a cold start's own update check, would take control with no `onNeedReload`, and the page would
+    keep the old bundle. `controllerchange` fires on every change of controller; the first one on a page that had no
+    controller (the first install claiming it) is not counted, and the second signal for one arrival changes nothing
+    (it cannot cut the pause after a busy state short). Accepted risk: between
+    the worker change and the reload, a lazily loaded chunk whose name changed in the release (the QR scanner, on the
+    pairing page) is no longer served; the scanner then says to type the code instead. That page holds the update (an
+    idle moment reloads at once), so this can happen only on the pairing page, and only in a release that changed the
+    scanner's chunk.
+    (4) The busy signal (`store/busy.ts`, one place). Read from existing state where it lives, never copied: a Screen
+    view session starting, live or paused (`store/screen.ts`); a touchpad or keyboard session starting, live or
+    suspended (`store/input.ts`); a PC confirmation waiting for an answer (`pendingConfirmation` in `store/live.ts`:
+    shut down, restart, sleep, closing an app); an Assistant request in progress or a plan running
+    (`store/assistant.ts`). Pages report what only they know with `useBusyHold`: the Screen page while it is open (it
+    keeps "Stopped · 3 min" and the resume after the app was hidden, and the copy says "when you leave Screen view"),
+    the Touchpad page while open (it starts a session by itself when it opens), the pairing page while open (the code
+    lives only there), the Billing page on its way to Stripe or after a return from it, and the Assistant page while
+    the microphone is on. Not covered: text typed but not sent (the support form, the Type box) is lost if a reload
+    falls on an idle moment while it sits there; a reload follows only a start, a return to the front or the
+    30-minute look, so this is rare.
+    (5) `requestAppUpdate()` (the MALFORMED_MESSAGE path, design screen-view-2a D28) is unchanged: it still asks the
+    registration and calls the update function; the reload it leads to now waits for a safe moment like any other.
+    (6) Not built: comparing the bundle's commit with `GET /healthz` "commit" as a second signal. Every look already
+    asks the server for `sw.js` itself (`update()` bypasses the HTTP cache for the worker script), and every deploy
+    changes `sw.js` (the commit is in the bundle now, so the precache revisions change), so a mismatch could only lead
+    to the same `update()` call, one request later; in a rolling deploy `/healthz` may also answer from a newer machine
+    than the one serving `sw.js`. If the device check (KNOWN_ISSUES 49) shows `update()` does not find the new worker
+    on iOS, that comparison is the fallback to build, with a reload at a safe moment and a guard against reload loops.
+    Unit-tested (jsdom, fake timers, a fake registration and `controllerchange` from a fake service-worker
+    container; the build-commit validation; the readout line), and
+    simulated through the real Screen page and runtime with the fake peer: a newer version arriving while the
+    picture is live, across a trip to the background and the automatic restart, and after Stop, reloads only once the
+    page is left. The deploy tooling test checks the Dockerfile's PWA stage receives the argument. Not yet verified on
+    a device: KNOWN_ISSUES 49.

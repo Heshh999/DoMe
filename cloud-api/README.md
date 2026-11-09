@@ -371,7 +371,9 @@ uv run dome-api --skip-migrations          # serve only (start-up still verifies
 
 Sign in at `http://localhost:5173/v1/auth/login` (through the Vite proxy) or directly on
 `DOME_PUBLIC_ORIGIN`. With `tools/dev-idp` the sign-in page offers `alice@example.test` /
-`bob@example.test`; there is no login path that bypasses OIDC.
+`bob@example.test`; there is no login path that bypasses OIDC. A sign-in whose ID token does not say
+`email_verified: true` is refused and lands on the home page's "Confirm your email first" notice
+(`DECISIONS.md` #118); the dev-idp page's "Treat this email as not confirmed yet" box shows it.
 
 ## Environment variables
 
@@ -392,7 +394,7 @@ misconfiguration stops the process with a plain error.
 | `DOME_OIDC_ISSUER` | — (required) | OIDC issuer URL (discovery at `/.well-known/openid-configuration`). Auth0 (`https://<tenant>.<region>.auth0.com`, with or without the trailing slash), Keycloak or `tools/dev-idp`. Stored without a trailing slash; the ID token's `iss` is compared with the discovery document's `issuer` exactly as published (Auth0 keeps the slash). |
 | `DOME_OIDC_CLIENT_ID` / `DOME_OIDC_CLIENT_SECRET` | — (required) | Relying-party credentials. The token endpoint is called with `client_secret_post` (Auth0: Credentials > Authentication Method "Client Secret (Post)"). |
 | `DOME_OIDC_REDIRECT_PATH` | `/v1/auth/callback` | Registered redirect path (appended to `DOME_PUBLIC_ORIGIN`). |
-| `DOME_OIDC_SCOPES` | `openid email profile` | Requested scopes. |
+| `DOME_OIDC_SCOPES` | `openid email profile` | Requested scopes. Keep `email`: it carries the `email_verified` claim, and every sign-in without `email_verified: true` is refused (`DECISIONS.md` #118). |
 | `DOME_ENTITLEMENT_SIGNING_KEY_PEM_PATH` | — (required) | Ed25519 private key (PKCS8 PEM) that signs entitlement assertions; public key served at `/.well-known/dome-jwks.json`. |
 | `DOME_RELAY_MAX_CONNECTIONS` | `5000` | Global socket cap; upgrades above it are refused with HTTP 503. |
 | `DOME_RELAY_MAX_FRAME_BYTES` | `65536` | Frames above this close the socket with 1009. |

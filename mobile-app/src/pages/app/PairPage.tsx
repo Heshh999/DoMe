@@ -10,6 +10,8 @@
  * `verifyAndPin` checks the MAC and pins the key for Screen view; then the code is dropped. It is
  * also dropped when the pairing fails, expires, is declined or cancelled, and when the page unmounts.
  * A pairing without a valid MAC still pairs; Screen view then says "pair again" for that PC.
+ *
+ * While the page is open a newer app version never reloads it (DECISIONS 92): the code would be lost.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -28,6 +30,7 @@ import { errorSummary, log } from "../../lib/log.ts";
 import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation, takeScanAgainHint } from "../../lib/pairing.ts";
 import { HeldPairingCode, verifyAndPin, type PinOutcome } from "../../lib/pcKeyPins.ts";
 import { CameraError, detectQrSupport, startQrScanner, type QrScanner } from "../../lib/qr.ts";
+import { useBusyHold } from "../../store/busy.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
 type Step =
@@ -73,6 +76,8 @@ export function PairPage() {
   // the one code this page may still hold; dropped on every way out, including unmount
   const heldRef = useRef<HeldPairingCode | null>(null);
   const screenSwitch = useScreenSwitch();
+  // the code lives only in this page: a newer DoMe waits until pairing is left (DECISIONS 92)
+  useBusyHold("pairing");
 
   const dropCode = useCallback(() => {
     heldRef.current?.clear();

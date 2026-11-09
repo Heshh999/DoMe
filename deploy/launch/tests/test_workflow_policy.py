@@ -296,6 +296,23 @@ def test_dockerfile_release_channel_defaults_to_production() -> None:
     assert re.findall(r"^ARG VITE_DOME_RELEASE_CHANNEL=(\S*)$", text, re.MULTILINE) == ["production"]
 
 
+def test_dockerfile_pwa_stage_receives_the_build_commit() -> None:
+    """The PWA stage declares the same DOME_BUILD_COMMIT build argument the Deploy workflow and CI pass (one
+    `--build-arg` reaches every stage that declares it) and hands it to `pnpm build`, so the app can say which build it
+    runs (mobile-app DECISIONS 92); declared after the sources are copied, so a new commit keeps the dependency layers.
+    The runtime stage still declares it for /healthz."""
+    text = DOCKERFILE.read_text()
+    stages = {m.group(1): m.start() for m in re.finditer(r"^FROM \S+ AS (\S+)$", text, re.MULTILINE)}
+    assert {"pwa", "runtime"} <= set(stages)
+    pwa = text[stages["pwa"] : min(start for start in stages.values() if start > stages["pwa"])]
+    runtime = text[stages["runtime"] :]
+    arg = pwa.index("ARG DOME_BUILD_COMMIT=\n")
+    env = pwa.index("ENV DOME_BUILD_COMMIT=${DOME_BUILD_COMMIT}\n")
+    assert pwa.index("COPY mobile-app mobile-app") < arg < env < pwa.index("RUN pnpm build")
+    assert "pnpm install" not in pwa[arg:]
+    assert "ARG DOME_BUILD_COMMIT=\n" in runtime
+
+
 def test_dockerfile_base_images_are_pinned_by_digest() -> None:
     text = DOCKERFILE.read_text()
     args = dict(re.findall(r"^ARG ((?:PYTHON|NODE|UV)_IMAGE)=(\S+)$", text, re.MULTILINE))

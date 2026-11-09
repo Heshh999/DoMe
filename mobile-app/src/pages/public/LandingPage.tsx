@@ -1,11 +1,17 @@
-/** Product explanation. No testimonials, counts, certifications or platform claims that are not verified. */
-import { Link } from "react-router";
+/**
+ * Product explanation. No testimonials, counts, certifications or platform claims that are not verified. Also where a
+ * refused sign-in lands (`?sign_in=<reason>`, `lib/signInProblem.ts`): the notice for it sits above the hero.
+ */
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 
 import { Wordmark } from "../../components/brand.tsx";
 import { Film } from "../../components/film/Film.tsx";
 import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
+import { Notice } from "../../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES, planById, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { SIGN_IN_PARAM, SIGN_IN_PROBLEMS, SIGN_IN_SUPPORT, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
 import { paidPlansLine, useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 
 const FREE = planById("free");
@@ -173,10 +179,46 @@ function PhonePicture() {
 
 const SECTION = "mx-auto max-w-6xl px-5 lg:px-8";
 
+/**
+ * Read once: the marker leaves the address bar at once, the notice stays until the page is left. It is carried through
+ * a reload in the next minute (an update can reload the page right after the refusal; lib/signInProblem.ts).
+ */
+function SignInNotice() {
+  const [params, setParams] = useSearchParams();
+  const [problem] = useState(() => signInProblem(params) ?? carriedSignInProblem());
+  useEffect(() => {
+    if (!params.has(SIGN_IN_PARAM)) return;
+    const fromAddress = signInProblem(params);
+    if (fromAddress !== null) carrySignInProblem(fromAddress);
+    setParams(withoutSignInProblem(params), { replace: true });
+  }, [params, setParams]);
+  if (problem === null) return null;
+  const copy = SIGN_IN_PROBLEMS[problem];
+  const support = supportContact();
+  const help = SIGN_IN_SUPPORT[problem];
+  return (
+    <div data-testid="sign-in-problem" className={`${SECTION} pt-6`}>
+      <Notice tone="warning" title={copy.title}>
+        <p>{copy.text}</p>
+        {support ? (
+          <p>
+            {help.lead}
+            <a href={support} className="font-semibold text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-current" rel="noopener noreferrer" target="_blank">
+              {help.link}
+            </a>
+            {help.rest}
+          </p>
+        ) : null}
+      </Notice>
+    </div>
+  );
+}
+
 export function LandingPage() {
   const availability = useBillingAvailability();
   return (
     <div>
+      <SignInNotice />
       <section className="relative overflow-x-clip">
         <Orbit />
         <div className={`${SECTION} relative grid items-center gap-12 pb-20 pt-14 sm:pb-16 sm:pt-20 lg:grid-cols-[1.1fr_1fr] lg:gap-10 lg:pb-12 lg:pt-24`}>

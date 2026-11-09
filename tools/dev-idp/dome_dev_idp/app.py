@@ -23,6 +23,9 @@ TOKEN_TTL = 3600
 # guessable online anyway.
 PASSPHRASE_MAX_FAILURES = 10
 PASSPHRASE_FAILURE_WINDOW = 600
+# The ``email_verified`` claim a test can choose: DoMe refuses a sign-in unless it is exactly true, so tests need
+# the other two cases too. ``?dev_email_verified=`` on the dev_user path; the sign-in form has a checkbox for "false".
+EMAIL_VERIFIED_CHOICES: dict[str, bool | None] = {"true": True, "false": False, "absent": None}
 
 
 DEFAULT_ISSUER = "http://127.0.0.1:8081"
@@ -61,6 +64,7 @@ class DevIdpSettings:
 class _Code:
     sub: str
     email: str
+    email_verified: bool | None  # None: the claim is left out
     nonce: str | None
     redirect_uri: str
     code_challenge: str | None
@@ -73,13 +77,29 @@ class _Code:
 class _State:
     key: RSAKey
     codes: dict[str, _Code] = field(default_factory=dict)
-    access_tokens: dict[str, tuple[str, str, float]] = field(default_factory=dict)  # token -> (sub, email, exp)
+    # token -> (sub, email, email_verified, exp)
+    access_tokens: dict[str, tuple[str, str, bool | None, float]] = field(default_factory=dict)
     passphrase_failures: list[float] = field(default_factory=list)  # monotonic times of wrong passphrases
 
 
 def _sub_for(email: str) -> str:
     # Stable pseudo-random subject per email so re-login maps to the same account.
     return "dev|" + hashlib.sha256(email.lower().encode()).hexdigest()[:24]
+
+
+def _email_verified_choice(value: str | None) -> bool | None:
+    """``?dev_email_verified=`` → the claim's value; not given means verified, as before."""
+    if value is None:
+        return True
+    if value.strip().lower() not in EMAIL_VERIFIED_CHOICES:
+        raise HTTPException(400, "dev_email_verified must be true, false or absent")
+    return EMAIL_VERIFIED_CHOICES[value.strip().lower()]
+
+
+def _with_email_verified(claims: dict[str, object], email_verified: bool | None) -> dict[str, object]:
+    if email_verified is not None:
+        claims["email_verified"] = email_verified
+    return claims
 
 
 # Shared by the sign-in page and its error page; box-sizing keeps the card inside a phone screen.
@@ -162,11 +182,12 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
         if params.get("code_challenge") and params.get("code_challenge_method", "S256") != "S256":
             raise HTTPException(400, "only S256 PKCE is supported")
 
-    def _issue_code(params: dict[str, str], email: str) -> RedirectResponse:
+    def _issue_code(params: dict[str, str], email: str, email_verified: bool | None = True) -> RedirectResponse:
         code = secrets.token_urlsafe(32)
         state.codes[code] = _Code(
             sub=_sub_for(email),
             email=email,
+            email_verified=email_verified,
             nonce=params.get("nonce"),
             redirect_uri=params["redirect_uri"],
             code_challenge=params.get("code_challenge"),
@@ -182,12 +203,14 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     async def authorize(request: Request):  # type: ignore[no-untyped-def]
         params = dict(request.query_params)
         _validate_authorize(params)
-        # Non-interactive path for integration tests: ?dev_user=<email>. Never with a passphrase set.
+        # Non-interactive path for integration tests: ?dev_user=<email>, optionally with
+        # &dev_email_verified=true|false|absent (default true). Never with a passphrase set.
         dev_user = params.pop("dev_user", None)
+        verified_choice = params.pop("dev_email_verified", None)
         if dev_user:
             if settings.passphrase:
                 raise HTTPException(403, "dev_user sign-in is disabled while DEV_IDP_PASSPHRASE is set")
-            return _issue_code(params, dev_user.strip().lower())
+            return _issue_code(params, dev_user.strip().lower(), _email_verified_choice(verified_choice))
         hidden = "".join(
             f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k, v in params.items()
         )
@@ -212,6 +235,7 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
 {passphrase_field}
 {buttons}
 <label>Or any email<input name="email_typed" type="email" placeholder="you@example.test"></label>
+<label style="display:flex;align-items:center;gap:10px"><input type="checkbox" name="email_unverified" value="1" style="width:auto">Treat this email as not confirmed yet (DoMe should refuse the sign-in)</label>
 </form></body></html>"""
         return HTMLResponse(page)
 
@@ -232,7 +256,11 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     @app.post("/authorize")
     async def authorize_post(request: Request) -> RedirectResponse:
         form = await request.form()
-        params = {k: str(v) for k, v in form.items() if k not in ("email", "email_typed", "use_typed", "passphrase")}
+        params = {
+            k: str(v)
+            for k, v in form.items()
+            if k not in ("email", "email_typed", "use_typed", "passphrase", "email_unverified")
+        }
         _validate_authorize(params)
         _check_passphrase(str(form.get("passphrase") or ""))
         # Two ways to choose who signs in: an account button (name="email") or the "any email" box with
@@ -246,7 +274,7 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
                 email = str(form.get("email_typed") or "").strip().lower()
         if not email or "@" not in email:
             raise HTTPException(400, "choose one of the test accounts, or type an email and tap Continue")
-        return _issue_code(params, email)
+        return _issue_code(params, email, form.get("email_unverified") != "1")
 
     def _client_auth(request: Request, form: dict[str, str]) -> None:
         auth = request.headers.get("authorization", "")
@@ -279,21 +307,23 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
             if not secrets.compare_digest(digest, code.code_challenge):
                 raise HTTPException(400, "invalid PKCE verifier")
         now = int(time.time())
-        claims = {
-            "iss": settings.issuer.rstrip("/"),
-            "sub": code.sub,
-            "aud": settings.client_id,
-            "iat": now,
-            "exp": now + TOKEN_TTL,
-            "email": code.email,
-            "email_verified": True,
-            "name": code.email.split("@")[0],
-        }
+        claims: dict[str, object] = _with_email_verified(
+            {
+                "iss": settings.issuer.rstrip("/"),
+                "sub": code.sub,
+                "aud": settings.client_id,
+                "iat": now,
+                "exp": now + TOKEN_TTL,
+                "email": code.email,
+                "name": code.email.split("@")[0],
+            },
+            code.email_verified,
+        )
         if code.nonce:
             claims["nonce"] = code.nonce
         id_token = jwt.encode({"alg": "RS256", "kid": state.key.kid}, claims, state.key)
         access = secrets.token_urlsafe(32)
-        state.access_tokens[access] = (code.sub, code.email, now + TOKEN_TTL)
+        state.access_tokens[access] = (code.sub, code.email, code.email_verified, now + TOKEN_TTL)
         return JSONResponse({"access_token": access, "token_type": "Bearer", "expires_in": TOKEN_TTL, "id_token": id_token, "scope": "openid email profile"})
 
     @app.get("/userinfo")
@@ -301,10 +331,10 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
         auth = request.headers.get("authorization", "")
         tok = auth[7:] if auth.lower().startswith("bearer ") else ""
         entry = state.access_tokens.get(tok)
-        if not entry or entry[2] < time.time():
+        if not entry or entry[3] < time.time():
             raise HTTPException(401, "invalid token")
-        sub, email, _ = entry
-        return JSONResponse({"sub": sub, "email": email, "email_verified": True, "name": email.split("@")[0]})
+        sub, email, email_verified, _ = entry
+        return JSONResponse(_with_email_verified({"sub": sub, "email": email, "name": email.split("@")[0]}, email_verified))
 
     @app.get("/logout")
     async def logout(post_logout_redirect_uri: str | None = None):  # type: ignore[no-untyped-def]

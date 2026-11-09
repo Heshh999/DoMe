@@ -692,3 +692,39 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     the old one goes with the old session's end, a set-aside credential goes with the controller, the account or the
     sweeper's expiry, and a revocation the provider does not confirm is retried like any other. Not verified against the
     real provider or on a device (KNOWN_ISSUES #38).
+
+## Sign-in (2026-11-09)
+
+118. **A sign-in is refused unless the ID token's `email_verified` is exactly `true`.** Production signs people in
+    through an Auth0 database connection (email and password), which lets someone sign in before they click the link in
+    the verification email, so an account could be created with an address its holder does not own
+    (`docs/LAUNCH_SETUP.md` §16 listed it as open). `OIDCClient.complete` checks the claim right after the ID token is
+    verified and raises `EmailNotVerifiedError` when it is absent, `false` or anything other than the JSON value `true`
+    (the string `"true"` included). Nothing about an account is then read, created or updated: no session row, no
+    cookie, no security event (there is no account to file it under yet). `GET /v1/auth/callback` answers 303 to
+    `/?sign_in=email_unverified` with `Cache-Control: no-store` and returns normally, so the transaction commits the
+    deletion of the login attempt and the callback URL cannot be replayed. The target is the public home page, never
+    `return_to` or `/app`: the app shell sends a signed-out browser straight to `/v1/auth/login`, Auth0 remembers the
+    person and answers unverified again, and the round trip would repeat until the login rate limit. The home page
+    shows "Confirm your email first" for that reason (`mobile-app/src/lib/signInProblem.ts`) and removes the marker from
+    the address bar; a reason it does not know shows nothing. Log: one INFO line `oidc.email_unverified` whose only
+    field is `claim` (`absent`, `false` or `not_boolean`); no email, no subject, no issuer. An existing account whose
+    provider now reports the address unverified is refused the same way and left untouched; sessions it already holds
+    keep working until they expire or are revoked (only new sign-ins are checked). There is no setting to turn the
+    check off: `tools/dev-idp` says `true` unless a test asks otherwise, OpenID Connect Core §5.4 puts `email_verified`
+    in the `email` scope that `DOME_OIDC_SCOPES` requests by default, and a switch would only be a way to run staging
+    with a security control off. `tools/dev-idp` gained `dev_email_verified=true|false|absent` on its `dev_user` path
+    and a "Treat this email as not confirmed yet" box on its sign-in page. Getting back in: Auth0 sends the link once,
+    at sign-up, and it expires after a few days; people who signed up before the email provider was connected
+    (2026-10-20), the founder's own users among them, may never have had one, and nothing in DoMe sends a new one.
+    The founder sends it from Auth0 (User Management > Users > the user > Send Verification Email);
+    `docs/LAUNCH_SETUP.md` §16 says to check the founder's own and the testers' users in both tenants before the first deploy
+    with this check, and to do the same for anyone who writes in. The home-page notice adds "Still nothing? Contact
+    support and we'll send a new link." only when a support contact (`VITE_DOME_SUPPORT_URL`) is configured, and links
+    to that contact, never to `/support`, whose form needs a sign-in this person cannot complete; the founder's
+    title and text are unchanged. Integration-tested (Linux, real PostgreSQL,
+    `tools/dev-idp`; `tests/test_auth_email_verified.py`): `true` signs in as before; `false`, absent and the string
+    `"true"` are refused with the redirect, no account, no cookie, the attempt used up and no email or subject in any
+    log line; an existing account reported unverified is refused with its row, sessions and security events unchanged,
+    keeps its earlier session, and signs in to the same account once confirmed again. The PWA notice is unit-tested
+    (vitest, jsdom). Not yet verified against Auth0 or on a device.

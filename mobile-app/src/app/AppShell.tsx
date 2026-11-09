@@ -1,7 +1,8 @@
 /**
- * Authenticated shell: session guard, runtime start, bottom tab bar, relay banners, offline screen
- * and the global confirmation modal. Keeps developer concepts out of view: statuses are phrased for
- * customers and the only identifiers shown are PC and phone names.
+ * Authenticated shell: session guard, runtime start, bottom tab bar, relay banners, offline screen,
+ * the global confirmation modal and the "A newer DoMe is ready" notice (DECISIONS 92). Keeps developer
+ * concepts out of view: statuses are phrased for customers and the only identifiers shown are PC and
+ * phone names.
  */
 import { useEffect } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
@@ -9,6 +10,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { loginUrl } from "../lib/api.ts";
 import { errorMessage } from "../lib/labels.ts";
 import { Wordmark } from "../components/brand.tsx";
+import { AppUpdateNotice } from "../components/AppUpdateNotice.tsx";
 import { ConfirmationModal } from "../components/ConfirmationModal.tsx";
 import { OfflineScreen } from "../components/OfflineScreen.tsx";
 import { useOnline } from "./useOnline.ts";
@@ -250,6 +252,7 @@ export function AppShell() {
           </ul>
         </nav>
         <GlobalConfirmation />
+        <AppUpdateNotice />
       </div>
     </RequireSession>
   );

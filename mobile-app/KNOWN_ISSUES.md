@@ -264,9 +264,9 @@ Items from the review that were recorded rather than fully closed, plus residual
     a deploy; a refusal whose body is not DoMe's, such as a proxy's HTML 404, is an ordinary error). The device list on
     screen is kept, the controllers still come from their own answer (so the Devices page names this phone, and says
     nothing about pairing while nothing about it is known), and the app asks the service-worker registration for the
-    newer version (with `autoUpdate` the new worker activates and the page reloads once the browser has it). On the
-    other pages the app keeps the last list without a word until that reload or until it is reopened. The reload
-    after the update check is not yet verified on a device.
+    newer version (the new worker activates by itself and the page reloads at the next safe moment, DECISIONS 92).
+    On the other pages the app keeps the last list without a word until that reload or until it is reopened. The
+    reload after the update check is not yet verified on a device (KNOWN_ISSUES 49).
 
 46. **With Drag on, Touchpad mode has no pinch zoom.** While Drag holds the mouse button, a second finger is ignored
     (as before 1.5), so a pinch does not zoom; End Drag first, then pinch. The 1× button still works.
@@ -297,3 +297,16 @@ Items from the review that were recorded rather than fully closed, plus residual
     bundle's `problem_code` is `SCREEN_OFFER_INVALID` in both cases, so the two are told apart by the bundle's log:
     the phone's case has a `screen.offer_too_long` line (bytes and limit); a PC refusal has none and a
     `screen.start_refused` line with `origin: "agent"` instead.
+
+49. **Not yet verified on a device: the app updating itself on iOS** (DECISIONS 92). Unit-tested with fake timers
+    and a fake service-worker registration, and simulated through the Screen page; on the founder's iPhone three
+    things remain to be seen. (a) Whether `visibilitychange` (to visible) or `pageshow` (with `persisted`) fires when
+    the home-screen app, or Safari, is brought back from the app switcher; if neither does, the start and the
+    30-minute look still run, but a return alone no longer looks. (b) Whether the registration's `update()` finds the new worker there, the new worker
+    takes control of the open page, and the page is told (`controllerchange`, DECISIONS 92 (3)). (c) Whether the reload that follows then loads the new bundle. How to check after a
+    staging deploy, without reloading by hand: open the app from the app switcher and look at Settings → Diagnostics
+    ("DoMe app 0.1.0 · build …") or the first line of the Screen view readout; once the new version has downloaded
+    the app reloads by itself and the build should match the 12 characters the Deploy summary printed ("built from
+    commit …"). During Screen view the notice "A newer DoMe is ready. It will update when you leave Screen view."
+    should appear instead, and the reload should follow leaving Screen view. If the build stays old, reloading the page by hand still works (DECISIONS 92 (3)),
+    and the `/healthz` comparison in DECISIONS 92 (6) is the next step.

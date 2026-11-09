@@ -16,6 +16,7 @@ import { configureApi } from "../../src/lib/api.ts";
 import { browserNavigation } from "../../src/lib/billing.ts";
 import { BillingPage, NOT_SWITCHED_ON, PRO_PLUS_NOT_SOLD, RETURN_POLL_MS, STILL_CONFIRMING, TEST_MODE } from "../../src/pages/app/BillingPage.tsx";
 import { useAssistantStore } from "../../src/store/assistant.ts";
+import { busyKinds } from "../../src/store/busy.ts";
 import { useSessionStore } from "../../src/store/session.ts";
 import { jsonResponse, PC, SESSION, TS } from "../helpers/harness.ts";
 
@@ -420,6 +421,19 @@ describe("BillingPage", () => {
       await vi.advanceTimersByTimeAsync(RETURN_POLL_MS * 3);
     });
     expect(calls.length).toBe(before);
+  });
+
+  it("a return from Stripe holds a newer DoMe until the page is left (DECISIONS 92); a plain visit does not", async () => {
+    billing = FREE_ON;
+    const plain = renderBilling();
+    expect(await screen.findAllByRole("button", { name: "Continue to payment" })).toHaveLength(2);
+    expect(busyKinds()).not.toContain("checkout");
+    plain.unmount();
+    const back = renderBilling("/app/billing?checkout=return");
+    expect(await screen.findByText("Pending activation", { selector: "p" })).toBeInTheDocument();
+    expect(busyKinds()).toContain("checkout");
+    back.unmount();
+    expect(busyKinds()).not.toContain("checkout");
   });
 
   it("cancel return says nothing was charged", async () => {

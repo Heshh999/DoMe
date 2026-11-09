@@ -23,6 +23,7 @@ import { clearLogs, recentLogs } from "../../src/lib/log.ts";
 import { ALL_CAPABILITIES, normalizePairingCode, pairingCodeHandle, pairingVerificationCode } from "../../src/lib/pairing.ts";
 import { getPin, heldPairingCodes } from "../../src/lib/pcKeyPins.ts";
 import { PairPage } from "../../src/pages/app/PairPage.tsx";
+import { busyKinds } from "../../src/store/busy.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useScreenStore } from "../../src/store/screen.ts";
 import { FakePcKey } from "../helpers/fakePeer.ts";
@@ -94,6 +95,13 @@ afterEach(() => {
 });
 
 describe("PairPage", () => {
+  it("while open, a newer DoMe waits (the code lives only in the page, DECISIONS 92); leaving releases it", () => {
+    const view = renderPair();
+    expect(busyKinds()).toContain("pairing");
+    view.unmount();
+    expect(busyKinds()).not.toContain("pairing");
+  });
+
   it("claims with code_hash + public_jwk only (never the code), shows the shared verification code, polls slowly and reconnects the relay once on approval", async () => {
     const reconnect = vi.spyOn(h.rt.relay, "reconnect").mockImplementation(() => undefined);
     renderPair();

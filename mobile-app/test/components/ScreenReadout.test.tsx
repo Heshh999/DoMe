@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ScreenReadout, type ScreenReadoutSource } from "../../src/components/ScreenReadout.tsx";
+import { appReadoutLine } from "../../src/lib/diagnostics.ts";
 import { EMPTY_SCREEN_STATE, type ScreenSessionState } from "../../src/lib/screen.ts";
 import { EMPTY_POINTER_FACTS, EMPTY_SURFACE_FACTS, EMPTY_ZOOM_FACTS, emptyTimeline, type ScreenClientFacts } from "../../src/lib/screenStats.ts";
 
@@ -137,7 +138,7 @@ describe("ScreenReadout", () => {
     expect(screen.queryByTestId("screen-readout-text")).toBeNull();
   });
 
-  it("Copy writes the readout's text to the clipboard", async () => {
+  it("Copy writes the readout's text to the clipboard: the app build first (DECISIONS 92), then the gate checklist", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     render(<ScreenReadout source={source()} state={CONNECTING} />);
@@ -145,7 +146,9 @@ describe("ScreenReadout", () => {
     expect(writeText).toHaveBeenCalledTimes(1);
     const copied = (writeText.mock.calls[0] as unknown as [string])[0];
     expect(copied).toBe(screen.getByTestId("screen-readout-text").textContent);
-    expect(copied.split("\n")[0]).toBe("verified: yes");
+    expect(copied.split("\n")[0]).toBe(appReadoutLine());
+    expect(copied.split("\n")[0]).toMatch(/^app: \d+\.\d+\.\d+ · build ([0-9a-f]{12}|dev)$/);
+    expect(copied.split("\n")[1]).toBe("verified: yes");
     expect(await screen.findByRole("status")).toHaveTextContent("Copied");
   });
 

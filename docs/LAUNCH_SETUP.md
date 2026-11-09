@@ -496,6 +496,9 @@ Steps, per environment (staging first):
 > id) and an **API Token**; the read-only usage token is made under the person icon > **My Profile** > **API Tokens**
 > > **Create Token** > **Start from scratch** > **Start with an Account policy** > **Account Analytics: Read**, with
 > no expiry. After a Deploy, **reload the DoMe page on the phone** (Safari keeps the old page until you do).
+> Since 2026-11-09 the app also updates itself: it looks for a newer version when it opens, each time you come back
+> to it and every 30 minutes, and reloads when nothing is running (never in the middle of Screen view, the touchpad,
+> pairing or a payment); this is not yet checked on an iPhone, so reloading by hand stays the fallback.
 > Production still needs its own key (`domeremote-production`).
 
 1. **Relay server key (optional but needed on mobile data).** In the Cloudflare account you use for
@@ -709,13 +712,26 @@ summary lists them again until an engineer closes them:
 - a rehearsal of recovering from a failed deploy;
 - an outside uptime monitor on https://domeremote.com/healthz that alerts you;
 - the database backup retention, written down in `docs/OPERATIONS.md`;
-- a support contact (`VITE_DOME_SUPPORT_URL`);
+- a support contact (`VITE_DOME_SUPPORT_URL`); until it is set, someone whose email confirmation link
+  never arrived has no way to ask DoMe for a new one (the next item);
 - ~~an Auth0 email provider~~ **done 2026-10-20**: Resend on the verified sending domain
   `mail.domeremote.com`, From `DoMe Remote <no-reply@mail.domeremote.com>`, connected under Auth0
   **Branding > Email Provider**; Auth0's test email arrived. Resend's free plan allows 3,000 emails a
   month and at most 100 a day [vendor page, October 2026]. Still open: Google sign-in either off or with
-  your own keys, and DoMe does not yet refuse sign-in for an unverified address
-  (`cloud-api/dome_api/auth/oidc.py` reads `email` but never `email_verified`);
+  your own keys;
+- ~~DoMe refuses sign-in for an unverified address~~ **done 2026-11-09**: DoMe now lets a new person in
+  only after they click the link in Auth0's verification email; until then the DoMe home page tells them
+  "Confirm your email first". In Auth0, for both the staging and the production tenant, check that
+  **Branding > Email Templates > Verification Email** is turned on, so new users actually receive that link.
+  This also applies to people who already have an account, you included: Auth0 sends the link only once, at
+  sign-up, and it stops working after a few days; anyone who signed up before the email provider was
+  connected (2026-10-20) may never have received it. So **before the first deploy that includes this
+  change**, in both tenants, open Auth0 **User Management > Users**, open your own user and each tester,
+  and check the email address shows as verified. If it does not, open that user, choose **Send
+  Verification Email**, and click the link in that inbox. Do the same for anyone who writes in that they
+  see "Confirm your email first". When the support contact (previous item) is set, that notice also
+  says "Still nothing? Contact support and we'll send a new link." (menu names per Auth0's dashboard,
+  not yet exercised);
 - signing in yourself on production (the button cannot test sign-in);
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).

@@ -9,6 +9,9 @@ exercised and the backend never needs a "dev login" bypass.
 - Sign-in page offers `alice@example.test` / `bob@example.test` or any typed email.
 - Non-interactive path for tests: `GET /authorize?...&dev_user=alice@example.test` returns the
   redirect immediately.
+- ID tokens say `email_verified: true` unless a test asks otherwise: `&dev_email_verified=false` or
+  `&dev_email_verified=absent` (claim left out) on the `dev_user` path, or the sign-in page's checkbox
+  "Treat this email as not confirmed yet". DoMe refuses both (`cloud-api/DECISIONS.md` #118).
 - Supports discovery, JWKS, PKCE S256, `client_secret_basic`/`client_secret_post`, userinfo.
 
 Run: `uv sync && uv run dome-dev-idp` (or `make dev-idp` from the repository root).

@@ -19,6 +19,7 @@ import { aiErrorText, aiUsable, MAX_TEXT } from "../../lib/assistant.ts";
 import { requestsLeft, warningText } from "../../lib/billing.ts";
 import type { RecognitionProblem } from "../../lib/speech.ts";
 import { useAssistantStore, type ChatChip } from "../../store/assistant.ts";
+import { useBusyHold } from "../../store/busy.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
 /** Height of the bottom tab bar (AppShell): the dock sits above it, or above the keyboard while it is open. */
@@ -92,6 +93,9 @@ export function AssistantPage() {
   const aiBlocked = useAssistantStore((s) => s.aiBlocked);
   const setPrefs = useAssistantStore((s) => s.setPrefs);
   const [listen, setListen] = useState<"idle" | "starting" | "listening">("idle");
+  // a newer DoMe never reloads the app while the microphone is on (DECISIONS 92; a request or a plan in progress is
+  // read from the store by store/busy.ts)
+  useBusyHold("assistant", listen !== "idle");
   const [interim, setInterim] = useState("");
   const [typing, setTyping] = useState(false);
   const [dictated, setDictated] = useState(false);

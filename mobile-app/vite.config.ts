@@ -8,6 +8,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
+import { buildCommit } from "./scripts/build-commit.ts";
+
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = resolve(here, "..");
 const sharedTsSrc = resolve(repoRoot, "shared/ts/src");
@@ -38,12 +40,15 @@ function domeProtocolNoEval(): Plugin {
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // the git commit of a deploy image's build (scripts/build-commit.ts; "" for a local build)
+    __BUILD_COMMIT__: JSON.stringify(buildCommit(process.env.DOME_BUILD_COMMIT)),
   },
   plugins: [
     domeProtocolNoEval(),
     react(),
     tailwindcss(),
     VitePWA({
+      // a newer worker takes control by itself; the page reloads only when the app says so (src/pwa.ts, DECISIONS 92)
       registerType: "autoUpdate",
       injectRegister: false, // registered from src/pwa.ts (no inline script: CSP script-src 'self')
       manifest: {

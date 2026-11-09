@@ -3,7 +3,9 @@
 Discovery and JWKS documents are fetched from the configured issuer and cached. ``state``,
 ``nonce`` and the PKCE verifier live in the ``auth_flows`` table for one login attempt (10 minutes,
 single use). The ID token is verified with ``joserfc`` (RS256/ES256 only, issuer's JWKS) and its
-``iss``, ``aud``/``azp``, ``exp``, ``iat`` and ``nonce`` claims are checked explicitly.
+``iss``, ``aud``/``azp``, ``exp``, ``iat`` and ``nonce`` claims are checked explicitly. A sign-in is refused
+(``EmailNotVerifiedError``) unless ``email_verified`` is exactly ``true``: absent, ``false`` or a string such as
+``"true"`` all mean the provider has not confirmed that the person owns the address (DECISIONS #118).
 
 ``iss`` is compared with the discovery document's ``issuer`` exactly as the provider wrote it (OpenID
 Connect Core 3.1.3.7): Auth0 publishes ``https://<tenant>.auth0.com/`` with a trailing slash, while
@@ -49,6 +51,14 @@ class Identity:
     subject: str
     email: str
     display_name: str
+
+
+class EmailNotVerifiedError(Exception):
+    """The ID token is valid but its ``email_verified`` claim is not exactly ``true``.
+
+    Raised before any account is looked up, created or updated; the callback turns it into a redirect to the
+    PWA's sign-in notice, without a session or a cookie.
+    """
 
 
 class OIDCClient:
@@ -171,6 +181,12 @@ class OIDCClient:
         if not isinstance(id_token, str):
             raise ApiError(502, "INTERNAL", "The identity provider returned no ID token")
         claims = await self._verify_id_token(id_token, flow.nonce)
+        verified = claims.get("email_verified")
+        if verified is not True:
+            # No email, no subject: the account is not known yet, and an address someone may not own is not logged.
+            claim = "absent" if verified is None else ("false" if verified is False else "not_boolean")
+            log.info("oidc.email_unverified", claim=claim)
+            raise EmailNotVerifiedError
         subject = str(claims["sub"])
         email = str(claims.get("email") or "")[:254]
         name = str(claims.get("name") or claims.get("preferred_username") or email.split("@")[0] or "DoMe user")[:128]

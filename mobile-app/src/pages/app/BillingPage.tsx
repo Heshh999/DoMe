@@ -6,6 +6,7 @@
  * until it says the plan changed, and says "pending" until then. Without Stripe keys the server reports
  * `billing_enabled: false` and this page stays today's honest page: the plan, its limits, and a notice that upgrading is
  * not available yet, with the prices of the website's plan content (src/content/plans.ts).
+ * A newer app version never reloads the page on its way to Stripe or after a return from it (DECISIONS 92).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -20,6 +21,7 @@ import { allowanceSummary, billingErrorText, billingStateCopy, browserNavigation
 import { relativeTime } from "../../lib/format.ts";
 import { recoverySteps } from "../../lib/labels.ts";
 import { useAssistantStore } from "../../store/assistant.ts";
+import { useBusyHold } from "../../store/busy.ts";
 import { useSessionStore } from "../../store/session.ts";
 
 /** How often, and for how long, the page asks the server after a return from Stripe (bounded; cleared on unmount). */
@@ -216,6 +218,8 @@ export function BillingPage() {
   // a failed purchase or portal request: the customer's text, and the payment provider's reason for the test-mode line
   const [actionError, setActionError] = useState<{ text: string; reason: ProviderErrorReason | null } | null>(null);
   const now = new Date();
+  // on the way to Stripe, or back from it and saying what the server confirmed: a newer DoMe waits (DECISIONS 92)
+  useBusyHold("checkout", returned !== null || busy !== null);
 
   const load = useCallback(
     (): Promise<BillingStatusResponse | null> =>

@@ -4,6 +4,7 @@
  * when it opens (takeover prompt when another phone owns it), stops it when it is left, when Stop
  * Input is tapped or when the runtime decides (hidden, PC switch, sign-out, lost socket). The live
  * indicator reflects the PC's `input_ack` — Windows accepted the events — never an application effect.
+ * While the page is open a newer app version never reloads it (DECISIONS 92).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
@@ -20,6 +21,7 @@ import { GestureMachine, type GestureOutput } from "../../lib/gestures.ts";
 import type { InputEvent } from "../../lib/input.ts";
 import { foregroundParts, sessionStatus } from "../../lib/inputStatus.ts";
 import { errorMessage, INPUT_SCOPE_EXPLANATION, recoverySteps } from "../../lib/labels.ts";
+import { useBusyHold } from "../../store/busy.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 
 function toEvent(o: Exclude<GestureOutput, { type: "pinch" }>): InputEvent {
@@ -46,6 +48,8 @@ export function TouchpadPage() {
   const [dragMode, setDragMode] = useState(false);
   const [leftHeld, setLeftHeld] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  // a newer DoMe waits until the touchpad is left: this page starts a session by itself when it opens (DECISIONS 92)
+  useBusyHold("input");
   // one machine per page instance; options follow below. Nothing here zooms, so two fingers never classify as a pinch
   // (a pinch would drop the scroll or the right click they are on this page: an anchored thumb, a sloppy slide)
   const [machine] = useState(() => new GestureMachine({ sensitivity: prefs.sensitivity, scrollDirection: prefs.scrollDirection, pinchRatio: Number.POSITIVE_INFINITY }));

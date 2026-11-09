@@ -22,6 +22,7 @@ import { configureApi } from "../../src/lib/api.ts";
 import type { RecognitionHandlers, Recognizer, Speaker } from "../../src/lib/speech.ts";
 import { AssistantPage } from "../../src/pages/app/AssistantPage.tsx";
 import { DEFAULT_ASSISTANT_PREFS, useAssistantStore } from "../../src/store/assistant.ts";
+import { busyKinds } from "../../src/store/busy.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import type { YoutubeTab } from "../../src/store/live.ts";
 import { CONTROLLER, FakeSocket, freshStorage, installDialogPolyfill, jsonResponse, makeRuntime, OFFICE_PC, OTHER_PC, PC, signedIn, TS, type RuntimeHarness } from "../helpers/harness.ts";
@@ -209,6 +210,20 @@ describe("talking", () => {
     expect(turns).toHaveLength(0); // handled without AI
     expect(conversation().getByText("Very good. YouTube is paused.").closest("li")).not.toHaveTextContent("Asked Claude");
     expect(liveRegion()).toHaveTextContent("Very good. YouTube is paused.");
+  });
+
+  it("while the microphone is on, a newer DoMe waits (DECISIONS 92); it no longer does once listening ends", async () => {
+    useAssistantStore.getState().setPrefs({ voiceNoticeSeen: true });
+    renderPage();
+    expect(busyKinds()).not.toContain("assistant");
+    await userEvent.click(talk());
+    expect(recognizer.starts).toBe(1);
+    expect(busyKinds()).toContain("assistant"); // getting ready counts
+    const hs = recognizer.handlers();
+    act(() => hs.onState("listening"));
+    expect(busyKinds()).toContain("assistant");
+    act(() => hs.onState("idle"));
+    expect(busyKinds()).not.toContain("assistant");
   });
 
   it("the voice notice is shown only once", async () => {

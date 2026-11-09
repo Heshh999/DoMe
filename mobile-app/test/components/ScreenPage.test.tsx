@@ -15,7 +15,8 @@
  * 2…" (no idle card) and ends with "Screen 2 of 2"; the switching line gives way to "Tap to show the picture" and to
  * the consent wait; the short notes, their timings and order; the pointer note once per session after
  * `state{cursor: "drawn"}` in a session that asked for the pointer, never in a 1.4 session; the time left on line
- * two; the three gesture lists, the explainer and the "newer DoMe is ready" notice.
+ * two; the three gesture lists, the explainer and the "newer DoMe is ready" notice. DECISIONS 92: a newer version that
+ * took control during Screen view never reloads the page while it is open; it does once the page is left.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -26,6 +27,7 @@ import type { relayFrames, rest } from "@dome/protocol";
 
 import { Runtime, setRuntimeForTests } from "../../src/app/runtime.ts";
 import { configureApi } from "../../src/lib/api.ts";
+import { AFTER_BUSY_DELAY_MS, AppUpdater } from "../../src/lib/appUpdate.ts";
 import { writePin } from "../../src/lib/controllerKey.ts";
 import { EMPTY_INPUT_STATE, FLUSH_INTERVAL_MS } from "../../src/lib/input.ts";
 import { EMPTY_SCREEN_STATE, type ScreenSessionState } from "../../src/lib/screen.ts";
@@ -33,6 +35,7 @@ import { DIRECT_GESTURES } from "../../src/lib/directGestures.ts";
 import { TOUCHPAD_SCREEN_GESTURES } from "../../src/lib/gestures.ts";
 import { COPY, SCREEN_BETA_LABEL, SWITCH_COPY } from "../../src/lib/screenStatus.ts";
 import { ScreenPage } from "../../src/pages/app/ScreenPage.tsx";
+import { currentBusy, subscribeBusy } from "../../src/store/busy.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useInputStore } from "../../src/store/input.ts";
 import { useLiveStore } from "../../src/store/live.ts";
@@ -961,5 +964,50 @@ describe("ScreenPage: the gesture sheet, the explainer, a newer app (1.5)", () =
     renderPage();
     expect(await screen.findByTestId("screen-update-ready")).toHaveTextContent("A newer DoMe is ready. Close and reopen the app to update.");
     expect(COPY.updateReady).toBe("A newer DoMe is ready. Close and reopen the app to update.");
+  });
+});
+
+describe("ScreenPage: a newer DoMe during Screen view (DECISIONS 92)", () => {
+  it("never reloads while the picture is live, through a trip to the background and the fresh session after it, or after Stop on the page; it reloads once the page is left", async () => {
+    const reload = vi.fn();
+    const updateTimers = new FakeTimers();
+    const updater = new AppUpdater({ check: async () => undefined, reload, busy: currentBusy, subscribeBusy, onChange: () => undefined, timers: updateTimers, now: () => updateTimers.now });
+    const view = renderPage();
+    await waitFor(() => screen.getByRole("button", { name: "Show screen" }));
+    await goLive();
+    updater.onNewVersion(); // the newer worker took control in the middle of the session
+    await updateTimers.advance(10 * AFTER_BUSY_DELAY_MS);
+    expect(reload).not.toHaveBeenCalled();
+
+    // the background and back: the session stops (resume pending), then one fresh session starts by itself
+    await act(async () => {
+      setVisibility("hidden");
+      await flush(6);
+    });
+    expect(rt.screen.snapshot.phase).toBe("idle");
+    await updateTimers.advance(10 * AFTER_BUSY_DELAY_MS);
+    await act(async () => {
+      setVisibility("visible");
+      await flush(6);
+    });
+    await waitFor(() => expect(sent("screen_ice_request")).toHaveLength(2));
+    await updateTimers.advance(10 * AFTER_BUSY_DELAY_MS);
+    expect(reload).not.toHaveBeenCalled();
+
+    // Stop: the page stays open with "Stopped · …"; still no reload
+    await userEvent.click(screen.getByRole("button", { name: "Stop Screen view" }));
+    await waitFor(() => expect(screen.queryByTestId("screen-stage")).toBeNull());
+    expect(rt.screen.snapshot.phase).toBe("ended");
+    await updateTimers.advance(10 * AFTER_BUSY_DELAY_MS);
+    expect(reload).not.toHaveBeenCalled();
+
+    // leaving Screen view: the reload follows after the short pause
+    view.unmount();
+    expect(currentBusy()).toBeNull();
+    await updateTimers.advance(AFTER_BUSY_DELAY_MS - 1);
+    expect(reload).not.toHaveBeenCalled();
+    await updateTimers.advance(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    updater.stop();
   });
 });

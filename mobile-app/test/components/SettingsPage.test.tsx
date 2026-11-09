@@ -3,7 +3,8 @@
  * redirect. Each flow navigates exactly once, to "/", after the runtime has finished — and for
  * Forget, after the signing key is gone from IndexedDB. The connection check stays available while
  * the state is stale or remote control is off, and is withheld only when the socket is down or the
- * relay says the PC is not online. The diagnostics download carries the Screen view client's own facts (device round 2).
+ * relay says the PC is not online. The diagnostics download carries the Screen view client's own facts (device round 2)
+ * and, with the line under it, the app build (DECISIONS 92).
  */
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,6 +15,7 @@ import { RequireSession } from "../../src/app/AppShell.tsx";
 import { setNavigationForTests, type Navigation } from "../../src/app/navigation.ts";
 import { configureApi } from "../../src/lib/api.ts";
 import { getExistingKeyPair, getOrCreateKeyPair, getStoredControllerId, setStoredControllerId } from "../../src/lib/controllerKey.ts";
+import { APP_VERSION, BUILD_COMMIT, buildLabel } from "../../src/lib/diagnostics.ts";
 import { emptyTimeline, type ScreenClientFacts } from "../../src/lib/screenStats.ts";
 import { SettingsPage } from "../../src/pages/app/SettingsPage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
@@ -217,6 +219,26 @@ describe("Settings: diagnostics", () => {
     expect(click).toHaveBeenCalledTimes(1);
     const report = JSON.parse(await blobs[0]!.text()) as { screen: Record<string, unknown> };
     expect(report.screen).toMatchObject({ phase: "idle", stats: facts.stats, media: null, timeline: facts.timeline, transport_connected: true, codec_fallback: { from: "h264", to: "vp8", reason: "not_decoded" } });
+    vi.restoreAllMocks();
+  });
+
+  it("the download and the line under it name the app build (DECISIONS 92): the commit, or none for a local build", async () => {
+    const blobs: Blob[] = [];
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: (b: Blob) => {
+        blobs.push(b);
+        return "blob:diagnostics";
+      },
+    });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: () => undefined });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Download diagnostics" }));
+    const report = JSON.parse(await blobs[0]!.text()) as { app: Record<string, unknown> };
+    expect(report.app).toMatchObject({ version: APP_VERSION, build_commit: BUILD_COMMIT === "" ? null : BUILD_COMMIT });
+    expect(screen.getByText((_, el) => el?.tagName === "P" && (el.textContent ?? "").startsWith(`DoMe app ${buildLabel()}`))).toBeInTheDocument();
+    expect(buildLabel()).toMatch(/^\d+\.\d+\.\d+ · build ([0-9a-f]{12}|dev)$/);
     vi.restoreAllMocks();
   });
 });

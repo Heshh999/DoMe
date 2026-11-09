@@ -18,6 +18,7 @@ import { configureApi } from "../../src/lib/api.ts";
 import { FLUSH_INTERVAL_MS } from "../../src/lib/input.ts";
 import { clearLogs, recentLogs } from "../../src/lib/log.ts";
 import { TouchpadPage } from "../../src/pages/app/TouchpadPage.tsx";
+import { busyKinds } from "../../src/store/busy.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useLiveStore } from "../../src/store/live.ts";
 import { CONTROLLER, FakeSocket, flush, freshStorage, HELLO_ACK, installDialogPolyfill, noTimers, OFFICE_PC, PC, signedIn, TS } from "../helpers/harness.ts";
@@ -154,6 +155,16 @@ afterEach(() => {
 });
 
 describe("TouchpadPage", () => {
+  it("while open, a newer DoMe waits (DECISIONS 92): the page and its live session both hold it; leaving releases both", async () => {
+    const { unmount } = renderPage();
+    expect(busyKinds()).toEqual(["input"]);
+    await answerStart();
+    expect(busyKinds()).toEqual(["input"]);
+    unmount();
+    await waitFor(() => expect(stops()).toHaveLength(1));
+    expect(busyKinds()).toEqual([]);
+  });
+
   it("starts the session on entry, shows the PC and the foreground app, and stops it when the page is left", async () => {
     const { unmount } = renderPage();
     await answerStart();

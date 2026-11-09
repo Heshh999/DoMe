@@ -2,7 +2,8 @@
  * The Screen view readout, test builds only (device round 2, 2026-10-27: the founder's phone sat on "Connecting…" for
  * 217 s and nothing on it said why). It sits in the stage's corner over the picture — or over the black stage when no
  * picture exists, which is the case it is for — and lists, once a second, the gates a picture has to pass in order
- * (the first "no" is the stage that failed), then the numbers behind them. Everything comes from the session client:
+ * (the first "no" is the stage that failed), then the numbers behind them, under one first line naming the app build
+ * ("app: 0.1.0 · build 6fc0951a2b3c", DECISIONS 92). Everything else comes from the session client:
  * the whitelisted `getStats()` snapshot, the `<video>` element's own metadata and the stage timeline
  * (lib/screenStats.ts); nothing here reads a pixel or an address.
  *
@@ -14,6 +15,7 @@
  */
 import { useEffect, useState } from "react";
 
+import { appReadoutLine } from "../lib/diagnostics.ts";
 import type { ScreenSessionState } from "../lib/screen.ts";
 import { readoutLines, screenReadoutEnabled, type ScreenClientFacts } from "../lib/screenStats.ts";
 
@@ -79,7 +81,8 @@ function Readout({ source, state }: { source: ScreenReadoutSource; state: Screen
     };
   }, [source, shown, stage]);
 
-  const text = readoutLines(state, facts).join("\n");
+  // the first line says which app build is running (DECISIONS 92), so a copied readout names the bundle it came from
+  const text = [appReadoutLine(), ...readoutLines(state, facts)].join("\n");
 
   const toggle = () => {
     const next = !shown;

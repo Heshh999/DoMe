@@ -11,3 +11,5 @@ interface ImportMetaEnv {
 
 /** Injected by Vite `define` from package.json (see vite.config.ts). */
 declare const __APP_VERSION__: string;
+/** Injected by Vite `define` from DOME_BUILD_COMMIT (scripts/build-commit.ts): a git commit, or "" for a local build. */
+declare const __BUILD_COMMIT__: string;

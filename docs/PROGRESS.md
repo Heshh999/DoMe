@@ -2,6 +2,36 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-09 — Pre-launch batch: the app updates itself at safe moments; sign-in needs a confirmed email; the counsel email
+
+- **The open app updates itself.** After a Deploy the phone no longer keeps the old app until someone reloads the
+  page (the cause of the first failed retest after the offer fix). It checks for a newer version at start, on
+  return to the front (at most once a minute) and every 30 minutes while in front, and reloads only at a safe
+  moment: never during Screen view, a touchpad session, a PC confirmation, pairing, the trip to or back from
+  Stripe, or an Assistant request. While one of those is going on, a small notice says the update waits and
+  offers "Update now", which first says what it would end. The browser's own `controllerchange` is watched
+  besides Workbox's `activated`, which can be missed on an iPhone (mobile-app DECISIONS 92, KNOWN_ISSUES 49).
+- **Every build says which commit it is.** The Deploy's commit reaches the phone app's build; the readout's first
+  line and Settings → Diagnostics show it ("DoMe app 0.1.0 · build 6fc0951a2b3c"), and the diagnostics bundle
+  carries `app.build_commit`. The founder can now tell at a glance whether the phone runs the latest Deploy.
+- **Sign-in refuses an unconfirmed email.** The gap left open on 2026-10-20 is closed: cloud-api signs a person in
+  only when the provider says `email_verified` is exactly true; otherwise no account, session or cookie is made,
+  and the home page says "Confirm your email first" (cloud-api DECISIONS #118, `docs/SECURITY.md` T1). The notice
+  survives the app reloading itself for an update in the minute after the refusal. Before the first Deploy with
+  this, the founder checks that their own and any tester's Auth0 users show the email as verified, in both tenants
+  (`docs/LAUNCH_SETUP.md` §16).
+- **The counsel email** is in `docs/legal/h264-counsel-email.md`: the H.264 licensing and FFmpeg LGPL questions
+  for a short paid consult, each fact traced to the repository; its answer is a condition before Screen view is
+  switched on for customers.
+- **What was run (Linux, 2026-11-09):** mobile-app typecheck, lint, vitest 1,688 passed (5 skipped), build with
+  and without a commit, and a refused bad commit value; cloud-api 624 passed, ruff, format, mypy; dev-idp 23
+  passed; deploy/launch 391 passed; e2e security, input and versions 18 passed, e2e Screen view 18 passed. A
+  review found four issues (an update missed for good on an iPhone, no way back for a locked-out account, the
+  email understating DoMe's handling of the H.264 output, the notice lost on an update reload); all four were
+  fixed with tests that fail without the fix. [verified on Linux; not yet on a device]
+- **Next:** Deploy staging; on the phone, reload once more (the last manual reload: the new app updates itself),
+  then check that the readout's first line names the Deploy's commit. Send the counsel email.
+
 ## 2026-11-09 — Screen view round 2a rebuilt (protocol 1.5): built and tested on Linux, not yet on a device
 
 - **What was rebuilt.** The founder's four additions, from the saved design (`docs/design/screen-view-2a.md`,

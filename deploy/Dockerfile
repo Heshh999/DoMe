@@ -17,7 +17,8 @@
 #
 # The Deploy workflow (deploy/launch/dome_deploy.py) builds it with:
 #   --build-arg VITE_DOME_RELEASE_CHANNEL=staging|production  --build-arg VITE_DOME_SUPPORT_URL=...
-#   --build-arg DOME_BUILD_COMMIT=<40-hex git commit>          (reported by /healthz as "commit")
+#   --build-arg DOME_BUILD_COMMIT=<40-hex git commit>          (reported by /healthz as "commit"; the PWA stage
+#                                                               stamps it into the app too, mobile-app DECISIONS 92)
 
 # Base images are pinned by DIGEST (each tag's multi-platform index), so every build of a commit, staging's
 # and production's alike, starts from the same layers; a re-pushed tag changes nothing here. The tag stays for
@@ -61,6 +62,12 @@ COPY shared/protocol shared/protocol
 COPY shared/ts shared/ts
 COPY mobile-app mobile-app
 WORKDIR /src/mobile-app
+# The git commit this image is built from: the same build argument as the runtime stage below (/healthz "commit"),
+# stamped into the bundle by vite.config.ts so the app can say which build it runs (mobile-app DECISIONS 92). Declared
+# after the COPY lines so a new commit does not invalidate the dependency layers above; empty for local builds. The
+# PWA build stops on anything but 7-40 lower-case hex digits or empty.
+ARG DOME_BUILD_COMMIT=
+ENV DOME_BUILD_COMMIT=${DOME_BUILD_COMMIT}
 RUN pnpm build
 
 ############################################################################################
