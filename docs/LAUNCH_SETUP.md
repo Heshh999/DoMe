@@ -489,6 +489,15 @@ PC that uses it.
 
 Steps, per environment (staging first):
 
+> **Status (2026-11-09): done for staging.** Key `domeremote-staging`, the three values in the staging environment,
+> Deploy reported "relay server: Cloudflare TURN; usage reconciliation on", and Screen view connected on mobile data
+> through the relay on the founder's iPhone. What the screens looked like that day: Cloudflare asks you to
+> **subscribe to Realtime** first (free; 1,000 GB a month included); the key page shows a **Turn Token ID** (the key
+> id) and an **API Token**; the read-only usage token is made under the person icon > **My Profile** > **API Tokens**
+> > **Create Token** > **Start from scratch** > **Start with an Account policy** > **Account Analytics: Read**, with
+> no expiry. After a Deploy, **reload the DoMe page on the phone** (Safari keeps the old page until you do).
+> Production still needs its own key (`domeremote-production`).
+
 1. **Relay server key (optional but needed on mobile data).** In the Cloudflare account you use for
    the domain: Dashboard > **Realtime** > **TURN Server** > **Create**, named `domeremote-staging`
    (later `domeremote-production`). Copy the **key id** and the **API token** with Cloudflare's copy

@@ -95,9 +95,23 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   and answering a compact offer; **not yet verified on a device** (Safari with TURN on Wi-Fi + cellular:
   `mobile-app/KNOWN_ISSUES.md`). The diagnosis rests on the symptom and the measurements above, not on the device's
   own error detail, which the old build did not show.
-- Next: deploy staging, then the founder tries Screen view again on Wi-Fi and on mobile data and sends the readout's
-  `offer:` line (`docs/HANDOFF.md` §7 item 2, founder step 3; §10.4 item 3); record the result in
-  `docs/ACCEPTANCE.md` Scenario 26.
+- **Device result (owner-reported, 2026-11-09 evening; staging at 6fc0951, Deploy run 42688638955).** The first
+  retest still failed because the phone was running the old bundle: its readout had no `offer:` line (Safari kept the
+  loaded page; closing Safari does not reload it). After reloading the page, Screen view works again on Wi-Fi, and
+  **on mobile data it connected through the relay**: readout `offer: 7.0 KB · 19 candidates · 0 dropped`,
+  `pair succeeded relay/srflx udp rtt 54 ms`, `path relayed`, H.264 1280x720, 34 of 34 frames decoded, pointer
+  `overlay`, `switches 1 failed 0`. So Safari under `max-bundle` writes its candidates once and a real offer with
+  TURN is 7.0 KB, well under the 12288-byte limit, with nothing trimmed. The readout was copied after the tab had been
+  in the background for about 7 minutes (last packet age 416911 ms, 2 heartbeats), so it shows the first seconds of
+  the relayed session only: a long relayed session and a switch while relayed are owner-reported ("it works good"),
+  not shown by a readout. **Evidence tag: device-verified (owner-reported)** for the relayed connection.
+- **Relay setup on staging (2026-11-09).** Cloudflare Realtime TURN key `domeremote-staging` (free tier, 1,000 GB a
+  month; Cloudflare required subscribing to Realtime first), `DOME_TURN_KEY_ID` as a variable and
+  `DOME_TURN_API_TOKEN` / `DOME_TURN_ANALYTICS_TOKEN` as secrets in the staging environment; Deploy run 42669360520
+  reported "Screen view: ON (beta); relay server: Cloudflare TURN; usage reconciliation on". Production has no key
+  yet.
+- **Still open:** a stale app after a deploy (nothing tells the user to reload unless `/v1/pcs` fails); the readout
+  does not show which build the phone runs.
 
 ## 2026-11-09 — Screen view round 2a: designed, built and tested, then lost before it was saved
 

@@ -278,7 +278,11 @@ Items from the review that were recorded rather than fully closed, plus residual
     batch the PC dropped. The pointer itself is in the picture there and stays where the PC puts it; only the zoomed
     view can lead away from it, and 1× shows the whole picture again. Not yet verified on a device.
 
-48. **Not yet verified on a device: Safari with TURN on Wi-Fi + cellular.** (DECISIONS 91.) The 2026-11-09 failure
+48. **Verified on the founder's iPhone for the relayed connection (2026-11-09 evening, owner-reported): readout
+    `offer: 7.0 KB · 19 candidates · 0 dropped`, `pair succeeded relay/srflx udp`, `path relayed`; Safari under
+    `max-bundle` wrote its candidates once and nothing had to be trimmed. Not shown by a readout: a long relayed
+    session, a switch while relayed, and an offer large enough to need trimming. The original entry follows.**
+    **Not yet verified on a device: Safari with TURN on Wi-Fi + cellular.** (DECISIONS 91.) The 2026-11-09 failure
     ("The phone's connection request was not valid. Try again." at every start once the relay handed out TURN
     servers) was diagnosed from the symptom and from measurements with Chromium on Linux, not from an offer the
     founder's phone built (the phone never logs one). The fix (max-bundle, the compaction) is unit-tested on a
