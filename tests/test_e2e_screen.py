@@ -1167,8 +1167,12 @@ async def test_cursor_overlay_messages_reach_the_phone_and_validate(
     assert 1 <= len(at_rest) <= 2, at_rest
     slide = {p["x"] for p in visible if p["y"] == normalised(1500, 200)[1]}
     assert 30 <= len(slide) <= 60, sorted(slide)
-    # positions on the unordered cursor channel; nothing else on it
-    assert set(viewer.labels_of("cursor_pos")) == {"dome-screen-cursor-v1"}, viewer.labels_of("cursor_pos")
+    # positions on the unordered cursor channel; nothing else on it. Until that channel is open the PC sends a position
+    # on dome-screen-v1 instead (rules.screen_cursor (3)), so on a slow machine the first few may arrive there; every
+    # later one travels on the cursor channel
+    pos_labels = viewer.labels_of("cursor_pos")
+    assert "dome-screen-cursor-v1" in pos_labels, pos_labels
+    assert all(i < 3 for i, label in enumerate(pos_labels) if label == "dome-screen-v1"), pos_labels
     assert {m["type"] for label, m in viewer.messages if label == "dome-screen-cursor-v1"} == {"cursor_pos"}
     times = [t for t, (_label, m) in zip(viewer.dc_arrivals, viewer.messages, strict=True) if m["type"] == "cursor_pos"]
     assert most_in_one_second(times) <= 60, most_in_one_second(times)
