@@ -42,6 +42,22 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
 - Next: the review of round 2a and its fixes, then the founder's device round (`docs/HANDOFF.md` §10.4; results
   into `docs/ACCEPTANCE.md` Scenario 26).
 
+## 2026-11-09 — Screen view round 2a works on the founder's devices (device round 4)
+
+- **Rebuilt and shipped.** After the lost build, round 2a was rebuilt from the saved design, reviewed (41 findings,
+  every confirmed one fixed or recorded) and committed as 1370a41, with a CI-only test fix in 94d3c01 (the first
+  cursor positions may use `dome-screen-v1` before the cursor channel opens). CI green on 94d3c01; the Windows
+  installer run 42579915990 (second attempt, after a GitHub 504 while downloading the LGPL `av` wheel) green, making
+  `DoMe-Setup-0.1.0+1370a41` ("Screen view: included"). Work in progress is now backed up to `wip/screen-view-2a`.
+- **Device round 4 (owner-reported).** Staging deployed at 94d3c01, the PC updated over the old install. The pointer
+  drawn by the phone, Next screen between two monitors and pinch zoom in Touchpad mode all work; the picture "looks
+  great" (H.264 720p, no frames lost, direct path, rtt 7 ms). **Evidence tag: device-verified (owner-reported)**
+  for those three; the hardware encoder was not checked (`encoder_hw` not read), and a switch on mobile data and an
+  older Windows 10 were not tried (docs/ACCEPTANCE.md Scenario 26).
+- **Founder decisions.** No 4K or paid quality tier; Screen view quality stays as it is.
+- Next: read `encoder_hw`/`mft` from a diagnostics file when convenient; then the launch steps (production deploy,
+  payment checks, publishing the signed installer, TURN relay, legal).
+
 ## 2026-11-09 — Screen view round 2a: designed, built and tested, then lost before it was saved
 
 - **What was done (2026-11-02 to 2026-11-05).** The founder's four additions (Next screen, the pointer drawn
