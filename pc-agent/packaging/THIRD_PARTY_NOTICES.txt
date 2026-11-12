@@ -19,7 +19,7 @@ PART 1
 1. DoMe
 -------
 DoMe.exe, dome-native-host.exe and the dome_agent and dome_protocol code inside them are DoMe's own,
-closed-source software. [FOUNDER: the business's legal name and year for the copyright line.]
+closed-source software. Copyright (c) [FOUNDER: year] [FOUNDER: legal name of the business].
 
 2. The Python runtime
 ---------------------

@@ -20,4 +20,5 @@ service are covered by the Terms of service at https://domeremote.com/terms.
 
 4. DoMe is provided "as is", without warranties, as far as the law allows.
 
-[FOUNDER: the business's legal name, liability and governing law, matching the Terms of service.]
+[FOUNDER: legal name of the business]. Governing law: [FOUNDER: governing law (New Jersey?)], as in the
+Terms of service. [COUNSEL: liability wording, matching the Terms of service.]

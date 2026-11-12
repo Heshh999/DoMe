@@ -2,6 +2,33 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-12 — The legal packet for counsel is ready (docs/legal/)
+
+- **What it is.** Everything a lawyer needs before launch, so the founder only has to choose one and send it
+  (`docs/legal/README.md` is the index): email 1 on H.264 and the FFmpeg build (from 2026-11-09); email 2 on the
+  Privacy notice, the Terms, the Windows licence terms and seventeen launch questions (automatic renewal and
+  cancellation, refunds, state privacy laws, minimum age, the AI assistant, misuse of remote control, YouTube,
+  liability and governing law, the business entity, trademark, vendor data agreements, export, advertising
+  claims, accessibility, the public source code); a data map and a list of every outside company that receives
+  customer data, each fact traced to the code; the assistant's consent text word for word; and a checklist of
+  the decisions only the founder can make, with every [FOUNDER] and [COUNSEL] mark in the drafts.
+- **The Privacy and Terms drafts were rewritten** to match what the code does today, still under the DRAFT
+  banner: they name the companies (Fly.io, Auth0, Resend, Stripe, Cloudflare including the Screen view relay,
+  Anthropic), both cookies, what is never collected, and say plainly what is not built yet (no delete button:
+  deletion is a support request; no automatic clean-up; no way to send customers notices). The Windows licence
+  terms and notices use the same placeholders.
+- **The repository is public**, so the packet tells the founder to fill in the decisions sheet in a private
+  copy and keep the lawyer's replies out of the repository.
+- **Gaps the research found, now listed for counsel or an engineer:** no account-deletion route and no purge
+  job (retention rules are proposed only); account deletion would also delete DoMe's billing records; no Terms
+  acceptance or renewal wording before payment; the Pricing and FAQ pages promise "unlimited" Screen view and
+  features not built yet; vendor regions and data agreements are unconfirmed.
+- **What was run (Linux, 2026-11-12):** a fact check of every claim against the code and a completeness review
+  read as the lawyer would (26 findings, all fixed); mobile-app typecheck, lint, 1,697 passed (5 skipped),
+  build; pc-agent 1,357 passed (3 skipped). [docs prepared from the code; not reviewed by counsel]
+- **Next:** the founder fills in a private copy of `docs/legal/founder-decisions.md` and sends the two emails
+  when ready; the drafts deploy to staging with the next Deploy.
+
 ## 2026-11-12 — The email check worked on the founder's iPhone; getting past it did not, and is fixed
 
 - **Founder-run on staging (2026-11-10 to 2026-11-12, iPhone Safari).** After the Deploy of ec9b963 the phone's

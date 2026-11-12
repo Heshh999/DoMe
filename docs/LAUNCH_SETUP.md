@@ -755,7 +755,8 @@ summary lists them again until an engineer closes them:
 Before `DOME_SCREEN_VIEW_ENABLED` is `true` in **production** (section 11B), also: the device round on
 your PC and iPhone (`docs/ACCEPTANCE.md` Scenario 26), a signed Windows build that includes Screen view,
 counsel's answer on H.264, and the privacy notice naming the connection relay provider as a
-sub-processor (the draft on the Privacy page carries a FOUNDER note for it).
+sub-processor (the Privacy page draft of 2026-11-12 names Cloudflare; it becomes final after counsel's
+review, `docs/legal/README.md`).
 
 ## 17. Code signing and releases *(per vendor docs, not yet exercised)*
 

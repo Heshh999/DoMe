@@ -425,8 +425,8 @@ founder-driven; then:
    4. Counsel's answer on H.264 (design §20 step 4, §22 item 7; also the LGPL notice and source offer). If the
       answer is no, Screen view ships VP8 only: an engineer adds that switch (today the agent uses VP8 only when
       `h264_mf` is unavailable on the PC).
-   5. Before production: list the connection relay provider as a sub-processor on the Privacy page (the
-      FOUNDER note there), then the launch gate in design §19 (device evidence per GPU vendor and on iOS 18
+   5. Before production: the Privacy page draft names the connection relay provider (Cloudflare) as a
+      sub-processor since 2026-11-12; make it final after counsel's review (`docs/legal/README.md`), then the launch gate in design §19 (device evidence per GPU vendor and on iOS 18
       and 26 in both modes, Authenticode signing and the updater, branch protection with required review).
    **Next (engineer):** after the device round, fix what the real PC and iPhone answer differently (the
    Windows sources, `h264_mf`, the bars' placement on scaled and multi-monitor PCs and the Job object were

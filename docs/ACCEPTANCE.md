@@ -568,8 +568,8 @@ item as a dated row (§7) with the Windows build, GPU, iOS version and Safari/ho
 `SCREEN_VIEW_STATUS` changes from "Coming" (design §19 launch gate): device evidence on at least one PC per
 GPU vendor and on iOS 18 and 26 in both modes, Authenticode signing with the update check, branch
 protection with required review, counsel's answer on H.264 and the LGPL drafts (or VP8 only), the privacy
-notice naming the connection relay provider as a sub-processor (the Privacy page draft carries the section
-and a FOUNDER note), and `DOME_SCREEN_VIEW_ENABLED` on in production.
+notice naming the connection relay provider as a sub-processor (the Privacy page draft names Cloudflare since
+2026-11-12; final after counsel's review), and `DOME_SCREEN_VIEW_ENABLED` on in production.
 
 Device-checklist additions from the 2026-10-22 review (pc-agent `README.md` "Device checklist"): the bars at
 100 %, 125 %, 150 % and mixed scaling with a secondary monitor left of the primary (each bar on its monitor,
