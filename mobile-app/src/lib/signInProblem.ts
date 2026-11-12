@@ -17,9 +17,22 @@ export const SIGN_IN_PROBLEMS: Record<SignInProblem, { title: string; text: stri
 };
 
 /**
- * The way out when the link never came or no longer works (Auth0 sends it once, at sign-up; DECISIONS #118): a line
- * after the text, shown only when a support contact is configured. Never the support page: its form needs a sign-in,
- * which this person cannot complete. The founder sends a new link from Auth0 (docs/LAUNCH_SETUP.md §16).
+ * The way out when the link never came or no longer works (Auth0 sends it once, at sign-up, and it expires; DECISIONS
+ * #118): setting a new password through "Forgot password?" on Auth0's login page also confirms the address
+ * (founder-run on staging, 2026-11-12). The founder's paragraph after the text, `lead` + `strong` (in bold) + `rest`,
+ * then a "Sign in again" button. That sign-in shows Auth0's login page even though Auth0 still remembers the person,
+ * because cloud-api set a marker for it with the refusal (DECISIONS #119).
+ */
+export const SIGN_IN_WAY_OUT: Record<SignInProblem, { lead: string; strong: string; rest: string }> = {
+  email_unverified: { lead: "No email? Tap Sign in, then ", strong: "Forgot password?", rest: ". Setting a new password confirms your email too." },
+};
+
+export const SIGN_IN_AGAIN = "Sign in again";
+
+/**
+ * After the way out, a last line shown only when a support contact is configured. Never the support page: its form
+ * needs a sign-in, which this person cannot complete. The founder sends a new link from Auth0
+ * (docs/LAUNCH_SETUP.md §16, which also says what happened when that was tried on staging).
  */
 export const SIGN_IN_SUPPORT: Record<SignInProblem, { lead: string; link: string; rest: string }> = {
   email_unverified: { lead: "Still nothing? ", link: "Contact support", rest: " and we'll send a new link." },

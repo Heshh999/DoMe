@@ -373,7 +373,9 @@ Sign in at `http://localhost:5173/v1/auth/login` (through the Vite proxy) or dir
 `DOME_PUBLIC_ORIGIN`. With `tools/dev-idp` the sign-in page offers `alice@example.test` /
 `bob@example.test`; there is no login path that bypasses OIDC. A sign-in whose ID token does not say
 `email_verified: true` is refused and lands on the home page's "Confirm your email first" notice
-(`DECISIONS.md` #118); the dev-idp page's "Treat this email as not confirmed yet" box shows it.
+(`DECISIONS.md` #118); the dev-idp page's "Treat this email as not confirmed yet" box shows it. After
+such a refusal, sign-ins from that browser ask the provider for its login page until one succeeds
+(`prompt=login`, `DECISIONS.md` #119).
 
 ## Environment variables
 

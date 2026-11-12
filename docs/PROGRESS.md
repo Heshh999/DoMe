@@ -2,6 +2,34 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-12 — The email check worked on the founder's iPhone; getting past it did not, and is fixed
+
+- **Founder-run on staging (2026-11-10 to 2026-11-12, iPhone Safari).** After the Deploy of ec9b963 the phone's
+  diagnostics named that commit and logged the update check at start. The founder's own email-and-password
+  account had never been confirmed: a sign-in in a private tab was refused and the home page showed "Confirm
+  your email first", as built. The already signed-in tab stayed signed in.
+- **What went wrong next.** (1) Tapping Sign in again came straight back to the notice: Auth0 still remembered
+  the person and answered without showing its sign-in page, so "Forgot password?" could not be reached; only
+  closing every private tab got there. (2) Auth0's dashboard button **Send Verification Email** reported "sent",
+  but Resend's logs show no request at all; the cause is not found yet (the Verification Email template may be
+  off). (3) What worked: **Forgot password?** on Auth0's sign-in page. The reset email arrived, and after the
+  new password the next sign-in got in: Auth0 counts a completed password reset as confirming the address.
+- **The fix (cloud-api DECISIONS #119).** A refusal now leaves a marker cookie (`dome_reprompt`, the value `1`
+  only, one day, auth routes only). While the browser carries it, every sign-in asks the provider for its
+  sign-in page (`prompt=login`); a successful sign-in clears it. The notice now adds "No email? Tap Sign in, then
+  **Forgot password?**. Setting a new password confirms your email too." and a **Sign in again** button.
+  `docs/LAUNCH_SETUP.md` §16 now points to Forgot password? instead of the dashboard button.
+- **What was run (Linux, 2026-11-12):** cloud-api 641 passed (7 skipped), ruff, format, mypy; dev-idp 25 passed;
+  mobile-app typecheck, lint, 1,690 passed (5 skipped), build; e2e security, input and versions 18 passed. A
+  review found the marker was used up by the tap and not by the outcome (the sign-in page would have shown only
+  every other try); fixed, with tests that fail without the fix. [the refusal and the password-reset way out:
+  verified on the founder's iPhone (founder-run); the marker and the new notice: integration-tested (Linux,
+  dev-idp), not yet verified against Auth0 or on a device]
+- **Still open:** why Send Verification Email does not reach Resend, and with it whether a new sign-up receives
+  its link at all (check the template in the Auth0 dashboard, then sign up with a fresh address); the app
+  updating itself on the phone at the next Deploy (mobile-app KNOWN_ISSUES 49); a sign-in finished more than
+  10 minutes after it was started still ends on a technical error page instead of a plain "start again".
+
 ## 2026-11-09 — Pre-launch batch: the app updates itself at safe moments; sign-in needs a confirmed email; the counsel email
 
 - **The open app updates itself.** After a Deploy the phone no longer keeps the old app until someone reloads the
@@ -15,7 +43,7 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   line and Settings → Diagnostics show it ("DoMe app 0.1.0 · build 6fc0951a2b3c"), and the diagnostics bundle
   carries `app.build_commit`. The founder can now tell at a glance whether the phone runs the latest Deploy.
 - **Sign-in refuses an unconfirmed email.** The gap left open on 2026-10-20 is closed: cloud-api signs a person in
-  only when the provider says `email_verified` is exactly true; otherwise no account, session or cookie is made,
+  only when the provider says `email_verified` is exactly true; otherwise no account, session or session cookie is made,
   and the home page says "Confirm your email first" (cloud-api DECISIONS #118, `docs/SECURITY.md` T1). The notice
   survives the app reloading itself for an update in the minute after the refusal. Before the first Deploy with
   this, the founder checks that their own and any tester's Auth0 users show the email as verified, in both tenants

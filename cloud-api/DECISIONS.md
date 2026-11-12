@@ -701,7 +701,8 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     (`docs/LAUNCH_SETUP.md` §16 listed it as open). `OIDCClient.complete` checks the claim right after the ID token is
     verified and raises `EmailNotVerifiedError` when it is absent, `false` or anything other than the JSON value `true`
     (the string `"true"` included). Nothing about an account is then read, created or updated: no session row, no
-    cookie, no security event (there is no account to file it under yet). `GET /v1/auth/callback` answers 303 to
+    session cookie (the refusal's one cookie is #119's re-prompt marker), no security event (there is no account to
+    file it under yet). `GET /v1/auth/callback` answers 303 to
     `/?sign_in=email_unverified` with `Cache-Control: no-store` and returns normally, so the transaction commits the
     deletion of the login attempt and the callback URL cannot be replayed. The target is the public home page, never
     `return_to` or `/app`: the app shell sends a signed-out browser straight to `/v1/auth/login`, Auth0 remembers the
@@ -724,7 +725,69 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     to that contact, never to `/support`, whose form needs a sign-in this person cannot complete; the founder's
     title and text are unchanged. Integration-tested (Linux, real PostgreSQL,
     `tools/dev-idp`; `tests/test_auth_email_verified.py`): `true` signs in as before; `false`, absent and the string
-    `"true"` are refused with the redirect, no account, no cookie, the attempt used up and no email or subject in any
-    log line; an existing account reported unverified is refused with its row, sessions and security events unchanged,
-    keeps its earlier session, and signs in to the same account once confirmed again. The PWA notice is unit-tested
-    (vitest, jsdom). Not yet verified against Auth0 or on a device.
+    `"true"` are refused with the redirect, no account, no session cookie, the attempt used up and no email or subject
+    in any log line; an existing account reported unverified is refused with its row, sessions and security events
+    unchanged, keeps its earlier session, and signs in to the same account once confirmed again. The PWA notice is
+    unit-tested (vitest, jsdom). Against Auth0 on staging: the refusal of an unconfirmed address and the notice are
+    verified on the founder's iPhone (founder-run, 2026-11-10 to 2026-11-12), and the same account signed in once its
+    address was confirmed. That run also showed that the person could not get past the notice and that a new link
+    could not be sent: #119.
+
+119. **After a refusal, sign-ins ask the provider for its login page (`prompt=login`) until one succeeds, and the
+    notice names a way out.** Founder-run on staging (iPhone Safari, 2026-11-10 to 2026-11-12), #118's notice
+    appeared, and then: (a) the person could not get past it. Auth0 keeps its own sign-in session (a single sign-on
+    cookie on the Auth0 domain), so tapping Sign in again was answered at once with the same unverified ID token,
+    without Auth0's login page, and the browser landed on the notice again. "Forgot password?" and switching account
+    are on that page; the founder reached it only by closing every private tab. (b) A new link could not be sent:
+    Send Verification Email in the Auth0 dashboard reported sent, but Resend's logs show no request (cause not yet
+    found; `docs/LAUNCH_SETUP.md` §16). What did work was "Forgot password?" on Auth0's login page: the reset email
+    arrived, and completing the reset marked the address verified, so the next sign-in got in.
+    For (a), the refusal redirect in `GET /v1/auth/callback` now also sets a marker cookie, `dome_reprompt=1`:
+    `HttpOnly`, `SameSite=Lax`, `Secure` by the session cookie's own rule (`Settings.cookie_secure`,
+    `auth/sessions.py`), `Path=/v1/auth` (the auth routes as mounted under `/v1` in `main.py`, so it reaches the
+    routes under `/v1/auth` (login, callback, and logout, which ignores it) and nothing else), `Max-Age` 86400 s.
+    One day, because Auth0 remembers the person for days: a marker that ran out early would send someone who comes
+    back later that day straight to the notice once more before the login page shows, while a marker that outlives
+    its use costs one password entry at the provider and nothing else. `GET /v1/auth/login` with the marker valued
+    exactly `1` calls `OIDCClient.begin(db, target, prompt="login")` and leaves the marker as it is: login only reads
+    it and sets no cookie. `begin` hands `prompt` to Authlib's `create_authorization_url` as an extra keyword
+    argument, which Authlib writes into the query (read in the installed Authlib: after `nonce`, before the PKCE
+    challenge), so the authorization URL carries `prompt=login` (OpenID Connect Core 3.1.2.1: the provider is asked
+    to have the person sign in again even though it remembers them). Without the marker the URL has no `prompt` at
+    all; a marker with any other value is ignored (no `prompt`, the cookie left as it is).
+    The marker is ended by a sign-in's outcome, not by the tap, and only the callback changes it: a successful
+    callback never sets it and clears the one it finds, so signing in leaves none behind; every refusal sets it
+    again (a fresh day), so someone who signs in at the login page while still unconfirmed gets the login page on
+    the next try too; otherwise it runs out a day after the last refusal. A callback that fails for another reason
+    (the provider reports an error, a replayed URL) leaves it alone. The first build cleared it in the login
+    redirect, and review found the hole before the founder's next run: a try that never reaches the callback (the
+    person swipes back from Auth0's page to look for the email, closes the tab, or comes back before the reset
+    email arrives) used the marker up, the next tap was answered by Auth0 at once, and the person was on the notice
+    again, so the login page showed only on every second try. Not clearing at login costs nothing extra for someone
+    who confirmed through the emailed link: they type their password once, as before, and that sign-in clears it.
+    The marker holds nothing but `1`, grants nothing, and changes nothing else: not the callback's outcome,
+    accounts, sessions or the `return_to` rules (a refused `return_to` is still 400, and the marker stays), not the
+    login rate limit, not logout; nothing new is logged and there is no setting. A cookie, not a parameter on the
+    notice's button, because the person may come back through the header's Sign in or the app shell's own redirect,
+    and all of them go through `/v1/auth/login`. Not taken: signing the person out of Auth0 after a refusal (needs an
+    allowed logout URL configured in each tenant and one more round trip), and `prompt=login` on every sign-in
+    (everyone would type their password every time).
+    For (b), the home-page notice keeps the founder's title and first paragraph and adds "No email? Tap Sign in, then
+    Forgot password?. Setting a new password confirms your email too." and a "Sign in again" button to
+    `/v1/auth/login?return_to=/app` (`mobile-app/src/lib/signInProblem.ts`, `pages/public/LandingPage.tsx`); the
+    optional support line stays after these. That a completed password reset marks the address verified is Auth0's
+    behaviour as seen on the staging tenant (founder-run), not something DoMe does.
+    `tools/dev-idp` already ignored parameters it does not know and keeps no sign-in session, so it accepts
+    `prompt=login` unchanged; `tools/dev-idp/tests/test_prompt.py` pins that for both its sign-in paths.
+    Integration-tested (Linux, dev-idp, real PostgreSQL; `tests/test_auth_email_verified.py`): a refusal sets exactly
+    the marker with the attributes above and no session cookie, and creates no account; the browser's cookie jar
+    sends it to the auth routes only (login, callback, logout), and logout leaves it as it is; the next login
+    redirects to the exact authorization URL with `prompt=login`, keeps its `return_to` and sets no cookie; logins
+    that never reach the callback, and one after a failed callback, still carry `prompt=login` with the marker
+    kept; a login without the marker has no `prompt`; other values are ignored; a refused `return_to` keeps the
+    marker; a second and third refusal mark again, and once the address is confirmed the same step signs in and
+    clears the marker on that answer, and the login after it has no `prompt`; a successful callback never sets the
+    marker and clears one set by a refusal in another tab. Unit-tested: the marker's `Secure` follows the session
+    cookie's on http and https origins; the PWA notice's text, order and button (vitest, jsdom). Not yet verified
+    against Auth0 (that it shows its login page for `prompt=login` while it remembers the person) or on the
+    founder's iPhone (KNOWN_ISSUES #39, with the marker's accepted limit).

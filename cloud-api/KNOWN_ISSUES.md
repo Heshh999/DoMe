@@ -188,3 +188,16 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     minted for it. That is integration-tested against `FakeTurn` only. Two things are unchecked: whether the old picture
     survives a switch on mobile data, and whether a refused switch restores a relayed session. Both depend on the real
     provider and the phone's TURN allocation (never run against Cloudflare: #27, #34) and belong to the device round.
+
+## Sign-in (2026-11-12)
+
+39. **The re-prompt after a refused sign-in is not verified against Auth0** (DECISIONS #119). That Auth0 shows its
+    login page for `prompt=login` while it still remembers the person is taken from OpenID Connect Core 3.1.2.1; the
+    integration tests (Linux, dev-idp) prove the authorization URL and the marker, and dev-idp keeps no sign-in session,
+    so it cannot show the difference. It belongs to the founder's next run on staging. One limit of the marker is
+    accepted: it stays until a sign-in succeeds in that browser or a day has passed since the last refusal (leaving
+    the provider's login page without signing in does not use it up), so a person who confirmed through the emailed
+    link and comes back within that day types their password once more. Separately, a new verification link cannot
+    be sent for now: Send Verification Email in the Auth0 dashboard reports sent but nothing reaches Resend
+    (founder-run on staging, 2026-11-12; cause not yet found, `docs/LAUNCH_SETUP.md` §16). A password reset through
+    "Forgot password?" is the way that works.

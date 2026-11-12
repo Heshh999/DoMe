@@ -13,6 +13,9 @@ exercised and the backend never needs a "dev login" bypass.
   `&dev_email_verified=absent` (claim left out) on the `dev_user` path, or the sign-in page's checkbox
   "Treat this email as not confirmed yet". DoMe refuses both (`cloud-api/DECISIONS.md` #118).
 - Supports discovery, JWKS, PKCE S256, `client_secret_basic`/`client_secret_post`, userinfo.
+- Accepts `prompt=login`, which DoMe sends on sign-ins after a refused one (`cloud-api/DECISIONS.md`
+  #119). It keeps no sign-in session, so its page is shown every time anyway; the `dev_user` path
+  still answers at once.
 
 Run: `uv sync && uv run dome-dev-idp` (or `make dev-idp` from the repository root).
 

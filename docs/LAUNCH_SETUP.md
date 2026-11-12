@@ -727,11 +727,25 @@ summary lists them again until an engineer closes them:
   sign-up, and it stops working after a few days; anyone who signed up before the email provider was
   connected (2026-10-20) may never have received it. So **before the first deploy that includes this
   change**, in both tenants, open Auth0 **User Management > Users**, open your own user and each tester,
-  and check the email address shows as verified. If it does not, open that user, choose **Send
-  Verification Email**, and click the link in that inbox. Do the same for anyone who writes in that they
-  see "Confirm your email first". When the support contact (previous item) is set, that notice also
-  says "Still nothing? Contact support and we'll send a new link." (menu names per Auth0's dashboard,
-  not yet exercised);
+  and check the email address shows as verified. If it does not, that address still has to be
+  confirmed. Auth0's button for this is **Send Verification Email** on that user's page, but when it
+  was tried on staging on 2026-11-12 it did not deliver (see below). So for now use **Forgot
+  password?** on Auth0's sign-in page instead: on staging, setting a new password through the emailed
+  link also confirmed the address. Tell the same to anyone who writes in that they see "Confirm your
+  email first". When the support contact (previous item) is set, that notice also says "Still nothing?
+  Contact support and we'll send a new link." (menu names per Auth0's dashboard: **Send Verification
+  Email** was tried on staging on 2026-11-12 and did not deliver, see below; the others are not yet
+  exercised).
+  **What happened on staging (founder-run, 2026-11-12):** the notice showed on your iPhone. **Send
+  Verification Email** in the Auth0 dashboard said it was sent, but nothing reached Resend; the cause is
+  not found yet. When you next have the Auth0 dashboard open: check that **Branding > Email Templates >
+  Verification Email** is turned on, press **Send Test Email** under **Branding > Email Provider**, then
+  look in **Resend > Logs**. What did work: **Forgot password?** on Auth0's sign-in page. Setting a new
+  password through the emailed link confirmed the address, and the next sign-in got in. So until the
+  cause is found, tell anyone who is stuck to use **Forgot password?**. The notice now tells people this
+  way out, and its **Sign in again** button is built to open Auth0's sign-in page, where **Forgot
+  password?** is, instead of bringing them straight back to the notice (integration-tested (Linux,
+  dev-idp); not yet verified on your iPhone);
 - signing in yourself on production (the button cannot test sign-in);
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).

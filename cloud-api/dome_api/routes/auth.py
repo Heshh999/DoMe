@@ -17,6 +17,7 @@ from dome_api.logging import get_logger
 from dome_api.plans import plan_for
 from dome_api.security import events
 from dome_api.security.tokens import ip_hash
+from dome_api.settings import Settings
 from dome_api.util import client_ip, rest_response, ts_required, utcnow
 
 router = APIRouter(tags=["auth"])
@@ -26,6 +27,24 @@ MAX_RETURN_TO = 1024
 # first" for this reason (mobile-app/src/lib/signInProblem.ts). Never /app: the app shell sends a signed-out
 # browser straight back to the provider, which remembers the person and would answer unverified again, in a loop.
 EMAIL_UNVERIFIED_REDIRECT = "/?sign_in=email_unverified"
+# The re-prompt marker (DECISIONS #119). After a refusal the provider still remembers the person (Auth0 keeps its own
+# sign-in session), so the next sign-in would be answered "unverified" again at once, without the provider's login
+# page, where "Forgot password?" and switching account are. The refusal sets this cookie; every GET /v1/auth/login
+# that carries it asks the provider for that page (prompt=login). Login only reads it. The callback alone ends it,
+# by the outcome and not by the tap: a sign-in that succeeds clears it, a refusal sets it again, and it runs out a
+# day after the last refusal. Clearing it at login would use it up on a try that never comes back (the person leaves
+# the provider's page to look for the email), and the try after that would land on the notice again. Its value is
+# only ever "1" and any other value is ignored. It grants nothing and decides nothing else: not the callback's
+# outcome, not sessions, accounts or the return_to rules.
+REPROMPT_COOKIE = "dome_reprompt"
+REPROMPT_VALUE = "1"
+# Sent only to the auth routes: this router is mounted under /v1 (main.py), so /v1/auth/login, /v1/auth/callback and
+# /v1/auth/logout (which ignores it).
+REPROMPT_COOKIE_PATH = "/v1/auth"
+# One day. The provider remembers the person for days, so a marker that ran out early would send someone who comes
+# back later that day ("I'll look for the email tonight") straight to the notice once more before the login page
+# shows. A marker that outlives its use costs one password entry at the provider (signing in clears it), nothing else.
+REPROMPT_MAX_AGE = 24 * 60 * 60
 
 
 def safe_return_to(value: str | None) -> str:
@@ -37,12 +56,37 @@ def safe_return_to(value: str | None) -> str:
     return value
 
 
+def reprompt_marked(request: Request) -> bool:
+    """The browser carries the marker: exactly ``"1"``, nothing else counts."""
+    return request.cookies.get(REPROMPT_COOKIE) == REPROMPT_VALUE
+
+
+def set_reprompt_cookie(response: Response, settings: Settings) -> None:
+    """HttpOnly, SameSite=Lax, and Secure by the session cookie's own rule (``set_session_cookie``)."""
+    response.set_cookie(
+        REPROMPT_COOKIE,
+        REPROMPT_VALUE,
+        max_age=REPROMPT_MAX_AGE,
+        path=REPROMPT_COOKIE_PATH,
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def clear_reprompt_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        REPROMPT_COOKIE, path=REPROMPT_COOKIE_PATH, secure=settings.cookie_secure, httponly=True, samesite="lax"
+    )
+
+
 @router.get("/auth/login")
 async def login(request: Request, db: DB, svc: Svc, return_to: str | None = None) -> Response:
     if not svc.login_limiter.allow(client_ip(request) or "?"):
         raise ApiError(429, "RATE_LIMITED")
     target = safe_return_to(return_to)
-    url = await svc.oidc.begin(db, target)
+    # The marker is read here and never changed: this try may not reach the callback, and only the callback ends it.
+    url = await svc.oidc.begin(db, target, prompt="login" if reprompt_marked(request) else None)
     return RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store"})
 
 
@@ -56,9 +100,11 @@ async def callback(
     try:
         identity, return_to = await svc.oidc.complete(db, code, state)
     except EmailNotVerifiedError:
-        # Nothing about an account is read or written and no cookie is set; returning (not raising) commits the
-        # deletion of the login attempt, so this callback URL cannot be replayed.
-        return RedirectResponse(EMAIL_UNVERIFIED_REDIRECT, status_code=303, headers={"Cache-Control": "no-store"})
+        # Nothing about an account is read or written and no session cookie is set, only the re-prompt marker;
+        # returning (not raising) commits the deletion of the login attempt, so this callback URL cannot be replayed.
+        refused = RedirectResponse(EMAIL_UNVERIFIED_REDIRECT, status_code=303, headers={"Cache-Control": "no-store"})
+        set_reprompt_cookie(refused, svc.settings)
+        return refused
     now = utcnow()
     account = await db.scalar(
         select(Account).where(Account.issuer == identity.issuer, Account.subject == identity.subject)
@@ -93,6 +139,9 @@ async def callback(
     )
     response = RedirectResponse(return_to, status_code=303, headers={"Cache-Control": "no-store"})
     set_session_cookie(response, svc.settings, token)
+    if reprompt_marked(request):
+        # Signed in, so the marker is of no use any more. This is the one place that clears it.
+        clear_reprompt_cookie(response, svc.settings)
     return response
 
 

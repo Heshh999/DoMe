@@ -11,7 +11,8 @@ import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Notice } from "../../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES, planById, usd, WINDOW_HOURS } from "../../content/plans.ts";
-import { SIGN_IN_PARAM, SIGN_IN_PROBLEMS, SIGN_IN_SUPPORT, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
+import { loginUrl } from "../../lib/api.ts";
+import { SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, SIGN_IN_SUPPORT, SIGN_IN_WAY_OUT, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
 import { paidPlansLine, useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 
 const FREE = planById("free");
@@ -181,7 +182,9 @@ const SECTION = "mx-auto max-w-6xl px-5 lg:px-8";
 
 /**
  * Read once: the marker leaves the address bar at once, the notice stays until the page is left. It is carried through
- * a reload in the next minute (an update can reload the page right after the refusal; lib/signInProblem.ts).
+ * a reload in the next minute (an update can reload the page right after the refusal; lib/signInProblem.ts). Its
+ * "Sign in again" starts sign-in where the header's Sign in ends up for a signed-out browser (the app shell sends it
+ * to loginUrl("/app")), without the stop at the app shell. Outlined: the hero keeps the page's one solid primary.
  */
 function SignInNotice() {
   const [params, setParams] = useSearchParams();
@@ -196,10 +199,21 @@ function SignInNotice() {
   const copy = SIGN_IN_PROBLEMS[problem];
   const support = supportContact();
   const help = SIGN_IN_SUPPORT[problem];
+  const wayOut = SIGN_IN_WAY_OUT[problem];
   return (
     <div data-testid="sign-in-problem" className={`${SECTION} pt-6`}>
       <Notice tone="warning" title={copy.title}>
         <p>{copy.text}</p>
+        <p>
+          {wayOut.lead}
+          <strong className="font-semibold text-text">{wayOut.strong}</strong>
+          {wayOut.rest}
+        </p>
+        <div className="pb-1 pt-2">
+          <a href={loginUrl("/app")} className="tap dome-press inline-flex items-center justify-center rounded-full border border-border-strong bg-bg-elevated px-5 text-[15px] font-semibold text-text hover:bg-surface">
+            {SIGN_IN_AGAIN}
+          </a>
+        </div>
         {support ? (
           <p>
             {help.lead}

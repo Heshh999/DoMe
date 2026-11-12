@@ -170,6 +170,10 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
     async def jwks() -> JSONResponse:
         return JSONResponse({"keys": [state.key.as_dict(private=False)]})
 
+    # Only these parameters are checked. Any other is accepted and ignored (the sign-in page carries it through its
+    # form). That includes ``prompt=login``, which DoMe sends on sign-ins after a refused one (cloud-api DECISIONS
+    # #119): this provider keeps no sign-in session, so its page is shown every time anyway, and the non-interactive
+    # ``dev_user`` path still answers at once.
     def _validate_authorize(params: dict[str, str]) -> None:
         if params.get("client_id") != settings.client_id:
             raise HTTPException(400, "unknown client_id")

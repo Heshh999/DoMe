@@ -22,7 +22,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -57,7 +57,8 @@ class EmailNotVerifiedError(Exception):
     """The ID token is valid but its ``email_verified`` claim is not exactly ``true``.
 
     Raised before any account is looked up, created or updated; the callback turns it into a redirect to the
-    PWA's sign-in notice, without a session or a cookie.
+    PWA's sign-in notice, without a session or a session cookie (its one cookie is the re-prompt marker,
+    DECISIONS #119).
     """
 
 
@@ -130,7 +131,10 @@ class OIDCClient:
         )
 
     # ----- flow ------------------------------------------------------------------------------
-    async def begin(self, db: AsyncSession, return_to: str) -> str:
+    async def begin(self, db: AsyncSession, return_to: str, *, prompt: Literal["login"] | None = None) -> str:
+        """Start one login attempt; returns the provider's authorization URL. ``prompt="login"`` adds OpenID Connect
+        Core 3.1.2.1 ``prompt=login``, so the provider shows its login page even while it still remembers the person
+        (sign-ins after a refusal, DECISIONS #119); without it the URL has no ``prompt`` at all."""
         disc = await self.discovery()
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(32)
@@ -147,9 +151,11 @@ class OIDCClient:
                 expires_at=now + FLOW_LIFETIME,
             )
         )
+        # Authlib puts extra keyword arguments into the query (after state and nonce, before the PKCE challenge).
+        extra = {"prompt": prompt} if prompt is not None else {}
         async with self._client() as client:
             url, _ = client.create_authorization_url(
-                disc["authorization_endpoint"], state=state, nonce=nonce, code_verifier=verifier
+                disc["authorization_endpoint"], state=state, nonce=nonce, code_verifier=verifier, **extra
             )
         return str(url)
 
