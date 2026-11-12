@@ -34,9 +34,13 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   every other try); fixed, with tests that fail without the fix. [the refusal and the password-reset way out:
   verified on the founder's iPhone (founder-run); the marker and the new notice: integration-tested (Linux,
   dev-idp), not yet verified against Auth0 or on a device]
-- **Still open:** why Send Verification Email does not reach Resend, and with it whether a new sign-up receives
-  its link at all (check the template in the Auth0 dashboard, then sign up with a fresh address); the app
-  updating itself on the phone at the next Deploy (mobile-app KNOWN_ISSUES 49).
+- **After the Deploy of 8a1f002 (founder-reported, 2026-11-12, iPhone Safari tab).** The Deploy failed twice
+  at its first read from Fly ("Could not read the IP addresses ... from Fly", before any change) and passed on
+  the third run. The phone's open page then refreshed by itself and its diagnostics named 8a1f002: the app
+  updating itself works in a Safari tab (mobile-app KNOWN_ISSUES 49; the home-screen app is not yet seen). A new
+  test sign-up received Auth0's verification email and confirmed it, so new customers do get their link.
+- **Still open:** why the Auth0 dashboard's Send Verification Email does not reach Resend (the sign-up email
+  does); the **Sign in again** button opening Auth0's sign-in page on the phone (not yet reported).
 
 ## 2026-11-09 — Pre-launch batch: the app updates itself at safe moments; sign-in needs a confirmed email; the counsel email
 

@@ -298,9 +298,13 @@ Items from the review that were recorded rather than fully closed, plus residual
     the phone's case has a `screen.offer_too_long` line (bytes and limit); a PC refusal has none and a
     `screen.start_refused` line with `origin: "agent"` instead.
 
-49. **Not yet verified on a device: the app updating itself on iOS** (DECISIONS 92). Unit-tested with fake timers
-    and a fake service-worker registration, and simulated through the Screen page; on the founder's iPhone three
-    things remain to be seen. (a) Whether `visibilitychange` (to visible) or `pageshow` (with `persisted`) fires when
+49. **Partly verified on a device: the app updating itself on iOS** (DECISIONS 92). **Seen on the founder's iPhone
+    (founder-reported, 2026-11-12):** after the staging Deploy of 8a1f002, the open page in a Safari tab (not the
+    home-screen app; the diagnostics say `standalone: false`) refreshed by itself once Safari came back to the front,
+    and Settings → Diagnostics then named the new build. So (a) to (c) below hold for a Safari tab. Still not seen: the
+    home-screen app, and the notice and the deferred reload during Screen view. Unit-tested with fake timers
+    and a fake service-worker registration, and simulated through the Screen page; the original three questions
+    were: (a) Whether `visibilitychange` (to visible) or `pageshow` (with `persisted`) fires when
     the home-screen app, or Safari, is brought back from the app switcher; if neither does, the start and the
     30-minute look still run, but a return alone no longer looks. (b) Whether the registration's `update()` finds the new worker there, the new worker
     takes control of the open page, and the page is told (`controllerchange`, DECISIONS 92 (3)). (c) Whether the reload that follows then loads the new bundle. How to check after a

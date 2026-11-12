@@ -745,7 +745,9 @@ summary lists them again until an engineer closes them:
   cause is found, tell anyone who is stuck to use **Forgot password?**. The notice now tells people this
   way out, and its **Sign in again** button is built to open Auth0's sign-in page, where **Forgot
   password?** is, instead of bringing them straight back to the notice (integration-tested (Linux,
-  dev-idp); not yet verified on your iPhone);
+  dev-idp); not yet verified on your iPhone). **A new sign-up does get its link (founder-reported,
+  2026-11-12):** a fresh test account received Auth0's verification email and confirmed it, so the
+  sign-up email works; only the dashboard's resend button did not deliver;
 - signing in yourself on production (the button cannot test sign-in);
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).
