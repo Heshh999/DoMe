@@ -759,7 +759,8 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     callback never sets it and clears the one it finds, so signing in leaves none behind; every refusal sets it
     again (a fresh day), so someone who signs in at the login page while still unconfirmed gets the login page on
     the next try too; otherwise it runs out a day after the last refusal. A callback that fails for another reason
-    (the provider reports an error, a replayed URL) leaves it alone. The first build cleared it in the login
+    (the provider reports an error, a replayed URL) leaves it alone (since #120 such a callback lands on the
+    "Sign in again" notice, and still sets and clears no cookie). The first build cleared it in the login
     redirect, and review found the hole before the founder's next run: a try that never reaches the callback (the
     person swipes back from Auth0's page to look for the email, closes the tab, or comes back before the reset
     email arrives) used the marker up, the next tap was answered by Auth0 at once, and the person was on the notice
@@ -791,3 +792,83 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     cookie's on http and https origins; the PWA notice's text, order and button (vitest, jsdom). Not yet verified
     against Auth0 (that it shows its login page for `prompt=login` while it remembers the person) or on the
     founder's iPhone (KNOWN_ISSUES #39, with the marker's accepted limit).
+
+120. **A sign-in callback that only needs a fresh start sends the browser to a plain "Sign in again" notice.** Since
+    #119 the "Confirm your email first" notice sends people to the provider's login page and its "Forgot password?"
+    link. That detour (ask for the email, wait for it, set a password in another tab, come back to the login page that
+    is still open) often takes longer than the 10 minutes a login attempt lives (`FLOW_LIFETIME`). The callback then
+    answered 400 with a JSON body ("Login attempt expired; start again"), and the person on a phone saw raw technical
+    text although a fresh sign-in would have worked. The same kind of page appeared when a callback address was opened a
+    second time (Back, reload: "Unknown or already used login state") and when the provider reported an error or the
+    person cancelled there.
+    `GET /v1/auth/callback` now answers 303 with `Cache-Control: no-store` to one constant, `/?sign_in=try_again`
+    (`START_AGAIN_REDIRECT` in `routes/auth.py`), in exactly three cases: (1) the provider sent `error`, or `code` or
+    `state` is missing; (2) no login attempt has that `state` (it was already used, never started here, or it expired
+    and a later login start has already removed it); (3) the attempt is older than its 10 minutes and still on
+    record. Nothing the provider or the browser sent goes into the answer: not `error`,
+    `error_description`, `state` or `code`. No session is started, nothing about an account is read or written, and the
+    answer sets no cookie at all; the re-prompt marker of #119 is neither set nor cleared, so someone who comes back too
+    late from the "Forgot password?" detour still gets the provider's login page on the next try. The target is the
+    public home page and never `return_to` or `/app`, for #118's reason: the home page starts nothing by itself, so
+    nothing repeats without a tap.
+    The cases are told apart by type, not by message text: `OIDCClient.complete` raises `StartAgainError` (next to
+    `EmailNotVerifiedError` in `auth/oidc.py`) with a fixed reason, `unknown_state` or `expired`, and the route catches
+    that class only. Everything else answers as before: a failed token exchange (502), an ID token that does not verify
+    (400), a deleted account (403), the unconfirmed-email refusal (its own redirect and marker, #118 and #119) and the
+    login rate limit (429).
+    The length check on `state` (16 to 128 characters) and `code` (1 to 2,048) stays a 400 ("Invalid login response"). A
+    browser coming back from a sign-in started here cannot reach it: `begin` only ever issues a 43-character state
+    (`secrets.token_urlsafe(32)`), which the provider returns unchanged; a provider does not send an empty code, and
+    sign-ins through Auth0 on staging pass the check (founder-run), so its codes are within the bound. Only a hand-made
+    or cut-off address fails it, and that keeps the technical answer.
+    Log: the existing INFO line `oidc.callback_error` keeps `provider_error` (true or false) and gains
+    `reason=cancelled_or_provider_error`; cases (2) and (3) write one new INFO line, `oidc.callback_start_again`, whose
+    only field is `reason` (`unknown_state` or `expired`). A separate event, so that `oidc.callback_error` keeps meaning
+    what happened on the provider's side: an expired attempt is an ordinary slow sign-in, not provider trouble. The
+    three reason words are fixed in the code; the state, the code and the provider's text are never logged, and the
+    request log carries no query string.
+    Reading the two words: every login start removes all expired attempts (the sweep in `begin`, there before this
+    change and left as it is). A slow sign-in is therefore logged `expired` only when it comes back before anyone has
+    started another sign-in; after that its attempt is gone and the line reads `unknown_state`, the same as for a
+    replayed address. The more often sign-ins are started, the more slow ones end up there, so `expired` is a lower
+    bound on slow sign-ins and `unknown_state` does not by itself mean a replay. The person lands on the same notice
+    either way, and no one is signed in either way.
+    Single use, as found and as left. The deletion of a login attempt is part of the request's transaction (`db_session`
+    commits when the handler returns and rolls back when it raises). (a) Returning the redirect commits the deletion of
+    an expired attempt. Before, the 400 was raised, the deletion was rolled back and the expired row stayed until the
+    next login swept it. Either way it could never sign anyone in; now a second opening finds no attempt
+    (`unknown_state`). (b) The error answers above still roll the deletion back, as they always have: the attempt stays
+    until it expires, and opening the address again asks the provider again with the same code. A provider refuses a
+    code it has already redeemed (dev-idp does; RFC 6749 §4.1.2 requires it), and where the first exchange never reached
+    the provider, the reload can finish the same attempt. Left unchanged. (c) The attempt used to be read and then
+    deleted, in two statements. Two callbacks with the same `state` arriving together both read the row; the second
+    one's delete matched nothing once the first had committed, which SQLAlchemy only warns about, so the second went on
+    to the provider with the same code, and only the provider's refusal stopped it (a probe against dev-idp before the
+    change: 30 of 30 pairs ended as one sign-in and one 502). `complete` now takes the attempt in one statement,
+    `DELETE ... RETURNING`: the second callback waits on the row, finds nothing once the first has committed, and
+    lands on the notice without contacting the provider. If the first one fails and rolls back, the second gets the
+    attempt, as a later reload would under (b).
+    The PWA knows the second reason, `try_again` (`mobile-app/src/lib/signInProblem.ts`, where each reason's entry now
+    names the parts its notice has): title "Sign in again", text "That sign-in didn't finish. It may have taken too
+    long. Tap Sign in again to start over.", then the same "Sign in again" button as the email notice
+    (`/v1/auth/login?return_to=/app`). It has no "Forgot password?" paragraph and no support line, also when a support
+    contact is configured: nothing is wrong with the email or the password, and there is nothing for support to send.
+    The marker leaves the address bar and the notice is carried through an update reload for one minute, as for
+    `email_unverified`, whose notice is unchanged; a reason the page does not know still shows nothing.
+    Accepted limits. The notice does not say which of the three cases happened ("It may have taken too long" is the
+    common one). A provider error that would repeat (an account blocked at the provider, say) lands on the same notice
+    after every tap. Someone who is signed in and opens a used callback address again sees the notice although their
+    session is fine, because these paths do not look at sessions; the button signs them in again.
+    Integration-tested (Linux, dev-idp, real PostgreSQL; `tests/test_auth_start_again.py`): each of the three cases
+    redirects to the constant with `no-store`, sets no cookie, leaves the counts of accounts, sessions and security
+    events unchanged and logs its reason word and nothing the provider or the browser sent; a browser that carries the
+    re-prompt marker keeps it; a callback replayed after a successful sign-in, in the same or another browser, lands on
+    the notice and signs no one in; an attempt moved 11 minutes into the past is refused and gone, and a fresh sign-in
+    then works, while one moved 9 minutes back still signs in; an expired attempt that another login start has already
+    removed lands on the notice with `unknown_state` in its log line; two callbacks at the same moment sign in once; a
+    state or code of an impossible length, an unreachable token endpoint, a code the provider refuses, a wrong nonce, a
+    deleted account, an unconfirmed email and a rate-limited login answer as before. Unit-tested (vitest, jsdom): the
+    PWA notice's exact text, its button and its missing parts; the email notice's text and order are asserted as before
+    (its markup was also compared with the previous build's in a one-off run, and was identical). Not yet verified
+    against Auth0 (what it sends back when the person cancels, or when a sign-in is finished late) or on a device
+    (KNOWN_ISSUES #39).

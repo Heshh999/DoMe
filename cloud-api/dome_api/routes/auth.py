@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from dome_api.auth.deps import DB, Auth, Svc
-from dome_api.auth.oidc import EmailNotVerifiedError
+from dome_api.auth.oidc import EmailNotVerifiedError, StartAgainError
 from dome_api.auth.sessions import clear_session_cookie, create_session, set_session_cookie
 from dome_api.db.models import Account
 from dome_api.errors import ApiError
@@ -27,6 +27,13 @@ MAX_RETURN_TO = 1024
 # first" for this reason (mobile-app/src/lib/signInProblem.ts). Never /app: the app shell sends a signed-out
 # browser straight back to the provider, which remembers the person and would answer unverified again, in a loop.
 EMAIL_UNVERIFIED_REDIRECT = "/?sign_in=email_unverified"
+# Where a callback lands that cannot be finished and whose whole remedy is to start sign-in again (DECISIONS #120):
+# the provider reported an error or the person cancelled there, code or state is missing, the login attempt is
+# unknown or was already used (the callback address opened twice), or it is older than its 10 minutes (the "Forgot
+# password?" detour often takes longer). The home page shows "Sign in again" for this reason. A constant: nothing the
+# provider or the browser sent is put into it, and it is the home page for the same reason as above (no loop: that
+# page starts nothing by itself).
+START_AGAIN_REDIRECT = "/?sign_in=try_again"
 # The re-prompt marker (DECISIONS #119). After a refusal the provider still remembers the person (Auth0 keeps its own
 # sign-in session), so the next sign-in would be answered "unverified" again at once, without the provider's login
 # page, where "Forgot password?" and switching account are. The refusal sets this cookie; every GET /v1/auth/login
@@ -80,6 +87,12 @@ def clear_reprompt_cookie(response: Response, settings: Settings) -> None:
     )
 
 
+def start_again() -> RedirectResponse:
+    """The answer for a callback that only needs a fresh sign-in: the constant target and no cookie of any kind.
+    No session, nothing about an account read or written, and the re-prompt marker neither set nor cleared."""
+    return RedirectResponse(START_AGAIN_REDIRECT, status_code=303, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/auth/login")
 async def login(request: Request, db: DB, svc: Svc, return_to: str | None = None) -> Response:
     if not svc.login_limiter.allow(client_ip(request) or "?"):
@@ -95,10 +108,16 @@ async def callback(
     request: Request, db: DB, svc: Svc, code: str | None = None, state: str | None = None, error: str | None = None
 ) -> Response:
     if error is not None or code is None or state is None:
-        log.info("oidc.callback_error", provider_error=bool(error))
-        raise ApiError(400, "MALFORMED_MESSAGE", "Sign-in was cancelled or failed. Try again.")
+        # The provider's own words (error, error_description) and the state are never logged or passed on.
+        log.info("oidc.callback_error", provider_error=bool(error), reason="cancelled_or_provider_error")
+        return start_again()
     try:
         identity, return_to = await svc.oidc.complete(db, code, state)
+    except StartAgainError as again:
+        # ``reason`` is one of two fixed words (unknown_state, expired). Returning (not raising) commits the deletion
+        # of an expired attempt, as for the refusal below; an unknown one left nothing to delete.
+        log.info("oidc.callback_start_again", reason=again.reason)
+        return start_again()
     except EmailNotVerifiedError:
         # Nothing about an account is read or written and no session cookie is set, only the re-prompt marker;
         # returning (not raising) commits the deletion of the login attempt, so this callback URL cannot be replayed.

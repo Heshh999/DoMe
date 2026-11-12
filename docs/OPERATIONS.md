@@ -271,6 +271,7 @@ masked path and no query string). Event names worth counting or alerting on:
 | `result.late_correction`, `result.post_terminal_dropped` | Late results after `outcome_unknown` (one correction allowed) and anything else dropped |
 | `confirmation_required.invalid`, `confirmation_required.unknown_command`, `ack.unknown_command`, `cancel.ignored`, `revoke_controller.ignored`, `pairing_decision.*` | Agent frames that did not match relay state; a rising count indicates an agent bug or a hostile agent |
 | `oidc.discovery_failed`, `oidc.jwks_failed`, `oidc.token_exchange_failed`, `oidc.id_token_rejected`, `oidc.callback_error` | Identity-provider outage or misconfiguration (customers get 503 at sign-in); `id_token_rejected` with clock errors points at the service clock |
+| `oidc.email_unverified`, `oidc.callback_start_again` (info) | Not faults: a sign-in refused because the email is not confirmed (the person sees "Confirm your email first"), and a sign-in that did not finish (the person sees "Sign in again"; `reason` is `unknown_state` or `expired`, and `expired` undercounts slow sign-ins, cloud-api DECISIONS #118 to #120). `oidc.callback_error` now carries `reason=cancelled_or_provider_error`. A sudden rise in any of these is worth a look at the provider |
 | `security_event` (`kind`, `severity`) | Every security event is also logged as it is written (below) |
 | Unhandled exceptions | `unhandled_error_handler` logs the exception with the request id and returns `INTERNAL`; alert on any |
 

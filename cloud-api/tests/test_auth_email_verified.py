@@ -25,6 +25,7 @@ from dome_api.auth.sessions import clear_session_cookie, set_session_cookie
 from dome_api.routes.auth import (
     EMAIL_UNVERIFIED_REDIRECT,
     REPROMPT_COOKIE,
+    START_AGAIN_REDIRECT,
     clear_reprompt_cookie,
     set_reprompt_cookie,
 )
@@ -122,9 +123,12 @@ async def test_unverified_or_missing_claim_is_refused_without_an_account(env: En
         _assert_refused(r, client)
         _assert_logs_clean(logs, email, claim)
         assert (await client.get("/v1/session")).status_code == 401
-        # the login attempt was used up: the same callback URL cannot be replayed
+        # the login attempt was used up: the same callback URL cannot be replayed. It finds no attempt and lands on
+        # the "Sign in again" notice (DECISIONS #120), with no cookie: no session, and the marker not set a second time
         replay = await client.get(callback)
-        assert replay.status_code == 400 and "set-cookie" not in replay.headers
+        assert replay.status_code == 303 and replay.headers["location"] == START_AGAIN_REDIRECT
+        assert "set-cookie" not in replay.headers
+        assert (await client.get("/v1/session")).status_code == 401
     assert _accounts(env, email) == []
 
 
@@ -277,7 +281,7 @@ async def test_leaving_the_login_page_without_signing_in_does_not_use_the_marker
             _assert_marker_kept(r, client)
         # a callback that fails (the provider reports an error) is not a sign-in either: the marker stays
         failed = await client.get("/v1/auth/callback", params={"error": "access_denied", "state": "x" * 40})
-        assert failed.status_code == 400
+        assert failed.status_code == 303 and failed.headers["location"] == START_AGAIN_REDIRECT
         _assert_marker_kept(failed, client)
         r = await client.get("/v1/auth/login", params={"return_to": "/app"})
         location = str(r.headers["location"])

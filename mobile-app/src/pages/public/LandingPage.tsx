@@ -1,6 +1,7 @@
 /**
  * Product explanation. No testimonials, counts, certifications or platform claims that are not verified. Also where a
- * refused sign-in lands (`?sign_in=<reason>`, `lib/signInProblem.ts`): the notice for it sits above the hero.
+ * sign-in that was refused or could not be finished lands (`?sign_in=<reason>`, `lib/signInProblem.ts`): the notice
+ * for it sits above the hero.
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -12,7 +13,7 @@ import { Icon, type IconName } from "../../components/icons.tsx";
 import { Notice } from "../../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES, planById, usd, WINDOW_HOURS } from "../../content/plans.ts";
 import { loginUrl } from "../../lib/api.ts";
-import { SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, SIGN_IN_SUPPORT, SIGN_IN_WAY_OUT, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
+import { SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
 import { paidPlansLine, useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 
 const FREE = planById("free");
@@ -185,6 +186,8 @@ const SECTION = "mx-auto max-w-6xl px-5 lg:px-8";
  * a reload in the next minute (an update can reload the page right after the refusal; lib/signInProblem.ts). Its
  * "Sign in again" starts sign-in where the header's Sign in ends up for a signed-out browser (the app shell sends it
  * to loginUrl("/app")), without the stop at the app shell. Outlined: the hero keeps the page's one solid primary.
+ * Each reason's notice names its own parts (lib/signInProblem.ts): the title, the text and the button always, the
+ * "Forgot password?" paragraph and the support line only where that reason has them.
  */
 function SignInNotice() {
   const [params, setParams] = useSearchParams();
@@ -196,31 +199,31 @@ function SignInNotice() {
     setParams(withoutSignInProblem(params), { replace: true });
   }, [params, setParams]);
   if (problem === null) return null;
-  const copy = SIGN_IN_PROBLEMS[problem];
-  const support = supportContact();
-  const help = SIGN_IN_SUPPORT[problem];
-  const wayOut = SIGN_IN_WAY_OUT[problem];
+  const { title, text, wayOut, support } = SIGN_IN_PROBLEMS[problem];
+  const contact = support ? supportContact() : null;
   return (
     <div data-testid="sign-in-problem" className={`${SECTION} pt-6`}>
-      <Notice tone="warning" title={copy.title}>
-        <p>{copy.text}</p>
-        <p>
-          {wayOut.lead}
-          <strong className="font-semibold text-text">{wayOut.strong}</strong>
-          {wayOut.rest}
-        </p>
+      <Notice tone="warning" title={title}>
+        <p>{text}</p>
+        {wayOut ? (
+          <p>
+            {wayOut.lead}
+            <strong className="font-semibold text-text">{wayOut.strong}</strong>
+            {wayOut.rest}
+          </p>
+        ) : null}
         <div className="pb-1 pt-2">
           <a href={loginUrl("/app")} className="tap dome-press inline-flex items-center justify-center rounded-full border border-border-strong bg-bg-elevated px-5 text-[15px] font-semibold text-text hover:bg-surface">
             {SIGN_IN_AGAIN}
           </a>
         </div>
-        {support ? (
+        {support && contact ? (
           <p>
-            {help.lead}
-            <a href={support} className="font-semibold text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-current" rel="noopener noreferrer" target="_blank">
-              {help.link}
+            {support.lead}
+            <a href={contact} className="font-semibold text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-current" rel="noopener noreferrer" target="_blank">
+              {support.link}
             </a>
-            {help.rest}
+            {support.rest}
           </p>
         ) : null}
       </Notice>

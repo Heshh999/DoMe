@@ -3,6 +3,7 @@ session inventory/revocation, security events."""
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from tests.conftest import AccountFactory, Browser, Env
@@ -90,10 +91,15 @@ async def test_return_to_must_be_relative(env: Env) -> None:
 
 
 async def test_callback_with_unknown_state_is_rejected(env: Env) -> None:
-    r = await env.http.get("/v1/auth/callback", params={"code": "abc", "state": "x" * 40})
-    assert r.status_code == 400
-    r = await env.http.get("/v1/auth/callback", params={"error": "access_denied", "state": "x" * 40})
-    assert r.status_code == 400
+    """Rejected as before (no session, no cookie); since DECISIONS #120 the answer is a redirect to the PWA's "Sign in
+    again" notice instead of a JSON error (tests/test_auth_start_again.py has the full set)."""
+    async with httpx.AsyncClient(base_url=env.origin, follow_redirects=False, timeout=10) as client:
+        for params in ({"code": "abc", "state": "x" * 40}, {"error": "access_denied", "state": "x" * 40}):
+            r = await client.get("/v1/auth/callback", params=params)
+            assert r.status_code == 303 and r.headers["location"] == "/?sign_in=try_again"
+            assert r.headers["cache-control"] == "no-store" and "set-cookie" not in r.headers
+        assert "dome_session" not in client.cookies
+        assert (await client.get("/v1/session")).status_code == 401
 
 
 async def test_logout_revokes_session_and_clears_cookie(make_account: AccountFactory) -> None:

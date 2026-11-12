@@ -625,7 +625,7 @@ self-validates every response outside production. Session-authenticated routes n
 | Route | Auth | Request | Response |
 | --- | --- | --- | --- |
 | `GET /v1/auth/login?return_to=` | — | | 302 to the issuer; with `prompt=login` while the browser carries the re-prompt marker (cloud-api DECISIONS #119) |
-| `GET /v1/auth/callback?code&state` | — | | 302 to `return_to`, sets cookie; an unconfirmed email is refused: redirect to `/?sign_in=email_unverified`, no session, only the re-prompt marker cookie (cloud-api DECISIONS #118, #119) |
+| `GET /v1/auth/callback?code&state` | — | | 302 to `return_to`, sets cookie; an unconfirmed email is refused: redirect to `/?sign_in=email_unverified`, no session, only the re-prompt marker cookie (cloud-api DECISIONS #118, #119); a callback that only needs a fresh start (provider error or cancel, `code`/`state` missing, `state` unknown or already used, attempt older than 10 minutes): redirect to `/?sign_in=try_again`, no session, no cookie (#120) |
 | `POST /v1/auth/logout` | session + CSRF | | 204; closes the session's controller sockets |
 | `GET /v1/session` | session | | `session_response{account{id, email, display_name, created_at}, csrf_token, plan, entitlement_state?, limits{max_enabled_pcs, max_controllers, routines, custom_layouts}, protocol_version}` |
 | `GET /v1/account/security-events?limit=` | session | | `security_events_response{events[]{id, kind, severity, actor, subject_id?, detail?, created_at}}` |

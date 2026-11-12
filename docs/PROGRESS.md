@@ -19,16 +19,24 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   sign-in page (`prompt=login`); a successful sign-in clears it. The notice now adds "No email? Tap Sign in, then
   **Forgot password?**. Setting a new password confirms your email too." and a **Sign in again** button.
   `docs/LAUNCH_SETUP.md` §16 now points to Forgot password? instead of the dashboard button.
-- **What was run (Linux, 2026-11-12):** cloud-api 641 passed (7 skipped), ruff, format, mypy; dev-idp 25 passed;
-  mobile-app typecheck, lint, 1,690 passed (5 skipped), build; e2e security, input and versions 18 passed. A
+- **A sign-in that did not finish now ends on a plain notice (cloud-api DECISIONS #120).** Three things used
+  to end on a page of technical text: finishing a sign-in more than 10 minutes after starting it (the Forgot
+  password? detour often takes longer), landing a second time on the address the provider sends the browser
+  back to (Back, reload), and cancelling at the provider. The browser now lands on the home page, which says
+  "Sign in again" and "That sign-in didn't finish. It may have taken too long. Tap Sign in again to start
+  over.", with a **Sign in again** button. Nobody is signed in on these paths and nothing about an account is
+  read or changed. When the same sign-in arrives twice at the same moment, one signs in and the other gets the
+  notice. [integration-tested (Linux, dev-idp), not yet verified against Auth0 or on a device]
+- **What was run (Linux, 2026-11-12, after both changes):** cloud-api 669 passed (7 skipped), ruff, format,
+  mypy; dev-idp 25 passed; mobile-app typecheck, lint, 1,697 passed (5 skipped), build; e2e security, input and
+  versions 18 passed. A
   review found the marker was used up by the tap and not by the outcome (the sign-in page would have shown only
   every other try); fixed, with tests that fail without the fix. [the refusal and the password-reset way out:
   verified on the founder's iPhone (founder-run); the marker and the new notice: integration-tested (Linux,
   dev-idp), not yet verified against Auth0 or on a device]
 - **Still open:** why Send Verification Email does not reach Resend, and with it whether a new sign-up receives
   its link at all (check the template in the Auth0 dashboard, then sign up with a fresh address); the app
-  updating itself on the phone at the next Deploy (mobile-app KNOWN_ISSUES 49); a sign-in finished more than
-  10 minutes after it was started still ends on a technical error page instead of a plain "start again".
+  updating itself on the phone at the next Deploy (mobile-app KNOWN_ISSUES 49).
 
 ## 2026-11-09 — Pre-launch batch: the app updates itself at safe moments; sign-in needs a confirmed email; the counsel email
 

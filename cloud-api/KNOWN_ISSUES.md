@@ -200,4 +200,7 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     link and comes back within that day types their password once more. Separately, a new verification link cannot
     be sent for now: Send Verification Email in the Auth0 dashboard reports sent but nothing reaches Resend
     (founder-run on staging, 2026-11-12; cause not yet found, `docs/LAUNCH_SETUP.md` §16). A password reset through
-    "Forgot password?" is the way that works.
+    "Forgot password?" is the way that works. The "Sign in again" notice for a sign-in that could not be finished
+    (DECISIONS #120: it took more than 10 minutes, its callback was opened twice, or it was cancelled at the provider)
+    is in the same state: integration-tested (Linux, dev-idp), not yet verified against Auth0 (what it sends back when
+    the person cancels, or when a sign-in is finished late) or on a device. It belongs to the same run.

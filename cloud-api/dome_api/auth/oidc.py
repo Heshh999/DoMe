@@ -5,7 +5,9 @@ Discovery and JWKS documents are fetched from the configured issuer and cached. 
 single use). The ID token is verified with ``joserfc`` (RS256/ES256 only, issuer's JWKS) and its
 ``iss``, ``aud``/``azp``, ``exp``, ``iat`` and ``nonce`` claims are checked explicitly. A sign-in is refused
 (``EmailNotVerifiedError``) unless ``email_verified`` is exactly ``true``: absent, ``false`` or a string such as
-``"true"`` all mean the provider has not confirmed that the person owns the address (DECISIONS #118).
+``"true"`` all mean the provider has not confirmed that the person owns the address (DECISIONS #118). A callback
+whose login attempt is unknown, already used or older than those 10 minutes raises ``StartAgainError``: the one remedy
+is a fresh sign-in, and the callback sends the browser to a plain notice for it (DECISIONS #120).
 
 ``iss`` is compared with the discovery document's ``issuer`` exactly as the provider wrote it (OpenID
 Connect Core 3.1.3.7): Auth0 publishes ``https://<tenant>.auth0.com/`` with a trailing slash, while
@@ -28,7 +30,7 @@ import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from joserfc import jwt
 from joserfc.jwk import KeySet
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dome_api.db.models import AuthFlow
@@ -60,6 +62,28 @@ class EmailNotVerifiedError(Exception):
     PWA's sign-in notice, without a session or a session cookie (its one cookie is the re-prompt marker,
     DECISIONS #119).
     """
+
+
+StartAgainReason = Literal["unknown_state", "expired"]
+
+
+class StartAgainError(Exception):
+    """The login attempt this callback names cannot be finished, and starting sign-in again is the whole remedy.
+
+    ``reason`` is one of two fixed words, chosen here and never taken from the request: ``unknown_state`` (no such
+    attempt: it was already used by an earlier callback, never started here, or expired and was then removed by a
+    later login's sweep in ``begin``) or ``expired`` (older than ``FLOW_LIFETIME`` and still in the table). Raised
+    before the provider is contacted and before any account is looked up; the callback turns it into a redirect to
+    the PWA's "Sign in again" notice, without a session or any cookie (DECISIONS #120).
+
+    Reading the log: every login start removes all expired attempts, so a slow sign-in is logged ``expired`` only when
+    it comes back before anyone has started another one. ``expired`` is a lower bound on slow sign-ins, and
+    ``unknown_state`` covers the rest of them, so it does not by itself mean that a callback address was replayed.
+    """
+
+    def __init__(self, reason: StartAgainReason) -> None:
+        super().__init__(reason)
+        self.reason: StartAgainReason = reason
 
 
 class OIDCClient:
@@ -140,6 +164,8 @@ class OIDCClient:
         nonce = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(64)  # 86 chars, within RFC 7636's 43..128
         now = utcnow()
+        # Every start sweeps all expired attempts, anyone's. A slow sign-in that comes back after this finds no row
+        # and is logged ``unknown_state``, not ``expired`` (see ``StartAgainError``).
         await db.execute(delete(AuthFlow).where(AuthFlow.expires_at < now))
         db.add(
             AuthFlow(
@@ -160,16 +186,33 @@ class OIDCClient:
         return str(url)
 
     async def complete(self, db: AsyncSession, code: str, state: str) -> tuple[Identity, str]:
-        """Exchange the code, verify the ID token, return (identity, return_to). Consumes the flow."""
+        """Exchange the code, verify the ID token, return (identity, return_to). Consumes the flow.
+
+        Raises ``StartAgainError`` for an unknown, already used or expired attempt and ``EmailNotVerifiedError`` for
+        an unconfirmed address, which the callback turns into redirects; every other failure stays an error answer.
+        """
+        # Not a start-again case: ``begin`` only ever issues a 43-character state and a provider's code is never
+        # empty, so a browser coming back from a sign-in started here cannot fail this check. Only a hand-made or
+        # cut-off address does, and it keeps the plain 400 (DECISIONS #120).
         if not (16 <= len(state) <= 128) or not (1 <= len(code) <= 2048):
             raise ApiError(400, "MALFORMED_MESSAGE", "Invalid login response")
-        flow = await db.scalar(select(AuthFlow).where(AuthFlow.state == state))
+        # Single use: the attempt is taken out of the table in the one statement that reads it. Two callbacks with the
+        # same state cannot both get it: the second waits for the first, and finds nothing once the first has
+        # committed. (Reading the row and deleting it afterwards let both through to the provider, because a delete
+        # that matches no row is only a warning.) The delete is part of the request's transaction: committed when the
+        # callback returns (a sign-in, the unconfirmed-email refusal, the start-again redirect) and rolled back with
+        # everything else when it answers an error (a failed token exchange, a rejected ID token, a deleted account).
+        taken = await db.execute(
+            delete(AuthFlow)
+            .where(AuthFlow.state == state)
+            .returning(AuthFlow.nonce, AuthFlow.code_verifier, AuthFlow.return_to, AuthFlow.expires_at)
+        )
+        flow = taken.tuples().one_or_none()
         if flow is None:
-            raise ApiError(400, "MALFORMED_MESSAGE", "Unknown or already used login state")
-        await db.delete(flow)  # single use, success or not
-        await db.flush()
-        if flow.expires_at < utcnow():
-            raise ApiError(400, "MALFORMED_MESSAGE", "Login attempt expired; start again")
+            raise StartAgainError("unknown_state")
+        nonce, code_verifier, return_to, expires_at = flow
+        if expires_at < utcnow():
+            raise StartAgainError("expired")
         disc = await self.discovery()
         try:
             async with self._client() as client:
@@ -177,7 +220,7 @@ class OIDCClient:
                     disc["token_endpoint"],
                     grant_type="authorization_code",
                     code=code,
-                    code_verifier=flow.code_verifier,
+                    code_verifier=code_verifier,
                     redirect_uri=self.settings.redirect_uri,
                 )
         except Exception as exc:  # noqa: BLE001 - provider errors are reported generically
@@ -186,7 +229,7 @@ class OIDCClient:
         id_token = token.get("id_token") if isinstance(token, dict) else None
         if not isinstance(id_token, str):
             raise ApiError(502, "INTERNAL", "The identity provider returned no ID token")
-        claims = await self._verify_id_token(id_token, flow.nonce)
+        claims = await self._verify_id_token(id_token, nonce)
         verified = claims.get("email_verified")
         if verified is not True:
             # No email, no subject: the account is not known yet, and an address someone may not own is not logged.
@@ -196,9 +239,7 @@ class OIDCClient:
         subject = str(claims["sub"])
         email = str(claims.get("email") or "")[:254]
         name = str(claims.get("name") or claims.get("preferred_username") or email.split("@")[0] or "DoMe user")[:128]
-        return Identity(
-            issuer=self.settings.oidc_issuer, subject=subject, email=email, display_name=name
-        ), flow.return_to
+        return Identity(issuer=self.settings.oidc_issuer, subject=subject, email=email, display_name=name), return_to
 
     async def _verify_id_token(self, id_token: str, nonce: str) -> dict[str, Any]:
         # The exact issuer string from discovery (already checked against DOME_OIDC_ISSUER up to a trailing

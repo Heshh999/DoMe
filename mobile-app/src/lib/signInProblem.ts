@@ -1,42 +1,57 @@
 /**
  * Why cloud-api sent the browser back without signing it in. The sign-in callback redirects to the public home page
- * with `?sign_in=<reason>` (cloud-api `routes/auth.py`, DECISIONS #118), never to `/app`: the app shell sends a
- * signed-out browser straight back to the identity provider, which remembers the person and would answer the same
+ * with `?sign_in=<reason>` (cloud-api `routes/auth.py`, DECISIONS #118 and #120), never to `/app`: the app shell sends
+ * a signed-out browser straight back to the identity provider, which remembers the person and would answer the same
  * way again, in a loop. The home page shows the matching notice once and removes the marker from the address bar.
  * Unknown reasons show nothing: the customer never sees a code.
+ *
+ * `email_unverified`: the provider has not confirmed the address yet (DECISIONS #118).
+ * `try_again`: the sign-in could not be finished and starting again is the whole remedy: it took more than ten
+ * minutes (the "Forgot password?" detour often does), its answer was opened a second time (Back, reload), or it was
+ * cancelled or failed at the provider (DECISIONS #120).
  */
 export const SIGN_IN_PARAM = "sign_in";
 
-export type SignInProblem = "email_unverified";
+export type SignInProblem = "email_unverified" | "try_again";
 
-export const SIGN_IN_PROBLEMS: Record<SignInProblem, { title: string; text: string }> = {
+/**
+ * One notice per reason, and each reason says which parts its notice has. Every notice has the title, the text and
+ * then the "Sign in again" button (`SIGN_IN_AGAIN`); `wayOut` and `support` are null where a notice has no such part.
+ */
+export interface SignInNoticeCopy {
+  title: string;
+  text: string;
+  /** A paragraph between the text and the button, `lead` + `strong` (in bold) + `rest`; null: none. */
+  wayOut: { lead: string; strong: string; rest: string } | null;
+  /** A last line after the button, shown only when a support contact is configured; null: never shown. */
+  support: { lead: string; link: string; rest: string } | null;
+}
+
+export const SIGN_IN_PROBLEMS: Record<SignInProblem, SignInNoticeCopy> = {
   email_unverified: {
     title: "Confirm your email first",
     text: "We sent a link to your inbox when you signed up. Open it, then sign in again. Can't find it? Check your spam folder.",
+    // The way out when the link never came or no longer works (Auth0 sends it once, at sign-up, and it expires;
+    // DECISIONS #118): setting a new password through "Forgot password?" on Auth0's login page also confirms the
+    // address (founder-run on staging, 2026-11-12). The sign-in the button starts shows Auth0's login page even
+    // though Auth0 still remembers the person, because cloud-api set a marker for it with the refusal (DECISIONS #119).
+    wayOut: { lead: "No email? Tap Sign in, then ", strong: "Forgot password?", rest: ". Setting a new password confirms your email too." },
+    // Never the support page: its form needs a sign-in, which this person cannot complete. The founder sends a new
+    // link from Auth0 (docs/LAUNCH_SETUP.md §16, which also says what happened when that was tried on staging).
+    support: { lead: "Still nothing? ", link: "Contact support", rest: " and we'll send a new link." },
+  },
+  try_again: {
+    title: "Sign in again",
+    text: "That sign-in didn't finish. It may have taken too long. Tap Sign in again to start over.",
+    // Nothing is wrong with the email or the password, so no "Forgot password?" paragraph, and nothing for support
+    // to send: the button is the whole remedy.
+    wayOut: null,
+    support: null,
   },
 };
 
-/**
- * The way out when the link never came or no longer works (Auth0 sends it once, at sign-up, and it expires; DECISIONS
- * #118): setting a new password through "Forgot password?" on Auth0's login page also confirms the address
- * (founder-run on staging, 2026-11-12). The founder's paragraph after the text, `lead` + `strong` (in bold) + `rest`,
- * then a "Sign in again" button. That sign-in shows Auth0's login page even though Auth0 still remembers the person,
- * because cloud-api set a marker for it with the refusal (DECISIONS #119).
- */
-export const SIGN_IN_WAY_OUT: Record<SignInProblem, { lead: string; strong: string; rest: string }> = {
-  email_unverified: { lead: "No email? Tap Sign in, then ", strong: "Forgot password?", rest: ". Setting a new password confirms your email too." },
-};
-
+/** The button every notice has, after its text and its way out. It starts sign-in like the header's Sign in. */
 export const SIGN_IN_AGAIN = "Sign in again";
-
-/**
- * After the way out, a last line shown only when a support contact is configured. Never the support page: its form
- * needs a sign-in, which this person cannot complete. The founder sends a new link from Auth0
- * (docs/LAUNCH_SETUP.md §16, which also says what happened when that was tried on staging).
- */
-export const SIGN_IN_SUPPORT: Record<SignInProblem, { lead: string; link: string; rest: string }> = {
-  email_unverified: { lead: "Still nothing? ", link: "Contact support", rest: " and we'll send a new link." },
-};
 
 /** The support contact (`VITE_DOME_SUPPORT_URL`, mailto: or https://, checked by the Deploy tool), or null. */
 export function supportContact(): string | null {
