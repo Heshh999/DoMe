@@ -6,6 +6,9 @@
  * until it says the plan changed, and says "pending" until then. Without Stripe keys the server reports
  * `billing_enabled: false` and this page stays today's honest page: the plan, its limits, and a notice that upgrading is
  * not available yet, with the prices of the website's plan content (src/content/plans.ts).
+ * Before payment (docs/legal): under every "Continue to payment" button, that the plan renews automatically at the price
+ * shown until cancelled, how to cancel and the Terms and Privacy links (content/SubscriptionTerms.tsx); beside the
+ * top-up button, that it is a one-time purchase and what happens to unused requests (plans.ts topUpTerms).
  * A newer app version never reloads the page on its way to Stripe or after a return from it (DECISIONS 92).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,7 +18,8 @@ import type { rest } from "@dome/protocol";
 
 import { loadAssistantStatus } from "../../app/voice.ts";
 import { Button, Card, CheckRow, IconWell, KeyValue, Notice, PageHeader, Pill, Segmented, Spinner, Steps } from "../../components/ui.tsx";
-import { AI_OFF_STATUS, aiSummary, COMING_AT_PAID_LAUNCH, planById, usd, type PlanContent } from "../../content/plans.ts";
+import { AI_OFF_STATUS, aiSummary, COMING_AT_PAID_LAUNCH, planById, topUpTerms, usd, type PlanContent } from "../../content/plans.ts";
+import { SubscriptionTerms } from "../../content/SubscriptionTerms.tsx";
 import { api, ApiError } from "../../lib/api.ts";
 import { allowanceSummary, billingErrorText, billingStateCopy, browserNavigation, bucketLevel, isCheckoutUrl, longDate, providerErrorReason, providerTestModeLine, refreshText, topupLabel, type AllowanceBucket, type AssistantAllowance, type BillingStatusResponse, type BucketLevel, type ProviderErrorReason } from "../../lib/billing.ts";
 import { relativeTime } from "../../lib/format.ts";
@@ -32,6 +36,8 @@ export const STILL_CONFIRMING = "Still confirming. This page updates when the pa
 export const STRIPE_NOTE = "You'll finish on Stripe's secure page. Card details never touch DoMe. Prices in US dollars, tax included.";
 export const TEST_MODE = "Test mode: no real charges";
 export const NOT_SWITCHED_ON = AI_OFF_STATUS;
+/** "Your limits" for routines and custom layouts on a paid plan: part of the plan, not built yet. */
+export const COMING_LATER = "Coming later";
 /** Under the offers while the server sells Pro but not Pro Plus (`checkout_plans` without it: the assistant is off). */
 export const PRO_PLUS_NOT_SOLD = "Pro Plus is not on sale yet: its extra AI requests are its only difference from Pro, and the AI butler is not switched on yet.";
 
@@ -391,6 +397,7 @@ export function BillingPage() {
         <Button className="mt-4" variant="primary" full busy={busy === `checkout:${id}`} disabled={busy !== null} onClick={() => void startCheckout(id)}>
           Continue to payment
         </Button>
+        <SubscriptionTerms className="mt-3 text-xs text-text-muted" price={{ monthlyCents: monthly, annualCents: annual }} interval={interval} testId={`terms-${offer.id}`} />
       </Card>
     );
   };
@@ -457,8 +464,9 @@ export function BillingPage() {
           rows={[
             { label: "Enabled PCs", value: String(session.limits.max_enabled_pcs) },
             { label: "Paired phones", value: String(session.limits.max_controllers) },
-            { label: "Routines", value: session.limits.routines ? "Included" : "Not included" },
-            { label: "Custom layouts", value: session.limits.custom_layouts ? "Included" : "Not included" },
+            // in the paid plans but not built yet (pages/app/RoutinesPage.tsx and LayoutsPage.tsx are previews)
+            { label: "Routines", value: session.limits.routines ? COMING_LATER : "Not included" },
+            { label: "Custom layouts", value: session.limits.custom_layouts ? COMING_LATER : "Not included" },
           ]}
         />
       </Card>
@@ -519,6 +527,9 @@ export function BillingPage() {
               <Button variant="secondary" full busy={busy === "topup"} disabled={busy !== null} onClick={() => void buyTopup()}>
                 {topupLabel(status.topup)}
               </Button>
+              <p className="text-xs text-text-muted" data-testid="topup-terms">
+                {topUpTerms(status.topup.requests)}
+              </p>
               <p className="text-xs text-text-faint">You choose when; nothing is added or charged automatically. {STRIPE_NOTE}</p>
             </div>
           ) : null}

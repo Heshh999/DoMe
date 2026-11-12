@@ -1,18 +1,21 @@
 /**
  * Settings & help: connection check (system.ping round trip), privacy facts, iOS Add-to-Home-Screen
- * steps, redacted diagnostics download, support, sign out and the local "forget this installation".
+ * steps, redacted diagnostics download, support, sign out and the local "forget this installation", and last, on
+ * its own, "Delete account" (components/DeleteAccountSheet.tsx).
  */
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 import { useLabels, useSelectedPc, useSend } from "../../app/hooks.ts";
 import { navigation } from "../../app/navigation.ts";
 import { getRuntime } from "../../app/runtime.ts";
 import { AssistantSettingsCard } from "../../components/AssistantSettingsCard.tsx";
 import { CommandOutcome } from "../../components/CommandOutcome.tsx";
+import { DELETE_ACCOUNT_PARAM, DeleteAccountSheet } from "../../components/DeleteAccountSheet.tsx";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Button, Card, IconWell, Notice, PageHeader, SectionLabel, type WellTone } from "../../components/ui.tsx";
 import { buildDiagnostics, buildLabel, downloadJson, isStandalone } from "../../lib/diagnostics.ts";
+import { carryAccountDeleted } from "../../lib/signInProblem.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useInputStore } from "../../store/input.ts";
 import { useScreenStore } from "../../store/screen.ts";
@@ -63,6 +66,15 @@ export function SettingsPage() {
   const live = useLiveStore();
   const [busy, setBusy] = useState<string | null>(null);
   const [forgetArmed, setForgetArmed] = useState(false);
+  // The deletion sheet is open while the address says so: "Sign in again" (REAUTH_REQUIRED) comes back to it.
+  const [params, setParams] = useSearchParams();
+  const deleteOpen = params.get(DELETE_ACCOUNT_PARAM) === "1";
+  const setDeleteOpen = (open: boolean) => {
+    const next = new URLSearchParams(params);
+    if (open) next.set(DELETE_ACCOUNT_PARAM, "1");
+    else next.delete(DELETE_ACCOUNT_PARAM);
+    setParams(next, { replace: true });
+  };
   const ios = /iPhone|iPad/.test(navigator.userAgent);
   const standalone = isStandalone();
 
@@ -103,6 +115,17 @@ export function SettingsPage() {
     try {
       await getRuntime().signOut({ forgetInstallation: true });
     } finally {
+      navigation().assign("/");
+    }
+  };
+  // After DELETE /v1/account answered 204: the same clean-up as Forget, without a logout request (the server already
+  // ended the session), then the home page says "Your account was deleted." (lib/signInProblem.ts).
+  const accountDeleted = async () => {
+    setBusy("delete");
+    try {
+      await getRuntime().signOut({ forgetInstallation: true, serverSessionEnded: true });
+    } finally {
+      carryAccountDeleted();
       navigation().assign("/");
     }
   };
@@ -236,6 +259,18 @@ export function SettingsPage() {
           )}
         </SettingCard>
       </section>
+
+      <section className="pt-6">
+        <SectionLabel>Leaving DoMe</SectionLabel>
+        <SettingCard icon="trash" tone="danger" title="Delete account" text="Deletes your DoMe account and disconnects every phone and PC. You’ll see what happens before anything is deleted.">
+          <div className="mt-3 flex justify-end">
+            <Button variant="danger-ghost" className="-mr-2" onClick={() => setDeleteOpen(true)} disabled={busy !== null}>
+              Delete account…
+            </Button>
+          </div>
+        </SettingCard>
+      </section>
+      {deleteOpen ? <DeleteAccountSheet open email={session?.account.email ?? null} onClose={() => setDeleteOpen(false)} onDeleted={accountDeleted} /> : null}
     </div>
   );
 }

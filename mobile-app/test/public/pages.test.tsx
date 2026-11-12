@@ -54,8 +54,11 @@ describe("public reading pages", () => {
     expect(text).toContain("dome_session");
     expect(text).toContain("dome_reprompt");
     for (const vendor of ["Fly.io", "Auth0", "Resend", "Stripe", "Cloudflare", "Anthropic"]) expect(text).toContain(vendor);
-    // no account-deletion promise the app cannot keep yet
-    expect(text).toContain("The app does not have a button to delete your account yet.");
+    // account deletion as the app does it: self-serve, the 30-day erase, and the Auth0 sign-in it does not delete
+    expect(text).not.toContain("The app does not have a button to delete your account yet.");
+    expect(text).toContain("You can delete your account yourself in the app: Settings, then Delete account.");
+    expect(text).toContain("Thirty days later (or once Stripe has confirmed the cancellation, if that takes longer) the account is erased");
+    expect(text).toContain("Your sign-in at Auth0 (your email address and password) is separate and is not deleted by DoMe.");
     // what the code does: Screen view's temporary ports, the cookie set once at sign-in, linking codes kept after deletion
     expect(text).toContain("During a Screen view session it opens temporary network ports");
     expect(text).toContain("Your browser keeps it for 30 days from sign-in.");
@@ -101,6 +104,9 @@ describe("public reading pages", () => {
     expect(text).toContain("The AI can make mistakes.");
     // no promise of published abuse limits that no customer page shows
     expect(text).toContain("Technical limits protect the service");
+    // deleting the account is in the app now, not a support request
+    expect(text).toContain("in the app under Settings, Delete account");
+    expect(text).not.toContain("There is no delete button in the app yet");
     expect(text).not.toContain("published abuse limits");
     // the licence wording the Windows installer's licence terms also carry (pc-agent/packaging/installer/licence-terms.txt)
     expect(text).toContain("you may modify DoMe for your own use and reverse engineer it to debug such modifications");

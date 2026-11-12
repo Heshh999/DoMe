@@ -164,7 +164,7 @@ describe("billingStateCopy", () => {
     expect(billingStateCopy({ ...base, subscription: sub({ state: "trialing", plan: "pro_plus" }) })).toMatchObject({ label: "Active", text: "Your DoMe Pro Plus subscription is active." });
     const canceling = billingStateCopy({ ...base, subscription: sub({ state: "cancel_scheduled", cancel_at_period_end: true }) }, "UTC");
     expect(canceling).toMatchObject({ label: "Ends at period end", tone: "warning" });
-    expect(canceling.text).toBe("DoMe Pro stays on until 20 November 2026. Then your account returns to Free: 1 PC and 2 phones stay enabled, your layouts and routines are kept but cannot run, and you can re-subscribe at any time.");
+    expect(canceling.text).toBe("DoMe Pro stays on until 20 November 2026. Then your account returns to Free: 1 PC and 2 phones stay enabled, and you can re-subscribe at any time.");
     // Stripe's `active` with cancel_at_period_end set reads the same way
     expect(billingStateCopy({ ...base, subscription: sub({ cancel_at_period_end: true }) }, "UTC").text).toBe(canceling.text);
     const pastDue = billingStateCopy({ ...base, subscription: sub({ state: "past_due", grace_until: "2026-11-27T12:00:00Z" }) }, "UTC");

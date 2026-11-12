@@ -44,7 +44,7 @@ pinned SDK sends; it knows no account, so a price's existence and type, the acco
 | State machine | `billing/state.py::apply()` is the only writer of `accounts.plan` | integration-tested (fake provider) |
 | Grace and downgrade selection | 7-day grace after a failed payment; `GET/PUT /v1/account/plan-selection` within 14 days of a downgrade | integration-tested (fake provider) |
 | Reconciler | Hourly pass in the API process; `dome-api --billing-reconcile` runs one pass by hand | integration-tested (fake provider) |
-| Account deletion | `BillingService.cancel_for_account_deletion()` with a `pending_deletions` retry | integration-tested (fake provider); the `DELETE /v1/account` route is **not implemented** |
+| Account deletion | `DELETE /v1/account` calls `BillingService.cancel_for_account_deletion()` with a `pending_deletions` retry and `close_checkouts_for_deletion()` (a page paid into a deleted account is never applied or credited); the purge job hard-deletes the account 30 days later and keeps the billing rows with `account_id` NULL (§11) | integration-tested (fake provider); not yet verified against Stripe's test mode |
 | Stripe adapter | `billing/stripe_provider.py` on the official `stripe` SDK 16.x (`*_async` methods, SDK retries off, 10 s timeout) | unit-tested against the SDK's own signature helper, object models and Stripe-shaped error answers (`test_billing_stripe_adapter.py`); stripe-mock-validated: every request with the service's own arguments, and the fields read back (`test_stripe_provider_mock.py`, CI); **sandbox-provider-tested** for customer creation and a subscription Checkout (staging, 2026-10-26, founder-reported); Portal, top-up and the webhook path not yet |
 | Disputes, refunds, trials | Recorded as `ignored` with a `billing.needs_operator` warning (disputes, refunds); no trial is configured | **not implemented** |
 | PWA | Billing page states, pricing page "Available now" when `billing_enabled` (mobile-app, built separately) | unit-tested (component tests in `mobile-app`) |
@@ -372,7 +372,7 @@ Evidence: integration-tested, `cloud-api/tests/test_assistant_metering.py` (wind
 reason, ordering, concurrency, the shared fixture `shared/protocol/fixtures/ai-window-cases.json`),
 `test_assistant_routes.py`, `test_billing_topup.py`.
 
-## 11. Account deletion (function only)
+## 11. Account deletion
 
 `BillingService.cancel_for_account_deletion(db, account_id)` cancels the Stripe subscription at once and applies
 `canceled` → Free. If Stripe fails, a `pending_deletions` row records the attempt (`attempts`, `last_error`) and
@@ -380,8 +380,19 @@ the result is `pending`, never a false "done"; the reconciler retries until it s
 account change nothing. Evidence: integration-tested (fake provider),
 `test_account_deletion_cancels_or_records_pending_then_retries`.
 
-**Not implemented:** the `DELETE /v1/account` route with OIDC re-authentication, session/credential revocation and
-the 30-day hard delete. Until it exists, deletion is a support request.
+**Implemented (2026-11-12, cloud-api DECISIONS #121 to #123):** `DELETE /v1/account` (session + CSRF + exact Origin,
+the phrase `delete my account`, and a password entry the provider confirmed in the last 10 minutes, else 403
+`REAUTH_REQUIRED`: `GET /v1/auth/login?prompt=login` sends `max_age=0` and the callback checks `auth_time`). The
+route marks the account deleted and blanks its email and name, closes its sockets (`revoked{account_deleted}`), then
+calls `cancel_for_account_deletion` (cancelled at once, or `pending` and retried as above; no automatic refund),
+expires every open Checkout page (`close_checkouts_for_deletion`: a page paid anyway is never applied or credited; its
+subscription is cancelled, the top-up marked `failed`, and `billing.needs_operator` `kind=refund` asks for a refund by
+hand), then revokes every session, phone, grant, PC credential and TURN credential and soft-deletes the PCs. The
+hourly purge job hard-deletes the account 30 days later, never while its billing is open (a pending cancel, a live
+provider subscription, a pending page). The billing rows survive the hard delete with `account_id` NULL (migration
+0008); how long they are kept (7 years proposed) is for counsel to confirm. Evidence: integration-tested (fake
+provider, fake TURN, dev-idp), `tests/test_account_deletion.py`, `tests/test_retention_purge.py`. Not yet verified
+against Stripe's test mode or Auth0. Not covered: the Auth0 login and the Stripe customer stay (KNOWN_ISSUES #40).
 
 ## 12. Verification
 

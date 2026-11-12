@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     # shown to customers ONLY when the founder configured one (never a default promise).
     rate_support_tickets_per_hour: int = Field(default=10, ge=1)
     support_response_expectation: str = Field(default="", max_length=200)
+    # The hourly retention purge (docs/DATA_RETENTION.md, DECISIONS #122). On by default: the retention periods the
+    # privacy notice states depend on it. false stops every pass (an operator's kill switch while investigating).
+    purge_enabled: bool = True
     static_dir: Path | None = None
     log_level: str = "INFO"
     # The git commit the image was built from (deploy/Dockerfile build argument), reported by /healthz so a

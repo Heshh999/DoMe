@@ -11,9 +11,9 @@ import { Film } from "../../components/film/Film.tsx";
 import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Notice } from "../../components/ui.tsx";
-import { FREE_SCREEN_VIEW_MINUTES, planById, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { FREE_SCREEN_VIEW_MINUTES, planById, SCREEN_VIEW_FAIR_USE, usd, WINDOW_HOURS } from "../../content/plans.ts";
 import { loginUrl } from "../../lib/api.ts";
-import { SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
+import { ACCOUNT_DELETED_HERE, SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, carriedAccountDeleted, carriedSignInProblem, carrySignInProblem, signInAgainOptions, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
 import { paidPlansLine, useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 
 const FREE = planById("free");
@@ -33,7 +33,7 @@ const CAPABILITIES: Array<{ icon: IconName; title: string; text: string; status?
   { icon: "lock", title: "Lock and power", text: "Lock Windows in one tap. Sleep, restart and shut down always ask you first." },
   { icon: "ask", title: "Just ask", text: "Say or type “skip this video” or “set the volume to 35”. Everyday commands need no AI and never count." },
   { icon: "check", title: "Honest results", text: "Every control shows what the PC actually did. “Sent” is never shown as “done”." },
-  { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. In development: Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window, Pro and Pro Plus unlimited.`, status: "Coming" },
+  { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. In development: Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window. ${SCREEN_VIEW_FAIR_USE}`, status: "Coming" },
 ];
 
 const TRUST: Array<{ title: string; text: React.ReactNode }> = [
@@ -187,18 +187,31 @@ const SECTION = "mx-auto max-w-6xl px-5 lg:px-8";
  * "Sign in again" starts sign-in where the header's Sign in ends up for a signed-out browser (the app shell sends it
  * to loginUrl("/app")), without the stop at the app shell. Outlined: the hero keeps the page's one solid primary.
  * Each reason's notice names its own parts (lib/signInProblem.ts): the title, the text and the button always, the
- * "Forgot password?" paragraph and the support line only where that reason has them.
+ * "Forgot password?" paragraph and the support line only where that reason has them. After `account_deleted` the
+ * button asks the provider for its login page (`signInAgainOptions`).
+ *
+ * Without a reason: the one line "Your account was deleted." when this tab has just deleted the account (Settings →
+ * Delete account; lib/signInProblem.ts `carryAccountDeleted`), and nothing otherwise.
  */
 function SignInNotice() {
   const [params, setParams] = useSearchParams();
   const [problem] = useState(() => signInProblem(params) ?? carriedSignInProblem());
+  const [deletedHere] = useState(() => carriedAccountDeleted());
   useEffect(() => {
     if (!params.has(SIGN_IN_PARAM)) return;
     const fromAddress = signInProblem(params);
     if (fromAddress !== null) carrySignInProblem(fromAddress);
     setParams(withoutSignInProblem(params), { replace: true });
   }, [params, setParams]);
-  if (problem === null) return null;
+  if (problem === null) {
+    return deletedHere ? (
+      <div data-testid="account-deleted" className={`${SECTION} pt-6`}>
+        <Notice tone="success">
+          <p>{ACCOUNT_DELETED_HERE}</p>
+        </Notice>
+      </div>
+    ) : null;
+  }
   const { title, text, wayOut, support } = SIGN_IN_PROBLEMS[problem];
   const contact = support ? supportContact() : null;
   return (
@@ -213,7 +226,7 @@ function SignInNotice() {
           </p>
         ) : null}
         <div className="pb-1 pt-2">
-          <a href={loginUrl("/app")} className="tap dome-press inline-flex items-center justify-center rounded-full border border-border-strong bg-bg-elevated px-5 text-[15px] font-semibold text-text hover:bg-surface">
+          <a href={loginUrl("/app", signInAgainOptions(problem))} className="tap dome-press inline-flex items-center justify-center rounded-full border border-border-strong bg-bg-elevated px-5 text-[15px] font-semibold text-text hover:bg-surface">
             {SIGN_IN_AGAIN}
           </a>
         </div>
@@ -379,7 +392,7 @@ export function LandingPage() {
               Free today. Pro and Pro Plus when they’re worth it.
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">
-              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, unlimited Screen view when it ships, and more AI butler time. {paidPlansLine(availability)}
+              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, Screen view without the Free plan’s time limit when it ships, and more AI butler time. {paidPlansLine(availability)}
             </p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">

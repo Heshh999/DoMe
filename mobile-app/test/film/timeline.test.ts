@@ -56,7 +56,9 @@ describe("honesty rules (brief §4)", () => {
     expect(screen.status.tone).toBe("coming");
     expect(screen.status.label).toMatch(/Screen view · Coming/);
     expect(screen.status.label).toMatch(/Free: 10 min per 5 h/);
-    expect(screen.status.label).toMatch(/Pro: unlimited/);
+    // paid Screen view has fair-use limits on the relay: never "unlimited"
+    expect(screen.status.label).toMatch(/Pro: fair use/);
+    expect(screen.status.label).not.toMatch(/unlimited/i);
 
     const point = sceneByNumber(4);
     expect(point.status.tone).toBe("planned");
@@ -78,7 +80,26 @@ describe("honesty rules (brief §4)", () => {
     const words = [...SCENES.flatMap((s) => [s.caption, s.status.label, ...(s.beats ?? []).map((b) => b.text)]), ...PLAN_FACTS.flatMap((p) => [p.status, ...p.lines.map((l) => l.text)]), CONCEPT_NOTE].join(" ");
     expect(words).not.toMatch(/record(ed|ing)/i);
     expect(words).not.toMatch(/AI (can )?sees?\b(?! your screen)/);
-    expect(CONCEPT_NOTE).toBe("Concept preview. Screen view and point-and-talk are in development.");
+    // Screen view is being built; point-and-talk is only planned: the note says each as it is
+    expect(CONCEPT_NOTE).toBe("Concept preview. Screen view is in development; point-and-talk is planned.");
+  });
+
+  it("shows only what Screen view's first version has: no mini view, no PC sound, no TV-style remote", () => {
+    const screen = sceneByNumber(3);
+    const words = [screen.caption, screen.status.label, ...(screen.beats ?? []).map((b) => b.text)].join(" ");
+    expect(words).not.toMatch(/corner|mini|picture-in-picture|swipe away/i);
+    expect(words).not.toMatch(/TV|arrow keys|remote|D-pad/i);
+    expect(words).not.toMatch(/hear|sound|audio|mute/i);
+    expect((screen.beats ?? []).map((b) => b.text)).toEqual([
+      "Your PC’s screen, live on the phone",
+      "Tap a button on your PC’s screen",
+      "Two fingers to scroll",
+      "Pinch to zoom in",
+      "Tap an episode to play it",
+      "Tap 1× to see the whole screen again",
+    ]);
+    // the phone never leaves Screen view for another page during the scene, so nothing keeps playing in a corner
+    for (let t = screen.start; t < screen.end; t += 100) expect(phoneAt(t).page).toBe("screen");
   });
 });
 
@@ -108,7 +129,9 @@ describe("plan facts (brief §5)", () => {
     expect(texts(free)).toContain("Screen view: 10 min per 5 h");
     expect(texts(free)).toContain("AI: 10 requests to try, once");
     expect(texts(pro)).toContain("5 PCs · 5 phones");
-    expect(texts(pro)).toContain("Screen view: unlimited");
+    expect(texts(pro)).toContain("Screen view: fair use");
+    expect(texts(plus)).toContain("Screen view: fair use");
+    for (const p of PLAN_FACTS) expect(texts(p).join(" ")).not.toMatch(/unlimited/i);
     expect(texts(pro)).toContain("AI: 30 requests per 5 h, up to 120 a week");
     expect(texts(pro)).toContain("Top-up: 100 requests for $2.99");
     expect(texts(plus)).toContain("AI: 90 requests per 5 h, up to 300 a week");
@@ -194,13 +217,23 @@ describe("the script", () => {
     expect(pcAt(18_000).episode).toBe(4);
     expect(pcAt(18_000).fullscreen).toBe(1);
     expect(phoneAt(18_000).plan?.steps.every((s) => s.done)).toBe(true);
-    // scene 3: the mirror arrives, shrinks to the corner while Apps opens, the TV app gets a D-pad, PC audio can be muted
+    // scene 3: the mirror arrives; a tap pauses and two fingers raise the shelf; the pinch zooms the picture on the
+    // phone only (the PC's screen does not change); a tap on Episode 5's poster plays it; 1× brings back the whole screen
     expect(phoneAt(24_000).mirror).toBe(1);
-    expect(phoneAt(31_000).page).toBe("apps");
-    expect(phoneAt(31_000).mini).toBe(1);
-    expect(pcAt(34_200).app).toBe("tv");
-    expect(phoneAt(34_000).dpadPress).toBe("right");
-    expect(phoneAt(38_000).muted).toBe(true);
+    expect(phoneAt(24_000).zoom).toBe(1);
+    expect(pcAt(26_000).paused).toBe(true);
+    expect(pcAt(29_000).shelf).toBe(1);
+    expect(phoneAt(31_000).zoom).toBe(2);
+    expect(handAt(30_800).pair).toBeGreaterThan(handAt(29_300).pair);
+    // the pinch only zooms the phone's picture: the PC's screen is the same before and after it
+    expect(pcAt(31_000)).toEqual(pcAt(29_400));
+    expect(pcAt(31_000).episode).toBe(4);
+    expect(pcAt(33_000).episode).toBe(5);
+    expect(pcAt(33_000).paused).toBe(false);
+    expect(pcAt(33_000).shelf).toBe(0);
+    expect(phoneAt(33_000).zoom).toBe(2);
+    expect(phoneAt(36_000).zoom).toBe(1);
+    expect(phoneAt(39_000).page).toBe("screen");
     // scene 4: the finger rests on Subscribe, the user says "click that", the name lights up, the PC clicks it
     expect(phoneAt(44_000).spoken).toBe("click that");
     expect(phoneAt(44_000).nameTag).toBe(1);

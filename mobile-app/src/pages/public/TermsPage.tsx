@@ -82,7 +82,7 @@ const SECTIONS: ReadonlyArray<readonly [string, ReactNode]> = [
         <strong>Your subscription renews automatically</strong> at the end of each monthly or yearly period, and Stripe charges your card for the next period, until you cancel.
       </li>
       <li>If a payment fails, you keep your paid plan for 7 days so you can update your card; after that your account returns to Free.</li>
-      <li>[COUNSEL: the disclosures and consent needed before purchase under federal and state automatic-renewal laws, reminders before yearly renewals, and a confirmation after purchase. Today the plan card shown before payment does not say that the plan renews automatically and does not link to these terms.]</li>
+      <li>[COUNSEL: the disclosures and consent needed before purchase under federal and state automatic-renewal laws, reminders before yearly renewals, and a confirmation after purchase. Today each subscribe button and each paid plan on the Pricing page say that the plan renews automatically at the price shown, explain how to cancel and link to these terms and the Privacy notice; checkout records no acceptance.]</li>
     </ul>,
   ],
   [
@@ -113,7 +113,7 @@ const SECTIONS: ReadonlyArray<readonly [string, ReactNode]> = [
       <li>Screen view shows a live picture of your PC on your phone. It is a beta: it may change, have errors, be limited or be withdrawn. It is switched on only on our test site so far.</li>
       <li>It works only after the PC’s owner allows it in a DoMe window on that PC, and while it runs the PC shows a “Screen view on” bar on every screen.</li>
       <li>Do not use Screen view to watch someone who is using the PC without their knowledge, or to view other people’s messages or calls without their consent.</li>
-      <li>Free includes 10 minutes of Screen view per 5-hour window. Paid plans have no minute allowance, but technical limits protect the service (for example a monthly limit on relay connections per account). [COUNSEL: whether “unlimited” may be used next to these limits.]</li>
+      <li>Free includes 10 minutes of Screen view per 5-hour window. Paid plans have no minute allowance, but fair-use limits protect the service (for example a monthly limit on relay connections per account). [COUNSEL: whether this fair-use wording and example are enough.]</li>
     </ul>,
   ],
   [
@@ -131,12 +131,12 @@ const SECTIONS: ReadonlyArray<readonly [string, ReactNode]> = [
   ],
   [
     "Availability and limits",
-    <p>DoMe depends on your internet connection, your PC and third-party platforms (Windows, browsers, YouTube). Features may be limited or unavailable when those change. Technical limits protect the service, for example on how many commands a phone can send each minute; we may suspend accounts that keep exceeding them or that violate these terms. [COUNSEL: whether these limits must be published, given that the Pricing page calls everyday commands “unlimited”.]</p>,
+    <p>DoMe depends on your internet connection, your PC and third-party platforms (Windows, browsers, YouTube). Features may be limited or unavailable when those change. Technical limits protect the service, for example on how many commands a phone can send each minute; we may suspend accounts that keep exceeding them or that violate these terms. [COUNSEL: whether these limits must be published; the Pricing page shows one of them, 120 commands a minute.]</p>,
   ],
   [
     "Suspension and ending your account",
     <>
-      <p>You may stop using DoMe and delete your account at any time. There is no delete button in the app yet: ask through the support form or at [FOUNDER: contact email], as the Privacy notice explains.</p>
+      <p>You may stop using DoMe and delete your account at any time, in the app under Settings, Delete account. Deleting it cancels any subscription at once, with no automatic refund, and the account is erased 30 days later, as the Privacy notice explains. You can also ask through the support form or at [FOUNDER: contact email].</p>
       <p>We may suspend or close an account that breaks these terms, keeps exceeding those technical limits or puts other people or the service at risk. [COUNSEL: notice before suspension, and refunds when we close a paid account.] If we stop offering DoMe, we will tell you at least [FOUNDER: notice period] ahead. [FOUNDER: refund of unused paid time if DoMe closes.]</p>
     </>,
   ],
@@ -168,10 +168,10 @@ const SECTIONS: ReadonlyArray<readonly [string, ReactNode]> = [
       <li>Business identity: legal name, entity type, postal address, contact email and the copyright year. The Windows installer’s licence terms and third-party notices carry the same placeholders.</li>
       <li>Governing law, venue and dispute resolution; minimum age; launch regions.</li>
       <li>Refund, trial and price-change policy; whether top-ups ever expire.</li>
-      <li>Disclosures before purchase: a statement that the plan renews automatically, a link to these terms, and a step that records acceptance at sign-up and at checkout.</li>
+      <li>Disclosures before purchase: a step that records acceptance at sign-up and at checkout (the renewal statement and the link to these terms are now shown).</li>
       <li>Notices: a way to send customers notices (by email or in the app) is not built; it is needed for price-change, terms-change and renewal notices.</li>
       <li>Sales tax: prices include tax, Stripe Tax is off and DoMe is the seller.</li>
-      <li>Advertising claims: “unlimited” Screen view next to relay limits; everyday commands called “unlimited” next to per-minute limits; features shown as “Coming” or described before they are built; AI requests described as minutes.</li>
+      <li>Advertising claims: paid Screen view described as “without the Free plan’s time limit (fair-use limits apply)” next to relay limits; everyday commands described as free and “never counted against AI limits” next to a fair-use limit of 120 a minute; features shown as “Coming” or described before they are built; AI requests described as minutes.</li>
       <li>Windows packaging: an Inno Setup commercial licence before paid launch; code signing uses the founder’s individual identity while Setup names the publisher “DoMe”; the H.264 question for Screen view (docs/legal/h264-counsel-email.md).</li>
       <li>Relationship to the privacy notice and to the licence terms shown in Setup.</li>
     </ul>,

@@ -41,7 +41,7 @@ export function pricingGroups({ aiOn = false }: { aiOn?: boolean } = {}): RowGro
         same("Lock and confirmed power controls", yes),
         same("Touchpad, keyboard, typed commands and dictation", yes),
         same("Secure access away from home through the DoMe service", yes),
-        same("Everyday commands DoMe understands by itself", "Unlimited, never counted"),
+        same("Everyday commands DoMe understands by itself", "Never counted against AI limits"),
         same("Fair-use limit on manual controls", `${free.manual_command_rate_limit.per_minute} per minute`),
       ],
     },
@@ -55,7 +55,8 @@ export function pricingGroups({ aiOn = false }: { aiOn?: boolean } = {}): RowGro
     {
       title: "Screen view",
       status: SCREEN_VIEW_STATUS,
-      rows: [{ label: "Your PC’s screen live on your phone, tap what you see", free: `${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS}-hour window`, pro: "Unlimited", proPlus: "Unlimited" }],
+      // the paid plans' wording is the plan content's (plans.ts PAID_SCREEN_VIEW): no Free time limit, fair-use limits
+      rows: [{ label: "Your PC’s screen live on your phone, tap what you see", free: `${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS}-hour window`, pro: proContent.screenView, proPlus: proPlus.screenView }],
     },
     {
       title: "AI butler",

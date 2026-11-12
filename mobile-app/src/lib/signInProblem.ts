@@ -1,18 +1,25 @@
 /**
  * Why cloud-api sent the browser back without signing it in. The sign-in callback redirects to the public home page
- * with `?sign_in=<reason>` (cloud-api `routes/auth.py`, DECISIONS #118 and #120), never to `/app`: the app shell sends
- * a signed-out browser straight back to the identity provider, which remembers the person and would answer the same
- * way again, in a loop. The home page shows the matching notice once and removes the marker from the address bar.
+ * with `?sign_in=<reason>` (cloud-api `routes/auth.py`, DECISIONS #118, #120 and #121), never to `/app`: the app shell
+ * sends a signed-out browser straight back to the identity provider, which remembers the person and would answer the
+ * same way again, in a loop. The home page shows the matching notice once and removes the marker from the address bar.
  * Unknown reasons show nothing: the customer never sees a code.
  *
  * `email_unverified`: the provider has not confirmed the address yet (DECISIONS #118).
  * `try_again`: the sign-in could not be finished and starting again is the whole remedy: it took more than ten
  * minutes (the "Forgot password?" detour often does), its answer was opened a second time (Back, reload), or it was
  * cancelled or failed at the provider (DECISIONS #120).
+ * `account_deleted`: the identity belongs to a deleted DoMe account (DECISIONS #121). The account is erased 30 days
+ * after it was deleted; after that, the same sign-in starts a new, empty account.
+ *
+ * Also here: the home page's "Your account was deleted." after this app deleted the account (`carryAccountDeleted`).
  */
+import type { rest } from "@dome/protocol";
+
 export const SIGN_IN_PARAM = "sign_in";
 
-export type SignInProblem = "email_unverified" | "try_again";
+/** rest.schema.json `sign_in_problem`: the values cloud-api puts in `?sign_in=`. */
+export type SignInProblem = rest.SignInProblem;
 
 /**
  * One notice per reason, and each reason says which parts its notice has. Every notice has the title, the text and
@@ -48,10 +55,28 @@ export const SIGN_IN_PROBLEMS: Record<SignInProblem, SignInNoticeCopy> = {
     wayOut: null,
     support: null,
   },
+  account_deleted: {
+    title: "This account was deleted",
+    text: "It will be erased for good 30 days after it was deleted. To use DoMe again before then, sign up with a different email address.",
+    // A new password changes nothing here, so no "Forgot password?" paragraph. The support line goes to the contact
+    // itself, as for email_unverified: the support page's form needs a sign-in this person cannot complete.
+    wayOut: null,
+    support: { lead: "Questions? ", link: "Contact support", rest: "." },
+  },
 };
 
 /** The button every notice has, after its text and its way out. It starts sign-in like the header's Sign in. */
 export const SIGN_IN_AGAIN = "Sign in again";
+
+/**
+ * How a notice's "Sign in again" starts sign-in (`loginUrl`'s options). After `account_deleted` it asks the provider
+ * for its login page (`prompt=login`): the provider still remembers the deleted identity and cloud-api sets no
+ * re-prompt marker for it, so a plain sign-in would land on the same notice at once, while the login page is where the
+ * person can use a different email address. The other reasons start sign-in exactly like the header's Sign in.
+ */
+export function signInAgainOptions(problem: SignInProblem): { prompt?: "login" } {
+  return problem === "account_deleted" ? { prompt: "login" } : {};
+}
 
 /** The support contact (`VITE_DOME_SUPPORT_URL`, mailto: or https://, checked by the Deploy tool), or null. */
 export function supportContact(): string | null {
@@ -103,4 +128,35 @@ export function withoutSignInProblem(params: URLSearchParams): URLSearchParams {
   const rest = new URLSearchParams(params);
   rest.delete(SIGN_IN_PARAM);
   return rest;
+}
+
+/**
+ * What the home page says after this app deleted the account (Settings → Delete account). It is not a reason in the
+ * address, so no link can make the home page say it: the app keeps it in this tab's sessionStorage right before it
+ * leaves for the home page, and the home page shows it for CARRY_MS, like a carried reason (an update can reload the
+ * page at once). Only a time is stored. Storage that is off or full just means the line is not shown.
+ */
+export const ACCOUNT_DELETED_HERE = "Your account was deleted.";
+const DELETED_KEY = "dome.account_deleted";
+
+export function carryAccountDeleted(now: number = Date.now()): void {
+  try {
+    sessionStorage.setItem(DELETED_KEY, JSON.stringify({ at: now }));
+  } catch {
+    /* not carried */
+  }
+}
+
+/** True when this tab deleted the account less than CARRY_MS ago. Reading does not clear it. */
+export function carriedAccountDeleted(now: number = Date.now()): boolean {
+  try {
+    const raw = sessionStorage.getItem(DELETED_KEY);
+    if (raw === null) return false;
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null) return false;
+    const { at } = value as { at?: unknown };
+    return typeof at === "number" && now >= at && now - at <= CARRY_MS;
+  } catch {
+    return false;
+  }
 }

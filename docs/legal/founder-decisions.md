@@ -27,7 +27,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
     business]" (section 7). Stripe's live mode needs business details, a bank account and identity
     (`docs/LAUNCH_SETUP.md:629`), and its payment page needs a public business name
     (`docs/LAUNCH_SETUP.md:628`). Business details on invoices are an open billing decision
-    (`docs/BILLING.md:412`). Windows code signing uses your individual identity, so Windows shows your legal
+    (`docs/BILLING.md:423`). Windows code signing uses your individual identity, so Windows shows your legal
     name as the publisher (`docs/LAUNCH_SETUP.md:766-771,788-791`), while Setup names the publisher "DoMe"
     (`pc-agent/packaging/installer/DoMe.iss:78`).
   - Outside research (New Jersey Division of Revenue fee page, via web search on 2026-11-12, not verified by
@@ -119,7 +119,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
   - Your answer:
 
 - [ ] **3.2 Free trial.**
-  - What is built: no trial (`cloud-api/KNOWN_ISSUES.md:107-109`; `docs/BILLING.md:412`); the Terms draft says
+  - What is built: no trial (`cloud-api/KNOWN_ISSUES.md:107-109`; `docs/BILLING.md:423`); the Terms draft says
     "There is no free trial" (`TermsPage.tsx:102`).
   - Suggestion, not legal advice: no trial at launch. Free already needs no card
     (`docs/PRODUCT_AND_PLANS.md:18`), and outside research (law-firm summaries, via web search on 2026-11-12, not
@@ -128,7 +128,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 
 - [ ] **3.3 Yearly plans at launch, or monthly only.** Ask counsel first (question 1).
   - What is built: Pro at $99.99 a year and Pro Plus at $249.99 a year (`shared/protocol/plans.json:152-158`).
-    Payments need all five Stripe prices, the yearly ones included (`cloud-api/dome_api/settings.py:324-325`;
+    Payments need all five Stripe prices, the yearly ones included (`cloud-api/dome_api/settings.py:327-328`;
     `docs/LAUNCH_SETUP.md:617`), so leaving yearly plans out needs an engineer's change. DoMe's server sends no
     email of its own (`docs/legal/subprocessors.md`, row 6), and how Stripe's own customer emails are set is not
     recorded (see 4.6).
@@ -142,7 +142,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 
 - [ ] **3.4 Do AI top-ups ever expire?** "[FOUNDER: confirm that top-ups never expire.]" (`TermsPage.tsx:72`).
   - What is built: they never expire and are kept across plan changes (`shared/protocol/plans.json:2`;
-    `docs/BILLING.md:408`).
+    `docs/BILLING.md:419`).
   - Suggestion, not legal advice: keep "never expires" as built; the lawyer confirms any rules on prepaid
     credits (question 2). Unclaimed-property rules were not researched.
   - Your answer:
@@ -170,7 +170,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 
 - [ ] **3.8 What Stripe's customer portal allows.** Proposed: upgrades and monthly-to-yearly take effect at
   once with unused time credited; downgrades and yearly-to-monthly at the end of the period; cancelling at
-  the end of the period with no partial refund (`docs/BILLING.md:292-301,407`). The setup guide already asks
+  the end of the period with no partial refund (`docs/BILLING.md:292-301,418`). The setup guide already asks
   for cancelling at period end and no pausing (`docs/LAUNCH_SETUP.md:387-389`).
   - Suggestion, not legal advice: adopt the proposal; the lawyer checks the wording (questions 1 and 2).
   - Your answer:
@@ -198,29 +198,41 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
     sure.
   - Your answer:
 
-- [ ] **4.2 Self-serve account deletion before launch, and how fast a deletion request is completed.** Ask
-  counsel first (question 4). "[FOUNDER: whether to build self-serve deletion before launch, and the time
-  within which a request is completed.]" (`PrivacyPage.tsx:168`).
-  - What is built: no delete route; deletion is a support request (`cloud-api/KNOWN_ISSUES.md:110-111`). The
-    billing part exists: it cancels the subscription at once (`docs/BILLING.md:375-385`). The design plans a
-    30-day soft delete and then a hard delete, not yet enforced (`docs/DATA_RETENTION.md:46`). The product
-    spec asks that deletion revoke access at once and stop billing (`docs/spec/MASTER_PROMPT.md:490`).
-  - Suggestion: none in the repository beyond the design above.
+- [ ] **4.2 How fast a deletion request sent to support is completed.** Self-serve deletion is now built, so
+  what is left is the time for a request that comes through support. "[FOUNDER: the time within which a deletion
+  request sent to support is completed.]" (`PrivacyPage.tsx:168`). Counsel's question 4 still covers whether the
+  process meets the law.
+  - What is built: Settings, Delete account in the app (`mobile-app/src/components/DeleteAccountSheet.tsx:80-100`)
+    and the route behind it (`cloud-api/dome_api/routes/account.py:28-58`; cloud-api DECISIONS #121, #123). The
+    person types "delete my account" and, unless they entered their password at a sign-in again in the last 10
+    minutes, signs in again first. The subscription is cancelled at once with no automatic refund
+    (`docs/BILLING.md:375-395`), every phone and PC is disconnected and signed out at once, the email and name are removed at once, and the hourly clean-up erases the account 30 days
+    later (`cloud-api/dome_api/purge.py:10-14`). Built and tested with automated tests only; not yet tried against
+    Auth0 or Stripe's test mode (`cloud-api/KNOWN_ISSUES.md:210-218`). The product spec asks that deletion
+    revoke access at once and stop billing (`docs/spec/MASTER_PROMPT.md:490`); the route does both, as tested.
+  - Suggestion: none in the repository.
   - Your answer:
 
-- [ ] **4.3 Does deleting a DoMe account also delete the sign-in at Auth0?** "[FOUNDER: whether deletion also
-  removes the sign-in at Auth0.]" (`PrivacyPage.tsx:169`).
+- [ ] **4.3 Deleting the sign-in at Auth0.** DoMe does not delete it: the drafts now say that support deletes it on
+  request. "[FOUNDER: confirm this, and the time within which it is done.]" (`PrivacyPage.tsx:168`).
+  - What is built: deleting a DoMe account leaves the Auth0 login (email and password); DoMe has no management
+    access to Auth0, so you delete the user in the Auth0 dashboard (User Management, Users) when someone asks
+    (`cloud-api/KNOWN_ISSUES.md:210-218`). Until the account is erased 30 days after its deletion, signing in with
+    that login shows "This account was deleted"; after that, the same login starts a new, empty DoMe account.
   - Suggestion: none in the repository.
   - Your answer:
 
 - [ ] **4.4 How long each kind of record is kept.** "[FOUNDER: confirm each period.]" (`PrivacyPage.tsx:149`).
-  - What is built: the planned periods are listed at `PrivacyPage.tsx:151-162`, from `docs/DATA_RETENTION.md`;
-    nothing deletes old records automatically yet (`docs/DATA_RETENTION.md:5-8`). Deleting an account today
-    also deletes DoMe's copy of its billing records, while the plan keeps them 7 years (the [COUNSEL] note at
-    `PrivacyPage.tsx:169`). After an account is deleted, its PC linking codes and Stripe payment notices stay,
-    without the link to the account (`PrivacyPage.tsx:169`; `docs/legal/data-map.md` section 7).
-  - Suggestion, not legal advice: take the planned periods to the lawyer as the starting point; an engineer
-    builds the automatic clean-up once they are settled.
+  - What is built: the periods are listed at `PrivacyPage.tsx:151-162`, from `docs/DATA_RETENTION.md`; an hourly
+    clean-up now deletes old records at the periods marked "automatic" there (`docs/DATA_RETENTION.md:175-200`;
+    `cloud-api/dome_api/purge.py:85-183`), built and tested with automated tests only. Payment records
+    (subscriptions, top-ups and Stripe's payment notices) now outlive the account without the link to it, and
+    nothing deletes them yet; how long to keep them (7 years proposed) is the [COUNSEL] note at
+    `PrivacyPage.tsx:169`. After an account is erased, its PC linking codes also stay without the link to the
+    account until they are deleted 24 hours after they expire (`PrivacyPage.tsx:169`; `docs/legal/data-map.md`
+    section 7).
+  - Suggestion, not legal advice: take these periods to the lawyer as the starting point; once they are settled,
+    an engineer changes each in one place (`cloud-api/dome_api/purge.py:85-183`).
   - Your answer:
 
 - [ ] **4.5 Who may sign up on the test site (staging).**
@@ -254,7 +266,7 @@ are facts other files in this packet ask you to confirm.
 - [ ] Fly.io: what its network proxy logs about customer traffic, and for how long (`PrivacyPage.tsx:65`).
 - [ ] Fly.io: how long it keeps DoMe's server logs (`PrivacyPage.tsx:161`).
 - [ ] Fly.io Managed Postgres: the backup period and encryption at rest (`PrivacyPage.tsx:162`;
-  `docs/DATA_RETENTION.md:93-95`).
+  `docs/DATA_RETENTION.md:113-115`).
 - [ ] Anthropic: its API data terms, before the AI assistant is switched on (`PrivacyPage.tsx:91`;
   `docs/design/assistant.md:2092-2093`).
 - [ ] Where Stripe, Resend, Cloudflare and Anthropic process data (`PrivacyPage.tsx:145`).
@@ -289,21 +301,25 @@ are facts other files in this packet ask you to confirm.
   buy one (`docs/WINDOWS_INSTALL.md:736`; `docs/HANDOFF.md:463`). An action rather than a choice.
   - Your answer:
 
-- [ ] **6.4 Website wording the lawyer may question.** The FAQ says Screen view lets you keep a floating mini
-  view, hear the PC's sound and use a TV-style remote (`mobile-app/src/content/faq.tsx:121`); none of the
-  three is built. The Screen view design asks you to approve new mini-view wording and recommends it
-  (`docs/design/screen-view.md:1538-1541`). Paid plans show "unlimited" Screen view next to relay limits
-  (`TermsPage.tsx:116`), and AI requests are shown as minutes (`mobile-app/src/content/plans.ts:107-113`).
-  Everyday commands are called "unlimited, always" (`mobile-app/src/content/plans.ts:159,205`), while each
-  phone may send at most 120 commands a minute, and slider moves at most 360 a minute
-  (`shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:47`). Email 2 asks about all of this
-  (question 16).
+- [ ] **6.4 Website wording the lawyer may question.** No page calls anything "unlimited" any more (changed on
+  2026-11-12). Paid Screen view reads "Without the Free plan's time limit (fair-use limits apply)", with the
+  example "a monthly limit on relay connections per account" (`mobile-app/src/content/plans.ts:109,113`).
+  Everyday commands read "Everyday commands without AI: free, never counted" and "Never counted against AI
+  limits", next to "Fair-use limit on manual controls: 120 per minute" (`mobile-app/src/content/plans.ts:209`;
+  `mobile-app/src/lib/pricing.ts:44-45`); each phone may send at most 120 commands a minute, and slider moves at
+  most 360 a minute (`shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:47`). The FAQ says Screen view
+  is in development and not in the app yet, and that hearing the PC's sound and a TV-style remote are coming later;
+  it no longer offers a floating mini view (`mobile-app/src/content/faq.tsx:123`). AI requests are still also shown
+  as minutes (`mobile-app/src/content/plans.ts:125-131,150-155`). Email 2 asks about all of this (question 16).
   - Already changed in the Terms draft on 2026-11-12: the Terms used to say "We publish abuse limits", but no
-    customer page shows them. They now say "Technical limits protect the service", with a [COUNSEL] note on
-    whether the limits must be published (`TermsPage.tsx:134,140`). Your choice: publish the numbers on the
-    Pricing or FAQ page (an engineer's change), or keep the Terms' "technical limits" wording.
-  - Suggestion, not legal advice: approve the design's recommended mini-view wording, keep "technical limits"
-    in the Terms, and let the lawyer judge "unlimited", the minutes and whether the limits must be published.
+    customer page showed them. They now say "Technical limits protect the service", with a [COUNSEL] note on
+    whether the limits must be published (`TermsPage.tsx:134,140`); the Pricing page now shows one of them (120
+    commands a minute). The Terms' Screen view line says "fair-use limits", like the Pricing page
+    (`TermsPage.tsx:116`). Your choice: publish more of the numbers on the Pricing or FAQ page (an engineer's
+    change), or keep the Terms' "technical limits" wording.
+  - Suggestion, not legal advice: keep "technical limits" in the Terms, and let the lawyer judge the fair-use
+    wording, the minutes and whether the limits must be published. The Screen view design's mini-view wording
+    (`docs/design/screen-view.md:1538-1541`) matters again only if the FAQ mentions a mini view.
   - Your answer:
 
 - [ ] **6.5 Approve the AI assistant's consent text** after the lawyer has reviewed it; it is marked for
@@ -352,8 +368,8 @@ below with where it is and the decision above that fills it. "Privacy" is
 | [FOUNDER: notice period; suggested default for counsel: 30 days] | Terms 108 | 3.5 |
 | [FOUNDER: notice period] | Terms 140 | 3.6 |
 | [FOUNDER: refund of unused paid time if DoMe closes.] | Terms 140 | 3.6 |
-| [FOUNDER: whether to build self-serve deletion before launch, and the time within which a request is completed.] | Privacy 168 | 4.2 |
-| [FOUNDER: whether deletion also removes the sign-in at Auth0.] | Privacy 169 | 4.3 |
+| [FOUNDER: the time within which a deletion request sent to support is completed.] | Privacy 168 | 4.2 |
+| [FOUNDER: confirm this, and the time within which it is done.] (support deleting the Auth0 sign-in) | Privacy 168 | 4.3 |
 | [FOUNDER: confirm each period.] | Privacy 149 | 4.4 |
 | [FOUNDER: confirm with Fly.io what its network proxy logs about this traffic and for how long.] | Privacy 65 | 5 |
 | [FOUNDER: confirm Fly.io’s log retention.] | Privacy 161 | 5 |
@@ -398,7 +414,7 @@ for.
 | [COUNSEL: whether the test site needs its own notice.] | Privacy 142 | Paragraph; `data-map.md` section 9, question 4 |
 | [COUNSEL: whether a statement on transfers outside the United States is needed.] | Privacy 145 | Paragraph; question 12 (launch regions) |
 | [COUNSEL: confirm the periods and the reasons for keeping billing records.] | Privacy 149 | Questions 3 and 4 |
-| [COUNSEL: today, deleting an account also deletes DoMe’s own copy of its subscription and top-up records, while the plan above keeps billing records 7 years; confirm which to follow.] | Privacy 169 | Question 4 |
+| [COUNSEL: confirm how long payment records are kept; 7 years is proposed and nothing deletes them yet.] | Privacy 169 | Question 4 |
 | [COUNSEL: breach-notice duties, including New Jersey’s, and what an incident plan should contain.] | Privacy 191 | Question 14 |
 | [COUNSEL: confirm the minimum age and the wording on children under 13 and on teenagers.] | Privacy 196 | Question 5 |
 | [COUNSEL: confirm which state laws apply (for example New Jersey’s and California’s), from what size of business, and adjust this section.] | Privacy 200 | Question 3 |
@@ -417,9 +433,9 @@ for.
 | [COUNSEL: the disclosures and consent needed before purchase under federal and state automatic-renewal laws, reminders before yearly renewals, and a confirmation after purchase. ...] | Terms 85 | Question 1 |
 | [COUNSEL: confirm the wording against state automatic-renewal and consumer laws.] | Terms 103 | Question 2 |
 | [COUNSEL: notice rules for price changes, especially for yearly plans.] | Terms 108 | Paragraph; question 1 |
-| [COUNSEL: whether “unlimited” may be used next to these limits.] | Terms 116 | Question 16 |
+| [COUNSEL: whether this fair-use wording and example are enough.] | Terms 116 | Question 16 |
 | [COUNSEL: whether a stronger AI disclaimer is needed, given that simple actions run without a tap, and whether state chatbot-disclosure rules apply.] | Terms 129 | Question 6 |
-| [COUNSEL: whether these limits must be published, given that the Pricing page calls everyday commands “unlimited”.] | Terms 134 | Paragraph; question 16 |
+| [COUNSEL: whether these limits must be published; the Pricing page shows one of them, 120 commands a minute.] | Terms 134 | Paragraph; question 16 |
 | [COUNSEL: notice before suspension, and refunds when we close a paid account.] | Terms 140 | Paragraph |
 | [COUNSEL: review against applicable consumer law, including New Jersey’s Truth-in-Consumer Contract, Warranty and Notice Act ...; for Free users this cap is zero.] | Terms 145 | Question 8 |
 | [COUNSEL: confirm, and whether customers keep the consumer protections of their own state.] (governing law) | Terms 149 | Question 8 |

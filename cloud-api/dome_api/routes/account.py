@@ -1,5 +1,5 @@
-"""Account self-service: security activity, web-session inventory/revocation, the Billing page's status and the
-downgrade device selection (docs/BILLING.md §8)."""
+"""Account self-service: security activity, web-session inventory/revocation, the Billing page's status, the
+downgrade device selection (docs/BILLING.md §8) and deleting the account (§11)."""
 
 from __future__ import annotations
 
@@ -11,14 +11,51 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dome_api import account_deletion
 from dome_api.auth.deps import DB, Auth, Svc
+from dome_api.auth.sessions import clear_session_cookie
 from dome_api.db.models import PC, Account, Controller, SecurityEvent, Session
 from dome_api.errors import ApiError
+from dome_api.logging import get_logger
 from dome_api.plans import Plan, catalog, plan_for
 from dome_api.security import events
 from dome_api.util import parse_uuid, rest_response, strict_body, ts, ts_required, utcnow
 
 router = APIRouter(tags=["account"])
+log = get_logger("dome_api.routes.account")
+
+
+@router.delete("/account", status_code=204)
+async def delete_account(request: Request, auth: Auth, db: DB, svc: Svc) -> Response:
+    """DELETE /v1/account (DECISIONS #121): session + CSRF + exact Origin (``Auth``), the exact phrase, and a session
+    created by a re-authentication (``GET /v1/auth/login?prompt=login``) whose password entry the provider confirmed
+    within the last 10 minutes (``sessions.authenticated_at``; a session's age alone counts for nothing, since a
+    provider that remembers the person answers a plain sign-in at once). The account is marked deleted and committed
+    first. From that commit no new socket of the account is accepted, so every open phone and PC socket is told
+    ``revoked{account_deleted}`` and closed right away, before step 2 and whatever becomes of it; the rest
+    (subscription, revocations) follows, and the purge job finishes it if this request cannot."""
+    await strict_body(request, "account_delete_request")
+    now = utcnow()
+    if not account_deletion.session_is_recent(auth.session.authenticated_at, now):
+        raise ApiError(403, "REAUTH_REQUIRED")
+    account_id = auth.account.id
+    started = await account_deletion.mark_deleted(db, account_id, now)
+    await db.commit()
+    if started:
+        closed = False
+        try:
+            await account_deletion.close_sockets(svc.relay, account_id)
+            closed = True
+            await account_deletion.finish(db=svc.db, billing=svc.billing, relay=svc.relay, account_id=account_id)
+        except Exception as exc:  # noqa: BLE001 - the deletion is recorded; the purge job finishes the rest
+            log.warning("account.deletion_incomplete", account_id=str(account_id), error_class=type(exc).__name__)
+            if not closed:
+                # once more: no socket of a deleted account may stay open until the purge job's pass (the relay's
+                # per-command checks do not read accounts.deleted_at)
+                await account_deletion.close_sockets(svc.relay, account_id, best_effort=True)
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    clear_session_cookie(response, svc.settings)
+    return response
 
 
 @router.get("/account/security-events")

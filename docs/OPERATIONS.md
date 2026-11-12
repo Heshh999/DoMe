@@ -271,7 +271,9 @@ masked path and no query string). Event names worth counting or alerting on:
 | `result.late_correction`, `result.post_terminal_dropped` | Late results after `outcome_unknown` (one correction allowed) and anything else dropped |
 | `confirmation_required.invalid`, `confirmation_required.unknown_command`, `ack.unknown_command`, `cancel.ignored`, `revoke_controller.ignored`, `pairing_decision.*` | Agent frames that did not match relay state; a rising count indicates an agent bug or a hostile agent |
 | `oidc.discovery_failed`, `oidc.jwks_failed`, `oidc.token_exchange_failed`, `oidc.id_token_rejected`, `oidc.callback_error` | Identity-provider outage or misconfiguration (customers get 503 at sign-in); `id_token_rejected` with clock errors points at the service clock |
-| `oidc.email_unverified`, `oidc.callback_start_again` (info) | Not faults: a sign-in refused because the email is not confirmed (the person sees "Confirm your email first"), and a sign-in that did not finish (the person sees "Sign in again"; `reason` is `unknown_state` or `expired`, and `expired` undercounts slow sign-ins, cloud-api DECISIONS #118 to #120). `oidc.callback_error` now carries `reason=cancelled_or_provider_error`. A sudden rise in any of these is worth a look at the provider |
+| `oidc.email_unverified`, `oidc.callback_start_again`, `oidc.reauth_unconfirmed` (info) | Not faults: a sign-in refused because the email is not confirmed (the person sees "Confirm your email first"), and a sign-in that did not finish (the person sees "Sign in again"; `reason` is `unknown_state` or `expired`, and `expired` undercounts slow sign-ins, cloud-api DECISIONS #118 to #120). `oidc.callback_error` now carries `reason=cancelled_or_provider_error`. `oidc.reauth_unconfirmed` (`claim`: `absent` or `outside_attempt`): a sign-in again before deleting an account whose provider did not confirm a password entry, so the deletion will be refused (cloud-api DECISIONS #123); every one of them means the provider skipped its login page or sent no `auth_time`. A sudden rise in any of these is worth a look at the provider |
+| `purge.run` (info) | One line per hourly retention pass (`dome_api/purge.py`, `docs/DATA_RETENTION.md` §4): rows deleted per table, `deletions_finished` (account deletions a crash had left unfinished), `accounts` (hard-deleted 30 days after deletion) and `accounts_kept_billing_open`. Counts only, never an email or a name. No line for more than an hour means the purge is off (`DOME_PURGE_ENABLED=false`, the operator's kill switch; `purge.scheduled` at start-up says it is on), the process restarted (the first pass runs an hour after start-up) or the pass failed (`purge.failed`) |
+| `purge.table_failed` (`table`), `purge.finish_failed` (`account_id`), `purge.failed`, `account.deletion_incomplete` (`account_id`), `billing.needs_operator` with `kind=refund` (warning) | One table's batch, one unfinished account deletion or a whole pass failed (`error_class` only); the next pass retries. Repeated lines for the same table or account need a look. `account.deletion_incomplete`: the second step of a deletion failed in its request; the account's sockets were already closed (`account.deletion_sockets_closed`, info, with counts) and the purge finishes it after 10 minutes. `billing.needs_operator` `kind=refund`: a Stripe page paid into a deleted account was not applied (its subscription is cancelled) or not credited (a top-up marked `failed`): refund the payment by hand in the Stripe dashboard (cloud-api DECISIONS #123) |
 | `security_event` (`kind`, `severity`) | Every security event is also logged as it is written (below) |
 | Unhandled exceptions | `unhandled_error_handler` logs the exception with the request id and returns `INTERNAL`; alert on any |
 
@@ -288,8 +290,10 @@ account through `GET /v1/account/security-events`). Kinds written today:
 Useful aggregates (SQL over the table, or counts of the `security_event` log line by `kind`):
 `pairing_failed` and `link_code_lookup_failed` per hour (guessing), `command_rejected` per account
 per hour (a client out of sync or hostile), `agent_token_refused` (unlinked PCs still running),
-`controller_throttled` (floods). Note `docs/DATA_RETENTION.md` §4: no purge job exists, so these tables
-grow until it is added; watch table size.
+`controller_throttled` (floods). Old rows are deleted by the hourly retention purge
+(`dome_api/purge.py`, `docs/DATA_RETENTION.md` §4): `security_events` after 12 months (90 days when no
+account is attached), `commands` after 30 days. Tables that live as long as the account still grow
+(cloud-api KNOWN_ISSUES #42); watch table size.
 
 **Agent side.** Customers produce redacted diagnostics on request (tray → Diagnostics…); there is no
 telemetry from agents to the service. The `activation_events` table exists but nothing emits to it
@@ -405,7 +409,7 @@ scenario to this table.
 - [ ] **Failed-deployment recovery rehearsed** on staging (§6)
 - [ ] Secret rotation rehearsed for the session secret and the entitlement key (§7)
 - [ ] External `/healthz` monitor and the first alerts from §8 configured; log shipping with a retention of 30 days or the documented alternative
-- [ ] Retention purge job implemented (`docs/DATA_RETENTION.md` §4) or table growth accepted and monitored
+- [ ] Retention purge job running on staging and production: implemented (`dome_api/purge.py`, on by default, `DOME_PURGE_ENABLED`; integration-tested against PostgreSQL in `cloud-api/tests/test_retention_purge.py`), not yet seen on a deployed server: confirm one `purge.run` line per hour; growth of the tables kept for the life of an account accepted and monitored
 - [ ] Load smoke run against staging from a separate machine; sustained idle/reconnect test (24 h) recorded in `docs/ACCEPTANCE.md` Scenario 17
 - [ ] Agent socket frame budget (`cloud-api/KNOWN_ISSUES.md` #1) implemented or explicitly accepted
 - [x] CI workflow exists and runs every suite on every push (`ci.yml`, green since 2026-10-11)

@@ -190,7 +190,7 @@ export interface StateCopy {
 }
 
 const FREE_PLAN = planById("free");
-const RETURNS_TO_FREE = `Then your account returns to Free: ${FREE_PLAN.pcs} PC and ${FREE_PLAN.phones} phones stay enabled, your layouts and routines are kept but cannot run, and you can re-subscribe at any time.`;
+const RETURNS_TO_FREE = `Then your account returns to Free: ${FREE_PLAN.pcs} PC and ${FREE_PLAN.phones} phones stay enabled, and you can re-subscribe at any time.`;
 const KEPT = "You are on DoMe Free; your PCs, phones and settings were kept.";
 const PENDING = "Pending activation — we are confirming your payment. Nothing is unlocked until it is verified.";
 

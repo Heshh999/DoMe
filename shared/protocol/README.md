@@ -208,3 +208,18 @@ and `registry_version` stay 1.2.
 | Plan fields `ai_cost_cap_cents_per_period`, `ai_turn_rate_limit` (read by cloud-api only) | `plans.json` |
 | `rules.search_queries`: the assistant clause (text only) | `version.json` |
 | Plan-structure cases shared by cloud-api's validator and the phone | `fixtures/assistant-plan-cases.json` |
+
+## Account deletion — REST additions without a version bump (2026-11-12)
+
+PWA-only (`docs/PROTOCOL.md` §19.2, cloud-api DECISIONS #121); `protocol_version` and `registry_version` stay 1.5. The
+relay frames already carried `revoked{reason: account_deleted}` for phones and PCs since 1.0, so nothing on the wire
+changes for the agent or the extension.
+
+| Addition | Where |
+| --- | --- |
+| `DELETE /v1/account` (session + CSRF + exact Origin, a session from a sign-in again with `prompt=login` whose password entry the provider confirmed within the last 10 minutes) with `account_delete_request{confirm: "delete my account"}` (the exact phrase); 204 without a body, the session cookie cleared | `schemas/rest.schema.json` |
+| `sign_in_problem`: the values of `/?sign_in=` the sign-in callback redirects to (`email_unverified`, `try_again`, and now `account_deleted` for a deleted account's identity) | `schemas/rest.schema.json` |
+| `GET /v1/auth/login?prompt=login`: asks the provider for its login page with `max_age=0` (a fresh password entry before deletion, its `auth_time` checked at the callback); `login` is the only accepted value, anything else is 400 `MALFORMED_MESSAGE` | query parameter, no body (`docs/PROTOCOL.md` §11) |
+| Error `REAUTH_REQUIRED` (403, REST only: no password entry confirmed by the provider within the last 10 minutes) | `errors.json` |
+
+Generated TypeScript types: `rest.AccountDeleteRequest`, `rest.SignInProblem` (`src/generated/rest.ts`).

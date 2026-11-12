@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { PLANS } from "@dome/protocol";
 
-import { aboutTime, AI_OFF_STATUS, AI_RULES, aiSummary, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, PLAN_CONTENT, planById, LAYOUTS_STATUS, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WEEK_DAYS, WINDOW_HOURS } from "../../src/content/plans.ts";
+import { aboutTime, AGREE_TO_TERMS, AI_OFF_STATUS, AI_RULES, aiSummary, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, HOW_TO_CANCEL, PAID_SCREEN_VIEW, PLAN_CONTENT, planById, LAYOUTS_STATUS, POINT_AND_TALK_STATUS, renewalLine, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TAX_INCLUDED, TOP_UP, topUpTerms, usd, WARN_AT_PERCENT, WEEK_DAYS, WINDOW_HOURS } from "../../src/content/plans.ts";
 import { COMING, INCLUDED, NOT_INCLUDED, pricingGroups, pricingRows } from "../../src/lib/pricing.ts";
 
 describe("plan content", () => {
@@ -44,14 +44,20 @@ describe("plan content", () => {
     expect([planById("pro_plus").pcs, planById("pro_plus").phones]).toEqual([5, 5]);
   });
 
-  it("Screen view is coming: 10 minutes per 5-hour window on Free, unlimited on the paid plans", () => {
+  it("Screen view is coming: 10 minutes per 5-hour window on Free, no Free time limit but fair-use limits on the paid plans", () => {
     expect(SCREEN_VIEW_STATUS).toBe("Coming");
     expect(POINT_AND_TALK_STATUS).toBe("Planned");
     expect(FREE_SCREEN_VIEW_MINUTES).toBe(10);
     expect(WINDOW_HOURS).toBe(5);
     expect(planById("free").screenView).toBe("10 minutes per 5-hour window");
-    expect(planById("pro").screenView).toBe("Unlimited");
-    expect(planById("pro_plus").screenView).toBe("Unlimited");
+    expect(planById("pro").screenView).toBe("Without the Free plan’s time limit (fair-use limits apply)");
+    expect(planById("pro_plus").screenView).toBe(PAID_SCREEN_VIEW);
+    // the relay keeps per-account limits on every plan: no plan's Screen view is "unlimited"
+    for (const plan of PLAN_CONTENT) {
+      expect(plan.screenView).not.toMatch(/unlimited/i);
+      expect(plan.tagline).not.toMatch(/unlimited/i);
+      expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))!.text).not.toMatch(/unlimited/i);
+    }
     // the card says "Coming" next to Screen view on every plan
     for (const plan of PLAN_CONTENT) expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))?.status).toBe("Coming");
     // every AI allowance is marked, so the page can say "Not switched on yet" beside it while AI is off
@@ -86,7 +92,11 @@ describe("plan content", () => {
     expect(AI_RULES.request).toMatch(/cannot work out on its own/);
     expect(AI_RULES.request).toMatch(/roughly 30 seconds/);
     expect(AI_RULES.everyday).toMatch(/“pause”, “volume 40”, “open Spotify”/);
-    expect(AI_RULES.everyday).toMatch(/free, unlimited and never count, on every plan, even after you reach an AI limit/);
+    expect(AI_RULES.everyday).toMatch(/are free and never count against your AI allowance, on every plan, even after you reach an AI limit/);
+    // a fair-use limit applies to every command (the comparison's "Fair-use limit on manual controls"): never "unlimited"
+    expect(AI_RULES.everyday).not.toMatch(/unlimited/i);
+    expect(planById("free").highlights.find((h) => h.text.startsWith("Everyday commands"))!.text).toBe("Everyday commands without AI: free, never counted");
+    for (const plan of PLAN_CONTENT) for (const h of plan.highlights) expect(h.text).not.toMatch(/unlimited/i);
     expect(WEEK_DAYS).toBe(7);
     expect(WARN_AT_PERCENT).toBe(80);
     expect(AI_RULES.windows).toMatch(/5-hour window starts with your first AI request/);
@@ -150,7 +160,10 @@ describe("pricing rows", () => {
     const groups = pricingGroups();
     const screen = groups.find((g) => g.title === "Screen view")!;
     expect(screen.status).toBe("Coming");
-    expect(screen.rows[0]).toMatchObject({ free: "10 min per 5-hour window", pro: "Unlimited", proPlus: "Unlimited" });
+    // the paid cells are the plan content's wording: no Free time limit, but fair-use limits on the relay, never "Unlimited"
+    expect(screen.rows[0]).toMatchObject({ free: "10 min per 5-hour window", pro: PAID_SCREEN_VIEW, proPlus: PAID_SCREEN_VIEW });
+    expect([screen.rows[0]!.pro, screen.rows[0]!.proPlus]).toEqual([planById("pro").screenView, planById("pro_plus").screenView]);
+    expect(`${screen.rows[0]!.pro} ${screen.rows[0]!.proPlus}`).not.toMatch(/unlimited/i);
     const ai = groups.find((g) => g.title === "AI butler")!;
     // Free's one-time taste has its own row, so it never reads as "10 per window"
     expect(ai.rows.map((r) => [r.free, r.pro, r.proPlus])).toEqual([
@@ -165,6 +178,43 @@ describe("pricing rows", () => {
     expect(pricingGroups({ aiOn: true }).find((g) => g.title === "AI butler")!.status).toBeUndefined();
     expect(ai.rows[3]!.label).toBe("Top-up: 100 requests for $2.99, only when you choose");
     const everyday = groups[0]!.rows.find((r) => r.label.startsWith("Everyday commands"))!;
-    expect([everyday.free, everyday.pro, everyday.proPlus]).toEqual(["Unlimited, never counted", "Unlimited, never counted", "Unlimited, never counted"]);
+    expect([everyday.free, everyday.pro, everyday.proPlus]).toEqual(["Never counted against AI limits", "Never counted against AI limits", "Never counted against AI limits"]);
+    // the per-minute fair-use limit sits beside it, so no cell calls everyday commands "unlimited"
+    expect(groups[0]!.rows.find((r) => r.label.startsWith("Fair-use limit"))).toBeDefined();
+    for (const r of pricingRows()) expect(`${r.label} ${r.free} ${r.pro} ${r.proPlus}`).not.toMatch(/unlimited/i);
+  });
+});
+
+describe("before payment (docs/legal: renewal, cancellation, Terms; the top-up)", () => {
+  it("says the plan renews automatically at the price it is given, for each interval and for both", () => {
+    const pro = planById("pro").price!;
+    expect(renewalLine(pro, "monthly")).toBe("Renews automatically every month at $9.99 until you cancel.");
+    expect(renewalLine(pro, "annual")).toBe("Renews automatically every year at $99.99 until you cancel.");
+    expect(renewalLine(pro, "both")).toBe("Renews automatically every month at $9.99, or every year at $99.99 if you choose yearly billing, until you cancel.");
+    // the amounts are the caller's plan data, never words in this file: another price, another sentence
+    const other = { monthlyCents: 1234, annualCents: 12000 };
+    expect(renewalLine(other, "monthly")).toBe("Renews automatically every month at $12.34 until you cancel.");
+    expect(renewalLine(other, "annual")).toBe("Renews automatically every year at $120 until you cancel.");
+    expect(renewalLine(other, "both")).toContain("every month at $12.34, or every year at $120");
+  });
+
+  it("says how to cancel, that the price includes any tax, and what subscribing agrees to", () => {
+    // docs/BILLING.md §2: the Stripe prices are tax-inclusive
+    expect(TAX_INCLUDED).toBe("Price includes any sales tax.");
+    expect(HOW_TO_CANCEL).toBe("To cancel, open Billing and choose Manage subscription. Paid features stay until the end of the period you paid for.");
+    expect(AGREE_TO_TERMS).toBe("By subscribing you agree to the Terms and the Privacy notice.");
+  });
+
+  it("describes the top-up as a one-time purchase and says what happens to unused requests, as cloud-api does today", () => {
+    expect(topUpTerms(TOP_UP.requests)).toBe(
+      "A one-time purchase, not a subscription: it adds 100 AI requests to your account. Unused top-up requests do not expire. They are used after your 5-hour window or week runs out, and they are kept if you move to Free, to use again on Pro or Pro Plus.",
+    );
+    expect(topUpTerms(250)).toContain("it adds 250 AI requests");
+    expect(topUpTerms(TOP_UP.requests)).not.toMatch(/automatic|renew/i);
+  });
+
+  it("explains paid Screen view's fair-use limits with the Terms' example", () => {
+    expect(PAID_SCREEN_VIEW).toBe("Without the Free plan’s time limit (fair-use limits apply)");
+    expect(SCREEN_VIEW_FAIR_USE).toBe("Pro and Pro Plus will not have Free’s time limit, but fair-use limits apply, for example a monthly limit on relay connections per account.");
   });
 });

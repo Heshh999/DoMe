@@ -378,6 +378,11 @@
       "retryable": false,
       "user_message": "That choice doesn't fit your plan's limits or names a device that isn't yours."
     },
+    "REAUTH_REQUIRED": {
+      "retryable": false,
+      "user_message": "For your safety, sign in again, then try once more.",
+      "description": "REST only (HTTP 403, DELETE /v1/account): the session was not created by a sign-in again with GET /v1/auth/login?prompt=login whose password entry the provider confirmed (its auth_time, asked for with max_age=0) within the last 10 minutes; a plain sign-in never counts, since a provider that remembers the person may answer it without asking. The phone sends the person to sign in again with GET /v1/auth/login?prompt=login and repeats the request afterwards."
+    },
     "SCREEN_SESSION_OWNED": {
       "retryable": false,
       "user_message": "Another phone is viewing this PC. Take over to continue."

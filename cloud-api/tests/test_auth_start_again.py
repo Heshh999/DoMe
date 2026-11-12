@@ -6,8 +6,8 @@ a second time); the attempt is older than its 10 minutes (the "Forgot password?"
 answers 303 to one constant with ``Cache-Control: no-store`` and no cookie of any kind, reads and writes nothing about
 an account, starts no session, leaves the re-prompt marker (DECISIONS #119) as it found it, and logs one fixed reason
 word and nothing the provider or the browser sent. Everything else answers as before: a state or code of an impossible
-length, a failed token exchange, an ID token that does not verify, a deleted account, the unconfirmed-email refusal
-and the login rate limit."""
+length, a failed token exchange, an ID token that does not verify, the unconfirmed-email refusal and the login rate
+limit; a deleted account has its own notice since DECISIONS #121."""
 
 from __future__ import annotations
 
@@ -23,7 +23,12 @@ import pytest
 from structlog.testing import capture_logs
 
 from dome_api.auth.oidc import FLOW_LIFETIME, OIDCClient, StartAgainError
-from dome_api.routes.auth import EMAIL_UNVERIFIED_REDIRECT, REPROMPT_COOKIE, START_AGAIN_REDIRECT
+from dome_api.routes.auth import (
+    ACCOUNT_DELETED_REDIRECT,
+    EMAIL_UNVERIFIED_REDIRECT,
+    REPROMPT_COOKIE,
+    START_AGAIN_REDIRECT,
+)
 from dome_api.security.ratelimit import SlidingWindowLimiter
 from tests.conftest import Env, sql
 
@@ -439,7 +444,9 @@ async def test_an_id_token_that_does_not_verify_is_still_a_400(env: Env) -> None
     assert _accounts(env, email) == [] and _totals(env) == before
 
 
-async def test_a_deleted_account_is_still_refused_with_403(env: Env) -> None:
+async def test_a_deleted_account_lands_on_its_own_notice(env: Env) -> None:
+    """Since account deletion (DECISIONS #121) a deleted account's identity is redirected to its own notice like the
+    other sign-in problems, instead of the JSON 403: still no session, no cookie and nothing written."""
     email = _email()
     async with _browser(env) as client:
         url, _ = await _start(client)
@@ -447,15 +454,19 @@ async def test_a_deleted_account_is_still_refused_with_403(env: Env) -> None:
         assert ok.status_code == 303 and "dome_session=" in ok.headers["set-cookie"]
     [account] = _accounts(env, email)
     sql(env.database_url, "UPDATE accounts SET deleted_at = now() WHERE id = %s", (account[0],))
-    before = _totals(env)
+    before, [deleted] = _totals(env), _accounts(env, email)
     async with _browser(env) as client:
         url, _ = await _start(client)
         with capture_logs() as logs:
             r = await client.get(await _provider(url, email))
-        _assert_error(r, 403, "FORBIDDEN", "This account was deleted.")
-        assert _oidc_lines(logs) == []
+        assert r.status_code == 303 and r.headers["location"] == ACCOUNT_DELETED_REDIRECT == "/?sign_in=account_deleted"
+        assert r.headers["cache-control"] == "no-store" and r.content == b""
+        assert "set-cookie" not in r.headers  # no session cookie, and the re-prompt marker neither set nor cleared
+        assert [line["event"] for line in _oidc_lines(logs)] == ["oidc.callback_account_deleted"]
+        assert email not in repr(logs) and _subject(email) not in repr(logs)
         assert (await client.get("/v1/session")).status_code == 401
     assert _totals(env) == before
+    assert _accounts(env, email) == [deleted]  # the row is as it was: nothing about the account written
 
 
 async def test_an_unconfirmed_email_still_gets_its_own_notice_and_marker(env: Env) -> None:

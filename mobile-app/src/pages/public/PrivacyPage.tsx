@@ -68,10 +68,10 @@ export function PrivacyPage() {
         <h2>On your phone</h2>
         <ul>
           <li>A signing key that cannot be exported, your controller identifier, your selected PC and the public keys of your paired PCs (used to check Screen view) are stored in the browser’s storage on the phone. No passwords or long-lived tokens are stored.</li>
-          <li>Your preferences (theme, touchpad, Screen view and AI butler settings, which explanations you dismissed, and whether speech recognition works on this phone) are kept in the browser’s local storage. If a sign-in fails, the reason is kept in the browser tab for about a minute so the app can explain it.</li>
+          <li>Your preferences (theme, touchpad, Screen view and AI butler settings, which explanations you dismissed, and whether speech recognition works on this phone) are kept in the browser’s local storage. If a sign-in fails, or you have just deleted your account, a note of that is kept in the browser tab for about a minute so the app can explain it.</li>
           <li>The app does not use analytics, advertising or session-replay scripts, loads no scripts or fonts from other companies, and does not cache your PC’s data for offline use.</li>
           <li>The camera is used only on the pairing page while you scan a code; the picture is read on the phone and not sent anywhere. The app does not use your location and sends no push notifications.</li>
-          <li>“Forget this installation” in Settings deletes the phone’s signing key, its selected PC and the saved PC keys.</li>
+          <li>“Forget this installation” in Settings deletes the phone’s signing key, its selected PC and the saved PC keys. Deleting your account in the app does the same on the phone you use.</li>
         </ul>
       </section>
       <section>
@@ -146,18 +146,18 @@ export function PrivacyPage() {
       </section>
       <section>
         <h2>How long we keep data</h2>
-        <p>Our server does not yet run an automatic clean-up. Until it does, the records below are kept for the life of your account unless a period is marked “automatic”; periods marked “planned” are our design and are not yet enforced. [FOUNDER: confirm each period.] [COUNSEL: confirm the periods and the reasons for keeping billing records.]</p>
+        <p>Our server deletes old records automatically every hour: periods marked “automatic” are enforced that way. Periods marked “planned” are our design and are not yet enforced. [FOUNDER: confirm each period.] [COUNSEL: confirm the periods and the reasons for keeping billing records.]</p>
         <ul>
-          <li>Account, PCs, phones and permissions: for the life of the account. Planned: deleted 30 days after the account is deleted.</li>
-          <li>Sign-in sessions: end after 30 days without use or 90 days at most (automatic). Planned: the records are deleted 30 days after a session ends.</li>
-          <li>PC linking codes: valid 10 minutes (automatic). Planned: deleted 24 hours after they expire.</li>
+          <li>Account, PCs, phones and permissions: for the life of the account; deleted 30 days after the account is deleted (automatic).</li>
+          <li>Sign-in sessions: end after 30 days without use or 90 days at most (automatic); the records are deleted 30 days after a session ends (automatic).</li>
+          <li>PC linking codes: valid 10 minutes (automatic); deleted 24 hours after they expire (automatic).</li>
           <li>Sign-in attempts in progress: deleted when the sign-in finishes; abandoned ones are deleted when someone next starts a sign-in (automatic).</li>
-          <li>Command history: planned 30 days.</li>
-          <li>Security events: planned 12 months.</li>
-          <li>Support requests: for the life of the account; no shorter period is set yet.</li>
+          <li>Command history: 30 days (automatic).</li>
+          <li>Security events: 12 months (automatic).</li>
+          <li>Support requests: for the life of the account, then deleted with it; no shorter period is set yet.</li>
           <li>Billing records: planned for the life of the account plus 7 years, as financial records. Stripe keeps its own records under its own terms.</li>
-          <li>AI butler usage: per-request records planned 400 days; allowance counts for the life of the account.</li>
-          <li>Screen view: daily relay data counts 62 days (automatic); session records planned 90 days; Free allowance windows planned 30 days after each window ends.</li>
+          <li>AI butler usage: per-request records 400 days (automatic); allowance counts for the life of the account.</li>
+          <li>Screen view: daily relay data counts 62 days (automatic); session records 90 days (automatic); Free allowance windows 30 days after each window ends (automatic).</li>
           <li>Server logs (redacted): kept by Fly.io for a short time; planned 30 days. [FOUNDER: confirm Fly.io’s log retention.]</li>
           <li>Database backups: as our database host keeps them. [FOUNDER: confirm the backup period and encryption at rest with Fly.io.]</li>
           <li>On your PC and phone: as described above; you control that data.</li>
@@ -165,9 +165,9 @@ export function PrivacyPage() {
       </section>
       <section>
         <h2>Deleting your account</h2>
-        <p>The app does not have a button to delete your account yet. To delete it, send a request through the support form (topic “Account / sign-in”) or write to [FOUNDER: contact email for privacy requests], and we will delete it by hand. [FOUNDER: whether to build self-serve deletion before launch, and the time within which a request is completed.]</p>
-        <p>As DoMe’s database is built, deleting an account deletes every record tied to it: PCs, phones, permissions, sessions, command history, security events, support requests and usage counts. Records of payment events are kept without the link to your account. PC linking codes are also kept without the link to your account until they are cleaned up; each holds the code, the PC’s name and public key and a keyed hash of the network address that asked for it. DoMe can cancel the account’s subscription at Stripe at once when the account is deleted. [COUNSEL: today, deleting an account also deletes DoMe’s own copy of its subscription and top-up records, while the plan above keeps billing records 7 years; confirm which to follow.] [FOUNDER: whether deletion also removes the sign-in at Auth0.]</p>
-        <p>Deleting the account does not touch the data on your PC or phone: uninstall DoMe on the PC (answer Yes to delete its data) and use “Forget this installation” on the phone.</p>
+        <p>You can delete your account yourself in the app: Settings, then Delete account. You type “delete my account” to confirm and, unless you did so in the last 10 minutes, sign in again with your password first. You can also ask through the support form (topic “Account / sign-in”) or write to [FOUNDER: contact email for privacy requests]. [FOUNDER: the time within which a deletion request sent to support is completed.] Your sign-in at Auth0 (your email address and password) is separate and is not deleted by DoMe. To have it deleted too, contact support and we will delete it by hand. [FOUNDER: confirm this, and the time within which it is done.]</p>
+        <p>When you delete your account, any subscription is cancelled at Stripe at once, with no automatic refund; every phone and PC is signed out and disconnected at once; and your email address and name are removed from the account at once. Thirty days later (or once Stripe has confirmed the cancellation, if that takes longer) the account is erased with every record tied to it: PCs, phones, permissions, sessions, command history, security events, support requests and usage counts. Records of payments (subscriptions, AI top-ups and Stripe’s payment notices, none of which holds your email address or name) are kept after that without the link to your account. [COUNSEL: confirm how long payment records are kept; 7 years is proposed and nothing deletes them yet.] PC linking codes are also kept without the link to your account until they are deleted 24 hours after they expire; each holds the code, the PC’s name and public key and a keyed hash of the network address that asked for it.</p>
+        <p>Deleting your account in the app also deletes the signing key and saved PC keys on the phone you use. It does not touch your PC or your other phones: uninstall DoMe on the PC (answer Yes to delete its data) and use “Forget this installation” on other phones.</p>
       </section>
       <section>
         <h2>Your choices</h2>
@@ -224,8 +224,8 @@ export function PrivacyPage() {
           <li>Business identity: legal name, entity type, postal address and a contact email for privacy requests.</li>
           <li>Which state privacy laws apply, and whether DoMe accepts customers outside the United States (GDPR, UK GDPR); checkout restricts no country today.</li>
           <li>Vendor confirmations: Anthropic’s API data terms; Fly.io’s proxy and log retention, backup period and encryption at rest; where Stripe, Resend, Cloudflare and Anthropic process data; data processing agreements with each sub-processor.</li>
-          <li>Retention: confirm each period, build the automatic clean-up, and settle the conflict between deleting billing records with an account and keeping them 7 years. docs/DATA_RETENTION.md is the engineering source for this list; it does not yet cover support requests, top-up purchases, AI allowance tables or some PC and phone files.</li>
-          <li>Account deletion and access: no delete button exists; DoMe’s service can list an account’s sessions, command history and security events, but no app screen shows them yet (relevant to access requests).</li>
+          <li>Retention: confirm each period, and how long payment records are kept after an account is erased (7 years proposed; nothing deletes them yet). The hourly automatic clean-up is built and tested with automated tests only. docs/DATA_RETENTION.md is the engineering source for this list; it does not yet cover some PC and phone files.</li>
+          <li>Account deletion and access: deletion is self-serve in the app (built and tested with automated tests only; not yet tried against Auth0 or Stripe’s test mode). DoMe does not delete the Auth0 sign-in itself. DoMe’s service can list an account’s sessions, command history and security events, but no app screen shows them yet (relevant to access requests).</li>
           <li>Notices: a way to send customers notices (by email or in the app) is not built; it is needed for notices of changes to this notice, of price changes and terms changes, and for renewal reminders.</li>
           <li>The AI butler’s consent text in the app is marked for lawyer review; the copy of it in the design document (docs/design/assistant.md) still says “monthly allowance”, while the allowance uses 5-hour and weekly windows. The consent text does not yet say that the time of day and whether a request was spoken, typed or tapped are sent to Anthropic, as this notice does; it needs the same addition when it is reviewed.</li>
           <li>The test site’s database (Neon) holds real sign-ups (at least the founder’s own account and a test sign-up); whether other people can sign up there is to be confirmed.</li>

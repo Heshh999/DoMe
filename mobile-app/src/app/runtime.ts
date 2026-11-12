@@ -236,8 +236,12 @@ export class Runtime {
    *    must be complete before any navigation unloads the page;
    * 4. server session, in-memory stores and account state (the key is kept unless 3 ran).
    * Resolves only when everything is done; the caller then navigates exactly once.
+   *
+   * `serverSessionEnded`: the server has already ended the session, so no logout request is sent. Deleting the
+   * account uses it (DELETE /v1/account answered 204 and cleared the cookie), with `forgetInstallation`: every pairing
+   * the key and the saved PC keys stood for went with the account.
    */
-  async signOut(options: { forgetInstallation?: boolean } = {}): Promise<void> {
+  async signOut(options: { forgetInstallation?: boolean; serverSessionEnded?: boolean } = {}): Promise<void> {
     useSessionStore.getState().beginSignOut();
     await this.input.stop("sign_out");
     await this.screen.stop("sign_out");
@@ -249,10 +253,12 @@ export class Runtime {
         log.warn("controller_key.delete_failed", errorSummary(e));
       }
     }
-    try {
-      await api.logout();
-    } catch (e) {
-      if (!(e instanceof ApiError && (e.status === 401 || e.code === "UNAUTHENTICATED"))) log.warn("logout.failed", errorSummary(e));
+    if (!options.serverSessionEnded) {
+      try {
+        await api.logout();
+      } catch (e) {
+        if (!(e instanceof ApiError && (e.status === 401 || e.code === "UNAUTHENTICATED"))) log.warn("logout.failed", errorSummary(e));
+      }
     }
     this.commands.reset();
     this.input.reset();

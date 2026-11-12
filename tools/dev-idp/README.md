@@ -16,6 +16,8 @@ exercised and the backend never needs a "dev login" bypass.
 - Accepts `prompt=login`, which DoMe sends on sign-ins after a refused one (`cloud-api/DECISIONS.md`
   #119). It keeps no sign-in session, so its page is shown every time anyway; the `dev_user` path
   still answers at once.
+- Every ID token carries `auth_time`, the moment of that sign-in. DoMe asks for it (`max_age=0`)
+  before deleting an account and checks it (`cloud-api/DECISIONS.md` #121).
 
 Run: `uv sync && uv run dome-dev-idp` (or `make dev-idp` from the repository root).
 

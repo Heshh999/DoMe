@@ -150,6 +150,57 @@ describe("REST client", () => {
     expect(loginUrl("//evil.example")).toBe("/v1/auth/login?return_to=%2Fapp");
     expect(loginUrl("https://evil.example")).toBe("/v1/auth/login?return_to=%2Fapp");
   });
+
+  it("loginUrl asks for the provider's login page with prompt=login only when told to, with the same return rules", () => {
+    expect(loginUrl("/app/settings?delete_account=1", { prompt: "login" })).toBe("/v1/auth/login?return_to=%2Fapp%2Fsettings%3Fdelete_account%3D1&prompt=login");
+    expect(loginUrl("/app/settings?delete_account=1#frag", { prompt: "login" })).toBe("/v1/auth/login?return_to=%2Fapp%2Fsettings%3Fdelete_account%3D1&prompt=login");
+    expect(loginUrl("//evil.example", { prompt: "login" })).toBe("/v1/auth/login?return_to=%2Fapp&prompt=login");
+    // without the option (or with an empty one) nothing changes
+    expect(loginUrl("/app", {})).toBe(loginUrl("/app"));
+    expect(loginUrl("/app")).not.toContain("prompt");
+  });
+});
+
+describe("account deletion endpoint (cloud-api DECISIONS #121)", () => {
+  it("DELETE /v1/account sends exactly the phrase as JSON with CSRF, and a 204 resolves without a body", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    configureApi({
+      csrfToken: "tok",
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(null, { status: 204 });
+      },
+    });
+    await expect(api.deleteAccount({ confirm: "delete my account" })).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("/v1/account");
+    expect(calls[0]!.init.method).toBe("DELETE");
+    expect(calls[0]!.init.credentials).toBe("include");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["X-DoMe-CSRF"]).toBe("tok");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(calls[0]!.init.body).toBe('{"confirm":"delete my account"}');
+    // any other phrase is refused before anything is sent: the server compares exactly
+    for (const confirm of ["Delete my account", " delete my account", "delete  my account", ""]) {
+      await expect(api.deleteAccount({ confirm } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    }
+    await expect(api.deleteAccount({ confirm: "delete my account", extra: 1 } as never)).rejects.toMatchObject({ code: "MALFORMED_MESSAGE" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("REAUTH_REQUIRED comes back as itself, not retried as a stale CSRF token", async () => {
+    const calls: string[] = [];
+    configureApi({
+      csrfToken: "tok",
+      accountId: UUID,
+      fetchImpl: async (url, init) => {
+        calls.push(`${init.method} ${url}`);
+        return respond(403, { error: { code: "REAUTH_REQUIRED", message: "For your safety, sign in again, then try once more.", retryable: false } });
+      },
+    });
+    await expect(api.deleteAccount({ confirm: "delete my account" })).rejects.toMatchObject({ status: 403, code: "REAUTH_REQUIRED", retryable: false });
+    expect(calls).toEqual(["DELETE /v1/account"]);
+  });
 });
 
 describe("assistant endpoints (docs/design/assistant.md §1.2)", () => {

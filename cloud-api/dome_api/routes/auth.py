@@ -34,6 +34,14 @@ EMAIL_UNVERIFIED_REDIRECT = "/?sign_in=email_unverified"
 # provider or the browser sent is put into it, and it is the home page for the same reason as above (no loop: that
 # page starts nothing by itself).
 START_AGAIN_REDIRECT = "/?sign_in=try_again"
+# Where a sign-in with the identity of a deleted account lands (DECISIONS #121): the home page shows "This account was
+# deleted" for this reason. No session, and nothing about the account is read beyond its deleted_at or written.
+ACCOUNT_DELETED_REDIRECT = "/?sign_in=account_deleted"
+# The only value GET /v1/auth/login accepts for ``prompt`` (OpenID Connect Core 3.1.2.1): the provider shows its login
+# page even while it remembers the person. Given explicitly (the phone before deleting the account), it starts a
+# re-authentication: ``max_age=0`` is added and the callback records the provider's ``auth_time`` on the session only
+# when it falls within this attempt, which DELETE /v1/account requires (DECISIONS #121).
+LOGIN_PROMPT = "login"
 # The re-prompt marker (DECISIONS #119). After a refusal the provider still remembers the person (Auth0 keeps its own
 # sign-in session), so the next sign-in would be answered "unverified" again at once, without the provider's login
 # page, where "Forgot password?" and switching account are. The refusal sets this cookie; every GET /v1/auth/login
@@ -94,12 +102,20 @@ def start_again() -> RedirectResponse:
 
 
 @router.get("/auth/login")
-async def login(request: Request, db: DB, svc: Svc, return_to: str | None = None) -> Response:
+async def login(
+    request: Request, db: DB, svc: Svc, return_to: str | None = None, prompt: str | None = None
+) -> Response:
     if not svc.login_limiter.allow(client_ip(request) or "?"):
         raise ApiError(429, "RATE_LIMITED")
+    if prompt is not None and prompt != LOGIN_PROMPT:
+        raise ApiError(400, "MALFORMED_MESSAGE", "prompt must be login")
     target = safe_return_to(return_to)
     # The marker is read here and never changed: this try may not reach the callback, and only the callback ends it.
-    url = await svc.oidc.begin(db, target, prompt="login" if reprompt_marked(request) else None)
+    # An explicit prompt=login (the phone before deleting the account) asks for the login page the same way, and is
+    # also a re-authentication (max_age=0, auth_time checked at the callback). The marker alone is not one.
+    reauth = prompt == LOGIN_PROMPT
+    asked = reauth or reprompt_marked(request)
+    url = await svc.oidc.begin(db, target, prompt="login" if asked else None, reauth=reauth)
     return RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store"})
 
 
@@ -141,11 +157,21 @@ async def callback(
         await db.flush()
         created = True
     elif account.deleted_at is not None:
-        raise ApiError(403, "FORBIDDEN", "This account was deleted.")
+        # Like the other sign-in problems: a redirect to the home page's notice, no session, no cookie of any kind (the
+        # re-prompt marker neither set nor cleared) and nothing written. Returning (not raising) commits the deletion
+        # of the login attempt, so this callback address cannot be replayed.
+        log.info("oidc.callback_account_deleted")
+        return RedirectResponse(ACCOUNT_DELETED_REDIRECT, status_code=303, headers={"Cache-Control": "no-store"})
     else:
         account.email = identity.email or account.email
         account.display_name = identity.display_name or account.display_name
-    session, token = await create_session(db, svc.settings, account.id, request.headers.get("user-agent"))
+    session, token = await create_session(
+        db,
+        svc.settings,
+        account.id,
+        request.headers.get("user-agent"),
+        authenticated_at=identity.reauthenticated_at,
+    )
     iph = ip_hash(svc.settings.session_secret.get_secret_value(), client_ip(request))
     events.record(
         db,

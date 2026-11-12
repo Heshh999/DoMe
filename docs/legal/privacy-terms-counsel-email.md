@@ -56,10 +56,12 @@ and the short licence terms my Windows installer shows.
 
 My questions:
 1. Renewal and cancellation. Plans renew automatically; customers cancel online in Stripe's portal, at
-   period end. Today my plan card before Stripe's checkout does not say the plan renews or link to the
-   Terms, and checkout records no acceptance. What disclosures, consent step, confirmation and
-   yearly-renewal reminders do I need under federal, California, New Jersey and other state laws? Should I
-   follow the strictest state everywhere? My own server sends no email and the app cannot show notices yet
+   period end. Under each subscribe button, and under each paid plan on my Pricing page, the app says in
+   bold, larger type that the plan renews automatically at the price shown until cancelled, says how to
+   cancel, and links to the Terms and the Privacy notice. There is still no tick box, and checkout records
+   no acceptance. Is that wording and placement enough? What consent step, confirmation and yearly-renewal
+   reminders do I need under federal, California, New Jersey and other state laws? Should I follow the
+   strictest state everywhere? My own server sends no email and the app cannot show notices yet
    (only my sign-in provider sends sign-in emails); how must reminders and notices of price or terms changes
    be sent?
 2. Refunds and card disputes. Today: no partial refunds, refunds by hand, no trial, and top-ups never expire.
@@ -70,8 +72,14 @@ My questions:
    others)? What must the notice contain regardless? The app has no analytics or advertising code; could a
    vendor arrangement still count as a "sale" or "sharing"? Is a keyed hash of an IP address personal
    information?
-4. Account deletion. There is no delete button yet; I delete accounts by hand on request. Is that
-   acceptable at launch, within what time, and how long must I keep billing records?
+4. Account deletion. Customers can delete their account in the app (Settings, Delete account). They type
+   a phrase and, unless they did so in the last 10 minutes, sign in again with their password. The
+   subscription is cancelled at once with no automatic refund, unused AI top-up requests are lost, every
+   phone and PC is disconnected, and the email and name are removed at once; the account is erased 30
+   days later (later while a payment matter is still open). My own payment records are kept without the
+   name or email; Stripe keeps its own records. The sign-in login at Auth0 is not deleted automatically: I
+   delete it by hand on request. Is this enough? How fast must I handle a deletion request sent to
+   support, and how long must I keep billing records?
 5. Minimum age. The drafts propose 18, because paid plans are contracts and the app can shut down a PC. Is
    that right, and what must I do about children under 13?
 6. The AI assistant. It proposes up to three steps from a fixed list of actions; simple ones such as pause
@@ -118,11 +126,12 @@ My questions:
 15. YouTube. My optional browser extension, named "DoMe for YouTube", controls YouTube's player in the
     customer's own browser (play, pause, volume, search; it never skips ads). Do YouTube's terms or brand
     rules, or the Chrome Web Store's policies, require changes to its name, to the extension or to my Terms?
-16. Advertising claims. My pages say everyday commands are "unlimited, always" and Screen view is
-    "unlimited" on paid plans, although technical limits apply (for example 120 commands a minute from
-    each phone, and relay limits for Screen view). My FAQ describes Screen view features that are not built
-    yet (a floating mini view, hearing the PC's sound and a TV-style remote), and AI requests are also
-    shown as minutes. What wording do I need?
+16. Advertising claims. My pages describe paid Screen view as "without the Free plan's time limit
+    (fair-use limits apply)", with an example (a monthly limit on relay connections per account), and
+    everyday commands as free and "never counted against AI limits", next to a fair-use limit of 120
+    commands a minute from each phone. Nothing is called "unlimited". My FAQ says Screen view is not in the
+    app yet, and that hearing the PC's sound and a TV-style remote are coming later. AI requests are also
+    shown as minutes. Is this wording enough, and what else do I need?
 17. Accessibility. My website and phone app aim for WCAG AA contrast and 44-pixel touch targets, and handle
     VoiceOver for the assistant, but publish no accessibility statement. Do I need one, or a particular standard, under US disability law?
 
@@ -157,7 +166,7 @@ rewritten that day.
   `deploy/fly.toml:18-19`.
 - Encrypted in transit, not end-to-end: `mobile-app/src/pages/public/PrivacyPage.tsx:64`;
   `docs/adr/0001-foundational-decisions.md:167-178`. The server keeps a record of each command (action name,
-  state, error code, times and a hash), not its content: `cloud-api/dome_api/db/models.py:315-339`;
+  state, error code, times and a hash), not its content: `cloud-api/dome_api/db/models.py:320-344`;
   `mobile-app/src/pages/public/PrivacyPage.tsx:43`.
 - Screen view encrypted, Cloudflare relay: `shared/protocol/version.json:76-77`;
   `cloud-api/dome_api/screen/turn.py:1-3`. On only on staging: `cloud-api/dome_api/settings.py:175`;
@@ -171,9 +180,11 @@ rewritten that day.
   `cloud-api/DECISIONS.md:522-531`; `shared/protocol/plans.json:166`.
 - Nothing on sale: `docs/LAUNCH_SETUP.md:312-320`.
 - Question 1: renewal and cancellation in Stripe's portal `mobile-app/src/pages/public/TermsPage.tsx:82,93-94`;
-  `docs/LAUNCH_SETUP.md:387-389`. No renewal statement or Terms link before payment
-  `mobile-app/src/pages/app/BillingPage.tsx:32,357-395`. No acceptance at checkout
-  `cloud-api/dome_api/billing/stripe_provider.py:222-237`; `mobile-app/src/pages/public/TermsPage.tsx:15`.
+  `docs/LAUNCH_SETUP.md:387-389`. The renewal statement (bold, larger), how to cancel and the Terms and
+  Privacy links `mobile-app/src/content/SubscriptionTerms.tsx:1-42`; `mobile-app/src/content/plans.ts:161-178`;
+  under each subscribe button `mobile-app/src/pages/app/BillingPage.tsx:400` and each paid plan on Pricing
+  `mobile-app/src/pages/public/PricingPage.tsx:212`. No tick box and no acceptance at checkout
+  `cloud-api/dome_api/billing/stripe_provider.py:222-237`; `mobile-app/src/pages/public/TermsPage.tsx:15,85`.
   No email sent by DoMe's server: search of `cloud-api/dome_api` (no email-sending code); Auth0's emails go
   through Resend `docs/LAUNCH_SETUP.md:717-719`. No in-app notice feature: search of `mobile-app/src`. The
   drafts' notice promises and [FOUNDER] notes: `TermsPage.tsx:34,108,157`; `PrivacyPage.tsx:213`.
@@ -182,10 +193,15 @@ rewritten that day.
   `docs/BILLING.md:49,264,337-338`.
 - Question 3: no analytics code `mobile-app/package.json:18-27`; `cloud-api/dome_api/security/headers.py:19-24`.
   Keyed IP hash `cloud-api/dome_api/security/tokens.py:41-44`.
-- Question 4: `cloud-api/KNOWN_ISSUES.md:110-111`; `mobile-app/src/pages/public/PrivacyPage.tsx:168`.
+- Question 4: the button and what it says `mobile-app/src/components/DeleteAccountSheet.tsx:80-100`; the route,
+  its phrase and the 10-minute password check `cloud-api/dome_api/routes/account.py:28-58`;
+  `cloud-api/dome_api/account_deletion.py:64`; cloud-api DECISIONS #121, #123; erased 30 days later, not while
+  billing is open `cloud-api/dome_api/purge.py:69,194-214`; payment records kept without name or email
+  `cloud-api/KNOWN_ISSUES.md:210-218`; `docs/BILLING.md:375-395`; the Auth0 login deleted by hand
+  `cloud-api/KNOWN_ISSUES.md:210-218`; `mobile-app/src/pages/public/PrivacyPage.tsx:168`.
 - Question 5: `mobile-app/src/pages/public/TermsPage.tsx:25`; `mobile-app/src/pages/public/PrivacyPage.tsx:196`.
 - Question 6: three steps, fixed list `docs/design/assistant.md:409-445`; simple actions run at once
-  `mobile-app/src/content/plans.ts:204`; consent screen `mobile-app/src/components/AssistantConsentSheet.tsx:1-5,24-48`,
+  `mobile-app/src/content/plans.ts:254`; consent screen `mobile-app/src/components/AssistantConsentSheet.tsx:1-5,24-48`,
   copied in `docs/legal/ai-consent-text.md`; mistakes wording `mobile-app/src/pages/public/TermsPage.tsx:124`.
 - Question 7: PC sound planned `docs/design/screen-view.md:75-77`; `mobile-app/src/content/faq.tsx:121`.
 - Question 8: `mobile-app/src/pages/public/TermsPage.tsx:145`; `pc-agent/packaging/installer/licence-terms.txt:21-24`.
@@ -211,10 +227,12 @@ rewritten that day.
 - Question 15: `browser-extension/public/manifest.json:3,7-10`; no ad skipping
   `browser-extension/src/content/adapter.ts:30,102`; `mobile-app/src/pages/public/TermsPage.tsx:58`; not
   yet listed in the Chrome Web Store `docs/WINDOWS_INSTALL.md:737`.
-- Question 16: "unlimited" `mobile-app/src/content/plans.ts:141,159,205`; the per-phone command limits
+- Question 16: the paid Screen view and everyday-command wording `mobile-app/src/content/plans.ts:109,113,209`;
+  `mobile-app/src/lib/pricing.ts:44-45`; no "unlimited" on any rendered public page
+  `mobile-app/test/public/honestClaims.test.tsx`; the per-phone command limits
   `shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:47`; Screen view relay limits
-  `mobile-app/src/pages/public/TermsPage.tsx:116`; features not built `mobile-app/src/content/faq.tsx:121`;
-  AI requests as minutes `mobile-app/src/content/plans.ts:107-113`; the Terms' limits wording
+  `mobile-app/src/pages/public/TermsPage.tsx:116`; features not built `mobile-app/src/content/faq.tsx:123`;
+  AI requests as minutes `mobile-app/src/content/plans.ts:125-131,150-155`; the Terms' limits wording
   `TermsPage.tsx:134,140`.
 - Question 17: `mobile-app/README.md:61`; `mobile-app/DECISIONS.md:481`; `docs/design/assistant.md:2139`; no
   accessibility statement (search of `mobile-app/src`).

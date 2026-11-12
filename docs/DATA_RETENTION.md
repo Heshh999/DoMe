@@ -3,10 +3,13 @@
 Status: this table describes every record class the code stores today (cloud-api PostgreSQL models,
 the agent's SQLite store and files, the PWA's browser storage, the extension's storage, logs) and the
 retention rule for each. **Implemented** means the code enforces the rule now (evidence tag given);
-**proposed** means the rule is the design and no job enforces it yet. As of this writing cloud-api has
-**no automated purge job**: rows marked `proposed` accumulate until Phase C/D adds the scheduled
-cleanup described in §4. The agent's bounds (journal 5,000 rows, security events 500 rows, challenge
-purge, log rotation) are implemented and unit-tested.
+**proposed** means the rule is the design and no job enforces it yet. Since 2026-11-12 cloud-api runs
+the hourly retention purge (§4, cloud-api DECISIONS #122): a rule marked **implemented (purge job)** is
+enforced by it, at most 500 rows per table per pass, integration-tested against real PostgreSQL
+(cloud-api `tests/test_retention_purge.py`). What is still marked `proposed` (the financial records'
+7 years, the operator audit, server logs, aggregated activation events) is a policy statement, not a
+guarantee. The agent's bounds (journal 5,000 rows, security events 500 rows, challenge purge, log
+rotation) are implemented and unit-tested.
 
 Design rules that hold everywhere (`docs/adr/0001-foundational-decisions.md`, cloud-api
 `models.py` docstring, unit- and integration-tested):
@@ -20,7 +23,20 @@ Design rules that hold everywhere (`docs/adr/0001-foundational-decisions.md`, cl
   proposed steps, in the database, logs, files, error bodies, security events or diagnostics
   (integration-tested: cloud-api `tests/test_assistant_routes.py::test_words_never_reach_logs_or_tables`).
 - Every account-owned table carries `account_id`, every query is scoped by it, and `ON DELETE CASCADE`
-  from `accounts` removes the rows when the account row is hard-deleted.
+  from `accounts` removes the rows when the account row is hard-deleted, except the financial records
+  (`subscriptions`, `topup_purchases`, `billing_events`) and `activation_events`, whose `account_id` is
+  set to NULL instead (`ON DELETE SET NULL`; for the first two since migration 0008).
+- Account deletion (`DELETE /v1/account`, cloud-api DECISIONS #121; implemented, integration-tested:
+  cloud-api `tests/test_account_deletion.py`): after a confirmed password entry within 10 minutes and the typed
+  phrase, the account is marked deleted and its email and display name are blanked at once; the
+  subscription is cancelled (or the cancel is retried until the provider confirms it); every session,
+  phone, grant, PC credential and PC token is revoked, every PC soft-deleted, the phones' TURN
+  credentials revoked, the assistant consent cleared, the support diagnostics deleted and the layouts
+  and routines soft-deleted, in one transaction with one `account_deleted` security event (counts
+  only). The account row and everything that cascades from it are hard-deleted 30 days later by the
+  purge job, never while a cancel is pending, a provider subscription is not cancelled or a Checkout
+  page is still pending. The sign-in provider's login is not deleted by DoMe (cloud-api KNOWN_ISSUES
+  #40).
 - Logs are structured and redacted before any sink (keys named `token`, `secret`, `*_code`,
   `pc_credential`, `challenge_text`, `payload`, `sig`, `title`, `email`, …); URLs are logged as paths
   only, `user_code` is masked in request logs, query strings are never logged.
@@ -43,32 +59,36 @@ only as hashes.
 
 | Record class (table) | Purpose | Contents | Retention | Deletion trigger | Encryption at rest | Who can access |
 | --- | --- | --- | --- | --- | --- | --- |
-| `accounts` | Identity anchor | OIDC `issuer` + `subject`, email, display name, `plan`, timestamps, `deleted_at`; AI assistant consent (`assistant_consent_version`, `assistant_consented_at`) | Life of the account; soft-deleted 30 days, then hard-deleted (proposed). Consent columns until withdrawn (cleared at once, implemented) or the account is deleted; the history is in `security_events` | Account deletion (Phase C); `DELETE /v1/assistant/consent` for the consent columns | Managed volume encryption (expected) | The account (`GET /v1/session`, `GET /v1/assistant`); founder DB access |
-| `sessions` | Web sign-in | SHA-256 of the session id, CSRF token, timestamps, SHA-256 of the user agent, `revoked_at` | 30-day idle / 90-day absolute expiry (implemented, integration-tested); expired and revoked rows kept until purge (proposed: delete 30 days after expiry) | Logout, session revoke, account deletion, purge | Managed | The account (`GET /v1/account/sessions`, metadata only) |
-| `auth_flows` | OIDC login in progress | `state`, `nonce`, PKCE verifier, `return_to` path | Deleted on callback, success or failure (implemented); abandoned flows expire in minutes (proposed purge of expired rows) | Callback or purge | Managed | Nobody (internal) |
-| `pcs` | Linked PC inventory | Name, PC public key (JWK) and `kid`, `enabled`, reported remote-enabled flag, platform, agent version, `last_seen_at`, `last_power_request` (action + time only), `deleted_at` | Life of the link; soft-deleted on unlink and kept so a re-link reuses the row (implemented, DECISIONS #2); hard-deleted with the account | Unlink + account deletion | Managed | The account (`GET /v1/pcs`) |
-| `pc_credentials` | PC long-lived credential | SHA-256 of the credential, timestamps, `revoked_at` | Until revoked; revoked rows kept for audit until account purge (proposed) | Unlink, re-link, account deletion | Managed | Nobody (hash only) |
-| `pc_access_tokens` | 1-hour relay tokens | SHA-256 of the token, `expires_at`, `revoked_at` | 1 h validity (implemented); expired rows should be purged daily (proposed) | Expiry purge, unlink | Managed | Nobody (hash only) |
-| `device_link_codes` | PC linking (device-code flow) | SHA-256 of `device_code`, `user_code`, PC public JWK, agent version, platform, name hint, state, SHA-256 of requester IP | Valid 10 minutes (implemented); rows should be purged 24 h after expiry (proposed) | Purge | Managed | The signed-in account previews a pending code by `user_code` |
-| `controllers` | Paired phone installations | Controller public JWK + `kid`, display name, `last_seen_at`, `revoked_at` | Life of the pairing; revoked rows kept (needed so a re-pair of the same key is detectable) until account purge | Revoke + account deletion | Managed | The account (`GET /v1/controllers`) |
-| `grants` | Controller → PC permissions | Capability list, timestamps, `revoked_at` | Life of the grant; revoked rows retained as security history until account purge | Revoke, unlink, account deletion | Managed | The account (`GET /v1/pcs/{id}/grants`) |
-| `pairing_sessions` | Pairing in progress | SHA-256 of the pairing code (never the code), state, claimed controller JWK/name/capabilities, attempt counter | Valid 5 minutes (implemented); decided/expired rows should be purged after 7 days (proposed) | Purge | Managed | The account (`GET /v1/pairing/{id}` after claim) |
-| `commands` | Command lifecycle history | Action name, SHA-256 of the signed payload, state, error code, timestamps, duration; **no params, no results, no targets, no titles** | Proposed: 30 days, then deleted; in-flight rows are swept to terminal states by the deadline sweeper (implemented) | Purge, account deletion | Managed | The account (`GET /v1/commands`, last 100 at most) |
-| `security_events` | Account security activity | Kind, severity, actor, subject id, redacted `detail` (passed through the log redactor before storage, DECISIONS #13), SHA-256 of client IP keyed by the session secret | Proposed: 12 months, then deleted; unattributed rows (`account_id NULL`) 90 days | Purge, account deletion | Managed | The account (`GET /v1/account/security-events`, last 200 at most) |
-| `activation_events` | Product measurement (install → first command funnel) | Kind, subject id, `detail` without command content | Table exists; **no event is emitted yet**. Proposed: 24 months aggregated, raw rows 90 days; `account_id` set to NULL on account deletion (`ON DELETE SET NULL`, implemented) | Purge | Managed | Founder analytics only; separate from security records by table |
-| `subscriptions` (Phase C) | Billing state cache | Stripe customer/subscription/price ids, state, period, grace | Life of the account + 7 years as part of financial records (proposed) | Account hard-delete keeps a minimal reference in `billing_events` | Managed | The account (Billing page); operators via audited interface |
-| `billing_events` (Phase C) | Webhook receipt and dedup | Provider event id, type, status, redacted error, payload digest; **no payload** | 7 years (financial records, proposed); `account_id` set NULL on account deletion | Financial retention window | Managed | Operators (failure queue) |
-| `usage_periods` (Phase E) | AI allowance accounting per account and calendar month (UTC) | Counters only: interpretations used and reserved, cost used and reserved (micro-dollars), input/output/cache-read/cache-write tokens, failed turns | Life of the account (proposed; billing and reconciliation questions) | Account deletion | Managed | The account (`GET /v1/assistant` allowance) |
-| `assistant_turns` (Phase E) | AI turn ledger: reservation, settlement, reconciliation | Phone's turn id, status code, charged flag, period and month, reserved and actual cost, the four token counts, model served, fallback used, provider request id, latency, timestamps; **no text column of any kind** | Proposed: 400 days, then deleted (reconciliation and billing questions); stale `pending` rows are settled as `abandoned` by the sweeper (implemented, integration-tested) | Purge, account deletion (`ON DELETE CASCADE`) | Managed | Founder DB access; the account sees only its allowance |
-| `ai_spend_months` (Phase E) | Operator AI spending ceiling | Month start, spent and reserved micro-dollars across all accounts; **no account data** | Life of the service (proposed) | — | Managed | Founder DB access |
-| `layouts`, `routines` (Phase C) | Customer configuration | Layout definition / routine steps (action ids and validated params, no secrets), name, `deleted_at` | Life of the account; retained through downgrade (spec §3); soft-deleted 30 days then purged (proposed) | Customer delete, account deletion | Managed | The account only |
-| `support_diagnostics` (Phase C) | Customer-initiated support bundle | Redacted bundle JSON, `expires_at` | `expires_at` (proposed 14 days), then deleted | Expiry, customer delete, account deletion | Managed | The account and authorised support staff through the audited operator interface |
-| `pending_deletions` (Phase C) | Deletion job state | Provider cancel state, attempts, redacted error | Until `completed_at` + 30 days (proposed) | Completion | Managed | Operators |
-| `pairing_sessions.pc_key_mac` (1.4) | The PC key pin the phone verifies (Screen view, `rules.pc_key_pinning`) | The 43-character HMAC the PC computed over its own key with the pairing code (the code itself is never sent) | With its pairing row (proposed purge after 7 days, as above) | Purge | Managed | The phone that claimed the pairing, once approved (`GET /v1/pairing/{id}`) |
-| `screen_accounts` (1.4) | The per-account lock every Screen view reservation and TURN mint takes, and the monthly mint counter | `account_id`, month start, mints this month, `updated_at` | Life of the account (proposed) | Account deletion (`ON DELETE CASCADE`) | Managed | Founder DB access |
-| `screen_view_windows` (1.4) | The Free Screen view allowance (5-hour rolling windows) | Window start/end; seconds used and reserved; forgiven failed and refused starts; seconds of pause discount given | Proposed: 30 days after the window ends (no purge job yet) | Account deletion | Managed | The account sees its allowance (`screen_ice_servers`), founder DB access |
-| `screen_reservations` (1.4) | One Screen view start as the relay measured it (the ledger) | Ids (account, PC, phone, command, session), reserved/charged seconds, forward/start/end times, end reason; **no SDP, address or name** | Proposed: 90 days (billing questions), then deleted; stale rows are settled by the sweeper (implemented, integration-tested) | Account deletion | Managed | Founder DB access |
-| `turn_credentials` (1.4) | The phone's current TURN credential (one row per phone) | The provider's username (never the credential, which reaches the phone once), mint/expiry times, TTL, the start and session it serves, state, revocation reason | Replaced by the phone's next mint; otherwise life of the phone (proposed purge 30 days after expiry) | Next mint, phone or account deletion | Managed | Founder DB access |
+| `accounts` | Identity anchor | OIDC `issuer` + `subject`, email, display name, `plan`, timestamps, `deleted_at`; AI assistant consent (`assistant_consent_version`, `assistant_consented_at`) | Life of the account. On deletion the email and display name are blanked and the consent columns cleared at once; `issuer` and `subject` stay so a sign-in with the same identity lands on the "account deleted" notice; the row is hard-deleted 30 days after `deleted_at` with everything that cascades (implemented, purge job), never while billing is open (a pending cancel, a live provider subscription, a pending Checkout page). Consent columns until withdrawn (cleared at once, implemented) or the account is deleted; the history is in `security_events` | Account deletion (`DELETE /v1/account`, implemented), then the purge job; `DELETE /v1/assistant/consent` for the consent columns | Managed volume encryption (expected) | The account (`GET /v1/session`, `GET /v1/assistant`); founder DB access |
+| `sessions` | Web sign-in | SHA-256 of the session id, CSRF token, timestamps, SHA-256 of the user agent, `revoked_at` | 30-day idle / 90-day absolute expiry (implemented, integration-tested); expired and revoked rows deleted 30 days after expiry or revocation (implemented, purge job) | Logout, session revoke, account deletion, purge | Managed | The account (`GET /v1/account/sessions`, metadata only) |
+| `auth_flows` | OIDC login in progress | `state`, `nonce`, PKCE verifier, `return_to` path | Deleted on callback, success or failure (implemented); abandoned flows expire in minutes and are deleted at the next login start or 24 h past expiry (implemented, purge job) | Callback or purge | Managed | Nobody (internal) |
+| `pcs` | Linked PC inventory | Name, PC public key (JWK) and `kid`, `enabled`, reported remote-enabled flag, platform, agent version, `last_seen_at`, `last_power_request` (action + time only), `deleted_at` | Life of the link; soft-deleted on unlink and kept so a re-link reuses the row (implemented, DECISIONS #2); soft-deleted at account deletion and hard-deleted with the account 30 days later (implemented, purge job) | Unlink + account deletion | Managed | The account (`GET /v1/pcs`) |
+| `pc_credentials` | PC long-lived credential | SHA-256 of the credential, timestamps, `revoked_at` | Until revoked; revoked rows kept for audit until the account's hard delete (implemented, purge job) | Unlink, re-link, account deletion | Managed | Nobody (hash only) |
+| `pc_access_tokens` | 1-hour relay tokens | SHA-256 of the token, `expires_at`, `revoked_at` | 1 h validity (implemented); expired rows deleted 24 h past expiry (implemented, purge job) | Expiry purge, unlink | Managed | Nobody (hash only) |
+| `device_link_codes` | PC linking (device-code flow) | SHA-256 of `device_code`, `user_code`, PC public JWK, agent version, platform, name hint, state, SHA-256 of requester IP | Valid 10 minutes (implemented); rows deleted 24 h after expiry (implemented, purge job) | Purge | Managed | The signed-in account previews a pending code by `user_code` |
+| `controllers` | Paired phone installations | Controller public JWK + `kid`, display name, `last_seen_at`, `revoked_at` | Life of the pairing; revoked rows kept (needed so a re-pair of the same key is detectable) until the account's hard delete (implemented, purge job) | Revoke + account deletion | Managed | The account (`GET /v1/controllers`) |
+| `grants` | Controller → PC permissions | Capability list, timestamps, `revoked_at` | Life of the grant; revoked rows retained as security history until the account's hard delete (implemented, purge job) | Revoke, unlink, account deletion | Managed | The account (`GET /v1/pcs/{id}/grants`) |
+| `pairing_sessions` | Pairing in progress | SHA-256 of the pairing code (never the code), state, claimed controller JWK/name/capabilities, attempt counter | Valid 5 minutes (implemented); decided/expired rows deleted after 7 days (implemented, purge job) | Purge | Managed | The account (`GET /v1/pairing/{id}` after claim) |
+| `commands` | Command lifecycle history | Action name, SHA-256 of the signed payload, state, error code, timestamps, duration; **no params, no results, no targets, no titles** | 30 days, then deleted (implemented, purge job); in-flight rows are swept to terminal states by the deadline sweeper (implemented) | Purge, account deletion | Managed | The account (`GET /v1/commands`, last 100 at most) |
+| `security_events` | Account security activity | Kind, severity, actor, subject id, redacted `detail` (passed through the log redactor before storage, DECISIONS #13), SHA-256 of client IP keyed by the session secret | 12 months (365 days), then deleted; unattributed rows (`account_id NULL`) 90 days (implemented, purge job); an account's rows also go with its hard delete | Purge, account deletion | Managed | The account (`GET /v1/account/security-events`, last 200 at most) |
+| `activation_events` | Product measurement (install → first command funnel) | Kind, subject id, `detail` without command content | Table exists; **no event is emitted yet**. Raw rows 90 days (implemented, purge job); 24 months aggregated (proposed, no aggregation is built); `account_id` set to NULL on account deletion (`ON DELETE SET NULL`, implemented) | Purge | Managed | Founder analytics only; separate from security records by table |
+| `subscriptions` (Phase C) | Billing state cache | Stripe customer/subscription/price ids, state, period, grace | Life of the account; survives the account's hard delete with `account_id` NULL (implemented, migration 0008); then 7 years as a financial record (proposed, **for counsel to confirm**; nothing deletes it yet) | Financial retention window | Managed | The account (Billing page); operators via audited interface |
+| `billing_events` (Phase C) | Webhook receipt and dedup | Provider event id, type, status, redacted error, payload digest; **no payload** | 7 years (financial records, proposed, **for counsel to confirm**; nothing deletes it yet); `account_id` set NULL at the account's hard delete (implemented) | Financial retention window | Managed | Operators (failure queue) |
+| `topup_purchases` (1.3) | AI top-up purchases | Stripe Checkout Session and payment-intent ids, requests bought, amount in cents and currency, status, timestamps; **no card data** | Life of the account; survives the account's hard delete with `account_id` NULL (implemented, migration 0008); then 7 years as a financial record (proposed, **for counsel to confirm**; nothing deletes it yet) | Financial retention window | Managed | The account sees its balance (Billing page); founder DB access |
+| `usage_periods` (Phase E) | AI allowance accounting per account and calendar month (UTC) | Counters only: interpretations used and reserved, cost used and reserved (micro-dollars), input/output/cache-read/cache-write tokens, failed turns | Life of the account (billing and reconciliation questions; no shorter period is stated); deleted with the account's hard delete (implemented, purge job). Not written since protocol 1.3 | Account deletion | Managed | The account (`GET /v1/assistant` allowance) |
+| `usage_windows` (1.3) | AI allowance per account: the 5-hour and the weekly window | Window start and end; requests used and reserved; cost used and reserved (micro-dollars); failed turns. Counts only | Life of the account (no shorter period is stated; ended windows are kept); deleted with its hard delete (implemented, purge job) | Account hard delete | Managed | The account (`GET /v1/assistant` allowance); founder DB access |
+| `ai_balances` (1.3) | AI balances that never roll over: Free's one-time taste and purchased top-up requests | Counters only: taste used and reserved, top-up requests remaining and reserved, `updated_at` | Life of the account; deleted with its hard delete (implemented, purge job) | Account hard delete | Managed | The account (allowance); founder DB access |
+| `assistant_turns` (Phase E) | AI turn ledger: reservation, settlement, reconciliation | Phone's turn id, status code, charged flag, period and month, reserved and actual cost, the four token counts, model served, fallback used, provider request id, latency, timestamps; **no text column of any kind** | 400 days, then deleted, settled rows only (implemented, purge job; reconciliation and billing questions); stale `pending` rows are settled as `abandoned` by the sweeper (implemented, integration-tested) | Purge, account deletion (`ON DELETE CASCADE`) | Managed | Founder DB access; the account sees only its allowance |
+| `ai_spend_months` (Phase E) | Operator AI spending ceiling | Month start, spent and reserved micro-dollars across all accounts; **no account data** | Life of the service (no purge rule; kept) | — | Managed | Founder DB access |
+| `layouts`, `routines` (Phase C) | Customer configuration | Layout definition / routine steps (action ids and validated params, no secrets), name, `deleted_at` | Life of the account; retained through downgrade (spec §3); soft-deleted (customer delete or account deletion) rows deleted 30 days after `deleted_at` (implemented, purge job). No route writes these tables yet | Customer delete, account deletion | Managed | The account only |
+| `support_diagnostics` (Phase C) | Customer-initiated support bundle | Redacted bundle JSON, `expires_at` | Deleted at `expires_at` (implemented, purge job; 14 days proposed for `expires_at`), and at once on account deletion (implemented). No route writes this table yet | Expiry, customer delete, account deletion | Managed | The account and authorised support staff through the audited operator interface |
+| `support_tickets` (1.1) | Customer-initiated support request | Reference, category, error code, the customer's message, the customer-reviewed diagnostics text after the server's redaction, app version, status, the answer, timestamps; never pairing material, credentials, typed text or media titles | Life of the account (no shorter period is stated); deleted with its hard delete (implemented, purge job) | Account hard delete | Managed | The account (`GET /v1/support/tickets`); founder DB access |
+| `pending_deletions` (Phase C) | Deletion job state | Provider cancel state, attempts, redacted error | Until `completed_at` + 30 days (implemented, purge job); an open row is never deleted and keeps the account from its hard delete | Completion | Managed | Operators |
+| `pairing_sessions.pc_key_mac` (1.4) | The PC key pin the phone verifies (Screen view, `rules.pc_key_pinning`) | The 43-character HMAC the PC computed over its own key with the pairing code (the code itself is never sent) | With its pairing row (deleted after 7 days, as above; implemented, purge job) | Purge | Managed | The phone that claimed the pairing, once approved (`GET /v1/pairing/{id}`) |
+| `screen_accounts` (1.4) | The per-account lock every Screen view reservation and TURN mint takes, and the monthly mint counter | `account_id`, month start, mints this month, `updated_at` | Life of the account; deleted with its hard delete (implemented, purge job) | Account deletion (`ON DELETE CASCADE`) | Managed | Founder DB access |
+| `screen_view_windows` (1.4) | The Free Screen view allowance (5-hour rolling windows) | Window start/end; seconds used and reserved; forgiven failed and refused starts; seconds of pause discount given | 30 days after the window ends (implemented, purge job) | Account deletion | Managed | The account sees its allowance (`screen_ice_servers`), founder DB access |
+| `screen_reservations` (1.4) | One Screen view start as the relay measured it (the ledger) | Ids (account, PC, phone, command, session), reserved/charged seconds, forward/start/end times, end reason; **no SDP, address or name** | 90 days (billing questions), then deleted, settled rows only (implemented, purge job); stale rows are settled by the sweeper (implemented, integration-tested) | Account deletion | Managed | Founder DB access |
+| `turn_credentials` (1.4) | The phone's current TURN credential (one row per phone) | The provider's username (never the credential, which reaches the phone once), mint/expiry times, TTL, the start and session it serves, state, revocation reason | Replaced by the phone's next mint; otherwise deleted 30 days after expiry (implemented, purge job); revoked at the provider on account deletion (implemented) | Next mint, phone or account deletion | Managed | Founder DB access |
 | `turn_deferred_revocations` (1.5) | A phone's TURN username still serving a live Screen view session after the phone minted its next credential (a Next screen switch keeps the old session until the new one shows its picture) | The provider's username (never the credential), the screen session id, account and phone ids, expiry | Until that session ends, then revoked at the provider and deleted; or the phone or account is revoked; or it expires | Session end, phone or account deletion | Managed | Founder DB access |
 | `turn_pending_revocations` (1.4) | Revocations the TURN provider has not confirmed yet | Username, account and phone ids (no foreign key: a deleted account's credential is still revoked), reason, expiry, attempts, last error code | Until the provider confirms or the credential expires (implemented, integration-tested) | Confirmation or expiry (the sweeper) | Managed | Nobody (internal) |
 | `turn_mint_days` (1.4) | The spending guard's count of credential lifetimes not covered by a session | Per account and UTC day: TTL seconds minted and released | 62 days (implemented, with the hourly reconciliation pass) | Purge, account deletion | Managed | Founder DB access |
@@ -152,17 +172,32 @@ cannot unlink itself (section 1).
 | Extension `chrome.storage.local` | Browser identity for tab targeting | Random `browser_instance_id`, user-set `profile_label`, last connection state | Life of the extension install | Uninstall, clearing extension data | Browser profile storage | The extension only (no network access of its own) |
 | Extension in-memory tab registry | Tab tokens and player state | Rebuilt after every service-worker restart | Worker lifetime | Termination | — | — |
 
-## 4. Proposed cleanup job (not implemented)
+## 4. Cleanup job (implemented: the retention purge)
 
-A daily task in cloud-api (`lifecycle.py` already owns the in-flight sweeper) would delete, in
-small batches: expired `pc_access_tokens`, `device_link_codes` and `auth_flows` older than 24 h past
-expiry, `pairing_sessions` decided/expired more than 7 days ago, `sessions` expired or revoked more
-than 30 days ago, `commands` older than 30 days, `security_events` older than 12 months (90 days when
-unattributed), `assistant_turns` older than 400 days, `support_diagnostics` past `expires_at`, and
-hard-delete `accounts` soft-deleted more than 30 days ago (cascading), keeping `billing_events` and
-`operator_audit`. Each run should write one
-`security_events` row of kind `retention_purge` (actor `system`, counts only). Until it exists, the
-retention column marked *proposed* is a policy statement, not a guarantee.
+`dome_api/purge.py` (cloud-api DECISIONS #122) runs in the API process every hour, the first pass an
+hour after start-up; `DOME_PURGE_ENABLED=false` stops it (`.env.example`). Each pass:
+
+1. Finishes account deletions a crash interrupted: an account deleted more than 10 minutes ago without
+   its `account_deleted` event gets the rest of the deletion (§1, "Account deletion").
+2. Deletes, per table, at most 500 rows past their period, oldest first, skipping rows another
+   transaction holds: `sessions` 30 days after expiry or revocation; `auth_flows`, `pc_access_tokens`
+   and `device_link_codes` 24 h past expiry; `pairing_sessions` 7 days after they were decided or
+   expired; `commands` after 30 days; `security_events` after 12 months (90 days when unattributed);
+   `activation_events` after 90 days; `support_diagnostics` at `expires_at`; `turn_credentials` 30 days
+   after expiry; `screen_view_windows` 30 days after the window ends; `screen_reservations` after 90
+   days and `assistant_turns` after 400 days, settled rows only; `pending_deletions` 30 days after
+   `completed_at`; `layouts` and `routines` 30 days after `deleted_at`.
+3. Hard-deletes accounts deleted more than 30 days ago, with everything that cascades from them. The
+   rows of `subscriptions`, `topup_purchases` and `billing_events` stay, with `account_id` set to
+   NULL. An account is kept while its subscription cancel is pending, a provider subscription of it is
+   not cancelled or a Checkout page of it is still pending.
+
+Each table runs in its own transaction. One log line per pass (`purge.run`) carries counts per table
+only. The per-pass `retention_purge` security event this section once proposed is not written: the
+log line carries the counts. Not covered by the job: the financial records' own period (7 years
+proposed, for counsel to confirm), `operator_audit`, `ai_spend_months`, server logs and database
+backups (the host's retention), and the tables that live as long as the account (cloud-api
+KNOWN_ISSUES #42).
 
 ## 5. Customer-facing summary (for the privacy notice draft)
 
@@ -176,4 +211,9 @@ signing key. The relay can see commands and results while routing them (it is no
 encrypted) and does not store them. If you turn on the optional AI assistant, the words of requests
 DoMe cannot work out by itself, with a short note of the recent conversation and a few coarse facts
 about your PC, go through DoMe's service to Anthropic; DoMe keeps only counts (requests, tokens,
-cost) and stores none of the words or answers. You can turn it off at any time.
+cost) and stores none of the words or answers. You can turn it off at any time. You can delete your
+account yourself after signing in again: your subscription stops, your phones and PCs are signed out
+at once, and the account is erased 30 days later. Payment records are kept after that, without your
+email or name, for a period still to be confirmed. Your login at the sign-in provider is separate;
+DoMe support can have it deleted on request. Old records (sign-in sessions, command history, security
+activity) are deleted automatically after the periods in this document.

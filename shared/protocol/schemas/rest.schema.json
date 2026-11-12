@@ -1487,6 +1487,27 @@
         }
       }
     },
+    "account_delete_request": {
+      "description": "DELETE /v1/account (session + CSRF + exact Origin; no protocol bump, docs/PROTOCOL.md §19.2). The phone makes the person type the phrase; the server compares it exactly (lower case, no extra spaces). Refused with 403 REAUTH_REQUIRED unless the session was created by a sign-in again with GET /v1/auth/login?prompt=login whose password entry the provider confirmed within the last 10 minutes; a plain sign-in never counts (the phone then signs in again that way). Answer: 204 without a body, and the session cookie is cleared.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confirm"
+      ],
+      "properties": {
+        "confirm": {
+          "const": "delete my account"
+        }
+      }
+    },
+    "sign_in_problem": {
+      "description": "The values of `sign_in` in the address GET /v1/auth/callback redirects to (`/?sign_in=<value>`) when a sign-in cannot finish: no session is started. email_unverified: the provider has not confirmed the email address; try_again: the attempt cannot be finished and a fresh sign-in is the whole remedy; account_deleted: the identity belongs to a deleted DoMe account.",
+      "enum": [
+        "email_unverified",
+        "try_again",
+        "account_deleted"
+      ]
+    },
     "support_ticket_request": {
       "description": "POST /v1/support/tickets. `diagnostics` is the customer-reviewed, already-redacted bundle as JSON text (component versions, connection states, error codes, timing only); the server passes it through its redactor again before storing. Never contains pairing material, credentials, typed text, media titles or URLs.",
       "type": "object",

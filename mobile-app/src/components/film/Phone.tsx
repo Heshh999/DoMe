@@ -1,14 +1,14 @@
 /**
  * The phone in the film: the real app's look (the brand mark, the Midnight cards, the tab bar with its coral dot),
- * authored at the real screen size (390 × 844) and scaled into the drawn handset. Pages: Home, Ask, Screen view
- * (coming) and Apps. The PC's mirror is a layer of its own so it can shrink into the corner while the page
- * underneath changes. Everything is positioned explicitly so the fingertip lands where it should at any size.
+ * authored at the real screen size (390 × 844) and scaled into the drawn handset. Pages: Home, Ask and Screen view
+ * (coming). The PC's mirror is a layer of its own over the Screen view page; it zooms on the phone only, as Screen
+ * view's pinch does, with the 1× button while zoomed. It shows nothing Screen view's first version lacks: no mini view,
+ * no PC sound, no TV-style remote. Everything is positioned explicitly so the fingertip lands where it should at any size.
  */
 import { memo, type ReactNode } from "react";
 
 import { BrandMark, Wordmark } from "../brand.tsx";
 import { Icon, type IconName } from "../icons.tsx";
-import { FilmIcon } from "./filmIcons.tsx";
 import { PHONE_SCREEN } from "./layout.ts";
 import { PcScreen } from "./Pc.tsx";
 import { EPISODES, MIRROR, TOUCH, type HandView, type PcView, type PhonePage, type PhoneView } from "./script.ts";
@@ -384,113 +384,21 @@ function ScreenPage({ view }: { view: PhoneView }) {
   );
 }
 
-/* ── Apps ────────────────────────────────────────────────────────────────────────────────────────────── */
-
-function AppRow({ y, icon, name, detail, action, press = 1, iconEl }: { y: number; icon?: IconName; iconEl?: ReactNode; name: string; detail: string; action: string; press?: number }) {
-  return (
-    <At x={16} y={y} w={358} h={76} className={`${CARD} flex items-center gap-3 px-4`}>
-      {iconEl ?? <Well icon={icon ?? "apps"} />}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[16px] font-semibold text-text">{name}</span>
-        <span className="block truncate text-[12px] text-text-muted">{detail}</span>
-      </span>
-      <span className="flex h-10 items-center justify-center rounded-full border border-white/12 bg-white/8 px-4 text-[14px] font-semibold text-text" style={{ transform: `scale(${press})` }}>
-        {action}
-      </span>
-    </At>
-  );
-}
-
-function Dpad({ pressed }: { pressed: "right" | null }) {
-  const key = (name: string, x: number, y: number, rotate: number) => (
-    <span key={name} className={`absolute flex h-11 w-11 items-center justify-center rounded-full ${pressed === name ? "bg-primary text-white" : "text-text"}`} style={{ left: x - 22, top: y - 22, transform: `rotate(${rotate}deg) scale(${pressed === name ? 0.92 : 1})` }}>
-      <Icon name="chevron" size={20} strokeWidth={2.25} />
-    </span>
-  );
-  return (
-    <div className="absolute h-[150px] w-[150px] rounded-full border border-white/12 bg-white/6" style={{ left: 104, top: 49 }}>
-      {key("up", 75, 26, -90)}
-      {key("right", 124, 75, 0)}
-      {key("down", 75, 124, 90)}
-      {key("left", 26, 75, 180)}
-      <span className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/12 text-[13px] font-bold text-text">OK</span>
-    </div>
-  );
-}
-
-function AppsPage({ view }: { view: PhoneView }) {
-  return (
-    <>
-      <PageTitle
-        title="Apps"
-        sub="Approved on Living Room PC"
-        chip={
-          <Pill tone="coral">
-            <span className="text-text-muted">Coming</span>
-          </Pill>
-        }
-      />
-      <AppRow y={120} name="ZStream" detail="TV and films" action="Open" press={view.zPress} iconEl={<span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(145deg,#f29d6a,#4b2a6e)] text-white"><FilmIcon name="tv" size={22} /></span>} />
-      <AppRow y={206} name="Edge" detail="Episode 4 · paused" action="Bring to front" iconEl={<span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/15 text-accent"><span className="h-5 w-5 rounded-full border-[3px] border-current" /></span>} />
-      <AppRow y={292} icon="music" name="Spotify" detail="Not running" action="Open" />
-      {view.tvRemote > 0 ? (
-        <At x={16} y={380} w={358} h={216} className={`${CARD} overflow-hidden`} style={{ opacity: view.tvRemote, transform: `translateY(${lerp(40, 0, view.tvRemote)}px)` }}>
-          <At x={16} y={14} className="text-[15px] font-semibold text-text">
-            ZStream · TV remote
-          </At>
-          <At x={16} y={36} className="text-[12px] text-text-muted">
-            Arrow keys and OK on the PC
-          </At>
-          <Dpad pressed={view.dpadPress} />
-          <At x={20} y={104} w={40} h={40} className="flex items-center justify-center rounded-full border border-white/12 text-text">
-            <FilmIcon name="back" size={18} />
-          </At>
-          <At x={298} y={104} w={40} h={40} className="flex items-center justify-center rounded-full border border-white/12 text-text">
-            <Icon name="home" size={18} />
-          </At>
-        </At>
-      ) : null}
-      {view.sound > 0 ? (
-        <At x={16} y={608} w={358} h={56} className={`${CARD} flex items-center gap-3 px-4`} style={{ opacity: view.sound, transform: `translateY(${lerp(16, 0, view.sound)}px)` }}>
-          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${view.muted ? "bg-white/10 text-text-muted" : "bg-accent/15 text-accent"}`}>
-            <FilmIcon name={view.muted ? "speakerMute" : "speaker"} size={20} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[14px] font-semibold text-text">PC audio</span>
-            <span className="block text-[12px] text-text-muted">{view.muted ? "Muted on this phone" : "Playing on this phone"}</span>
-          </span>
-          <span className="flex items-end gap-[3px]" aria-hidden="true">
-            {[10, 18, 14, 22, 12].map((h, i) => (
-              <span key={i} className={`w-[3px] rounded-full ${view.muted ? "bg-white/20" : "bg-accent"}`} style={{ height: view.muted ? 6 : h }} />
-            ))}
-          </span>
-          <span className={`ml-2 flex h-10 items-center justify-center rounded-full px-4 text-[14px] font-semibold ${view.muted ? "bg-white/8 text-text" : "bg-white/8 text-text"}`} style={{ transform: `scale(${view.mutePress})` }}>
-            {view.muted ? "Unmute" : "Mute"}
-          </span>
-        </At>
-      ) : null}
-      <TabBar active="More" screen />
-    </>
-  );
-}
-
 /* ── the mirror: the PC's screen inside the phone ────────────────────────────────────────────────────── */
 
 function Mirror({ view, pc }: { view: PhoneView; pc: PcView }) {
   if (view.mirror <= 0) return null;
   const f = MIRROR.full;
-  const m = MIRROR.mini;
-  const p = view.mini;
-  const x = lerp(f.x, m.x, p);
-  const y = lerp(f.y, m.y, p);
-  const w = lerp(f.w, m.w, p);
-  const h = lerp(f.h, m.h, p);
+  const o = MIRROR.zoomOrigin;
+  const b = MIRROR.oneX;
   const live = view.mirror >= 1;
+  // how far the pinch has zoomed in (0..1): the 1× button shows while the picture is zoomed
+  const zoomed = (view.zoom - 1) / (MIRROR.zoomMax - 1);
   const hold = view.hold;
   return (
-    <div className="absolute overflow-hidden rounded-[16px] bg-navy shadow-[0_24px_50px_-20px_rgb(0_0_0/0.8)] ring-1 ring-white/15" style={{ left: x, top: y, width: w, height: h }}>
-      <div style={{ opacity: live ? 1 : lerp(0.2, 1, view.mirror) }}>
-        <PcScreen view={pc} width={w} />
+    <div className="absolute overflow-hidden rounded-[16px] bg-navy shadow-[0_24px_50px_-20px_rgb(0_0_0/0.8)] ring-1 ring-white/15" style={{ left: f.x, top: f.y, width: f.w, height: f.h }}>
+      <div style={{ opacity: live ? 1 : lerp(0.2, 1, view.mirror), transform: view.zoom > 1 ? `scale(${view.zoom})` : undefined, transformOrigin: `${o.x}px ${o.y}px` }}>
+        <PcScreen view={pc} width={f.w} />
       </div>
       {!live ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[12px] font-medium text-text-muted">
@@ -498,10 +406,13 @@ function Mirror({ view, pc }: { view: PhoneView; pc: PcView }) {
           Connecting to Living Room PC…
         </div>
       ) : null}
-      {p < 1 ? (
-        <span className="absolute right-3 top-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm" style={{ opacity: 1 - p }}>
-          <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-success" : "bg-white/40"}`} />
-          Live
+      <span className="absolute right-3 top-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-0.5 text-[11px] font-semibold text-white backdrop-blur-sm">
+        <span className={`h-1.5 w-1.5 rounded-full ${live ? "bg-success" : "bg-white/40"}`} />
+        Live
+      </span>
+      {zoomed > 0 ? (
+        <span className="absolute flex items-center justify-center rounded-full bg-black/55 text-[12px] font-bold text-white ring-1 ring-white/25 backdrop-blur-sm" style={{ left: b.x, top: b.y, width: b.size, height: b.size, opacity: zoomed, transform: `scale(${view.oneXPress})` }}>
+          1×
         </span>
       ) : null}
       {hold > 0 ? (
@@ -528,30 +439,33 @@ function Fingertip({ hand }: { hand: HandView }) {
   return (
     <div className="pointer-events-none absolute inset-0" style={{ opacity: hand.visible }}>
       {hand.ripple > 0 && hand.ripple < 1 ? <span className="absolute rounded-full border-2 border-white" style={{ left: hand.x - 28, top: hand.y - 28, width: 56, height: 56, transform: `scale(${lerp(1, 2.4, hand.ripple)})`, opacity: 1 - hand.ripple }} /> : null}
-      {tip(0)}
-      {hand.second ? tip(52) : null}
+      {hand.pair > 0 ? (
+        <>
+          {tip(-hand.pair / 2)}
+          {tip(hand.pair / 2)}
+        </>
+      ) : (
+        tip(0)
+      )}
     </div>
   );
 }
 
 /* ── the handset ─────────────────────────────────────────────────────────────────────────────────────── */
 
-function previousPage(page: PhonePage, t: number): PhonePage {
+function previousPage(page: PhonePage): PhonePage {
   if (page === "ask") return "home";
-  if (page === "screen") return t >= 40_000 ? "apps" : "ask";
-  if (page === "apps") return "screen";
+  if (page === "screen") return "ask";
   return "home";
 }
 
 function Page({ page, view, pc }: { page: PhonePage; view: PhoneView; pc: PcView }) {
   if (page === "home") return <HomePage view={view} pc={pc} />;
   if (page === "ask") return <AskPage view={view} />;
-  if (page === "screen") return <ScreenPage view={view} />;
-  return <AppsPage view={view} />;
+  return <ScreenPage view={view} />;
 }
 
 export interface PhoneProps {
-  t: number;
   view: PhoneView;
   pc: PcView;
   hand: HandView;
@@ -560,12 +474,11 @@ export interface PhoneProps {
   bezel: number;
 }
 
-export const Phone = memo(function Phone({ t, view, pc, hand, width, bezel }: PhoneProps) {
+export const Phone = memo(function Phone({ view, pc, hand, width, bezel }: PhoneProps) {
   const scale = (width - bezel * 2) / PHONE_SCREEN.w;
   const screenH = PHONE_SCREEN.h * scale;
-  const prev = previousPage(view.page, t);
+  const prev = previousPage(view.page);
   const fading = view.pageIn < 1;
-  const slide = view.page === "apps";
   return (
     <div className="dome-dark relative" style={{ width, height: screenH + bezel * 2 }}>
       <div className="absolute inset-0 rounded-[46px] bg-[linear-gradient(160deg,#2b3a66,#0a1230_45%,#1b2a52)] shadow-[0_50px_80px_-36px_rgb(0_10_40/0.8),0_0_0_1px_rgb(255_255_255/0.1)_inset]" />
@@ -573,11 +486,11 @@ export const Phone = memo(function Phone({ t, view, pc, hand, width, bezel }: Ph
         <div className="absolute left-0 top-0 origin-top-left" style={{ width: PHONE_SCREEN.w, height: PHONE_SCREEN.h, transform: `scale(${scale})` }}>
           <div className="absolute inset-0 bg-[radial-gradient(28rem_18rem_at_50%_-6rem,rgb(1_66_251/0.5),transparent_70%)]" />
           {fading ? (
-            <div className="absolute inset-0" style={{ opacity: 1 - view.pageIn, transform: slide ? `translateX(${lerp(0, -40, view.pageIn)}px)` : `scale(${lerp(1, 0.98, view.pageIn)})` }}>
+            <div className="absolute inset-0" style={{ opacity: 1 - view.pageIn, transform: `scale(${lerp(1, 0.98, view.pageIn)})` }}>
               <Page page={prev} view={view} pc={pc} />
             </div>
           ) : null}
-          <div className="absolute inset-0" style={{ opacity: view.pageIn, transform: slide ? `translateX(${lerp(390, 0, view.pageIn)}px)` : undefined }}>
+          <div className="absolute inset-0" style={{ opacity: view.pageIn }}>
             <Page page={view.page} view={view} pc={pc} />
           </div>
           <Mirror view={view} pc={pc} />

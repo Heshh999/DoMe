@@ -315,7 +315,7 @@ function PlanCards({ L, t }: { L: StageLayout; t: number }) {
         );
       })}
       <p className={`absolute text-[#b2bfdd] ${wide ? "text-[20px]" : "text-[26px] leading-[1.35]"}`} style={{ left: L.cards[0]!.x, width: wide ? L.cards[2]!.x + L.cards[2]!.w - L.cards[0]!.x : L.cards[0]!.w, top: wide ? 642 : 1140, textAlign: "center", opacity: s.footnote, transform: `translateY(${lerp(10, 0, s.footnote)}px)` }}>
-        Everyday commands (“pause”, “volume 40”, “open Spotify”) are free and unlimited on every plan.
+        Everyday commands (“pause”, “volume 40”, “open Spotify”) are free and never count against AI limits.
       </p>
     </>
   );
@@ -434,7 +434,7 @@ export const Stage = memo(function Stage({ t, layout: L, endActions = "drawn", a
             <Monitor L={L} t={t} />
             <Link L={L} t={t} />
             <div className="absolute" style={{ left: L.phone.x, top: L.phone.y, opacity: phone.entrance, transform: `translateY(${rise + float}px) rotate(${lerp(3, 0, phone.entrance)}deg)`, transformOrigin: "50% 100%" }}>
-              <Phone t={t} view={phone} pc={pc} hand={hand} width={L.phone.w} bezel={L.bezel} />
+              <Phone view={phone} pc={pc} hand={hand} width={L.phone.w} bezel={L.bezel} />
             </div>
           </div>
         ) : null}

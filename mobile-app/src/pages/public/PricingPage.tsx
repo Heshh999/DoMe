@@ -7,6 +7,9 @@
  * "Test mode" while Stripe runs in test mode. Screen view, custom layouts and routines are marked "Coming" wherever
  * they appear. Every AI allowance says "Not switched on yet" unless the server says the assistant can be used
  * (`ai_enabled`), and Pro Plus, whose only difference from Pro is AI requests, is not offered while it cannot.
+ * Under each paid plan, whether or not it is on sale: that it renews automatically at the prices shown until cancelled,
+ * how to cancel, and the Terms and Privacy links (content/SubscriptionTerms.tsx). Paid Screen view is "without the Free
+ * plan's time limit (fair-use limits apply)", never "unlimited": the relay keeps per-account limits.
  */
 import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router";
@@ -14,7 +17,8 @@ import { Link } from "react-router";
 import { PLANS } from "@dome/protocol";
 
 import { Icon } from "../../components/icons.tsx";
-import { AI_OFF_STATUS, AI_RULES, AVAILABLE_NOW, PLAN_CONTENT, SCREEN_VIEW_STATUS, usd, type PlanContent } from "../../content/plans.ts";
+import { AI_OFF_STATUS, AI_RULES, AVAILABLE_NOW, PAID_SCREEN_VIEW, PAID_SCREEN_VIEW_SHORT, PLAN_CONTENT, planById, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, usd, type PlanContent } from "../../content/plans.ts";
+import { SubscriptionTerms } from "../../content/SubscriptionTerms.tsx";
 import { INCLUDED, NOT_INCLUDED, pricingGroups, type Row, type RowGroup } from "../../lib/pricing.ts";
 import { aiSwitchedOn, sellsPlan, useBillingAvailability, type BillingAvailability } from "../../lib/useBillingAvailability.ts";
 import { PublicIcon, type PublicIconName } from "./publicIcons.tsx";
@@ -62,6 +66,7 @@ function Cell({ value }: { value: string }) {
 
 /** A phone-sized value: "Up to 5" → "5", "10 min per 5-hour window" → "10 min / 5 h", "10, once (does not renew)" → "10, once". */
 function phoneValue(v: string): string {
+  if (v === PAID_SCREEN_VIEW) return PAID_SCREEN_VIEW_SHORT;
   return v
     .replace(/^Up to /, "")
     .replace(/ min per (\d+)-hour window$/, " min per\u00a0$1\u00a0h")
@@ -69,6 +74,17 @@ function phoneValue(v: string): string {
 }
 
 const PLAN_NAMES = ["Free", "Pro", "Pro Plus"] as const;
+
+/**
+ * The comparison's Screen view row with the paid plans' wording from the plan content (plans.ts PAID_SCREEN_VIEW), so
+ * the table never says "Unlimited" next to the relay's per-account limits. lib/pricing.ts already fills that row from
+ * the same plan content, so this only keeps the two in step if either changes.
+ */
+function withPlanScreenView(groups: RowGroup[]): RowGroup[] {
+  const pro = planById("pro").screenView;
+  const proPlus = planById("pro_plus").screenView;
+  return groups.map((g) => (g.title === "Screen view" ? { ...g, rows: g.rows.map((r) => ({ ...r, pro, proPlus })) } : g));
+}
 const isSame = (r: Row) => r.free === r.pro && r.pro === r.proPlus;
 
 /** Phone labels keep "5-hour" together (a non-breaking hyphen), so a label never breaks as "5-" / "hour". */
@@ -193,6 +209,7 @@ function PlanCard({ plan, checkout }: { plan: PlanContent; checkout: BillingAvai
             {statusLine}
           </p>
         )}
+        {plan.price ? <SubscriptionTerms className="mt-4 text-[13px] leading-snug text-text-muted" price={plan.price} interval="both" testId={`terms-${plan.id}`} /> : null}
       </div>
     </section>
   );
@@ -201,7 +218,7 @@ function PlanCard({ plan, checkout }: { plan: PlanContent; checkout: BillingAvai
 export function PricingPage() {
   const checkout = useBillingAvailability();
   const aiOn = aiSwitchedOn(checkout);
-  const groups = pricingGroups({ aiOn });
+  const groups = withPlanScreenView(pricingGroups({ aiOn }));
   const free = PLANS.plans.free;
   const names = ["Free", "Pro", "Pro Plus"] as const;
   const selling = !!checkout?.selling;
@@ -210,7 +227,7 @@ export function PricingPage() {
       <header className="animate-rise max-w-3xl pb-10 pt-14 sm:pb-14 sm:pt-20">
         <p className="dome-eyebrow">Pricing</p>
         <h1 className="mt-4 text-h1 font-bold">Free for everyday control.</h1>
-        <p className="mt-5 max-w-2xl text-lg text-text-muted sm:text-xl">The remote is free: no credit card, no ads. Pro and Pro Plus add more PCs and a real AI butler allowance{selling ? "" : " at paid launch"}, and unlimited Screen view once it ships.</p>
+        <p className="mt-5 max-w-2xl text-lg text-text-muted sm:text-xl">The remote is free: no credit card, no ads. Pro and Pro Plus add more PCs and a real AI butler allowance{selling ? "" : " at paid launch"}, and Screen view without the Free plan’s time limit once it ships.</p>
       </header>
 
       <div className="grid gap-4 md:grid-cols-3 lg:gap-5">
@@ -338,7 +355,7 @@ export function PricingPage() {
             If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which {free.max_enabled_pcs} PC and {free.max_controllers} phones stay enabled (within {PLANS.downgrade_policy.selection_window_days} days; otherwise the most recently used are kept). Revocation and emergency stop always work.
           </li>
           <li className="py-4">The AI butler is optional and off until you turn it on. {AI_RULES.privacy}</li>
-          <li className="py-4">Screen view is in development. The allowances above describe the plans; the feature is not in the app yet, and nothing is recorded when it arrives.</li>
+          <li className="py-4">Screen view is in development. The allowances above describe the plans; the feature is not in the app yet, and nothing is recorded when it arrives. {SCREEN_VIEW_FAIR_USE}</li>
           <li className="pt-4">An account is one person’s account, not a shared household login. Guest access is a later feature.</li>
         </ul>
         <p className="text-[15px] text-text-muted lg:col-span-8 lg:col-start-5">

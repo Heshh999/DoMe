@@ -270,10 +270,10 @@ Written and unit-tested against a fake `flyctl`; **never run against Fly.io yet*
   branch and require the founder as reviewer, so **no job receives a Fly token without an approval from
   the founder's GitHub account**. That approval authorizes whatever is on the default branch at that
   commit, and anything authorized to act as that account can give it. A review request from a run a
-  collaborator or an AI session (with a run-workflow tool) started looks the same as his own, so
-  `docs/LAUNCH_SETUP.md` (sections 3, 7, 11) tells him to approve only a run he started himself in the
+  collaborator or an AI session (with a run-workflow tool) started looks the same as their own, so
+  `docs/LAUNCH_SETUP.md` (sections 3, 7, 11) tells them to approve only a run they started themselves in the
   last few minutes and to reject any other. AI sessions in this setup push to the default branch, and no
-  one reviews that code before his click: **branch protection with required review on the default
+  one reviews that code before their click: **branch protection with required review on the default
   branch** is the follow-up control (§9).
 - **The gate checks the controls before approval is requested** (`dome_deploy.py gate`, no secret
   values). (1) A deploy secret stored as a **repository** secret would reach the deploy job silently (GitHub
@@ -397,8 +397,10 @@ at the desk uses the same keys at the same moment.
   code for a PC that is still linked, so the practical impact is that a victim could be shown a
   stray approval page. Cryptographic fix proposed for the next protocol MINOR.
 - **Update integrity, code signing, store review, installer.** Not built.
-- **Operator interface, audit log writes, account deletion job, data purge jobs, written retention
-  table.** Not built.
+- **Operator interface, audit log writes.** Not built. (Self-service account deletion, `DELETE /v1/account`, and
+  the hourly retention purge are implemented and integration-tested since 2026-11-12: cloud-api DECISIONS #121 to
+  #123; deleting needs a password entry the provider confirmed (`auth_time`) within 10 minutes, not a session's age;
+  `docs/DATA_RETENTION.md` is the retention table.)
 - **Linux/macOS secret storage.** Outside Windows the PC key and credential are 0600 files with a
   logged warning (development only).
 - **Product analytics / activation events.** Nothing is emitted; when added it must stay separate
@@ -427,7 +429,7 @@ at the desk uses the same keys at the same moment.
 | Stale subscriptions after unlink, unscoped-looking `command_id` probe cost, `user_code` in request logs | cloud-api review | fixed in this build (`DECISIONS.md` #24, #25, README) |
 | Fly organization tokens: each environment's token can reach both environments (§6 "The deploy pipeline"); move to separate Fly organizations per environment, or app-scoped deploy tokens after first-time setup | launch plan critique, 2026-10-14 | medium (mitigated by required approval on both GitHub Environments) |
 | No one-click rollback or rotate-generated-secrets action; both are engineer `flyctl` steps today | `deploy/README.md` | low |
-| No branch protection on the default branch: AI sessions push to it, and the founder's deploy approval authorizes whatever is there unreviewed; add required review (and keep the founder approving only runs he started) | launch review, 2026-10-14 | medium (mitigated by the approval rule and the gate's environment checks) |
+| No branch protection on the default branch: AI sessions push to it, and the founder's deploy approval authorizes whatever is there unreviewed; add required review (and keep the founder approving only runs they started) | launch review, 2026-10-14 | medium (mitigated by the approval rule and the gate's environment checks) |
 | Screen view's frozen-build DLL allow-list (`FROZEN_DLL_STEMS`) was written without a Windows build; an unknown DLL is a warning in development builds and a failure in release builds | `pc-agent/packaging/licence_gate.py`, `docs/WINDOWS_INSTALL.md` | low (fails closed for releases) |
 | Counsel on H.264 through the Windows/GPU encoder and on the LGPL notice, written source offer and licence terms (drafts in `pc-agent/packaging/`) | `docs/design/screen-view.md` §5.5, §20 step 4 | launch gate for Screen view |
 | A wrong `Fly-Client-IP` trust (or Cloudflare's proxy put in front) would make every visitor share one address for per-IP limits; detected by `/healthz` → `forwarded_client`, which only the deploy job and an (not yet configured) external monitor read | `deploy/README.md` "Client addresses" | medium until the external monitor exists |

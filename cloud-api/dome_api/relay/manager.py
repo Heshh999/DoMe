@@ -538,6 +538,33 @@ class ConnectionManager:
                     await self.screen.controller_gone(controller_id, "logout")
         return n
 
+    async def close_account_sockets(
+        self, account_id: uuid.UUID, reason: str, *, controller_ids: set[uuid.UUID] | None = None
+    ) -> tuple[int, int]:
+        """Account deletion, after the revocations were committed: every phone socket of the account (bound or not)
+        is sent ``revoked{reason}`` and closed (4003), every PC socket of the account is sent ``revoked{reason}`` and
+        closed (the agent stops reconnecting and discards its credential). The Screen view sessions of the account's
+        phones (those with a socket here and ``controller_ids``) end within one ticket and their TURN credentials are
+        revoked. Returns (phone sockets, PC sockets) closed."""
+        self.invalidate_input_auth(account_id=account_id)
+        gone: set[uuid.UUID] = set(controller_ids or ())
+        phones = 0
+        for conn in [c for c in self.controllers.values() if c.account_id == account_id and not c.closed]:
+            await conn.send({"type": "revoked", "reason": reason})
+            await conn.close(CLOSE_REVOKED)
+            self.unregister_controller(conn)
+            if conn.controller_id is not None:
+                gone.add(conn.controller_id)
+            phones += 1
+        if self.screen is not None:  # first, so a PC still connected is told its session's last ticket is final
+            for controller_id in gone:
+                await self.screen.controller_gone(controller_id, reason)
+        pcs = 0
+        for agent in [a for a in self.agents.values() if a.account_id == account_id and not a.closed]:
+            await self.disconnect_agent(agent.pc_id, revoked_reason=reason)
+            pcs += 1
+        return phones, pcs
+
     async def send_to_controller(
         self,
         controller_id: uuid.UUID,

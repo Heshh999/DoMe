@@ -7,8 +7,9 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { rest } from "@dome/protocol";
+import { PLANS, type rest } from "@dome/protocol";
 
+import { AGREE_TO_TERMS, HOW_TO_CANCEL, PAID_SCREEN_VIEW, SCREEN_VIEW_FAIR_USE, TAX_INCLUDED, usd } from "../../src/content/plans.ts";
 import { api, ApiError } from "../../src/lib/api.ts";
 import { PricingPage, PRO_PLUS_NEEDS_AI } from "../../src/pages/public/PricingPage.tsx";
 
@@ -156,7 +157,7 @@ describe("PricingPage", () => {
     expect(text).toContain("AI butler: a one-time taste of 10 requests");
     expect(text).toContain("30 requests (about 15 minutes) per 5-hour window, up to 120 (about 1 hour) a week");
     expect(text).toContain("90 requests (about 45 minutes) per 5-hour window, up to 300 (about 2.5 hours) a week");
-    expect(text).toContain("are free, unlimited and never count, on every plan, even after you reach an AI limit");
+    expect(text).toContain("are free and never count against your AI allowance, on every plan, even after you reach an AI limit");
     expect(text).toContain("Refreshes Saturday at 2 pm");
     expect(text).toContain("the app will show the exact refresh time");
     expect(text).toContain("warn you at 80%");
@@ -183,9 +184,56 @@ describe("PricingPage", () => {
     expect(within(table).getByRole("columnheader", { name: "Pro Plus" })).toBeInTheDocument();
     const screenRow = within(table).getByRole("row", { name: /Your PC’s screen live on your phone/ });
     expect(screenRow).toHaveTextContent("10 min per 5-hour window");
-    expect(screenRow).toHaveTextContent("Unlimited");
+    // the paid plans: no Free time limit, but fair-use limits on the relay, never "Unlimited"
+    expect(screenRow).toHaveTextContent(PAID_SCREEN_VIEW);
+    expect(screenRow).not.toHaveTextContent(/unlimited/i);
     expect(within(table).getByRole("columnheader", { name: /Screen view/ })).toHaveTextContent("Coming");
     expect(container.textContent).toContain("If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which 1 PC and 2 phones stay enabled (within 14 days");
     expect(screen.getByRole("link", { name: "Read the FAQ" })).toHaveAttribute("href", "/faq");
+  });
+
+  it("under each paid plan: renews automatically at the plan data's prices until cancelled, how to cancel, and the Terms and Privacy links; nothing of it on Free", async () => {
+    const pricing = PLANS.pricing_defaults.plans;
+    const check = () => {
+      for (const [name, id] of [
+        ["Pro", "pro"],
+        ["Pro Plus", "pro_plus"],
+      ] as const) {
+        const card = screen.getByRole("region", { name });
+        const terms = within(card).getByTestId(`terms-${id}`);
+        const month = usd(pricing[id].monthly_cents);
+        const year = usd(pricing[id].annual_cents);
+        // the card's own prices, and the same prices in the renewal line
+        expect(within(card).getByText(month)).toBeInTheDocument();
+        expect(within(card).getByText(`or ${year} / year`)).toBeInTheDocument();
+        expect(terms).toHaveTextContent(`Renews automatically every month at ${month}, or every year at ${year} if you choose yearly billing, until you cancel. ${TAX_INCLUDED}`);
+        expect(terms).toHaveTextContent(HOW_TO_CANCEL);
+        expect(terms).toHaveTextContent(AGREE_TO_TERMS);
+        expect(within(terms).getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+        expect(within(terms).getByRole("link", { name: "Privacy notice" })).toHaveAttribute("href", "/privacy");
+      }
+      const free = screen.getByRole("region", { name: "Free" });
+      expect(within(free).queryByText(/Renews automatically/)).toBeNull();
+      expect(within(free).queryByRole("link", { name: "Terms" })).toBeNull();
+    };
+    // not on sale yet: the plans still say how they renew
+    const off = renderPricing();
+    await plansAsked();
+    check();
+    off.unmount();
+
+    // on sale: the lines sit right under "Sign in to subscribe"
+    plans.mockResolvedValue({ ...PLANS_OFF, billing_enabled: true, billing_mode: "live", ai_enabled: true });
+    renderPricing();
+    const subscribe = await screen.findByTestId("subscribe-pro");
+    expect(subscribe.nextElementSibling).toBe(screen.getByTestId("terms-pro"));
+    expect(screen.getByTestId("subscribe-pro_plus").nextElementSibling).toBe(screen.getByTestId("terms-pro_plus"));
+    check();
+  });
+
+  it("explains paid Screen view's fair-use limits under Good to know", () => {
+    const { container } = renderPricing();
+    expect(container.textContent).toContain(SCREEN_VIEW_FAIR_USE);
+    expect(screen.getByRole("heading", { level: 1 }).nextElementSibling).toHaveTextContent("Screen view without the Free plan’s time limit once it ships");
   });
 });

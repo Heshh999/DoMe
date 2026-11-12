@@ -145,10 +145,13 @@ export function remainingSeconds(a: ScreenAllowance | null, now: number, countin
   return Math.max(0, a.remainingSeconds - Math.floor((now - a.at) / 1000));
 }
 
-/** "About 7 min left", "About 40 s left", "Unlimited", or null while nothing is known. */
+/**
+ * "About 7 min left", "About 40 s left", "No time limit", or null while nothing is known. A paid plan has no Free time
+ * limit but the relay keeps fair-use limits per account, so it is never called "unlimited" (as on the public pages).
+ */
 export function allowanceText(a: ScreenAllowance | null, now: number, counting: boolean): string | null {
   if (!a) return null;
-  if (a.unlimited) return "Unlimited";
+  if (a.unlimited) return "No time limit";
   const s = remainingSeconds(a, now, counting);
   if (s === null) return null;
   if (s >= 90) return `About ${Math.round(s / 60)} min left`;
@@ -183,7 +186,7 @@ export function entryLine(input: { grant: rest.Grant | null | undefined; pin: Pc
   if (input.lastProblem === "PROTOCOL_INCOMPATIBLE") return "Update DoMe on your PC";
   const left = remainingSeconds(input.allowance, input.now, false);
   if (left === 0 && input.allowance?.resetsAt) return `Free Screen view ${lowerFirst(refreshText(input.allowance.resetsAt, new Date(input.now), input.timeZone))}`;
-  if (input.allowance?.unlimited) return "Ready · unlimited";
+  if (input.allowance?.unlimited) return "Ready · no time limit";
   if (left !== null) return `Ready · ${left >= 60 ? `${Math.round(left / 60)} min` : `${left} s`} left in this window`;
   return `Ready · Free: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS}-hour window`;
 }

@@ -130,7 +130,7 @@ guide. In short:
    secret `DATABASE_URL`.
 2. **GitHub Environments** `staging` and `production` on this repository, each limited to the default
    branch with the founder as **required reviewer** and no administrator bypass (the `gate` job checks
-   this), approving only runs he started himself, holding the secrets and variables in
+   this), approving only runs they started themselves, holding the secrets and variables in
    [Secrets and configuration](#secrets-and-configuration-names-only--values-never-enter-this-repository).
 3. **Auth0**: one tenant per environment, one Regular Web Application each, callback URL exactly
    `<origin>/v1/auth/callback`, Credentials > Authentication Method **Client Secret (Post)** (what

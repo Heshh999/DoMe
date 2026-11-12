@@ -349,6 +349,18 @@ before the request body is read (so concurrent submissions cannot overshoot it: 
 execute, queue or forward anything to a PC, and operators have no route yet (`KNOWN_ISSUES.md` #6). A
 failed write is a 5xx, never a reference: the client must not claim receipt without one.
 
+## Account deletion and the retention purge
+
+`DELETE /v1/account` (`dome_api/account_deletion.py`, `DECISIONS.md` #121): session + CSRF + exact Origin, body
+`{"confirm": "delete my account"}`, and a password entry the provider confirmed within the last 10 minutes (else 403
+`REAUTH_REQUIRED`; `GET /v1/auth/login?prompt=login` adds `max_age=0` and records `auth_time`, #123). It marks the
+account deleted, blanks its email and name, closes its sockets with `revoked{account_deleted}`, cancels the
+subscription, closes open Checkout pages, revokes sessions, phones, grants and PC credentials and soft-deletes the PCs. A sign-in with the
+deleted identity lands on `/?sign_in=account_deleted`. The hourly purge (`dome_api/purge.py`, #122;
+`DOME_PURGE_ENABLED`, default on) deletes what is past its period in `docs/DATA_RETENTION.md` and hard-deletes
+accounts 30 days after deletion, keeping the billing rows with `account_id` NULL (migration 0008). One log line per
+pass, `purge.run`, with counts per table. Limits: `KNOWN_ISSUES.md` #40 to #42.
+
 ## Setup
 
 Prerequisites: Python 3.12+, `uv`, PostgreSQL 16, and `tools/dev-idp` for local sign-in.

@@ -63,11 +63,16 @@ export function apiUrl(path: string): string {
  * defence, because the pairing deep link carries the pairing code in its fragment and the backend
  * must never receive it (version.json rules.pairing_secret). Callers scrub the fragment themselves
  * before calling this (see `app/navigation.ts`).
+ *
+ * `prompt: "login"` (the only value cloud-api accepts; anything else is refused) makes the provider show
+ * its login page even while it still remembers the person: deleting the account asks for a fresh
+ * sign-in that way (REAUTH_REQUIRED, cloud-api DECISIONS #121).
  */
-export function loginUrl(returnTo: string): string {
+export function loginUrl(returnTo: string, options: { prompt?: "login" } = {}): string {
   const withoutFragment = returnTo.split("#", 1)[0] ?? "";
   const safe = withoutFragment.startsWith("/") && !withoutFragment.startsWith("//") ? withoutFragment : "/app";
-  return apiUrl(`/v1/auth/login?return_to=${encodeURIComponent(safe)}`);
+  const prompt = options.prompt === "login" ? "&prompt=login" : "";
+  return apiUrl(`/v1/auth/login?return_to=${encodeURIComponent(safe)}${prompt}`);
 }
 
 function parseBody(text: string): Record<string, unknown> {
@@ -225,6 +230,9 @@ export const api = {
   supportTickets: () => apiRequest<rest.SupportTicketsResponse>("GET", "/v1/support/tickets", { responseBody: "support_tickets_response" }),
   supportTicket: (id: string) => apiRequest<rest.SupportTicket>("GET", `/v1/support/tickets/${encodeURIComponent(id)}`, { responseBody: "support_ticket_response" }),
   securityEvents: () => apiRequest<rest.SecurityEventsResponse>("GET", "/v1/account/security-events", { responseBody: "security_events_response" }),
+  // Deleting the account (docs/BILLING.md §11, cloud-api DECISIONS #121): the typed phrase, exactly, with CSRF. 204 and
+  // the session cookie is cleared; 403 REAUTH_REQUIRED unless this session began with a sign-in in the last 10 minutes.
+  deleteAccount: (body: rest.AccountDeleteRequest) => apiRequest<void>("DELETE", "/v1/account", { responseBody: null, requestBody: "account_delete_request", body }),
 
   // Billing (docs/BILLING.md; protocol 1.3): the account's own plan as the server states it, and Stripe-hosted pages to
   // redirect to. Returning from one of those pages unlocks nothing; the page re-reads the session and this status.

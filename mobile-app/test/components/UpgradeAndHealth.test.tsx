@@ -3,10 +3,12 @@
  * dismissible explanation naming the benefit. Spec §11A: the Health page renders every layer with its
  * next action, bounded retries and the support path, and the walkthrough points at the failed step.
  */
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { rest } from "@dome/protocol";
 
 import { AppShell } from "../../src/app/AppShell.tsx";
 import { DashboardPage } from "../../src/pages/app/DashboardPage.tsx";
@@ -18,6 +20,8 @@ import { RoutinesPage } from "../../src/pages/app/RoutinesPage.tsx";
 import { TouchpadPage } from "../../src/pages/app/TouchpadPage.tsx";
 import { DownloadPage } from "../../src/pages/public/DownloadPage.tsx";
 import { ReleaseNotesPage } from "../../src/pages/public/ReleaseNotesPage.tsx";
+import { api } from "../../src/lib/api.ts";
+import { useSessionStore } from "../../src/store/session.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useLiveStore } from "../../src/store/live.ts";
 import { CONTROLLER, freshStorage, installDialogPolyfill, makeRuntime, OFFICE_PC, PC, signedIn, TS, type RuntimeHarness } from "../helpers/harness.ts";
@@ -25,6 +29,10 @@ import { CONTROLLER, freshStorage, installDialogPolyfill, makeRuntime, OFFICE_PC
 installDialogPolyfill();
 // the website's prices ($9.99 / $24.99) and the old planned one ($5.99) must never show up on a Free flow
 const UPGRADE = /upgrade|subscribe|DoMe Pro|checkout|\$5\.99|\$9\.99|\$24\.99|per month|\/ month/i;
+/** GET /v1/plans on a server without Stripe keys (the default here) and on one that sells. */
+const PLANS_OFF: rest.PlansResponse = { plans: {}, pricing: { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } }, billing_enabled: false, billing_mode: "off", ai_enabled: false };
+const PLANS_SELLING: rest.PlansResponse = { ...PLANS_OFF, billing_enabled: true, billing_mode: "live", ai_enabled: true };
+let plans: ReturnType<typeof vi.spyOn>;
 
 let h: RuntimeHarness;
 
@@ -37,9 +45,13 @@ beforeEach(async () => {
   useDevicesStore.setState({ loaded: true, pcs: [OFFICE_PC], selectedPcId: PC, controllers: [{ id: CONTROLLER, kid: "k".repeat(43), display_name: "iPhone", status: "active", created_at: TS, last_seen: TS }], grantsByPc: { [PC]: [{ id: "g", controller_id: CONTROLLER, pc_id: PC, capabilities: ["status", "media", "pointer", "keyboard"], created_at: TS }] } });
   useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS });
   if (!Element.prototype.setPointerCapture) Element.prototype.setPointerCapture = () => undefined;
+  plans = vi.spyOn(api, "plans").mockResolvedValue(PLANS_OFF);
 });
 
-afterEach(() => h.teardown());
+afterEach(() => {
+  plans.mockRestore();
+  h.teardown();
+});
 
 function page(el: React.ReactElement, path = "/app") {
   return render(<MemoryRouter initialEntries={[path]}>{el}</MemoryRouter>);
@@ -101,6 +113,49 @@ describe("Upgrade experience (spec §12)", () => {
     again.unmount();
     page(<LayoutsPage />, "/app/layouts");
     expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Part of Pro and Pro Plus: Saving your own remote layouts/);
+  });
+
+  it("follows what the server sells (GET /v1/plans): nothing to buy while it sells nothing, Pro on sale once it does, and nothing about buying on a paid plan", async () => {
+    // the server answers that it sells nothing: the static wording stays
+    const off = page(<LayoutsPage />, "/app/layouts");
+    await waitFor(() => expect(plans).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Coming at paid launch \(Pro from \$9\.99 \/ month\); there is nothing to buy yet/);
+    off.unmount();
+
+    // the server sells Pro: no "nothing to buy", and buying Pro does not add a feature that is not built
+    plans.mockResolvedValue(PLANS_SELLING);
+    const selling = page(<LayoutsPage />, "/app/layouts");
+    const exp = screen.getByTestId("pro-explanation");
+    await waitFor(() => expect(exp).toHaveTextContent(/Pro is on sale in Billing from \$9\.99 \/ month/));
+    expect(exp).toHaveTextContent(/This is not in the app yet, so buying Pro does not add it now\./);
+    expect(exp).toHaveTextContent(/stays free/);
+    expect(exp.textContent).not.toMatch(/nothing to buy|Coming at paid launch|Test mode/);
+    expect(within(exp).getByRole("link", { name: "Billing" })).toHaveAttribute("href", "/app/billing");
+    selling.unmount();
+
+    // in Stripe test mode it says so, as the pricing page does
+    plans.mockResolvedValue({ ...PLANS_SELLING, billing_mode: "test" });
+    const test = page(<LayoutsPage />, "/app/layouts");
+    await waitFor(() => expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Test mode: no real charges/));
+    test.unmount();
+
+    // already on a paid plan: nothing about buying, only that the feature is not in the app yet
+    useSessionStore.setState((st) => ({ session: st.session ? { ...st.session, plan: "pro" } : st.session }));
+    page(<RoutinesPage />, "/app/routines");
+    await waitFor(() => expect(plans).toHaveBeenCalledTimes(4));
+    await new Promise((r) => setTimeout(r, 0));
+    const paid = screen.getByTestId("pro-explanation");
+    expect(paid).toHaveTextContent(/Your plan includes this once it arrives; it is not in the app yet\./);
+    expect(paid.textContent).not.toMatch(/on sale|nothing to buy|\$9\.99/);
+  });
+
+  it("a failed GET /v1/plans keeps the static wording: nothing to buy yet", async () => {
+    plans.mockRejectedValue(new Error("offline"));
+    page(<RoutinesPage />, "/app/routines");
+    await waitFor(() => expect(plans).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Coming at paid launch \(Pro from \$9\.99 \/ month\); there is nothing to buy yet/);
   });
 
   it("public pages: the official Windows download is visibly not yet published, and the release notes say pre-release with no device verification", () => {

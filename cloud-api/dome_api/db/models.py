@@ -146,6 +146,9 @@ class Session(Base):
     absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     user_agent_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # the provider's ``auth_time`` when a login attempt with ``reauth`` created this session and the claim was checked
+    # (the password was asked for then); NULL for every other sign-in. DELETE /v1/account reads it (DECISIONS #121).
+    authenticated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuthFlow(Base):
@@ -156,6 +159,8 @@ class AuthFlow(Base):
     nonce: Mapped[str] = mapped_column(String(128), nullable=False)
     code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
     return_to: Mapped[str] = mapped_column(String(1024), nullable=False, default="/")
+    # started with an explicit ``prompt=login`` (and ``max_age=0``): the callback checks ``auth_time`` (DECISIONS #121)
+    reauth: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at: Mapped[datetime] = created_at_col()
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -392,9 +397,8 @@ class Subscription(Base):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # a financial record: it outlives the account's hard delete with account_id NULL (migration 0008, DECISIONS #122)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="stripe")
     provider_customer_id: Mapped[str | None] = mapped_column(String(128), index=True)
     provider_subscription_id: Mapped[str | None] = mapped_column(String(128), unique=True)
@@ -491,9 +495,8 @@ class TopupPurchase(Base):
     __table_args__ = (_enum_check("status", TOPUP_STATUSES, "ck_topup_purchases_status"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # a financial record: it outlives the account's hard delete with account_id NULL (migration 0008, DECISIONS #122)
+    account_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id", ondelete="SET NULL"), index=True)
     provider_checkout_session_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     provider_payment_intent_id: Mapped[str | None] = mapped_column(String(128))
     requests: Mapped[int] = mapped_column(Integer, nullable=False)

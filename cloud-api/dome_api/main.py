@@ -29,6 +29,7 @@ from dome_api.errors import (
     validation_error_handler,
 )
 from dome_api.logging import configure_logging, get_logger, pin_sdk_loggers
+from dome_api.purge import PurgeConfig, PurgeService
 from dome_api.relay.agent_ws import agent_endpoint
 from dome_api.relay.controller_ws import controller_endpoint
 from dome_api.relay.lifecycle import Sweeper
@@ -102,6 +103,13 @@ def _build_services(settings: Settings) -> Services:
         relay=relay,
     )
     relay.screen = screen  # the socket-close paths end owned Screen view sessions through it
+    billing_service = BillingService(
+        config=BillingConfig.from_settings(settings),
+        provider=build_billing_provider(settings),
+        db=db,
+        relay=relay,
+        assistant=assistant,
+    )
     return Services(
         settings=settings,
         engine=engine,
@@ -121,14 +129,9 @@ def _build_services(settings: Settings) -> Services:
         link_code_ip_limiter=SlidingWindowLimiter(settings.rate_link_code_failures_per_ip, 900),
         support_ticket_limiter=SlidingWindowLimiter(settings.rate_support_tickets_per_hour, 3600),
         assistant=assistant,
-        billing=BillingService(
-            config=BillingConfig.from_settings(settings),
-            provider=build_billing_provider(settings),
-            db=db,
-            relay=relay,
-            assistant=assistant,
-        ),
+        billing=billing_service,
         screen=screen,
+        purge=PurgeService(config=PurgeConfig.from_settings(settings), db=db, billing=billing_service, relay=relay),
     )
 
 
@@ -159,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await services.assistant.start()
         await services.billing.start()
         await services.screen.start()
+        await services.purge.start()
         log.info(
             "startup",
             version=__version__,
@@ -171,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await services.purge.stop()
             await services.screen.stop()
             await services.screen.aclose()
             await services.billing.stop()

@@ -156,7 +156,7 @@ describe("allowance wording and the entry line", () => {
     expect(allowanceText(a, NOW, true)).toBe("About 7 min left");
     expect(allowanceText({ ...a, remainingSeconds: 75 }, NOW, true)).toBe("About 1 min left");
     expect(allowanceText({ ...a, remainingSeconds: 40 }, NOW, true)).toBe("About 40 s left");
-    expect(allowanceText({ unlimited: true, remainingSeconds: null, resetsAt: null, at: NOW }, NOW, true)).toBe("Unlimited");
+    expect(allowanceText({ unlimited: true, remainingSeconds: null, resetsAt: null, at: NOW }, NOW, true)).toBe("No time limit");
     expect(allowanceText(null, NOW, true)).toBeNull();
     expect(allowanceLow(a, NOW, true)).toBe(false);
     expect(allowanceLow({ ...a, remainingSeconds: 59 }, NOW, true)).toBe(true);
@@ -174,7 +174,7 @@ describe("allowance wording and the entry line", () => {
     expect(entryLine({ ...base, allowance: { unlimited: false, remainingSeconds: 0, resetsAt: "2026-10-21T20:12:00.000Z", at: NOW } })).toBe("Free Screen view refreshes today at 4:12 pm");
     expect(entryLine({ ...base, allowance: { unlimited: false, remainingSeconds: 600, resetsAt: null, at: NOW } })).toBe("Ready · 10 min left in this window");
     expect(entryLine({ ...base, allowance: { unlimited: false, remainingSeconds: 45, resetsAt: null, at: NOW } })).toBe("Ready · 45 s left in this window");
-    expect(entryLine({ ...base, allowance: { unlimited: true, remainingSeconds: null, resetsAt: null, at: NOW } })).toBe("Ready · unlimited");
+    expect(entryLine({ ...base, allowance: { unlimited: true, remainingSeconds: null, resetsAt: null, at: NOW } })).toBe("Ready · no time limit");
     expect(entryLine(base)).toBe("Ready · Free: 10 min per 5-hour window");
     expect(entryLine({ ...base, grant: undefined, pin: undefined })).toBe("Ready · Free: 10 min per 5-hour window");
   });

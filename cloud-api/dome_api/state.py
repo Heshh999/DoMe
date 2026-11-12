@@ -16,6 +16,7 @@ from dome_api.settings import Settings
 if TYPE_CHECKING:
     from dome_api.assistant.service import AssistantService
     from dome_api.billing.service import BillingService
+    from dome_api.purge import PurgeService
     from dome_api.relay.manager import ConnectionManager
     from dome_api.relay.router import RateLimiters
     from dome_api.screen.service import ScreenService
@@ -50,3 +51,5 @@ class Services:
     # Screen view (docs/design/screen-view.md §12): the ledger, the TURN bookkeeping and the relay hooks; config, clock
     # and provider are replaceable for tests
     screen: ScreenService
+    # the hourly retention purge (docs/DATA_RETENTION.md); config and clock are replaceable for tests
+    purge: PurgeService

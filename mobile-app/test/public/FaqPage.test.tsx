@@ -73,8 +73,9 @@ describe("FAQ", () => {
     expect(answer("Is my speech stored?")).toMatch(/does not store what you say/);
     expect(answer("What happens when I reach a limit?")).toMatch(/every everyday command/);
     expect(answer("What happens when I reach a limit?")).toMatch(/Refreshes Saturday at 2 pm/);
-    expect(answer("What counts as an AI request?")).toMatch(/free, unlimited and never count/);
-    expect(answer("What is Screen view, and when is it coming?")).toMatch(/10 minutes per 5-hour window; Pro and Pro Plus will have unlimited/);
+    expect(answer("What counts as an AI request?")).toMatch(/free and never count against your AI allowance/);
+    expect(answer("What is Screen view, and when is it coming?")).toMatch(/10 minutes per 5-hour window\. Pro and Pro Plus will not have Free’s time limit, but fair-use limits apply/);
+    expect(answer("What is Screen view, and when is it coming?")).not.toMatch(/unlimited/i);
     expect(answer("What do Pro and Pro Plus include?")).toMatch(/\$9\.99 a month or \$99\.99 a year/);
     expect(answer("What do Pro and Pro Plus include?")).toMatch(/\$24\.99 a month or \$249\.99 a year/);
     expect(answer("What is a top-up?")).toMatch(/100 AI requests for \$2\.99/);
@@ -115,7 +116,7 @@ describe("FAQ", () => {
     }
     expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/in US dollars, tax included \(the price shown is the amount charged\)/);
     expect(answerFor(null, "What do Pro and Pro Plus include?")).not.toMatch(/at paid launch\. The difference/);
-    expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/layouts and saved routines when they arrive \(both are still coming\)/);
+    expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/custom remote layouts and saved routines are coming later: none of them is in the app yet/);
   });
 
   it("follows the server: static wording until it answers, how to subscribe once it sells, and Pro Plus only with the AI butler on", async () => {

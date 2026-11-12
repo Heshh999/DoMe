@@ -872,3 +872,139 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     (its markup was also compared with the previous build's in a one-off run, and was identical). Not yet verified
     against Auth0 (what it sends back when the person cancels, or when a sign-in is finished late) or on a device
     (KNOWN_ISSUES #39).
+
+## Account deletion and retention (2026-11-12)
+
+121. **`DELETE /v1/account`: self-service deletion after a fresh sign-in, recorded first and finished in one
+    transaction.** The legal packet (docs/legal) found that deletion was a support request. The route is session +
+    CSRF + exact Origin like every state-changing route, takes `account_delete_request{confirm: "delete my account"}`
+    (the exact phrase, compared by the schema; the phone makes the person type it) and is refused with 403
+    `REAUTH_REQUIRED` unless the session was created by a re-authentication whose password entry the provider
+    confirmed within the last 10 minutes (`sessions.authenticated_at`, `account_deletion.REAUTH_WINDOW`; #123: as first
+    built, the session's age alone counted, which a silent sign-in satisfied). The phrase is checked first, the
+    re-authentication second. `GET /v1/auth/login` accepts `prompt=login` as an explicit query value (any other value
+    is 400 `MALFORMED_MESSAGE`, before a login attempt is stored) besides the re-prompt marker of #119; only the
+    explicit one is a re-authentication (#123). The phone learns that it needs the detour from `REAUTH_REQUIRED`.
+    Two steps, each committed before the next (`dome_api/account_deletion.py`). (1) `mark_deleted` locks the account
+    row (re-read under the lock, so a second request racing the first changes nothing), sets `deleted_at` and blanks
+    `email` and `display_name` at once (both columns are NOT NULL, so they become empty strings); `issuer` and
+    `subject` stay until the hard delete so a sign-in with the same identity is recognised. From this commit the
+    account is gone for every path: its sessions and PC tokens resolve to nothing (`resolve_session`,
+    `resolve_agent_token` already checked `deleted_at`). (2) `finish` cancels the subscription through
+    `BillingService.cancel_for_account_deletion` (a provider failure leaves the `pending_deletions` row the reconciler
+    retries, as built; no refund is made), then in ONE transaction revokes every session, phone, grant, PC credential
+    and PC token, expires open pairings, soft-deletes and disables every PC, revokes the phones' TURN credentials at
+    the provider (`TurnService.revoke_account`; a refusal waits in `turn_pending_revocations`, which has no foreign key
+    and so outlives the hard delete), clears the assistant consent, deletes the support diagnostics, soft-deletes the
+    layouts and routines, and records the one `account_deleted` security event (actor `account`, detail: the
+    subscription outcome and counts; no email, name or provider id). That event is the record that the step is done:
+    the purge job (#122) runs `finish` again (actor `system`) for an account deleted more than 10 minutes ago without
+    it. After the commit the relay acts (`ConnectionManager.close_account_sockets`; the route already did right after
+    step 1, #123): every phone socket of the account gets `revoked{account_deleted}` and closes 4003, the Screen view
+    sessions of its phones get their final ticket (`controller_gone`), and every PC socket gets
+    `revoked{account_deleted}` and closes 4003 (the agent stops reconnecting and discards its credential, PROTOCOL
+    §6.4). The consent is cleared directly rather than through
+    `withdraw_consent`, so the deletion writes one event and not two. The answer is 204 with the session cookie
+    cleared; if step 2 raises, the answer is still 204 (the account is deleted from step 1 on) and
+    `account.deletion_incomplete` is logged with the error class, for the purge job to finish.
+    A sign-in with a deleted account's identity is now redirected like the other sign-in problems (#118 to #120): 303
+    `no-store` to `/?sign_in=account_deleted` (`rest.schema.json#/$defs/sign_in_problem`), no cookie of any kind (the
+    re-prompt marker neither set nor cleared), nothing about the account written, the login attempt used up; the log
+    line `oidc.callback_account_deleted` carries no field. The JSON 403 "This account was deleted." is gone.
+    Contract: no protocol bump (PROTOCOL §19.2): the route, its body, `sign_in_problem` and `REAUTH_REQUIRED` are
+    PWA-only; the `revoked` reason `account_deleted` existed since 1.0. Integration-tested (Linux, dev-idp, real
+    PostgreSQL, fake Stripe, fake TURN; `tests/test_account_deletion.py`): refused without CSRF, with a wrong or
+    missing Origin, with another phrase or no body, with a re-authentication 11 minutes old or none (`REAUTH_REQUIRED`),
+    without a session; a deletion with a re-authentication 9 minutes old cancels the subscription at the fake provider,
+    revokes every session of the account (every cookie gets 401), sends `revoked{account_deleted}` to the phone and the PC and closes
+    both with 4003, soft-deletes the PC, refuses its credential, revokes phones and grants, blanks email and name,
+    keeps issuer and subject, clears the consent, deletes the diagnostic, soft-deletes the layout and the routine,
+    writes one event without personal data and keeps the subscription, top-up and billing-event rows; a provider
+    failure records the cancel as pending and the reconciler completes it; a live Screen view session gets its final
+    ticket and the phone's TURN credential is revoked with reason `account_deleted`; a sign-in afterwards lands on the
+    notice with nothing written; `prompt=login` reaches the authorize URL and seven other values are refused; a
+    deletion interrupted after step 1 is left alone by the purge for 10 minutes and then finished with the same
+    frames and one event. Not yet verified against Stripe's test mode or Auth0 (KNOWN_ISSUES #40).
+
+122. **The retention purge: one hourly task, bounded batches, financial records outlive the account.**
+    `docs/DATA_RETENTION.md` marked its rules "proposed" and nothing enforced them. `dome_api/purge.py` follows the
+    sweeper pattern (an asyncio task started and stopped with the app, the first pass an hour after start-up like the
+    billing reconciler, an injectable clock, `PurgeService.purge(now)` for tests and operators). A pass: (1) finishes
+    deletions a crash interrupted (#121; at most 50 per pass, as each asks the billing provider); (2) deletes, per
+    table and per pass, at most 500 rows (`batch_size`), oldest first, rows another transaction holds skipped (`FOR
+    UPDATE SKIP LOCKED`), each table in its own transaction so a failure costs only that table's batch: sessions 30 days
+    after expiry or revocation; `auth_flows`, `pc_access_tokens` and `device_link_codes` 24 h past expiry;
+    `pairing_sessions` 7 days after they were decided or expired; commands 30 days; security events 12 months (365
+    days), rows of no account 90 days; activation events 90 days (nothing is emitted, so nothing is aggregated);
+    support diagnostics at `expires_at`; TURN credentials 30 days after expiry; Screen view windows 30 days after the
+    window ends; Screen view reservations 90 days, settled (`settled`, `swept`) rows only; assistant turns 400 days,
+    settled (not `pending`) rows only; `pending_deletions` 30 days after `completed_at` (an open row never); layouts and
+    routines 30 days after `deleted_at`; (3) hard-deletes accounts deleted more than 30 days ago, with everything that
+    cascades, never one whose deletion is not finished, whose `pending_deletions` row is open, which has a
+    subscription row with a provider id that is not `canceled` (never orphan a subscription that still charges), or
+    which has a Checkout page still pending (a `checkout_pending` subscription row, a `pending` top-up: the billing
+    reconciler may still apply a page paid late to the account).
+    Migration 0008 makes `subscriptions.account_id` and `topup_purchases.account_id` nullable with `ON DELETE SET NULL`
+    (they were `CASCADE`), as `billing_events.account_id` already was: those rows survive with `account_id` NULL. How
+    long they are kept after that (7 years proposed) is for counsel to confirm; nothing deletes them yet. The downgrade
+    refuses while such rows exist instead of deleting financial records. The billing reconciler's grace sweep skips a
+    row without an account. One log line per pass, `purge.run`, with counts per table only (and
+    `deletions_finished`, `accounts_kept_billing_open`); a failed table logs `purge.table_failed` with its name and
+    the error class. One setting: `DOME_PURGE_ENABLED` (default true), a kill switch for the loop. Rules without a
+    stated period keep their rows (DATA_RETENTION.md: `usage_windows`, `ai_balances`, `support_tickets`,
+    `usage_periods` and `screen_accounts` live as long as the account and go with its hard delete; KNOWN_ISSUES #42). §4's proposed `retention_purge` security event per pass is not written: an hourly row per pass would only
+    fill the table; the log line carries the counts. Integration-tested (real PostgreSQL;
+    `tests/test_retention_purge.py`, `tests/test_retention_migration.py`): every rule removes a row past its period and
+    keeps one inside it (and the unsettled, open or live rows its condition excludes); with a batch of 3, five
+    eligible rows go 3 then 2, oldest first; a finished account deleted 31 days ago goes with its PC, phones, sessions
+    and events while its subscription, top-up and billing event stay with `account_id` NULL; accounts with an open
+    cancel, a live provider subscription, a pending Checkout page (plan or top-up) or a deletion 29 days old stay, and
+    the one with the open cancel goes once its cancel has been complete for 30 days; an unfinished deletion is finished and hard-deleted in the same pass; the log line holds
+    counts only; with the switch off the loop never calls a pass. The migration upgrades from 0007, keeps the rows of a
+    hard-deleted account, refuses the downgrade while they exist, downgrades and upgrades again without them, and the
+    models match the schema (`alembic check`).
+
+123. **Deletion review fixes: a recorded re-authentication, sockets closed after step 1, Checkout pages closed, the
+    PC free to link again.** A review of #121 found four gaps; each is fixed at its cause and integration-tested in
+    `tests/test_account_deletion.py` (Linux, dev-idp, real PostgreSQL, fake Stripe, fake TURN).
+    (1) The 10-minute check read `sessions.created_at`, but a provider that remembers the person (Auth0 does, #119)
+    answers a plain `GET /v1/auth/login` at once, so anyone holding the signed-in browser got a fresh session and
+    could delete without a password. Migration 0009 adds `auth_flows.reauth` (bool, default false) and
+    `sessions.authenticated_at` (nullable). An explicit `prompt=login` starts `OIDCClient.begin(reauth=True)`: the
+    authorize URL carries `prompt=login` and `max_age=0` (OpenID Connect Core 3.1.2.1: the provider must then return
+    `auth_time`) and the attempt is stored with `reauth`. The callback keeps `auth_time` as the session's
+    `authenticated_at` only when it is an integer no earlier than the attempt's start and not in the future, each
+    within 60 s (`oidc.checked_auth_time`); otherwise the sign-in still succeeds with `authenticated_at` NULL and logs
+    `oidc.reauth_unconfirmed` (`claim`: `absent` or `outside_attempt`). Refusing the sign-in instead would lock out a
+    person whose identity is not in doubt; only deleting needs the proof. Plain sign-ins and the re-prompt marker
+    (#119, whose authorization URL is unchanged) leave it NULL. `DELETE /v1/account` refuses a NULL or older
+    `authenticated_at` with `REAUTH_REQUIRED`. `tools/dev-idp` puts `auth_time` (the moment of its sign-in) in every ID
+    token. Tested: a fresh plain sign-in, a second one and one carrying the marker are all refused; the explicit
+    `prompt=login` path stores `reauth`, sends `max_age=0` and records `auth_time`; `checked_auth_time` accepts the
+    attempt's window and refuses a remembered (older) time, a future one, a boolean, a string, a float and a missing
+    claim; migration 0009 up, down and up with `alembic check`.
+    (2) The sockets were closed only after step 2 committed, and the relay's per-command checks never read
+    `accounts.deleted_at`, so an unexpected error in step 2 left every open phone and PC socket working until the
+    purge's pass (up to about 70 minutes). The route now calls `account_deletion.close_sockets` right after step 1
+    commits (from then on no new socket opens) and once more, best effort, only if that call itself failed;
+    `finish` keeps its own close for the purge's path. Log: `account.deletion_sockets_closed` with the counts.
+    Tested with step 2 made to raise: both sockets get `revoked{account_deleted}` and 4003 in the same request.
+    (3) Open Checkout pages survived deletion, and the reconciler applied a page paid afterwards to the deleted
+    account (a recurring charge nobody could see) or credited a paid top-up. `finish` now calls
+    `BillingService.close_checkouts_for_deletion` after the cancel: each pending page is expired and read back; an
+    expired or unknown one is settled (the row deleted, the top-up `expired`); one still open or a provider failure
+    stays for the reconciler. A page found paid is never applied: `_paid_after_deletion` records the subscription it
+    created on the page's row and cancels it through `cancel_for_account_deletion` (whose refused cancel now reopens
+    a completed `pending_deletions` row, so the retry follows); a paid top-up is marked `failed` with its payment id
+    and not credited. Both log `billing.needs_operator` with `kind=refund` and the account id; the refund is by hand.
+    The reconciler's stale-page pass does the same for a deleted account (count `checkouts_paid_after_deletion`) and
+    skips `checkout_pending` rows that already carry a subscription id; `_refresh` with a deleted account named is
+    `ignored`/`unattributed`. Tested: open plan and top-up pages expired at deletion; a page paid during the deletion
+    and one paid afterwards (expiry refused) cancelled, never applied; a refused cancel retried; a paid top-up not
+    credited. Supersedes KNOWN_ISSUES #41.
+    (4) Deletion soft-deletes the PC row but keeps its key, and the agent keeps its key on `revoked{account_deleted}`,
+    so linking that PC to another account answered 409 "Unlink it there first" until the hard delete. `approve` now
+    deletes the PC row of a deleted owner (its credentials, tokens, grants, pairings, commands and reservations go by
+    cascade, as at the hard delete) and links the key as a new PC; a live owner still gets the 409. Log:
+    `agent_link.released_from_deleted_account` with the two PC ids. Tested: after a deletion the same key links to
+    another account with no grants, and nothing of the old PC is left.

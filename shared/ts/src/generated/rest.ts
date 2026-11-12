@@ -56,6 +56,13 @@ export type BillingMode = "off" | "test" | "live";
 export type SubscriptionState =
   "checkout_pending" | "incomplete" | "trialing" | "active" | "cancel_scheduled" | "past_due" | "unpaid" | "canceled";
 /**
+ * The values of `sign_in` in the address GET /v1/auth/callback redirects to (`/?sign_in=<value>`) when a sign-in cannot finish: no session is started. email_unverified: the provider has not confirmed the email address; try_again: the attempt cannot be finished and a fresh sign-in is the whole remedy; account_deleted: the identity belongs to a deleted DoMe account.
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "sign_in_problem".
+ */
+export type SignInProblem = "email_unverified" | "try_again" | "account_deleted";
+/**
  * Words the owner said or typed, or a line DoMe spoke. Printable text: no control characters, no format characters (bidi overrides, zero-width), no line or paragraph separators.
  *
  * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
@@ -753,6 +760,15 @@ export interface PlanSelectionResponse {
     selected: boolean;
     last_seen: null | Timestamp;
   }[];
+}
+/**
+ * DELETE /v1/account (session + CSRF + exact Origin; no protocol bump, docs/PROTOCOL.md §19.2). The phone makes the person type the phrase; the server compares it exactly (lower case, no extra spaces). Refused with 403 REAUTH_REQUIRED unless the session was created by a sign-in again with GET /v1/auth/login?prompt=login whose password entry the provider confirmed within the last 10 minutes; a plain sign-in never counts (the phone then signs in again that way). Answer: 204 without a body, and the session cookie is cleared.
+ *
+ * This interface was referenced by `DoMeRESTBodiesThatCrossComponentBoundaries`'s JSON-Schema
+ * via the `definition` "account_delete_request".
+ */
+export interface AccountDeleteRequest {
+  confirm: "delete my account";
 }
 /**
  * POST /v1/support/tickets. `diagnostics` is the customer-reviewed, already-redacted bundle as JSON text (component versions, connection states, error codes, timing only); the server passes it through its redactor again before storing. Never contains pairing material, credentials, typed text, media titles or URLs.

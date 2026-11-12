@@ -16,12 +16,14 @@ from dome_api.auth.deps import DB, AgentPublic, Auth, Svc
 from dome_api.auth.sessions import Authenticated
 from dome_api.db.models import PC, Account, DeviceLinkCode, Grant, PCCredential
 from dome_api.errors import ApiError
+from dome_api.logging import get_logger
 from dome_api.plans import plan_for
 from dome_api.security import events
 from dome_api.security.tokens import ip_hash, new_token, new_user_code, normalize_user_code, sha256
 from dome_api.util import client_ip, rest_response, strict_body, ts_required, utcnow
 
 router = APIRouter(tags=["agent-link"])
+log = get_logger("dome_api.routes.agent_link")
 POLL_INTERVAL_SECONDS = 5
 
 
@@ -157,8 +159,21 @@ async def approve(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc
     row = await _pending_code(db, svc, request, auth, user_code, for_update=True)
     plan = plan_for(account.plan)
     existing = await db.scalar(select(PC).where(PC.kid == row.kid).with_for_update())
+    released: uuid.UUID | None = None
     if existing is not None and existing.account_id != account.id:
-        raise ApiError(409, "FORBIDDEN", "This PC key is already linked to a different account. Unlink it there first.")
+        owner = await db.get(Account, existing.account_id)
+        if owner is not None and owner.deleted_at is None:
+            raise ApiError(
+                409, "FORBIDDEN", "This PC key is already linked to a different account. Unlink it there first."
+            )
+        # The key's last owner deleted its account (DECISIONS #121): nobody can unlink it there, and the agent kept its
+        # key when it was told revoked{account_deleted}. That PC row and everything under it (credentials, tokens,
+        # grants, pairings, commands, Screen view reservations; by cascade) belong to the deleted account and go now,
+        # as they would at its hard delete; the key links as a new PC of this account.
+        released = existing.id
+        await db.delete(existing)
+        await db.flush()
+        existing = None
     if existing is not None and existing.deleted_at is None:
         # Link start carries no proof of possession of the PC key (CONTRACT_ISSUES #10), so a code that
         # names the key of a PC that is still linked must not take over that PC's identity, credentials and
@@ -221,6 +236,10 @@ async def approve(user_code: str, request: Request, auth: Auth, db: DB, svc: Svc
     if existing is not None:
         # a socket cannot exist for a soft-deleted PC (unlink closed it); belt and braces for a stale one
         await svc.relay.disconnect_agent(pc.id, revoked_reason="credential_rotated")
+    if released is not None:
+        # the deletion closed that PC's socket already; belt and braces, as above (ids only in the log)
+        await svc.relay.disconnect_agent(released, revoked_reason=None)
+        log.info("agent_link.released_from_deleted_account", pc_id=str(pc.id), released_pc_id=str(released))
     return rest_response(svc.settings.validate_rest_responses, "agent_link_approve_response", out)
 
 

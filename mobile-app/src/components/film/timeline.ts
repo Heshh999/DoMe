@@ -5,10 +5,13 @@
  * scene), in QA stills (`/demo?scene=N&paused=1`) and in the exported video (`/demo?export=1`).
  *
  * Honesty (rollout brief §4): Screen view is "Coming", point-and-talk is "Planned", Pro and Pro Plus "arrive at
- * paid launch". The AI butler exists today. Nothing here claims recordings, screenshots or AI vision.
+ * paid launch". The AI butler exists today. Nothing here claims recordings, screenshots or AI vision. Paid Screen view
+ * is "fair use" (plans.ts PAID_SCREEN_VIEW_SHORT), never "unlimited": the relay keeps per-account limits. Scene 3
+ * shows only what Screen view's first version has (tap, two-finger scroll, pinch to zoom on the phone, 1×): no mini
+ * view (a home-screen app cannot draw one), no PC sound and no TV-style remote, none of which is built.
  */
 
-import { AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, PAID_SCREEN_VIEW_SHORT, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../../content/plans.ts";
 
 export type StatusTone = "now" | "coming" | "planned" | "info";
 
@@ -79,15 +82,15 @@ export const SCENES: readonly Scene[] = [
     start: 22_000,
     end: 40_000,
     caption: "See your PC. Tap what you see.",
-    status: { label: `Screen view · ${SCREEN_VIEW_STATUS} · Free: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h · Pro: unlimited`, tone: "coming" },
+    status: { label: `Screen view · ${SCREEN_VIEW_STATUS} · Free: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h · Pro: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, tone: "coming" },
     still: 36_500,
     beats: [
       { at: 22_600, text: "Your PC’s screen, live on the phone" },
       { at: 24_200, text: "Tap a button on your PC’s screen" },
       { at: 26_400, text: "Two fingers to scroll" },
-      { at: 29_000, text: "Swipe away: it keeps playing in a corner" },
-      { at: 30_800, text: "TV apps get arrow keys" },
-      { at: 36_000, text: "Hear your PC on your phone, or mute it" },
+      { at: 29_000, text: "Pinch to zoom in" },
+      { at: 31_400, text: "Tap an episode to play it" },
+      { at: 34_200, text: "Tap 1× to see the whole screen again" },
     ],
   },
   {
@@ -206,7 +209,7 @@ export const PLAN_FACTS: readonly PlanFact[] = [
     lines: [
       { text: `${proPlan.pcs} PCs · ${proPlan.phones} phones` },
       { text: "Remote control: all of it" },
-      { text: "Screen view: unlimited", status: SCREEN_VIEW_STATUS, key: true },
+      { text: `Screen view: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, status: SCREEN_VIEW_STATUS, key: true },
       { text: aiLine(proPlan.ai.perWindow?.requests, proPlan.ai.perWeek?.requests), key: true },
       { text: topUpLine },
     ],
@@ -222,15 +225,15 @@ export const PLAN_FACTS: readonly PlanFact[] = [
     lines: [
       { text: `${plusPlan.pcs} PCs · ${plusPlan.phones} phones` },
       { text: "Remote control: all of it" },
-      { text: "Screen view: unlimited", status: SCREEN_VIEW_STATUS, key: true },
+      { text: `Screen view: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, status: SCREEN_VIEW_STATUS, key: true },
       { text: aiLine(plusPlan.ai.perWindow?.requests, plusPlan.ai.perWeek?.requests), key: true },
       { text: topUpLine },
     ],
   },
 ];
 
-/** The honest line under the film on the website. */
-export const CONCEPT_NOTE = "Concept preview. Screen view and point-and-talk are in development.";
+/** The honest line under the film on the website: scenes 3 and 4 show features that are not in the app yet. */
+export const CONCEPT_NOTE = "Concept preview. Screen view is in development; point-and-talk is planned.";
 
 /* ── motion helpers (pure; the brand's easing, cubic-bezier(0.22, 1, 0.36, 1)) ───────────────────────────── */
 

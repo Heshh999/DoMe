@@ -39,7 +39,7 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   `docs/LAUNCH_SETUP.md`). Production is refused unless staging runs the same commit, healthy; both
   environments need the founder's approval, and the gate refuses to run while a deploy secret is a
   repository secret or either GitHub Environment is missing its reviewer or branch rule. The founder
-  approves only runs he started himself; nobody reviews the default branch's code before his click yet. Code changes for real hosting: the ID-token issuer is checked
+  approves only runs they started themselves; nobody reviews the default branch's code before their click yet. Code changes for real hosting: the ID-token issuer is checked
   against the discovery document exactly (Auth0's trailing slash would otherwise reject every sign-in),
   the token request uses `client_secret_post`, `/healthz` reports the build `commit` and a
   `forwarded_client` self-check, Fly's client address comes from `Fly-Client-IP` behind the private-range
@@ -55,7 +55,7 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   installer, `DoMe-Setup-<version>.exe` (Inno Setup), and `.github/workflows/windows-installer.yml`,
   which is to build it and smoke-test it on a GitHub Windows Server runner. Its first run was green on 2026-10-14 (run 38488799434: Windows unit tests, the build and 157
   smoke-test checks on the runner; not yet on a Windows 10/11 PC). The founder's guide is
-  `docs/WINDOWS_INSTALL.md` "The installer"; until he has installed it on his own PC, the test kit stays
+  `docs/WINDOWS_INSTALL.md` "The installer"; until they have installed it on their own PC, the test kit stays
   the fallback.
 
 ### Domain
@@ -311,7 +311,7 @@ Finish polish round 2 of the redesign first (checkpoint 6d76945); item 0 runs in
 founder-driven; then:
 
 0. **Launch setup (founder-driven, `docs/LAUNCH_SETUP.md`)**: the founder creates the Fly.io account
-   (card on file), the GitHub Environments `staging` and `production` (default branch only, himself as
+   (card on file), the GitHub Environments `staging` and `production` (default branch only, themselves as
    required reviewer on **both**), one Fly organization token per environment, two Auth0 tenants with a
    Regular Web Application each (Client Secret (Post)), a free Neon account with the project
    `domeremote-staging` (its direct connection string as the staging Environment secret `DATABASE_URL`),
@@ -457,7 +457,7 @@ founder-driven; then:
    `.github/workflows/windows-installer.yml`, which is to build it and smoke-test install, the tray
    process, upgrades and uninstalls on windows-latest (`docs/WINDOWS_INSTALL.md` "The installer"; first green run 2026-10-14, run 38488799434). Before a release build: the production extension id (`build_installer.py --release`
    refuses to build without it), signing, and replacing the test-version wizard text, which is compiled
-   only into development builds (`DoMe.iss` `#ifdef DevParams`). Next: the founder installs it on his Windows 11 PC as a
+   only into development builds (`DoMe.iss` `#ifdef DevParams`). Next: the founder installs it on their Windows 11 PC as a
    standard user; a tray "Link this PC…" item; a Chrome Web Store / Edge Add-ons listing, then the
    production extension id in the release build; Authenticode signing (most likely Azure Trusted
    Signing) in a separate protected job; an Inno Setup commercial licence before paid launch; an updater

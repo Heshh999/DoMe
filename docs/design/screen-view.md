@@ -27,7 +27,7 @@ Evidence tags, used throughout:
   Windows indicator bar, iOS playback and NAT behaviour can only be verified on devices.
 
 Why the founder cannot find it on the phone: Screen view does not exist in the product. The website and
-FAQ mark it "Coming" (`SCREEN_VIEW_STATUS` in `mobile-app/src/content/plans.ts:21`, `DECISIONS.md` 62–63,
+FAQ mark it "Coming" (`SCREEN_VIEW_STATUS` in `mobile-app/src/content/plans.ts:42`, `DECISIONS.md` 62–63,
 `docs/HANDOFF.md` §7 item 2) **[repo]**. The touchpad and keyboard that just passed the real-device test
 are a different feature. WP-0 (§19) puts a "Screen view: Coming" card on the Remote page now.
 

@@ -730,6 +730,10 @@ class BillingService:
         """Fetch the subscription as it is now and apply the state machine (BILLING §4.3). The event's own fields are
         never used, so duplicates and out-of-order deliveries converge."""
         provider = self._require_enabled()
+        if account_id is not None and await self._account_deleted(account_id):
+            # a page of a deleted account is never applied to it (the reconciler cancels what such a page created:
+            # ``_paid_after_deletion``)
+            return "ignored", None, "unattributed"
         if account_id is None:
             async with self.db() as db:
                 owner = await db.scalar(
@@ -753,6 +757,12 @@ class BillingService:
         touched = await self._apply_current(account_id, subscription_id, reason="webhook")
         await self._push(touched)
         return "processed", account_id, None
+
+    async def _account_deleted(self, account_id: uuid.UUID) -> bool:
+        """The account was deleted (``deleted_at`` set) or is gone altogether."""
+        async with self.db() as db:
+            account = await db.get(Account, account_id)
+            return account is None or account.deleted_at is not None
 
     async def _apply_current(self, account_id: uuid.UUID, subscription_id: str, *, reason: str) -> list[uuid.UUID]:
         """Fetch the subscription and apply it inside one transaction that holds a per-account advisory lock, so two
@@ -863,14 +873,16 @@ class BillingService:
         counts = {
             "checkouts_expired": 0,
             "checkouts_recovered": 0,
+            "checkouts_paid_after_deletion": 0,
             "grace_ended": 0,
             "events_retried": 0,
             "deletions_retried": 0,
             "rows_refreshed": 0,
             "mismatches": 0,
         }
-        expired, recovered = await self._settle_stale_checkouts(now)
+        expired, recovered, after_deletion = await self._settle_stale_checkouts(now)
         counts["checkouts_expired"], counts["checkouts_recovered"] = expired, recovered
+        counts["checkouts_paid_after_deletion"] = after_deletion
         async with self.db() as db:
             ended = (
                 await db.scalars(
@@ -880,6 +892,8 @@ class BillingService:
                 )
             ).all()
         for account_id in ended:
+            if account_id is None:  # a hard-deleted account's row is a financial record only (DECISIONS #122)
+                continue
             touched = await self._apply_forced(account_id, reason="grace_expired", forced_state="unpaid")
             await self._push(touched)
             counts["grace_ended"] += 1
@@ -912,17 +926,25 @@ class BillingService:
             return "keep"
         return "gone"
 
-    async def _settle_stale_checkouts(self, now: datetime) -> tuple[int, int]:
+    async def _settle_stale_checkouts(self, now: datetime) -> tuple[int, int, int]:
         """Pending pages older than ``checkout_pending_hours``. The provider is asked about each before anything is
         deleted: a page that was paid while every webhook failed (a wrong signing secret answers each delivery 400, so
-        no receipt row exists to retry) is applied or credited here, never dropped."""
+        no receipt row exists to retry) is applied or credited here, never dropped. A page of a deleted account that
+        was paid is never applied or credited: its subscription is cancelled at once and the payment is left to the
+        operator (``billing.needs_operator``, ``kind=refund``). Returns (expired, recovered, paid after deletion)."""
         cutoff = now - timedelta(hours=self.config.checkout_pending_hours)
-        expired = recovered = 0
+        expired = recovered = after_deletion = 0
         async with self.db() as db:
             stale = (
                 await db.execute(
                     select(Subscription.id, Subscription.account_id, Subscription.provider_checkout_session_id)
-                    .where(Subscription.state == "checkout_pending", Subscription.updated_at < cutoff)
+                    .where(
+                        Subscription.state == "checkout_pending",
+                        Subscription.updated_at < cutoff,
+                        # a page paid after deletion whose cancel is pending (``_paid_after_deletion``): the deletion
+                        # retries own it now
+                        Subscription.provider_subscription_id.is_(None),
+                    )
                     .limit(RECONCILE_FETCH_LIMIT)
                 )
             ).all()
@@ -938,6 +960,10 @@ class BillingService:
             if found == "keep":
                 continue
             if isinstance(found, CheckoutSession) and found.subscription_id:
+                if account_id is not None and await self._account_deleted(account_id):
+                    await self._paid_after_deletion(account_id, row_id, found.subscription_id)
+                    after_deletion += 1
+                    continue
                 try:
                     await self._refresh(found.subscription_id, account_id)
                 except ProviderError as exc:
@@ -960,6 +986,10 @@ class BillingService:
             if found == "keep":
                 continue
             if isinstance(found, CheckoutSession) and found.payment_status == "paid":
+                if account_id is None or await self._account_deleted(account_id):
+                    await self._topup_paid_after_deletion(account_id, purchase_id, found)
+                    after_deletion += 1
+                    continue
                 await self._credit_topup(account_id, found)
                 log.warning("billing.webhook_missed", account_id=str(account_id))
                 recovered += 1
@@ -968,7 +998,7 @@ class BillingService:
                 purchase = await db.get(TopupPurchase, purchase_id, with_for_update=True)
                 if purchase is not None and purchase.status == "pending":
                     purchase.status = "expired"
-        return expired, recovered
+        return expired, recovered, after_deletion
 
     async def _retry_events(self, now: datetime) -> int:
         if not self.enabled:
@@ -1067,7 +1097,7 @@ class BillingService:
             refreshed += 1
         return refreshed, mismatches
 
-    # ----- account deletion (BILLING §11; the HTTP route is not built yet) -------------------------------------------
+    # ----- account deletion (BILLING §11: DELETE /v1/account and the purge job, through account_deletion.finish) ------
     async def cancel_for_account_deletion(
         self, db: AsyncSession, account_id: uuid.UUID
     ) -> Literal["canceled", "pending", "none"]:
@@ -1092,6 +1122,10 @@ class BillingService:
                     account_id=account_id, requested_at=now, provider_cancel_state="pending", attempts=0
                 )
                 db.add(pending)
+            # open again when an earlier cancel of this account had completed (a page paid after the deletion created
+            # a second subscription): the reconciler retries open rows only
+            pending.provider_cancel_state = "pending"
+            pending.completed_at = None
             pending.attempts += 1
             pending.last_error = reason
             await db.flush()
@@ -1105,6 +1139,117 @@ class BillingService:
         await self._complete_deletion(db, account_id, now)
         log.info("billing.deletion_canceled", account_id=str(account_id))
         return "canceled"
+
+    async def close_checkouts_for_deletion(self, account_id: uuid.UUID) -> int:
+        """Close every Checkout page of a deleted account that could still be paid: its subscription row in
+        ``checkout_pending`` and each ``pending`` top-up. Each page is expired at the provider and read back. An expired
+        or unknown page is settled here (the row deleted, the top-up ``expired``); a page paid before it could be closed
+        is never applied (:meth:`_paid_after_deletion`, :meth:`_topup_paid_after_deletion`); a provider failure, a page
+        still open, or billing switched off leaves the row to the reconciler, which never applies a page of a deleted
+        account either, and the purge never hard-deletes the account meanwhile. Returns the pages closed."""
+        if not self.enabled or self.provider is None:
+            return 0
+        async with self.db() as db:
+            pages = (
+                await db.execute(
+                    select(Subscription.id, Subscription.provider_checkout_session_id).where(
+                        Subscription.account_id == account_id,
+                        Subscription.state == "checkout_pending",
+                        Subscription.provider_checkout_session_id.is_not(None),
+                        Subscription.provider_subscription_id.is_(None),
+                    )
+                )
+            ).all()
+            topups = (
+                await db.execute(
+                    select(TopupPurchase.id, TopupPurchase.provider_checkout_session_id).where(
+                        TopupPurchase.account_id == account_id, TopupPurchase.status == "pending"
+                    )
+                )
+            ).all()
+        closed = 0
+        for row_id, session_id in pages:
+            found = await self._close_page(str(session_id))
+            if found == "keep":
+                continue
+            if isinstance(found, CheckoutSession):
+                if found.subscription_id:
+                    await self._paid_after_deletion(account_id, row_id, found.subscription_id)
+                continue
+            async with transaction(self.db) as db:
+                row = await db.get(Subscription, row_id, with_for_update=True)
+                if (
+                    row is not None
+                    and row.state == "checkout_pending"
+                    and row.provider_checkout_session_id == session_id
+                    and row.provider_subscription_id is None
+                ):
+                    await db.delete(row)
+                    closed += 1
+        for purchase_id, session_id in topups:
+            found = await self._close_page(str(session_id))
+            if found == "keep":
+                continue
+            if isinstance(found, CheckoutSession):
+                if found.payment_status == "paid":
+                    await self._topup_paid_after_deletion(account_id, purchase_id, found)
+                continue
+            async with transaction(self.db) as db:
+                purchase = await db.get(TopupPurchase, purchase_id, with_for_update=True)
+                if purchase is not None and purchase.status == "pending":
+                    purchase.status = "expired"
+                    closed += 1
+        if pages or topups:
+            log.info(
+                "billing.deletion_checkouts", account_id=str(account_id), pages=len(pages) + len(topups), closed=closed
+            )
+        return closed
+
+    async def _close_page(self, session_id: str) -> CheckoutSession | Literal["gone", "keep"]:
+        """Expire one page, then ask what it is now: the session when it was completed (paid before it could be
+        closed), ``gone`` when it can no longer be paid, ``keep`` when it is still open or the provider failed."""
+        assert self.provider is not None
+        try:
+            await self.provider.expire_checkout(session_id)
+            session = await self.provider.retrieve_checkout(session_id)
+        except ProviderError as exc:
+            if exc.reason == "not_found":
+                return "gone"
+            self._provider_failed(exc, "expire_checkout")
+            return "keep"
+        if session.status == "complete":
+            return session
+        return "keep" if session.status == "open" else "gone"
+
+    async def _paid_after_deletion(self, account_id: uuid.UUID, row_id: uuid.UUID, subscription_id: str) -> str:
+        """A subscription page of a deleted account was paid. It is never applied: the subscription it created is
+        recorded on the page's row, so that the deletion's cancel finds it (a refused cancel opens the
+        ``pending_deletions`` row again, which the reconciler retries), and cancelled at once. The payment is the
+        operator's to refund."""
+        async with transaction(self.db) as db:
+            row = await db.get(Subscription, row_id, with_for_update=True)
+            if row is not None and row.state == "checkout_pending" and row.provider_subscription_id is None:
+                row.provider_subscription_id = subscription_id
+                row.updated_at = self.config.clock()
+        async with self.db() as db:
+            outcome = await self.cancel_for_account_deletion(db, account_id)
+            await db.commit()
+        log.warning("billing.needs_operator", kind="refund", account_id=str(account_id), subscription=outcome)
+        return outcome
+
+    async def _topup_paid_after_deletion(
+        self, account_id: uuid.UUID | None, purchase_id: uuid.UUID, session: CheckoutSession
+    ) -> None:
+        """A top-up page of a deleted account was paid: nothing is credited. The purchase is marked ``failed`` (it was
+        not delivered) with the payment's id, and the payment is the operator's to refund."""
+        async with transaction(self.db) as db:
+            purchase = await db.get(TopupPurchase, purchase_id, with_for_update=True)
+            if purchase is not None and purchase.status == "pending":
+                purchase.status = "failed"
+                purchase.provider_payment_intent_id = session.payment_intent_id
+        log.warning(
+            "billing.needs_operator", kind="refund", account_id=str(account_id) if account_id else None, topup=True
+        )
 
     async def _complete_deletion(self, db: AsyncSession, account_id: uuid.UUID, now: datetime) -> None:
         pending = await db.scalar(select(PendingDeletion).where(PendingDeletion.account_id == account_id))

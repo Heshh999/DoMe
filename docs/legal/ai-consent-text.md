@@ -49,7 +49,7 @@ The sentence depends on what the server reports for the account (`AssistantConse
 
 1. On a paid plan: "[N] requests per 5-hour window, up to [M] every 7 days; the app shows when each refreshes."
    The planned values are N = 30 and M = 120 on Pro, and N = 90 and M = 300 on Pro Plus
-   (`shared/protocol/plans.json:61-68,109-116`; the 5 hours and 7 days are `mobile-app/src/content/plans.ts:90-91`).
+   (`shared/protocol/plans.json:61-68,109-116`; the 5 hours and 7 days are `mobile-app/src/content/plans.ts:94-95`).
 2. On Free: "a one-time taste of [N] requests; it does not renew." The planned value is N = 10
    (`shared/protocol/plans.json:12`).
 3. When the allowance is not known yet: "shown in Settings once it is known."

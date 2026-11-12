@@ -16,6 +16,10 @@
  * Billing page and GET /v1/plans show one set of figures (test/public/plans.test.ts pins them). Prices
  * are tax-inclusive by the founder's decision (docs/PROGRESS.md 2026-10-20): the amount shown is the
  * amount charged.
+ *
+ * Before payment (docs/legal): every subscribe button and the paid plans on the pricing page carry the renewal,
+ * cancellation and Terms lines below (renewalLine, HOW_TO_CANCEL, AGREE_TO_TERMS; drawn by SubscriptionTerms.tsx),
+ * and the top-up button carries topUpTerms. Paid Screen view is never called "unlimited" (PAID_SCREEN_VIEW).
  */
 import { PLANS } from "@dome/protocol";
 
@@ -97,7 +101,21 @@ export const TOP_UP: { readonly requests: number; readonly priceCents: number } 
 export const FREE_TASTE_REQUESTS: number = PLANS.plans.free.ai_taste_requests;
 /** Free's Screen view allowance, in minutes per 5-hour window. */
 export const FREE_SCREEN_VIEW_MINUTES = 10;
-/** Everyday commands DoMe understands by itself: free, unlimited, never counted, on every plan. */
+/**
+ * Pro and Pro Plus Screen view: no minute allowance (plans.json `screen_view_seconds_per_window: null`), but never
+ * "unlimited": the relay keeps per-account limits on every plan (cloud-api screen/turn.py: relay connections per
+ * account per calendar month; screen/service.py: starts per phone per minute).
+ */
+export const PAID_SCREEN_VIEW = "Without the Free plan’s time limit (fair-use limits apply)";
+/** The same, where a line has no room (the comparison on phones, the demo film). */
+export const PAID_SCREEN_VIEW_SHORT = "Fair use";
+/** What "fair-use limits" means for Screen view, in one sentence (the same example the Terms give). */
+export const SCREEN_VIEW_FAIR_USE = "Pro and Pro Plus will not have Free’s time limit, but fair-use limits apply, for example a monthly limit on relay connections per account.";
+/**
+ * Everyday commands DoMe understands by itself: free and never counted against an AI allowance, on every plan. Never
+ * called "unlimited": a fair-use limit applies to them like every command (plans.json `manual_command_rate_limit`, 120
+ * per minute per phone, enforced by cloud-api relay/router.py; the pricing comparison shows it).
+ */
 export const EVERYDAY_EXAMPLES = ["pause", "volume 40", "open Spotify"] as const;
 
 const free = PLANS.plans.free;
@@ -136,9 +154,41 @@ export function aiSummary(ai: AiAllowance): string {
   return "";
 }
 
+/** How often a paid plan renews: each interval alone (the Billing page's choice), or both (the pricing page). */
+export type RenewalInterval = "monthly" | "annual" | "both";
+
+/** How the renewal sentence starts; SubscriptionTerms.tsx sets it in bold (it must stand out, not hide in small print). */
+export const RENEWS_AUTOMATICALLY = "Renews automatically";
+/**
+ * Beside every button that starts a subscription, and under the paid plans on the pricing page: the plan renews
+ * automatically at the price shown until it is cancelled. The amounts come from the caller's plan data (the server's
+ * pricing, or plans.json's `pricing_defaults`), never from this file.
+ */
+export function renewalLine(price: PlanPrice, interval: RenewalInterval): string {
+  const month = `every month at ${usd(price.monthlyCents)}`;
+  const year = `every year at ${usd(price.annualCents)}`;
+  const when = interval === "monthly" ? month : interval === "annual" ? year : `${month}, or ${year} if you choose yearly billing,`;
+  return `${RENEWS_AUTOMATICALLY} ${when} until you cancel.`;
+}
+/** The Stripe prices are tax-inclusive (docs/BILLING.md §2, founder decision 2026-10-20). */
+export const TAX_INCLUDED = "Price includes any sales tax.";
+/** How to cancel, as the Billing page and the Terms describe it: the Manage subscription page, effective at period end. */
+export const HOW_TO_CANCEL = "To cancel, open Billing and choose Manage subscription. Paid features stay until the end of the period you paid for.";
+/** The text of the agreement line; SubscriptionTerms.tsx draws "Terms" and "Privacy notice" as links to /terms and /privacy. */
+export const AGREE_TO_TERMS = "By subscribing you agree to the Terms and the Privacy notice.";
+
+/**
+ * Beside the top-up button: a one-time purchase, what it adds, and what happens to unused requests exactly as cloud-api
+ * does today (docs/BILLING.md §10): the balance does not expire, is spent only once the 5-hour window or the week is used
+ * up, and is kept on Free but can be spent only on a plan with top-ups.
+ */
+export function topUpTerms(requests: number): string {
+  return `A one-time purchase, not a subscription: it adds ${requests} AI requests to your account. Unused top-up requests do not expire. They are used after your ${WINDOW_HOURS}-hour window or week runs out, and they are kept if you move to Free, to use again on Pro or Pro Plus.`;
+}
+
 const topUpLine: Highlight = { text: `Optional top-up: ${TOP_UP.requests} extra AI requests for ${usd(TOP_UP.priceCents)}, only when you choose`, ai: true };
 const layoutsLine: Highlight = { text: `Custom remote layouts and saved routines of up to ${pro.routine_max_steps} steps`, status: LAYOUTS_STATUS };
-const screenViewUnlimited: Highlight = { text: "Screen view: unlimited", status: SCREEN_VIEW_STATUS };
+const paidScreenView: Highlight = { text: `Screen view: ${PAID_SCREEN_VIEW.charAt(0).toLowerCase()}${PAID_SCREEN_VIEW.slice(1)}`, status: SCREEN_VIEW_STATUS };
 
 export const PLAN_CONTENT: readonly PlanContent[] = [
   {
@@ -156,7 +206,7 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     highlights: [
       { text: "Full remote control: YouTube, media, volume, approved apps, lock and power, touchpad, keyboard and typed commands" },
       { text: `${free.max_enabled_pcs} PC and up to ${free.max_controllers} phones` },
-      { text: "Everyday commands without AI: unlimited, always" },
+      { text: "Everyday commands without AI: free, never counted" },
       { text: `AI butler: a one-time taste of ${FREE_TASTE_REQUESTS} requests`, ai: true },
       { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window`, status: SCREEN_VIEW_STATUS },
     ],
@@ -165,15 +215,15 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     id: "pro",
     name: "Pro",
     displayName: pro.display_name,
-    tagline: "More PCs, unlimited Screen view once it ships, and a real allowance for the AI butler.",
+    tagline: "More PCs, Screen view without the Free plan’s time limit once it ships, and a real allowance for the AI butler.",
     status: { kind: "coming", label: COMING_AT_PAID_LAUNCH },
     price: contractPrice("pro"),
     pcs: pro.max_enabled_pcs,
     phones: pro.max_controllers,
-    screenView: "Unlimited",
+    screenView: PAID_SCREEN_VIEW,
     ai: PRO_AI,
     topUp: true,
-    highlights: [{ text: "Everything in Free" }, { text: `Up to ${pro.max_enabled_pcs} PCs and ${pro.max_controllers} phones` }, { text: `AI butler: ${aiSummary(PRO_AI)}`, ai: true }, screenViewUnlimited, layoutsLine, topUpLine],
+    highlights: [{ text: "Everything in Free" }, { text: `Up to ${pro.max_enabled_pcs} PCs and ${pro.max_controllers} phones` }, { text: `AI butler: ${aiSummary(PRO_AI)}`, ai: true }, paidScreenView, layoutsLine, topUpLine],
   },
   {
     id: "pro_plus",
@@ -184,10 +234,10 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     price: contractPrice("pro_plus"),
     pcs: proPlus.max_enabled_pcs,
     phones: proPlus.max_controllers,
-    screenView: "Unlimited",
+    screenView: PAID_SCREEN_VIEW,
     ai: PRO_PLUS_AI,
     topUp: true,
-    highlights: [{ text: "Everything in Pro" }, { text: `Up to ${proPlus.max_enabled_pcs} PCs and ${proPlus.max_controllers} phones` }, { text: `AI butler: ${aiSummary(PRO_PLUS_AI)}`, ai: true }, screenViewUnlimited, layoutsLine, topUpLine],
+    highlights: [{ text: "Everything in Pro" }, { text: `Up to ${proPlus.max_enabled_pcs} PCs and ${proPlus.max_controllers} phones` }, { text: `AI butler: ${aiSummary(PRO_PLUS_AI)}`, ai: true }, paidScreenView, layoutsLine, topUpLine],
   },
 ];
 
@@ -202,7 +252,7 @@ export const AI_RULES = {
   request: "One request is one thing you ask that DoMe cannot work out on its own, so the AI interprets it and picks safe PC actions from DoMe’s fixed list. One request is roughly 30 seconds of use.",
   /** What happens to the actions the AI picks: exactly what the app does today (lib/assistant.ts, the action registry's risk levels). */
   actions: "Simple actions such as pause or volume run right away and show what happened; opening apps, full screen and locking wait for your tap on Run; power actions and closing apps ask you to confirm. Turn on “Ask before every action” in Settings to approve everything first.",
-  everyday: `Everyday commands DoMe understands by itself (“${EVERYDAY_EXAMPLES[0]}”, “${EVERYDAY_EXAMPLES[1]}”, “${EVERYDAY_EXAMPLES[2]}”) are free, unlimited and never count, on every plan, even after you reach an AI limit.`,
+  everyday: `Everyday commands DoMe understands by itself (“${EVERYDAY_EXAMPLES[0]}”, “${EVERYDAY_EXAMPLES[1]}”, “${EVERYDAY_EXAMPLES[2]}”) are free and never count against your AI allowance, on every plan, even after you reach an AI limit.`,
   windows: `The ${WINDOW_HOURS}-hour window starts with your first AI request; the weekly window refreshes ${WEEK_DAYS} days after the week’s first use. When paid plans launch, the app will show the exact refresh time (“Refreshes Saturday at 2 pm”) and warn you at ${WARN_AT_PERCENT}%.`,
   taste: `Free includes a one-time taste of ${FREE_TASTE_REQUESTS} AI requests, so you can try the butler before deciding. It does not renew.`,
   topUp: `On Pro and Pro Plus you can add ${TOP_UP.requests} AI requests for ${usd(TOP_UP.priceCents)} when you run out. You choose to buy a top-up; nothing is ever added or charged automatically.`,

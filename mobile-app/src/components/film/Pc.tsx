@@ -1,8 +1,8 @@
 /**
  * The living-room PC's screen, authored at 1280 × 720 and scaled into its monitor (or into the phone's mirror):
  * a Windows-like desktop with a taskbar, a browser window playing "Night Drive" (a fictional series), the same
- * player full screen, a ten-foot TV app ("ZStream", one of the approved apps in the design preview), and the
- * small reactions the film needs (pause glyph, "More episodes" shelf, focus ring, Subscribe highlight, mute).
+ * player full screen, and the small reactions the film needs (pause glyph, "More episodes" shelf, Subscribe
+ * highlight).
  */
 import { memo } from "react";
 
@@ -19,10 +19,10 @@ function clock(position: number, totalSeconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-const LENGTH_S = { 3: 1900, 4: 1752 } as const;
+const LENGTH_S = { 3: 1900, 4: 1752, 5: 1625 } as const;
 
 /** The episode itself: a night (or first-light) drive, drawn as vector art; the lane markers move while it plays. */
-function NightDrive({ episode, position, className = "" }: { episode: 3 | 4; position: number; className?: string }) {
+function NightDrive({ episode, position, className = "" }: { episode: 3 | 4 | 5; position: number; className?: string }) {
   const dawn = episode === 4;
   const offset = (position * 1400) % 1;
   const markers = Array.from({ length: 6 }, (_, i) => {
@@ -88,8 +88,8 @@ function NightDrive({ episode, position, className = "" }: { episode: 3 | 4; pos
   );
 }
 
-/** A gradient poster tile for shelves and the TV app. */
-function Poster({ i, title, w, h, focus = 0 }: { i: number; title: string; w: number; h: number; focus?: number }) {
+/** A gradient poster tile for the shelves. */
+function Poster({ i, title, w, h }: { i: number; title: string; w: number; h: number }) {
   const hues = [
     ["#2a62ff", "#001441"],
     ["#f29d6a", "#4b2a6e"],
@@ -100,7 +100,7 @@ function Poster({ i, title, w, h, focus = 0 }: { i: number; title: string; w: nu
   ];
   const [a, b] = hues[i % hues.length]!;
   return (
-    <div className="relative shrink-0 overflow-hidden rounded-[14px]" style={{ width: w, height: h, background: `linear-gradient(135deg, ${a}, ${b})`, boxShadow: focus > 0 ? `0 0 0 ${4 * focus}px #fff, 0 18px 40px -16px rgb(0 0 0 / .7)` : "0 12px 30px -16px rgb(0 0 0 / .6)", transform: `scale(${1 + 0.05 * focus})` }}>
+    <div className="relative shrink-0 overflow-hidden rounded-[14px]" style={{ width: w, height: h, background: `linear-gradient(135deg, ${a}, ${b})`, boxShadow: "0 12px 30px -16px rgb(0 0 0 / .6)" }}>
       <div className="absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,transparent,rgb(0_8_30/0.78))] px-3 pb-2 pt-6 text-[15px] font-semibold text-white">{title}</div>
     </div>
   );
@@ -139,15 +139,19 @@ function Taskbar() {
   );
 }
 
-function UpNext() {
-  const items = ["Episode 5: Tunnel", "Episode 6: The Bridge", "Episode 7: Coast Road", "Episode 8: Home"];
+/** The series' later episodes; "Up next" lists the four after the one playing. */
+const LATER_EPISODES = ["Episode 4: First Light", "Episode 5: Tunnel", "Episode 6: The Bridge", "Episode 7: Coast Road", "Episode 8: Home", "Episode 9: Last Exit"];
+
+function UpNext({ episode }: { episode: 3 | 4 | 5 }) {
+  const items = LATER_EPISODES.slice(episode - 3, episode + 1);
   return (
     <div className="absolute right-6 top-6 w-[352px]">
       <p className="text-[13px] font-semibold uppercase tracking-[0.12em] text-white/55">Up next</p>
       <ul className="mt-3 space-y-2.5">
         {items.map((title, i) => (
           <li key={title} className="flex items-center gap-3">
-            <Poster i={i + 2} title="" w={128} h={72} />
+            {/* each episode keeps its colour: Episode 5 is colour 2, as on the "More episodes" shelf */}
+            <Poster i={episode - 2 + i} title="" w={128} h={72} />
             <span className="min-w-0">
               <span className="block truncate text-[15px] font-semibold text-white">{title}</span>
               <span className="block text-[13px] text-white/55">Night Drive · 29 min</span>
@@ -203,7 +207,7 @@ function BrowserPage({ view }: { view: PcView }) {
             </span>
           ) : null}
         </div>
-        <UpNext />
+        <UpNext episode={view.episode} />
       </div>
     </div>
   );
@@ -268,53 +272,13 @@ function FullscreenPlayer({ view }: { view: PcView }) {
   );
 }
 
-/** ZStream: a ten-foot TV app, steered with the phone's D-pad. */
-function TvApp({ focus }: { focus: number }) {
-  const row = ["Night Drive S2 E5", "Harbor", "The Long Way", "Coast Road", "Home Again"];
-  return (
-    <div className="absolute inset-0 overflow-hidden bg-[#070d2a] text-white">
-      <div className="absolute inset-y-0 left-0 flex w-[72px] flex-col items-center gap-7 bg-[rgb(255_255_255/0.04)] pt-9 text-white/55">
-        <Icon name="search" size={22} />
-        <Icon name="home" size={22} className="text-white" />
-        <FilmIcon name="tv" size={22} />
-        <FilmIcon name="grid" size={22} />
-        <FilmIcon name="star" size={22} />
-      </div>
-      <div className="absolute left-[72px] right-0 top-0 h-[400px] bg-[linear-gradient(100deg,#0a1a5a_0%,#2a62ff_45%,#f29d6a_100%)]">
-        <div className="absolute inset-0 bg-[linear-gradient(90deg,rgb(7_13_42/0.9)_20%,transparent_70%)]" />
-        <div className="absolute left-14 top-16">
-          <p className="text-[14px] font-semibold uppercase tracking-[0.18em] text-white/70">Continue watching</p>
-          <p className="mt-3 text-[56px] font-bold leading-none tracking-[-0.03em]">Night Drive</p>
-          <p className="mt-3 text-[20px] text-white/80">Season 2 · Episode 4 · First Light</p>
-          <span className="mt-7 inline-flex h-12 items-center gap-2 rounded-full bg-white px-6 text-[17px] font-semibold text-[#070d2a]">
-            <Icon name="play" size={20} />
-            Resume
-          </span>
-        </div>
-        <span className="absolute right-10 top-8 flex items-center gap-2 rounded-full bg-[rgb(7_13_42/0.72)] px-3.5 py-1.5 text-[15px] font-semibold text-white">
-          <FilmIcon name="tv" size={18} />
-          ZStream
-        </span>
-      </div>
-      <p className="absolute left-[128px] top-[436px] text-[17px] font-semibold text-white/80">Continue watching</p>
-      <div className="absolute left-[128px] top-[472px] flex gap-6">
-        {row.map((title, i) => (
-          <Poster key={title} i={i} title={title} w={200} h={112} focus={i === focus ? 1 : 0} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export const PcScreen = memo(function PcScreen({ view, width }: { view: PcView; width: number }) {
   const scale = width / PC_SCREEN.w;
   return (
     <div className="relative overflow-hidden" style={{ width, height: PC_SCREEN.h * scale }}>
       <div className="absolute left-0 top-0 origin-top-left bg-[linear-gradient(160deg,#0a2a7a_0%,#061a4e_50%,#1a2b6d_100%)]" style={{ width: PC_SCREEN.w, height: PC_SCREEN.h, transform: `scale(${scale})`, opacity: view.on }}>
         <div className="absolute inset-0 bg-[radial-gradient(60rem_30rem_at_30%_20%,rgb(66_129_250/0.35),transparent_70%)]" />
-        {view.app === "tv" ? (
-          <TvApp focus={view.focus} />
-        ) : view.fullscreen >= 1 ? (
+        {view.fullscreen >= 1 ? (
           <FullscreenPlayer view={view} />
         ) : (
           <>
@@ -327,15 +291,6 @@ export const PcScreen = memo(function PcScreen({ view, width }: { view: PcView; 
             ) : null}
           </>
         )}
-        {view.muteOsd > 0 ? (
-          <div className="absolute left-6 top-6 flex items-center gap-3 rounded-[12px] bg-[rgb(20_30_70/0.92)] px-4 py-3 text-white shadow-[0_20px_40px_-20px_rgb(0_0_0/0.8)] ring-1 ring-white/10" style={{ opacity: view.muteOsd, transform: `translateY(${lerp(-8, 0, view.muteOsd)}px)` }}>
-            <FilmIcon name="speakerMute" size={22} />
-            <span className="h-1.5 w-40 rounded-full bg-white/20">
-              <span className="block h-full w-[40%] rounded-full bg-white/40" />
-            </span>
-            <span className="text-[14px] font-semibold">Muted</span>
-          </div>
-        ) : null}
       </div>
       {/* the panel's glass: a faint reflection */}
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,rgb(255_255_255/0.07),transparent_38%)]" />

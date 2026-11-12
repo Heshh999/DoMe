@@ -3,7 +3,7 @@
 Status: **pre-release engineering build. No formal Windows-device-tested pass is recorded.** Every
 Windows API path in `pc-agent/dome_agent/platform/windows/` is implemented against the real Windows
 APIs and unit-tested on Linux behind an explicit fake platform (`DOME_AGENT_PLATFORM=fake`); the owner
-has run the agent from source on his Windows 11 PC through the test kit (`docs/HANDOFF.md` §4). A
+has run the agent from source on their Windows 11 PC through the test kit (`docs/HANDOFF.md` §4). A
 per-user installer, `DoMe-Setup-<version>.exe`, now exists (next section). A GitHub Actions workflow
 (`windows-installer.yml`) is set up to build it on a Windows Server runner and smoke-test install,
 upgrade and uninstall there; its first run was green on 2026-10-14 (run 38488799434: the Windows unit tests, the
@@ -728,7 +728,7 @@ test `tests/test_processes.py::test_native_host_process_forwards_frames` (**unit
 | Item | Status | What unblocks it |
 | --- | --- | --- |
 | Building `DoMe.exe` / `dome-native-host.exe` | One PyInstaller folder (`dome-agent.spec`); built and run on Linux; built on Windows by `windows-installer.yml` | The first green `windows-installer.yml` run; fix whatever it reports |
-| Installer with uninstall cleanup | Inno Setup per-user installer (`pc-agent/packaging/installer/DoMe.iss`): native host, start-at-login opt-in, upgrade that quits DoMe first, downgrade refusal, uninstall cleanup; smoke-tested by CI, **awaiting its first run**; never run on a PC by a standard user | The first green run, then the founder installs it on his Windows 11 PC |
+| Installer with uninstall cleanup | Inno Setup per-user installer (`pc-agent/packaging/installer/DoMe.iss`): native host, start-at-login opt-in, upgrade that quits DoMe first, downgrade refusal, uninstall cleanup; smoke-tested by CI, **awaiting its first run**; never run on a PC by a standard user | The first green run, then the founder installs it on their Windows 11 PC |
 | Linking from the tray | `DoMe.exe link` works only from a console; the tray says "Not linked — run DoMe link" | A tray "Link this PC…" item (small change), and domeremote.com live |
 | **Code signing** (Authenticode) | Designed and written: `release.yml` signs `DoMe.exe`, `dome-native-host.exe`, Setup and the uninstaller with Azure Artifact Signing (`build_installer.py --sign-artifact-signing`, through Inno's `SignTool`) behind the protected environment `release`, verifies every signature after signing and again after installing. **Not yet verified**: it has never run; the option rules and the commands are **unit-tested** | The founder's Artifact Signing account, identity validation and the GitHub setup (`docs/LAUNCH_SETUP.md` §17), then a first run with publish off. SmartScreen may still warn for new versions; **never instruct customers to disable antivirus or SmartScreen** |
 | Update mechanism | An update **check** exists in code (`dome_agent/update_check.py`): Ed25519-signed `latest.json` against a pinned key, exact GitHub download address, rollback guard, at most three redirects on GitHub hosts, a download kept only when size and SHA-256 match; it never installs anything by itself. **Unit-tested** only; it is **not connected** to DoMe's menu or start-up, and no key is pinned, so DoMe does not check for updates yet. No automatic update, no staged rollout | Connect it to the tray ("Check for updates…") and the agent's start-up (`tray.py`, `agent.py`), pin the founder's update key, then a first signed release to check against |

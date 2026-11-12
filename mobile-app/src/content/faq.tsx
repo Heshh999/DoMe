@@ -1,7 +1,9 @@
 /**
  * The FAQ's questions and answers, grouped by topic. Every answer describes the software as built: the AI
- * butler exists (optional, off until turned on); Screen view is coming; point-and-talk is planned; the AI
- * never sees the screen; nothing is recorded; speech is not stored. Rendered by src/pages/public/FaqPage.tsx.
+ * butler exists (optional, off until turned on); Screen view is coming, and its sound and TV-style remote later
+ * still (no mini view over other apps: a home-screen app cannot draw one); paid Screen view has fair-use limits, never
+ * "unlimited"; point-and-talk is planned; the AI never sees the screen; nothing is recorded; speech is not stored.
+ * Rendered by src/pages/public/FaqPage.tsx.
  *
  * The plan answers follow what the server says (GET /v1/plans, lib/useBillingAvailability.ts): with no answer, or a
  * failed one, they keep the static "coming at paid launch" wording; once checkout exists they say how to subscribe, and
@@ -13,7 +15,7 @@ import { Link } from "react-router";
 import type { IconName } from "../components/icons.tsx";
 import { aiSwitchedOn, sellsPlan, type BillingAvailability } from "../lib/useBillingAvailability.ts";
 import type { PublicIconName } from "../pages/public/publicIcons.tsx";
-import { AI_RULES, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WINDOW_HOURS } from "./plans.ts";
+import { AI_RULES, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WINDOW_HOURS } from "./plans.ts";
 
 export type FaqEntry = { q: string; a: ReactNode };
 export type FaqGroup = { id: string; title: string; icon: PublicIconName | Extract<IconName, "shield" | "ask">; status?: string; entries: FaqEntry[] };
@@ -118,9 +120,9 @@ export function faqGroups(availability: BillingAvailability | null): FaqGroup[] 
           q: "What is Screen view, and when is it coming?",
           a: (
             <>
-              <p>Screen view shows your PC’s screen live on your phone so you can tap what you see, scroll with two fingers, keep a floating mini view while you use another app, hear the PC’s sound on your phone, and use a TV-style remote for full-screen apps. It is in development and not in the app yet; this page will say so until it ships.</p>
+              <p>Screen view shows your PC’s screen live on your phone so you can tap what you see and scroll with two fingers. It is in development and not in the app yet; this page will say so until it ships. Hearing your PC’s sound on your phone and a TV-style remote are coming later.</p>
               <p>
-                Free will include {FREE_SCREEN_VIEW_MINUTES} minutes per {WINDOW_HOURS}-hour window; Pro and Pro Plus will have unlimited Screen view.
+                Free will include {FREE_SCREEN_VIEW_MINUTES} minutes per {WINDOW_HOURS}-hour window. {SCREEN_VIEW_FAIR_USE}
               </p>
             </>
           ),
@@ -138,10 +140,10 @@ export function faqGroups(availability: BillingAvailability | null): FaqGroup[] 
           a: (
             <>
               <p>
-                Both add up to {pro.pcs} PCs and {pro.phones} phones, unlimited Screen view when it arrives, and custom remote layouts and saved routines when they arrive (both are still coming). The difference is the AI butler allowance: Pro has {pro.ai.perWindow?.requests} requests per {WINDOW_HOURS}-hour window (about {pro.ai.perWindow?.minutes} minutes), up to {pro.ai.perWeek?.requests} a week; Pro Plus has {proPlus.ai.perWindow?.requests} per window (about {proPlus.ai.perWindow?.minutes} minutes), up to {proPlus.ai.perWeek?.requests} a week.
+                Both add up to {pro.pcs} PCs and {pro.phones} phones. Screen view without the Free plan’s time limit (fair-use limits apply), custom remote layouts and saved routines are coming later: none of them is in the app yet. The difference is the AI butler allowance: Pro has {pro.ai.perWindow?.requests} requests per {WINDOW_HOURS}-hour window (about {pro.ai.perWindow?.minutes} minutes), up to {pro.ai.perWeek?.requests} a week; Pro Plus has {proPlus.ai.perWindow?.requests} per window (about {proPlus.ai.perWindow?.minutes} minutes), up to {proPlus.ai.perWeek?.requests} a week.
               </p>
               <p>
-                Pro is {usd(pro.price!.monthlyCents)} a month or {usd(pro.price!.annualCents)} a year; Pro Plus is {usd(proPlus.price!.monthlyCents)} a month or {usd(proPlus.price!.annualCents)} a year, in US dollars, tax included (the price shown is the amount charged). {howToBuy} See {link("/pricing", "Pricing")} for the full comparison.
+                Pro is {usd(pro.price!.monthlyCents)} a month or {usd(pro.price!.annualCents)} a year; Pro Plus is {usd(proPlus.price!.monthlyCents)} a month or {usd(proPlus.price!.annualCents)} a year, in US dollars, tax included (the price shown is the amount charged). A subscription renews automatically every month or every year until you cancel. {howToBuy} See {link("/pricing", "Pricing")} for the full comparison.
               </p>
             </>
           ),
@@ -152,7 +154,7 @@ export function faqGroups(availability: BillingAvailability | null): FaqGroup[] 
         },
         {
           q: "How do I cancel?",
-          a: `From Billing in the DoMe web app, at any time${selling ? "" : ", once paid plans launch"}. Access continues until the end of the period you paid for and your settings are kept. If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which PC and phones stay enabled on Free. Revocation and emergency stop always work, on every plan.`,
+          a: `At any time${selling ? "" : " once paid plans launch"}: open Billing in the DoMe web app and choose Manage subscription. Access continues until the end of the period you paid for and your settings are kept. If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which PC and phones stay enabled on Free. Revocation and emergency stop always work, on every plan.`,
         },
         {
           q: "Can I buy Pro or Pro Plus today?",

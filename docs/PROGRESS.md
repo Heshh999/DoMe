@@ -719,7 +719,7 @@ Evidence:
   windows, iPhone playback, NAT traversal, TURN, the Job object and the firewall prompt. `ffmpeg-lgpl.yml` has
   never run.
 
-Next (founder): run **ffmpeg-lgpl** from the Actions tab, then the §18 device round on his PC and iPhone, the
+Next (founder): run **ffmpeg-lgpl** from the Actions tab, then the §18 device round on their PC and iPhone, the
 Cloudflare TURN key per design §20 (`LAUNCH_SETUP.md` §11B, staging first), and counsel's answer on H.264. Details
 in `docs/HANDOFF.md` item 2.
 
@@ -1110,7 +1110,7 @@ critique of it (every blocking and major point applied; see the commit message).
 - **Evidence**: integration-tested on the windows-latest CI runner (Windows Server, administrator, UAC
   off). **Not Windows-device-tested**: no Windows 10/11 PC, no standard user, no UAC prompt, the tray icon
   and its menu not seen, Smart App Control / SmartScreen behaviour for the unsigned build not observed.
-- **Next**: the founder installs the build on his Windows 11 PC as a standard user; production extension
+- **Next**: the founder installs the build on their Windows 11 PC as a standard user; production extension
   id and signing before a release build; hosting at domeremote.com (`deploy/README.md` "Domain").
 
 ## 2026-10-14 — Windows installer: review fixes
@@ -1201,7 +1201,7 @@ HANDOFF §7 item 4, pulled forward ahead of items 1–3 (which keep their order)
   ignoring the development options, no empty state folder left). actionlint: both workflows clean.
 - **Evidence**: **not yet verified** on Windows — awaiting the first `windows-installer.yml` run (a
   Windows Server runner as administrator with UAC off; not a Windows 10/11 PC, not a standard user).
-- **Next**: the first CI run and its fixes; the founder installs it on his Windows 11 PC; a tray "Link
+- **Next**: the first CI run and its fixes; the founder installs it on their Windows 11 PC; a tray "Link
   this PC…" item; a store listing and the production extension id; signing in a separate protected job.
 
 ## 2026-10-13 — Design A round: domain, two polish rounds, documentation

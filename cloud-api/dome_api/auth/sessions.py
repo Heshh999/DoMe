@@ -11,7 +11,7 @@ import hashlib
 import hmac
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import Response
 from sqlalchemy import select
@@ -42,8 +42,15 @@ def user_agent_hash(ua: str | None) -> bytes | None:
 
 
 async def create_session(
-    db: AsyncSession, settings: Settings, account_id: uuid.UUID, user_agent: str | None
+    db: AsyncSession,
+    settings: Settings,
+    account_id: uuid.UUID,
+    user_agent: str | None,
+    *,
+    authenticated_at: datetime | None = None,
 ) -> tuple[Session, str]:
+    """``authenticated_at``: when the provider confirmed a fresh password entry for this sign-in (``auth_time`` of a
+    login attempt started with ``prompt=login``, checked by ``OIDCClient.complete``); None for every other sign-in."""
     token = new_token()
     now = utcnow()
     row = Session(
@@ -55,6 +62,7 @@ async def create_session(
         expires_at=now + timedelta(days=settings.session_idle_days),
         absolute_expires_at=now + timedelta(days=settings.session_absolute_days),
         user_agent_hash=user_agent_hash(user_agent),
+        authenticated_at=authenticated_at,
     )
     db.add(row)
     await db.flush()

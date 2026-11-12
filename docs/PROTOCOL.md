@@ -624,12 +624,13 @@ self-validates every response outside production. Session-authenticated routes n
 
 | Route | Auth | Request | Response |
 | --- | --- | --- | --- |
-| `GET /v1/auth/login?return_to=` | — | | 302 to the issuer; with `prompt=login` while the browser carries the re-prompt marker (cloud-api DECISIONS #119) |
-| `GET /v1/auth/callback?code&state` | — | | 302 to `return_to`, sets cookie; an unconfirmed email is refused: redirect to `/?sign_in=email_unverified`, no session, only the re-prompt marker cookie (cloud-api DECISIONS #118, #119); a callback that only needs a fresh start (provider error or cancel, `code`/`state` missing, `state` unknown or already used, attempt older than 10 minutes): redirect to `/?sign_in=try_again`, no session, no cookie (#120) |
+| `GET /v1/auth/login?return_to=&prompt=` | — | | 302 to the issuer; with `prompt=login` while the browser carries the re-prompt marker (cloud-api DECISIONS #119) or when the query says `prompt=login` (the phone before deleting the account, #121: then also `max_age=0`, and the callback records the provider's `auth_time` as the session's re-authentication when it falls within the attempt, #123); any other `prompt` value is 400 `MALFORMED_MESSAGE` |
+| `GET /v1/auth/callback?code&state` | — | | 302 to `return_to`, sets cookie; an unconfirmed email is refused: redirect to `/?sign_in=email_unverified`, no session, only the re-prompt marker cookie (cloud-api DECISIONS #118, #119); a callback that only needs a fresh start (provider error or cancel, `code`/`state` missing, `state` unknown or already used, attempt older than 10 minutes): redirect to `/?sign_in=try_again`, no session, no cookie (#120); the identity of a deleted account: redirect to `/?sign_in=account_deleted`, no session, no cookie, nothing written (#121). The values are `rest.schema.json#/$defs/sign_in_problem` |
 | `POST /v1/auth/logout` | session + CSRF | | 204; closes the session's controller sockets |
 | `GET /v1/session` | session | | `session_response{account{id, email, display_name, created_at}, csrf_token, plan, entitlement_state?, limits{max_enabled_pcs, max_controllers, routines, custom_layouts}, protocol_version}` |
 | `GET /v1/account/security-events?limit=` | session | | `security_events_response{events[]{id, kind, severity, actor, subject_id?, detail?, created_at}}` |
 | `GET /v1/account/sessions` / `DELETE /v1/account/sessions/{id}` | session (+CSRF) | | `{sessions[]{id, created_at, last_seen_at, expires_at, current}}` (no schema definition yet — contract gap #1) / 204 |
+| `DELETE /v1/account` (no bump, §19.2) | session + CSRF, from a sign-in again (`prompt=login`) whose password entry the provider confirmed within the last 10 minutes | `account_delete_request{confirm: "delete my account"}` | 204 without a body, session cookie cleared; 403 `REAUTH_REQUIRED` otherwise (a plain sign-in never counts); the account's phone and PC sockets get `revoked{account_deleted}` and close (4003) |
 | `POST /v1/agent-link/start` | — (10/h per IP) | `agent_link_start_request{pc_public_jwk, agent_version, platform: windows \| development, pc_name_hint?}` | `agent_link_start_response{device_code (43), user_code (ABCD-EFGH), verification_uri_complete, expires_in 60..900, interval 1..30}` |
 | `GET /v1/agent-link/{user_code}` | session | | `agent_link_preview_response{user_code, agent_version, platform, kid, pc_name_hint?, expires_at}` |
 | `POST /v1/agent-link/{user_code}/approve` | session + CSRF | `agent_link_approve_request{pc_name, remote_enabled: true}` | `agent_link_approve_response{pc_id, enabled, reason?: DEVICE_LIMIT_REACHED}`; 409 `PC_ALREADY_LINKED` |
@@ -1267,6 +1268,25 @@ BMP's format characters (bidi overrides, zero-width characters, BOM …) and U+2
 pattern is a backstop: cloud-api and the phone remove every `\p{Cf}` character and turn U+2028/U+2029
 into spaces before validating. `assistant_step.params` is an open object here; each side validates
 it per action against `actions.json` in code.
+
+### 19.2 Account deletion (2026-11-12)
+
+Self-service deletion and the sign-in it requires (cloud-api DECISIONS #121). `protocol_version` and
+`registry_version` stay 1.5: the bodies, the query value and the error code travel only between the PWA and
+cloud-api, and the relay frames already carried `revoked{reason: account_deleted}` for the phone (§6.2) and the PC
+(§6.4) since 1.0, so the agent and the extension are unaffected.
+
+| Addition | Contract location |
+| --- | --- |
+| `DELETE /v1/account` (session + CSRF + exact Origin) with `account_delete_request{confirm: "delete my account"}` (the exact phrase; the phone makes the person type it) → 204 without a body and the session cookie cleared | `rest.schema.json` |
+| `REAUTH_REQUIRED` (403, REST only): the session was not created by a sign-in again with `prompt=login` whose password entry the provider confirmed (`auth_time`) within the last 10 minutes; a plain sign-in never counts. The phone sends the person through `GET /v1/auth/login?prompt=login&return_to=…` and repeats the request | `errors.json` |
+| `GET /v1/auth/login` query `prompt`: `login` is the only accepted value (OpenID Connect Core 3.1.2.1: the provider shows its login page even while it remembers the person); anything else 400 `MALFORMED_MESSAGE` | query parameter (§11) |
+| `sign_in_problem`: the values of `/?sign_in=` the callback redirects to (`email_unverified`, `try_again`, `account_deleted`) | `rest.schema.json` |
+
+After a 204 the account is deleted at once: its sessions and PC tokens are refused, the email and name are blank,
+and the subscription is cancelled (or the cancel is retried until the provider confirms it). The account and
+everything it owns are removed 30 days later by the retention purge (`docs/DATA_RETENTION.md`), except the billing
+records, which are kept without the account.
 
 ## 20. Protocol 1.4: Screen view, Phase 1
 

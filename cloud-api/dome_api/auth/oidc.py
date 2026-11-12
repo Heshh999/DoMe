@@ -7,7 +7,11 @@ single use). The ID token is verified with ``joserfc`` (RS256/ES256 only, issuer
 (``EmailNotVerifiedError``) unless ``email_verified`` is exactly ``true``: absent, ``false`` or a string such as
 ``"true"`` all mean the provider has not confirmed that the person owns the address (DECISIONS #118). A callback
 whose login attempt is unknown, already used or older than those 10 minutes raises ``StartAgainError``: the one remedy
-is a fresh sign-in, and the callback sends the browser to a plain notice for it (DECISIONS #120).
+is a fresh sign-in, and the callback sends the browser to a plain notice for it (DECISIONS #120). A login attempt
+started for re-authentication (``begin(..., reauth=True)``: ``prompt=login`` and ``max_age=0``, before deleting the
+account) is remembered as such; its callback reads the ID token's ``auth_time`` and keeps it only when it falls within
+that attempt (:func:`checked_auth_time`), so a provider that answered from its remembered sign-in confirms nothing
+(DECISIONS #121).
 
 ``iss`` is compared with the discovery document's ``issuer`` exactly as the provider wrote it (OpenID
 Connect Core 3.1.3.7): Auth0 publishes ``https://<tenant>.auth0.com/`` with a trailing slash, while
@@ -22,8 +26,9 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import httpx
@@ -45,6 +50,8 @@ ALLOWED_ID_TOKEN_ALGS = ("RS256", "ES256")
 TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post"  # noqa: S105 - a method name, not a secret
 _DISCOVERY_TTL = 3600.0
 _JWKS_TTL = 3600.0
+# clock difference allowed between the provider and this server when ``auth_time`` is compared (as for the ID token)
+AUTH_TIME_LEEWAY = timedelta(seconds=60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +60,26 @@ class Identity:
     subject: str
     email: str
     display_name: str
+    # when the provider confirmed a fresh password entry: only for an attempt started with ``reauth`` whose
+    # ``auth_time`` passed :func:`checked_auth_time`; None for every other sign-in
+    reauthenticated_at: datetime | None = None
+
+
+def checked_auth_time(claims: Mapping[str, Any], started_at: datetime, now: datetime) -> datetime | None:
+    """The ID token's ``auth_time`` for a re-authentication attempt, when it shows that the person signed in at the
+    provider during that attempt: an integer number of seconds (a boolean is not one) no earlier than the attempt's
+    start and not in the future, each within :data:`AUTH_TIME_LEEWAY`. None otherwise: the provider answered from the
+    sign-in it remembered (an older ``auth_time``), or did not say when the person signed in."""
+    value = claims.get("auth_time")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    try:
+        at = datetime.fromtimestamp(value, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+    if at < started_at - AUTH_TIME_LEEWAY or at > now + AUTH_TIME_LEEWAY:
+        return None
+    return at
 
 
 class EmailNotVerifiedError(Exception):
@@ -155,10 +182,17 @@ class OIDCClient:
         )
 
     # ----- flow ------------------------------------------------------------------------------
-    async def begin(self, db: AsyncSession, return_to: str, *, prompt: Literal["login"] | None = None) -> str:
+    async def begin(
+        self, db: AsyncSession, return_to: str, *, prompt: Literal["login"] | None = None, reauth: bool = False
+    ) -> str:
         """Start one login attempt; returns the provider's authorization URL. ``prompt="login"`` adds OpenID Connect
         Core 3.1.2.1 ``prompt=login``, so the provider shows its login page even while it still remembers the person
-        (sign-ins after a refusal, DECISIONS #119); without it the URL has no ``prompt`` at all."""
+        (sign-ins after a refusal, DECISIONS #119); without it the URL has no ``prompt`` at all. ``reauth=True`` (the
+        phone before deleting the account, DECISIONS #121) also sends ``prompt=login``, adds ``max_age=0`` (the
+        provider must then report ``auth_time``) and stores the attempt as a re-authentication, which the callback
+        checks."""
+        if reauth:
+            prompt = "login"
         disc = await self.discovery()
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(32)
@@ -173,12 +207,15 @@ class OIDCClient:
                 nonce=nonce,
                 code_verifier=verifier,
                 return_to=return_to,
+                reauth=reauth,
                 created_at=now,
                 expires_at=now + FLOW_LIFETIME,
             )
         )
         # Authlib puts extra keyword arguments into the query (after state and nonce, before the PKCE challenge).
-        extra = {"prompt": prompt} if prompt is not None else {}
+        extra: dict[str, str] = {"prompt": prompt} if prompt is not None else {}
+        if reauth:
+            extra["max_age"] = "0"
         async with self._client() as client:
             url, _ = client.create_authorization_url(
                 disc["authorization_endpoint"], state=state, nonce=nonce, code_verifier=verifier, **extra
@@ -205,12 +242,19 @@ class OIDCClient:
         taken = await db.execute(
             delete(AuthFlow)
             .where(AuthFlow.state == state)
-            .returning(AuthFlow.nonce, AuthFlow.code_verifier, AuthFlow.return_to, AuthFlow.expires_at)
+            .returning(
+                AuthFlow.nonce,
+                AuthFlow.code_verifier,
+                AuthFlow.return_to,
+                AuthFlow.expires_at,
+                AuthFlow.created_at,
+                AuthFlow.reauth,
+            )
         )
         flow = taken.tuples().one_or_none()
         if flow is None:
             raise StartAgainError("unknown_state")
-        nonce, code_verifier, return_to, expires_at = flow
+        nonce, code_verifier, return_to, expires_at, started_at, reauth = flow
         if expires_at < utcnow():
             raise StartAgainError("expired")
         disc = await self.discovery()
@@ -239,7 +283,18 @@ class OIDCClient:
         subject = str(claims["sub"])
         email = str(claims.get("email") or "")[:254]
         name = str(claims.get("name") or claims.get("preferred_username") or email.split("@")[0] or "DoMe user")[:128]
-        return Identity(issuer=self.settings.oidc_issuer, subject=subject, email=email, display_name=name), return_to
+        reauthenticated_at = checked_auth_time(claims, started_at, utcnow()) if reauth else None
+        if reauth and reauthenticated_at is None:
+            # The sign-in still succeeds; deleting the account will ask for another one (REAUTH_REQUIRED).
+            log.info("oidc.reauth_unconfirmed", claim="absent" if "auth_time" not in claims else "outside_attempt")
+        identity = Identity(
+            issuer=self.settings.oidc_issuer,
+            subject=subject,
+            email=email,
+            display_name=name,
+            reauthenticated_at=reauthenticated_at,
+        )
+        return identity, return_to
 
     async def _verify_id_token(self, id_token: str, nonce: str) -> dict[str, Any]:
         # The exact issuer string from discovery (already checked against DOME_OIDC_ISSUER up to a trailing

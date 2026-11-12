@@ -11,10 +11,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ERRORS, type rest } from "@dome/protocol";
 
-import { COMING_AT_PAID_LAUNCH, planById, usd } from "../../src/content/plans.ts";
+import { AGREE_TO_TERMS, COMING_AT_PAID_LAUNCH, HOW_TO_CANCEL, planById, TAX_INCLUDED, topUpTerms, usd } from "../../src/content/plans.ts";
 import { configureApi } from "../../src/lib/api.ts";
 import { browserNavigation } from "../../src/lib/billing.ts";
-import { BillingPage, NOT_SWITCHED_ON, PRO_PLUS_NOT_SOLD, RETURN_POLL_MS, STILL_CONFIRMING, TEST_MODE } from "../../src/pages/app/BillingPage.tsx";
+import { BillingPage, COMING_LATER, NOT_SWITCHED_ON, PRO_PLUS_NOT_SOLD, RETURN_POLL_MS, STILL_CONFIRMING, TEST_MODE } from "../../src/pages/app/BillingPage.tsx";
 import { useAssistantStore } from "../../src/store/assistant.ts";
 import { busyKinds } from "../../src/store/busy.ts";
 import { useSessionStore } from "../../src/store/session.ts";
@@ -261,6 +261,48 @@ describe("BillingPage", () => {
     expect(calls.filter((c) => c.url === "/v1/billing/checkout").at(-1)!.body).toEqual({ plan: "pro", interval: "monthly" });
     // the plan shown never changed: the server was not asked to say anything else
     expect(within(monthly.container).getByText("DoMe Free")).toBeInTheDocument();
+  });
+
+  it("next to every Continue to payment button: the renewal at the price shown, how to cancel, and the Terms and Privacy links, with prices from the server's plan data", async () => {
+    // a price unlike the website's defaults: every line below must follow it
+    const pricing: rest.Pricing = { ...PRICING, plans: { pro: { monthly_cents: 1234, annual_cents: 12345 }, pro_plus: { monthly_cents: 2345, annual_cents: 23456 } } };
+    billing = { ...FREE_ON, pricing };
+    const user = userEvent.setup();
+    renderBilling();
+    const pro = (await screen.findByRole("article", { name: "DoMe Pro" })) as HTMLElement;
+    const proPlus = screen.getByRole("article", { name: "DoMe Pro Plus" });
+    for (const [card, id, monthly, annual] of [
+      [pro, "pro", "$12.34", "$123.45"],
+      [proPlus, "pro_plus", "$23.45", "$234.56"],
+    ] as const) {
+      const button = within(card).getByRole("button", { name: "Continue to payment" });
+      const terms = within(card).getByTestId(`terms-${id}`);
+      // directly under the button that starts Checkout
+      expect(button.nextElementSibling).toBe(terms);
+      expect(card).toHaveTextContent(`${monthly} / month`);
+      expect(terms).toHaveTextContent(`Renews automatically every month at ${monthly} until you cancel. ${TAX_INCLUDED}`);
+      expect(terms).not.toHaveTextContent(annual);
+      expect(terms).toHaveTextContent(HOW_TO_CANCEL);
+      expect(terms).toHaveTextContent(AGREE_TO_TERMS);
+      expect(within(terms).getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+      expect(within(terms).getByRole("link", { name: "Privacy notice" })).toHaveAttribute("href", "/privacy");
+    }
+    // yearly: the renewal line follows the price the card now shows
+    await user.click(screen.getByRole("tab", { name: "Yearly" }));
+    expect(pro).toHaveTextContent("$123.45 / year");
+    expect(within(pro).getByTestId("terms-pro")).toHaveTextContent("Renews automatically every year at $123.45 until you cancel.");
+    expect(within(proPlus).getByTestId("terms-pro_plus")).toHaveTextContent("Renews automatically every year at $234.56 until you cancel.");
+    expect(within(pro).getByTestId("terms-pro")).not.toHaveTextContent("every month");
+  });
+
+  it("Pro alone on sale still carries the renewal lines, once, under its own button", async () => {
+    billing = { ...FREE_ON, checkout_plans: ["pro"] };
+    assistant = AI_OFF;
+    renderBilling();
+    const pro = (await screen.findByRole("article", { name: "DoMe Pro" })) as HTMLElement;
+    expect(within(pro).getByTestId("terms-pro")).toHaveTextContent(`Renews automatically every month at ${usd(PRICING.plans.pro.monthly_cents)} until you cancel.`);
+    expect(screen.getAllByText(HOW_TO_CANCEL)).toHaveLength(1);
+    expect(screen.queryByTestId("terms-pro_plus")).toBeNull();
   });
 
   it("a checkout_url that is not https is never navigated to", async () => {
@@ -512,12 +554,37 @@ describe("BillingPage", () => {
     expect(week.parentElement).toHaveTextContent(/Refreshes /);
     const topup = screen.getByRole("button", { name: "Add 100 AI requests for $2.99" });
     expect(screen.getByText(/You choose when; nothing is added or charged automatically\./)).toBeInTheDocument();
+    // directly under the button: a one-time purchase, what it adds, and what happens to unused requests
+    const terms = screen.getByTestId("topup-terms");
+    expect(topup.nextElementSibling).toBe(terms);
+    expect(terms).toHaveTextContent(topUpTerms(100));
+    expect(terms).toHaveTextContent(/^A one-time purchase, not a subscription: it adds 100 AI requests to your account\. Unused top-up requests do not expire\./);
     await user.click(topup);
     await waitFor(() => expect(assign).toHaveBeenCalledWith(CHECKOUT_URL));
     const call = calls.find((c) => c.url === "/v1/billing/topup")!;
     expect(call.method).toBe("POST");
     expect(call.body).toEqual({});
     expect(call.csrf).toBe(SESSION.csrf_token);
+  });
+
+  it("the top-up terms follow the server's top-up figures", async () => {
+    session = { ...SESSION, plan: "pro", entitlement_state: "active", limits: PRO_LIMITS };
+    billing = { ...PRO_ON, topup: { ...PRO_ON.topup, requests: 250, price_cents: 499 } };
+    assistant = { ...AI_ON, allowance: WINDOWS };
+    renderBilling();
+    expect(await screen.findByRole("button", { name: "Add 250 AI requests for $4.99" })).toBeInTheDocument();
+    expect(screen.getByTestId("topup-terms")).toHaveTextContent("it adds 250 AI requests to your account");
+  });
+
+  it("a paid plan's limits say routines and custom layouts are coming later, never that they are there now", async () => {
+    session = { ...SESSION, plan: "pro", entitlement_state: "active", limits: PRO_LIMITS };
+    billing = PRO_ON;
+    renderBilling();
+    await billingLoaded();
+    const limits = screen.getByRole("heading", { name: "Your limits" }).closest("div") as HTMLElement;
+    expect(limits).toHaveTextContent(new RegExp(`Routines\\s*${COMING_LATER}`));
+    expect(limits).toHaveTextContent(new RegExp(`Custom layouts\\s*${COMING_LATER}`));
+    expect(limits).not.toHaveTextContent(/Included/);
   });
 
   it("no top-up button when the server says not allowed; a kept balance on Free is explained; TOPUP errors render the contract's message", async () => {

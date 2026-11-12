@@ -1053,7 +1053,7 @@ A copy of `older_agent.py` with `PROTOCOL_VERSIONS = ("1.0", "1.1", "1.2", "1.3"
 
 ---
 
-## 7. Device test checklist (what the founder tries, what he reports) and Deferred (needs the device)
+## 7. Device test checklist (what the founder tries, what they report) and Deferred (needs the device)
 
 Prerequisites: staging with Screen view on; a build whose BUILD-INFO says "screen view: included"; the staging readout visible.
 

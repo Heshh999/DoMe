@@ -107,8 +107,8 @@ Items the review surfaced that are deliberately deferred, with the reason and th
 21. **Disputes and refunds are not handled.** `charge.dispute.*` and `charge.refunded` are recorded as `ignored` with a
     `billing.needs_operator` warning; access is not paused and nothing is canceled automatically. Trials are not
     configured.
-22. **No `DELETE /v1/account` route.** Only `BillingService.cancel_for_account_deletion()` and its
-    `pending_deletions` retry exist; account deletion stays a support request.
+22. ~~**No `DELETE /v1/account` route.**~~ Resolved (2026-11-12, DECISIONS #121, #122): self-service deletion with a
+    fresh sign-in, and the hourly purge that hard-deletes the account 30 days later. Its limits are #40 to #42.
 23. **Single-process reconciler.** The hourly pass runs in the API process (ADR-0001 D1). Every step is idempotent
     (deduplicated events, fetch-then-apply, conditional updates), so a second process would only repeat work.
 24. **The Deploy button does not carry the Stripe values yet.** `deploy/` and `.github/workflows/deploy.yml` were
@@ -204,3 +204,29 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     (DECISIONS #120: it took more than 10 minutes, its callback was opened twice, or it was cancelled at the provider)
     is in the same state: integration-tested (Linux, dev-idp), not yet verified against Auth0 (what it sends back when
     the person cancels, or when a sign-in is finished late) or on a device. It belongs to the same run.
+
+## Account deletion and retention (2026-11-12)
+
+40. **The sign-in provider's user is not deleted** (DECISIONS #121). DoMe has no management access to Auth0, so
+    `DELETE /v1/account` deletes the DoMe account only: the person's login (email and password) stays at Auth0. If a
+    person asks for that too, the founder deletes the user in the Auth0 dashboard (User Management, Users). Until the
+    hard delete 30 days later, signing in with that login lands on the "account deleted" notice; after it, the same
+    login signs up a new, empty DoMe account. The Stripe customer object and its invoices also stay at Stripe (they
+    are financial records; DoMe keeps only the cancelled subscription row with `account_id` NULL). Deletion and its
+    re-authentication are integration-tested with dev-idp and the fake Stripe only: whether Auth0 asks for the password
+    on `prompt=login` with `max_age=0` and reports `auth_time` (without it, deleting is refused, never let through),
+    and the cancel and the closing of Checkout pages against Stripe's test mode, belong to the founder's staging run.
+41. ~~**An open Checkout page is not closed at deletion.**~~ Resolved (2026-11-12, DECISIONS #121): deletion expires
+    every open page (`BillingService.close_checkouts_for_deletion`). A page paid anyway (before it could be closed, or
+    after the provider refused to close it) is never applied or credited: its subscription is cancelled at once (a
+    refused cancel is retried as `pending_deletions`) or the top-up is marked `failed`, and `billing.needs_operator`
+    (`kind=refund`) asks the founder to refund the payment in the Stripe dashboard; no refund is automatic. Tested
+    with the fake Stripe only.
+42. **What the purge does not cover yet.** The purge keeps the rows of tables without a stated period until the
+    account's hard delete (`usage_windows`, `ai_balances`, `support_tickets`, `usage_periods`, `screen_accounts`) or
+    for the life of the service (`ai_spend_months`); the financial records
+    (`subscriptions`, `topup_purchases`, `billing_events`) are never deleted, pending counsel's period (7 years
+    proposed). Activation events are not aggregated before deletion (none is emitted yet). Database backups and the
+    host's logs follow the provider's retention, not this job (docs/DATA_RETENTION.md). The pass runs hourly in the
+    one API process; a process that restarts more often than hourly would never run it (staging and production keep
+    one machine running).

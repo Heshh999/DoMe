@@ -70,6 +70,8 @@ class _Code:
     code_challenge: str | None
     code_challenge_method: str | None
     expires_at: float
+    # when the person signed in here (seconds): this provider keeps no sign-in session, so every sign-in is fresh
+    auth_time: int = 0
     used: bool = False
 
 
@@ -162,7 +164,7 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
                 "scopes_supported": ["openid", "email", "profile"],
                 "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
                 "code_challenge_methods_supported": ["S256"],
-                "claims_supported": ["sub", "email", "email_verified", "name"],
+                "claims_supported": ["sub", "email", "email_verified", "name", "auth_time"],
             }
         )
 
@@ -172,8 +174,9 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
 
     # Only these parameters are checked. Any other is accepted and ignored (the sign-in page carries it through its
     # form). That includes ``prompt=login``, which DoMe sends on sign-ins after a refused one (cloud-api DECISIONS
-    # #119): this provider keeps no sign-in session, so its page is shown every time anyway, and the non-interactive
-    # ``dev_user`` path still answers at once.
+    # #119), and ``max_age=0``, which it adds before deleting an account (#121): this provider keeps no sign-in session,
+    # so its page is shown every time anyway, every ID token's ``auth_time`` is the moment of that sign-in, and the
+    # non-interactive ``dev_user`` path still answers at once.
     def _validate_authorize(params: dict[str, str]) -> None:
         if params.get("client_id") != settings.client_id:
             raise HTTPException(400, "unknown client_id")
@@ -197,6 +200,7 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
             code_challenge=params.get("code_challenge"),
             code_challenge_method=params.get("code_challenge_method"),
             expires_at=time.time() + AUTH_CODE_TTL,
+            auth_time=int(time.time()),
         )
         q = {"code": code}
         if params.get("state"):
@@ -320,6 +324,9 @@ def create_app(settings: DevIdpSettings | None = None) -> FastAPI:
                 "exp": now + TOKEN_TTL,
                 "email": code.email,
                 "name": code.email.split("@")[0],
+                # OpenID Connect Core 2: when the person signed in. Always sent (it is required whenever max_age is
+                # asked for, which DoMe does before deleting an account, cloud-api DECISIONS #121).
+                "auth_time": code.auth_time,
             },
             code.email_verified,
         )

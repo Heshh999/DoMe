@@ -10,15 +10,22 @@
  * A sign-in that could not be finished and only needs a fresh start (it took too long, its answer was opened twice, or
  * it was cancelled at the provider) lands with `?sign_in=try_again` (cloud-api DECISIONS #120): the "Sign in again"
  * notice, with the same button and neither the Forgot-password paragraph nor the support line.
+ *
+ * A sign-in with the identity of a deleted account lands with `?sign_in=account_deleted` (cloud-api DECISIONS #121):
+ * "This account was deleted", the founder's text, a Sign in again that asks the provider for its login page (it still
+ * remembers the deleted identity), no Forgot-password paragraph, and a support line only with a support contact.
+ *
+ * After this app deleted the account (Settings → Delete account) the home page says "Your account was deleted.": a
+ * marker only the app sets, in this tab's sessionStorage, never one an address can carry.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { rest } from "@dome/protocol";
 
 import { api, loginUrl } from "../../src/lib/api.ts";
-import { CARRY_MS, SIGN_IN_PROBLEMS, carriedSignInProblem, carrySignInProblem, signInProblem, supportContact, withoutSignInProblem } from "../../src/lib/signInProblem.ts";
+import { ACCOUNT_DELETED_HERE, CARRY_MS, SIGN_IN_PROBLEMS, carriedAccountDeleted, carriedSignInProblem, carryAccountDeleted, carrySignInProblem, signInAgainOptions, signInProblem, supportContact, withoutSignInProblem } from "../../src/lib/signInProblem.ts";
 import { LandingPage } from "../../src/pages/public/LandingPage.tsx";
 
 const TITLE = "Confirm your email first";
@@ -33,6 +40,11 @@ const CONTACT = "mailto:support@example.test";
 const AGAIN_TITLE = "Sign in again";
 const AGAIN_TEXT = "That sign-in didn't finish. It may have taken too long. Tap Sign in again to start over.";
 const AGAIN_FULL = AGAIN_TITLE + AGAIN_TEXT + SIGN_IN_AGAIN;
+// The third reason: the identity belongs to a deleted account. The founder's title and text, then the button.
+const DELETED_TITLE = "This account was deleted";
+const DELETED_TEXT = "It will be erased for good 30 days after it was deleted. To use DoMe again before then, sign up with a different email address.";
+const DELETED_FULL = DELETED_TITLE + DELETED_TEXT + SIGN_IN_AGAIN;
+const DELETED_SUPPORT_LINE = "Questions? Contact support.";
 const PLANS: rest.PlansResponse = { plans: {}, pricing: { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } }, billing_enabled: false, billing_mode: "off", ai_enabled: false };
 
 let plans: ReturnType<typeof vi.spyOn>;
@@ -70,13 +82,14 @@ function renderHome(entry: string) {
 }
 
 describe("signInProblem", () => {
-  it("knows email_unverified and try_again and nothing else", () => {
+  it("knows email_unverified, try_again and account_deleted and nothing else", () => {
     expect(signInProblem(new URLSearchParams("sign_in=email_unverified"))).toBe("email_unverified");
     expect(signInProblem(new URLSearchParams("sign_in=try_again"))).toBe("try_again");
-    for (const q of ["", "sign_in=", "sign_in=toString", "sign_in=EMAIL_UNVERIFIED", "other=email_unverified", "sign_in=TRY_AGAIN", "sign_in=try_again ", "sign_in=expired", "other=try_again"]) {
+    expect(signInProblem(new URLSearchParams("sign_in=account_deleted"))).toBe("account_deleted");
+    for (const q of ["", "sign_in=", "sign_in=toString", "sign_in=EMAIL_UNVERIFIED", "other=email_unverified", "sign_in=TRY_AGAIN", "sign_in=try_again ", "sign_in=expired", "other=try_again", "sign_in=ACCOUNT_DELETED", "sign_in=deleted", "other=account_deleted"]) {
       expect(signInProblem(new URLSearchParams(q))).toBeNull();
     }
-    expect(Object.keys(SIGN_IN_PROBLEMS).sort()).toEqual(["email_unverified", "try_again"]);
+    expect(Object.keys(SIGN_IN_PROBLEMS).sort()).toEqual(["account_deleted", "email_unverified", "try_again"]);
     // each reason says which parts its notice has: the founder's words, exactly
     expect(SIGN_IN_PROBLEMS.email_unverified).toEqual({
       title: TITLE,
@@ -85,6 +98,11 @@ describe("signInProblem", () => {
       support: { lead: "Still nothing? ", link: "Contact support", rest: " and we'll send a new link." },
     });
     expect(SIGN_IN_PROBLEMS.try_again).toEqual({ title: AGAIN_TITLE, text: AGAIN_TEXT, wayOut: null, support: null });
+    expect(SIGN_IN_PROBLEMS.account_deleted).toEqual({ title: DELETED_TITLE, text: DELETED_TEXT, wayOut: null, support: { lead: "Questions? ", link: "Contact support", rest: "." } });
+    // only the deleted account's button asks for the provider's login page
+    expect(signInAgainOptions("account_deleted")).toEqual({ prompt: "login" });
+    expect(signInAgainOptions("email_unverified")).toEqual({});
+    expect(signInAgainOptions("try_again")).toEqual({});
   });
 
   it("removes only the marker", () => {
@@ -282,5 +300,133 @@ describe("home page after a sign-in that did not finish", () => {
     renderHome("/?sign_in=try_again");
     expect(screen.getByTestId("sign-in-problem").textContent).toBe(AGAIN_FULL);
     await waitFor(() => expect(screen.getByTestId("address")).toHaveTextContent(/^\/$/));
+  });
+});
+
+describe("home page after a sign-in with a deleted account's identity", () => {
+  it("shows exactly the title, the text and the Sign in again button, then clears the marker from the address bar", async () => {
+    renderHome("/?sign_in=account_deleted");
+    const notice = screen.getByRole("alert");
+    const shown = screen.getByTestId("sign-in-problem");
+    expect(shown.textContent).toBe(DELETED_FULL);
+    expect(shown.textContent).toBe("This account was deletedIt will be erased for good 30 days after it was deleted. To use DoMe again before then, sign up with a different email address.Sign in again");
+    const [title, text] = Array.from(notice.querySelectorAll("p"));
+    expect(notice.querySelectorAll("p")).toHaveLength(2);
+    expect(title?.textContent).toBe(DELETED_TITLE);
+    expect(text?.textContent).toBe(DELETED_TEXT);
+    await waitFor(() => expect(screen.getByTestId("address")).toHaveTextContent(/^\/$/));
+    expect(screen.getByText(DELETED_TEXT)).toBeInTheDocument();
+    const hero = screen.getByRole("heading", { level: 1 });
+    expect(notice.compareDocumentPosition(hero) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.body.textContent).not.toContain("account_deleted");
+  });
+
+  it("its Sign in again asks the provider for its login page, where another email address can be used", () => {
+    renderHome("/?sign_in=account_deleted");
+    const button = screen.getByRole("link", { name: SIGN_IN_AGAIN });
+    expect(button).toHaveAttribute("href", loginUrl("/app", { prompt: "login" }));
+    expect(button.getAttribute("href")).toBe("/v1/auth/login?return_to=%2Fapp&prompt=login");
+    expect(screen.getByTestId("sign-in-problem")).toContainElement(button);
+  });
+
+  it("has no Forgot-password paragraph, and the support line only when a support contact is configured", () => {
+    vi.stubEnv("VITE_DOME_SUPPORT_URL", "");
+    const without = renderHome("/?sign_in=account_deleted");
+    let shown = screen.getByTestId("sign-in-problem");
+    expect(shown.textContent).toBe(DELETED_FULL);
+    expect(shown.textContent).not.toContain("Forgot password?");
+    expect(shown.querySelector("strong")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Contact support" })).toBeNull();
+    without.unmount();
+    sessionStorage.clear();
+    vi.stubEnv("VITE_DOME_SUPPORT_URL", CONTACT);
+    renderHome("/?sign_in=account_deleted");
+    shown = screen.getByTestId("sign-in-problem");
+    expect(shown.textContent).toBe(DELETED_FULL + DELETED_SUPPORT_LINE);
+    expect(screen.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", CONTACT);
+  });
+
+  it("leaves the other two notices exactly as they were, buttons included", () => {
+    const one = renderHome("/?sign_in=email_unverified");
+    expect(screen.getByTestId("sign-in-problem").textContent).toBe(FULL);
+    expect(screen.getByRole("link", { name: SIGN_IN_AGAIN })).toHaveAttribute("href", "/v1/auth/login?return_to=%2Fapp");
+    one.unmount();
+    sessionStorage.clear();
+    renderHome("/?sign_in=try_again");
+    expect(screen.getByTestId("sign-in-problem").textContent).toBe(AGAIN_FULL);
+    expect(screen.getByRole("link", { name: SIGN_IN_AGAIN })).toHaveAttribute("href", "/v1/auth/login?return_to=%2Fapp");
+  });
+
+  it("keeps the notice when the app reloads itself right after (the marker is already gone)", async () => {
+    const first = renderHome("/?sign_in=account_deleted");
+    await waitFor(() => expect(screen.getByTestId("address")).toHaveTextContent(/^\/$/));
+    expect(carriedSignInProblem()).toBe("account_deleted");
+    first.unmount();
+    renderHome("/");
+    expect(screen.getByTestId("sign-in-problem").textContent).toBe(DELETED_FULL);
+  });
+});
+
+describe("home page after this app deleted the account", () => {
+  it("says exactly “Your account was deleted.”, and nothing else, for a minute in this tab", () => {
+    expect(ACCOUNT_DELETED_HERE).toBe("Your account was deleted.");
+    carryAccountDeleted();
+    expect(carriedAccountDeleted()).toBe(true);
+    const view = renderHome("/");
+    const shown = screen.getByTestId("account-deleted");
+    expect(shown.textContent).toBe("Your account was deleted.");
+    expect(within(shown).getByRole("status")).toBeInTheDocument();
+    expect(screen.queryByTestId("sign-in-problem")).toBeNull();
+    expect(within(shown).queryByRole("link")).toBeNull();
+    // the notice sits above the hero
+    const hero = screen.getByRole("heading", { level: 1 });
+    expect(shown.compareDocumentPosition(hero) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // still there after a reload in the next minute
+    view.unmount();
+    renderHome("/");
+    expect(screen.getByTestId("account-deleted").textContent).toBe(ACCOUNT_DELETED_HERE);
+  });
+
+  it("shows nothing without the marker, after a minute, for anything stored but a time, or from an address", async () => {
+    const plain = renderHome("/");
+    expect(screen.queryByTestId("account-deleted")).toBeNull();
+    plain.unmount();
+    carryAccountDeleted(Date.now() - CARRY_MS - 1000);
+    expect(carriedAccountDeleted()).toBe(false);
+    const late = renderHome("/");
+    expect(screen.queryByTestId("account-deleted")).toBeNull();
+    late.unmount();
+    for (const raw of ["not json", "null", JSON.stringify({ at: "now" }), JSON.stringify({ at: Date.now() + 60_000 })]) {
+      sessionStorage.setItem("dome.account_deleted", raw);
+      expect(carriedAccountDeleted(), raw).toBe(false);
+    }
+    sessionStorage.clear();
+    // no address can make the page say it
+    for (const q of ["/?sign_in=deleted", "/?account_deleted=1", "/?sign_in=account_deleted_here"]) {
+      const view = renderHome(q);
+      expect(screen.queryByTestId("account-deleted"), q).toBeNull();
+      expect(document.body.textContent).not.toContain(ACCOUNT_DELETED_HERE);
+      view.unmount();
+    }
+  });
+
+  it("a sign-in problem in the address is shown instead", () => {
+    carryAccountDeleted();
+    renderHome("/?sign_in=account_deleted");
+    expect(screen.getByTestId("sign-in-problem").textContent).toBe(DELETED_FULL);
+    expect(screen.queryByTestId("account-deleted")).toBeNull();
+  });
+
+  it("storage that is off means no line and no error", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage off");
+    });
+    carryAccountDeleted();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage off");
+    });
+    expect(carriedAccountDeleted()).toBe(false);
+    renderHome("/");
+    expect(screen.queryByTestId("account-deleted")).toBeNull();
   });
 });
