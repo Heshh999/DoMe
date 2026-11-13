@@ -29,7 +29,7 @@ import { COPY, OFFER_COPY, screenStatus } from "../src/lib/screenStatus.ts";
 import { useDevicesStore } from "../src/store/devices.ts";
 import { useLiveStore } from "../src/store/live.ts";
 import { useScreenStore } from "../src/store/screen.ts";
-import { ANSWER_SDP, FakePcKey, fakePeerFactory, OFFER_SDP, safariLikeStats, SDP_SENTINEL, STATS_SECRETS, type FakePeerConnection } from "./helpers/fakePeer.ts";
+import { ANSWER_SDP, FakePcKey, fakePeerFactory, OFFER_SDP, safariLikeStats, SDP_SENTINEL, STATS_SECRETS, withoutUuids, type FakePeerConnection } from "./helpers/fakePeer.ts";
 import { FakeTimers } from "./helpers/fakeTimers.ts";
 import { ACCOUNT, CONTROLLER, FakeSocket, flush, freshStorage, HELLO_ACK, noTimers, OFFICE_PC, OTHER_PC, PC, signedIn, TS } from "./helpers/harness.ts";
 import { candidatesPerSection, OFFER_SECRETS, safariLikeOffer } from "./helpers/sdpOffers.ts";
@@ -758,7 +758,7 @@ describe("ScreenSessionClient: the first-frame watchdog after DTLS (device round
     expect(rt.screen.snapshot).toMatchObject({ phase: "ice", retries: 1, transportConnected: false });
     // nothing in the log names an address, a port or the certificate
     const text = JSON.stringify(recentLogs());
-    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+    for (const secret of STATS_SECRETS) expect(withoutUuids(text), secret).not.toContain(secret);
   });
 
   it("the fresh sessions count toward MAX_RETRIES; then SCREEN_CONNECTION_FAILED {cause: no_picture} with its own copy", async () => {
@@ -1100,7 +1100,7 @@ describe("ScreenSessionClient: stats, timeline and facts (device round 2)", () =
     expect(facts.channel.hb_sent).toBeGreaterThan(1);
     expect(facts.transport_connected).toBe(true);
     const text = JSON.stringify(facts);
-    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+    for (const secret of STATS_SECRETS) expect(withoutUuids(text), secret).not.toContain(secret);
     await rt.screen.stop("stopped");
     const after = peer.getStatsCalls;
     expect(timers.pending).toBe(0); // no interval of the session outlives it
@@ -1174,13 +1174,13 @@ describe("ScreenSessionClient: nothing recorded, nothing leaked", () => {
     expect(text).not.toContain("a=fingerprint");
     expect(text).not.toContain("0.0.0.0");
     expect(text).not.toContain("turn.example.net");
-    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+    for (const secret of STATS_SECRETS) expect(withoutUuids(text), secret).not.toContain(secret);
     const report = buildDiagnostics({ relayStatus: "open", controllerBound: true, keyAvailable: true, selectedPcId: PC, pcs: [], commands: useLiveStore.getState().commands, sessionPresent: true, plan: "free", screen: states[states.length - 1]!, screenFacts: rt.screen.facts });
     const json = JSON.stringify(report);
     expect(json).not.toContain(SDP_SENTINEL);
     expect(json).not.toContain("never-logged-credential");
     expect(json).not.toContain("a=fingerprint");
-    for (const secret of STATS_SECRETS) expect(json, secret).not.toContain(secret);
+    for (const secret of STATS_SECRETS) expect(withoutUuids(json), secret).not.toContain(secret);
     expect(report.screen).toMatchObject({ phase: "ended", pc_id: PC, end_reason: "stopped", transport_connected: true, codec_fallback: null, offer: { bytes: new TextEncoder().encode(OFFER_SDP).length, candidates: 0, dropped: 0 } });
     expect(Object.keys(report.screen!).sort()).toEqual(["codec_fallback", "encoder", "end_reason", "live_seconds", "media", "offer", "path", "pc_id", "phase", "problem_code", "retries", "stalled", "stats", "timeline", "transport_connected", "turn", "verified"]);
     // what survived Stop: the last snapshot (whitelisted) and the stages the attempt reached

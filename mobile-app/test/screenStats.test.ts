@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { redact } from "../src/lib/log.ts";
 import { EMPTY_SCREEN_STATE } from "../src/lib/screen.ts";
 import { EMPTY_POINTER_FACTS, EMPTY_SURFACE_FACTS, EMPTY_ZOOM_FACTS, emptyTimeline, fmtpSummary, mediaSummary, playOutcome, probeVideo, readoutLines, readoutLines15, reduceStats, statsSummary, type FrameCounters, type ScreenClientFacts } from "../src/lib/screenStats.ts";
-import { safariLikeStats, STATS_SECRETS } from "./helpers/fakePeer.ts";
+import { safariLikeStats, STATS_SECRETS, withoutUuids } from "./helpers/fakePeer.ts";
 
 const report = (entries: Array<Record<string, unknown>>) => new Map(entries.map((e, i) => [e && typeof e === "object" && typeof e.id === "string" ? e.id : `x${i}`, e]));
 
@@ -27,7 +27,7 @@ describe("reduceStats: the whitelist", () => {
       dc_received: 3,
     });
     const text = JSON.stringify(s);
-    for (const secret of STATS_SECRETS) expect(text, secret).not.toContain(secret);
+    for (const secret of STATS_SECRETS) expect(withoutUuids(text), secret).not.toContain(secret);
   });
 
   it("an empty report, unknown entries and odd values give nulls and placeholders, never the raw strings", () => {
@@ -179,7 +179,7 @@ describe("readoutLines: the gate checklist, then the numbers", () => {
         "phase live retries 0 stalled no encoder h264 path direct fallback vp8",
       ]),
     );
-    for (const secret of STATS_SECRETS) expect(lines.join("\n"), secret).not.toContain(secret);
+    for (const secret of STATS_SECRETS) expect(withoutUuids(lines.join("\n")), secret).not.toContain(secret);
   });
 });
 

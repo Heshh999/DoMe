@@ -190,6 +190,17 @@ export class FakePcKey {
 /** Addresses, ports, ICE fragments, a TURN/STUN name, the certificate and the SPS in this report: none may survive the whitelist. */
 export const STATS_SECRETS = ["192.0.2.44", "54321", "10.0.0.7", "61000", "198.51.100.9", "50000", "stun.example.net", "ufragph0n", "ufragpcpc", SDP_SENTINEL, "SECRETCERTBYTES", "sprop", "Z0LAH9oB", "aiortc-track-uuid", "wifi"];
 
+const RANDOM_UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * Logged or reported text with every UUID replaced, for the STATS_SECRETS check. The ports above are plain digits, and
+ * a random command_id can contain them by chance (CI saw "37f61000-…" match "61000"); no address, port or certificate
+ * is UUID-shaped, so nothing the check looks for is hidden.
+ */
+export function withoutUuids(text: string): string {
+  return text.replace(RANDOM_UUID, "<uuid>");
+}
+
 /**
  * A `getStats()` report shaped like Safari's (libwebrtc's field names): the selected pair through the transport, both
  * candidates WITH their addresses, the PC's certificate WITH its fingerprint, the H.264 codec with sprop-parameter-sets
