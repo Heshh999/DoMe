@@ -77,7 +77,7 @@ export function PrivacyPage() {
       <section>
         <h2>On your PC</h2>
         <p>The DoMe app keeps its data in your Windows user folder (%LOCALAPPDATA%\DoMe): its key material protected by Windows, the link to your account, the list of phones you approved, the apps you approved, a journal of the last 5,000 commands it received, its last 500 local security events, its Screen view history and its logs. Logs are redacted; each log file rotates at 2 MB and DoMe keeps at most about 8 MB of it. A crash log may hold file paths or other details; it stays on the PC unless you send it. Diagnostics files are created only when you ask for them, and DoMe never uploads them.</p>
-        <p>About once a day the program checks GitHub, where DoMe publishes its Windows installer, for a newer version. The check sends only the program’s name and version, so GitHub sees your PC’s IP address. A new version is downloaded only when you ask, and you start the installer yourself.</p>
+        <p>DoMe publishes its Windows installer on GitHub, so when you download it, GitHub sees your IP address. DoMe for Windows 0.1.0 does not check for newer versions yet: to update, you download a newer installer and run it yourself. A later version will check GitHub about once a day; that check will send only the program’s name and version, so GitHub will see your PC’s IP address, and a new version will be downloaded only when you ask.</p>
         <p>When you uninstall DoMe, the uninstaller asks whether to delete this data too; if you answer No, it stays on the PC. Your PC stays listed in your account until you unlink it in the app.</p>
         <p>The browser extension only runs on YouTube pages and does not collect browsing history. It keeps a random identifier for the browser and the label you give the browser profile, passes the state of your YouTube tabs to the DoMe app on the same PC, and makes no internet requests of its own. It is not yet published in the Chrome Web Store.</p>
       </section>
@@ -141,7 +141,7 @@ export function PrivacyPage() {
           <li><strong>Anthropic</strong> provides the AI model for the AI butler, only for accounts that turned the butler on. It receives what is listed under The AI butler, and no account identifier.</li>
           <li><strong>Neon</strong> hosts the database of our test site, staging.domeremote.com (in Amazon Web Services’ US East region). It holds the records of people who sign up on the test site, not those of domeremote.com. [COUNSEL: whether the test site needs its own notice.]</li>
         </ul>
-        <p>Your devices also talk directly to some companies, under those companies’ own terms: Apple (speech recognition on iPhone), YouTube (searches and playback happen in your own browser) and GitHub (the PC program’s update check, described under On your PC).</p>
+        <p>Your devices also talk directly to some companies, under those companies’ own terms: Apple (speech recognition on iPhone), YouTube (searches and playback happen in your own browser) and GitHub (where you download the PC program, and a later version’s update check, both described under On your PC).</p>
         <p>DoMe’s servers and databases are in the United States. [FOUNDER: confirm where Stripe, Resend, Cloudflare and Anthropic process data.] [COUNSEL: whether a statement on transfers outside the United States is needed.]</p>
       </section>
       <section>

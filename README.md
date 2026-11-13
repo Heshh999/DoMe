@@ -16,8 +16,12 @@ touchpad or keyboard; buttons and typed commands never need it.
 
 > Status: **pre-release; the free service is live.** https://domeremote.com has run since
 > 2026-10-15 (`docs/PROGRESS.md` 2026-10-16) and was updated to commit bf83141 on
-> 2026-11-13. No paid plan is on sale (billing is off in production), and the Windows program is not
-> yet published for download. The whole path phone → relay → PC agent → browser extension is
+> 2026-11-13. No paid plan is on sale (billing is off in production). **DoMe for Windows 0.1.0 was
+> published on 2026-11-13** as a free beta (https://github.com/Heshh999/DoMe/releases/tag/v0.1.0; signed,
+> publisher Justin Gaskins; no YouTube control in Chrome or Edge yet; Screen view inside but switched off for
+> accounts); it was tested on GitHub's Windows Server runner only, not on a Windows 10/11 PC as a standard user,
+> and its button on domeremote.com/download appears with the next Deploy (`docs/PROGRESS.md` 2026-11-13).
+> The whole path phone → relay → PC agent → browser extension is
 > implemented and proven end to end on Linux with the operating-system adapters and the browser
 > replaced by explicit test doubles. The owner has reported it working on their Windows 11 PC
 > (YouTube control in Edge) and iPhone, through the test kit, on production and on staging
@@ -42,7 +46,7 @@ touchpad or keyboard; buttons and typed commands never need it.
 | `testkit/` | **Try DoMe on your own Windows PC and iPhone**: three double-click scripts run the whole service in Docker behind temporary HTTPS addresses, start the PC program from source and build the extension; a fourth switches the optional AI assistant on with your own Anthropic API key. Start with `testkit/README.md`. | 240 script checks (pwsh); full rehearsal on Linux with an HTTPS stand-in (before the assistant) |
 | `brand/` | Original DoMe icon and wordmark (editable SVG), export script, `BRAND.md`. | 29 (unit) + export drift check |
 | `deploy/` | Container image, Fly.io configuration, the one-button deploy program (`deploy/launch/`), Docker Compose for development, deployment notes. | image built by CI and run by the test kit rehearsal (Linux); deploy program tested against a fake `flyctl`; staging and production deployed with it since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16) |
-| `.github/workflows/` | CI for every suite above (`ci.yml`), the Windows installer build, and the founder's **Deploy** button (`deploy.yml`). | CI green on GitHub since 2026-10-11; Deploy run by the founder for staging and production since 2026-10-15 |
+| `.github/workflows/` | CI for every suite above (`ci.yml`), the Windows installer build, the signed Windows **Release** (`release.yml`, which published 0.1.0 on 2026-11-13), and the founder's **Deploy** button (`deploy.yml`). | CI green on GitHub since 2026-10-11; Deploy run by the founder for staging and production since 2026-10-15 |
 | `docs/` | Everything written for people: see the list below. | — |
 
 Evidence tags used throughout: **unit-tested**, **integration-tested**, **load-tested**,

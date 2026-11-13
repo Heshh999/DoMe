@@ -1,16 +1,22 @@
 /**
  * The website chrome: the header links (with Demo → /demo), the phone menu that closes on navigation, the
- * icon-only theme switch with tooltips, the footer's lockup and the development caveat.
+ * icon-only theme switch with tooltips, the footer's lockup and the Windows app's status: the committed release
+ * (DoMe for Windows 0.1.0) as a free beta, and "not published yet" for the placeholder before it.
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PublicLayout } from "../../src/app/PublicLayout.tsx";
 import { ThemeSwitch } from "../../src/components/ThemeSwitch.tsx";
 import { FOOTER, NAV } from "../../src/content/nav.ts";
 import { THEME_KEY } from "../../src/lib/theme.ts";
+import { committedRelease } from "../helpers/committedRelease.ts";
+
+// the real committed release, or the placeholder the site carried before it while `release.placeholder` is set
+const release = vi.hoisted(() => ({ placeholder: false }));
+vi.mock("../../src/content/windows-release.json", async (importOriginal) => (await import("../helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
 
 function site(initial = "/faq") {
   const router = createMemoryRouter(
@@ -37,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
+  release.placeholder = false;
 });
 
 describe("PublicLayout", () => {
@@ -69,15 +76,24 @@ describe("PublicLayout", () => {
     expect(screen.getByRole("button", { name: "Menu" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("shows the full lockup, every page and the development caveat in the footer", () => {
-    site();
+  it("shows the full lockup, every page and the committed release's status in the footer", () => {
+    const r = committedRelease();
+    const { container } = site();
     for (const group of FOOTER) {
       const nav = screen.getByRole("navigation", { name: group.title });
       for (const l of group.links) expect(within(nav).getByRole("link", { name: l.label })).toHaveAttribute("href", l.to);
     }
-    expect(screen.getByText("In development: the Windows app is not published yet.")).toBeInTheDocument();
+    expect(screen.getByText(`Free beta: DoMe for Windows ${r.version} has not been tested on a Windows 10 or 11 PC yet.`)).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/not published yet/);
     expect(screen.getByText("DoMe Remote · for Windows PCs and iPhone")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "DoMe Remote home" }).length).toBe(2);
+  });
+
+  it("before a release, the footer says the Windows app is not published yet", () => {
+    release.placeholder = true;
+    site();
+    expect(screen.getByText("In development: the Windows app is not published yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/free beta/i)).toBeNull();
   });
 });
 

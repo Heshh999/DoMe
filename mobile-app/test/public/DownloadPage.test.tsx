@@ -1,8 +1,11 @@
 /**
  * The Download page offers a real download only for a valid signed release in src/content/windows-release.json
  * (mocked here): the placeholder and anything that breaks a rule keep the disabled "not yet published" state;
- * a published release shows its exact GitHub address, size, publisher, SHA-256, the SmartScreen and Smart App Control caveats and,
- * when it has no browser add-on, says so. Nothing ever tells people to turn protection off.
+ * a published release shows its exact GitHub address, size, publisher, SHA-256, the SmartScreen and Smart App Control caveats,
+ * that Screen view is not switched on for accounts, what it was tested on and, when it has no browser add-on, says so (also
+ * in what the app needs). Nothing ever tells people to turn protection off. The committed release (DoMe for Windows 0.1.0)
+ * is rendered from the real committed file (through a pass-through mock that can switch to the placeholder,
+ * test/helpers/committedRelease.ts) in test/public/pages.test.tsx and test/components/UpgradeAndHealth.test.tsx.
  */
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -16,7 +19,7 @@ vi.mock("../../src/content/windows-release.json", () => ({
   },
 }));
 
-import { DownloadPage, SMART_APP_CONTROL_NOTE } from "../../src/pages/public/DownloadPage.tsx";
+import { DownloadPage, SCREEN_VIEW_NOTE, SMART_APP_CONTROL_NOTE, TESTED_NOTE } from "../../src/pages/public/DownloadPage.tsx";
 
 const SHA = "3f".repeat(32);
 const PUBLISHED = {
@@ -51,6 +54,11 @@ function expectNotPublished(container: HTMLElement) {
   expect(button).toHaveAccessibleName("Download for Windows 10/11 — not yet published");
   expect(container.querySelector("#download-status")).toHaveTextContent(/Release status: not yet published\./);
   expect(container.querySelector('a[href*="github.com"]')).toBeNull();
+  // nothing about a published version: no Screen view or test caveats, and the requirements are still ahead
+  expect(screen.queryByTestId("screen-view-note")).toBeNull();
+  expect(screen.queryByTestId("tested-note")).toBeNull();
+  expect(screen.getByRole("heading", { name: "What the app will need" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Chrome or Edge, for YouTube control" })).toBeInTheDocument();
 }
 
 describe("Download page", () => {
@@ -79,6 +87,19 @@ describe("Download page", () => {
     // never an unverified guarantee: the Setup's own wording, not "everything else works"
     expect(container.textContent).toContain("This version does not include YouTube control in Chrome or Edge; everything else in DoMe is included.");
     expect(container.textContent).not.toContain("everything else works");
+    // Screen view is in the program but switched off for accounts on the server: the page says so
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent(SCREEN_VIEW_NOTE);
+    expect(SCREEN_VIEW_NOTE).toMatch(/not switched on for DoMe accounts yet, so it cannot be used/);
+    // what was tested, and what was not
+    expect(screen.getByTestId("tested-note")).toHaveTextContent(TESTED_NOTE);
+    expect(TESTED_NOTE).toMatch(/only on GitHub’s Windows Server test machine \(an administrator account with UAC off\): install, upgrade, uninstall and the signatures/);
+    expect(TESTED_NOTE).toMatch(/not yet been tested on a Windows 10 or 11 PC or by a standard user/);
+    // the requirements say the browser part is not in this version, instead of asking for an extension that cannot be had
+    expect(screen.getByRole("heading", { name: "What the app needs" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "What the app will need" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Chrome or Edge, for YouTube control (not in this version)" })).toBeInTheDocument();
+    expect(container.textContent).toContain("YouTube control in Chrome or Edge is not part of this version: it needs the DoMe extension, which is not in the Chrome or Edge stores yet.");
+    expect(container.textContent).not.toContain("with the DoMe extension if you want YouTube control");
     // signing is not a Smart App Control promise (docs/SECURITY.md T12): the page says it is not verified
     expect(screen.getByTestId("smart-app-control")).toHaveTextContent(SMART_APP_CONTROL_NOTE);
     expect(SMART_APP_CONTROL_NOTE).toMatch(/^Not yet verified on Windows 11 PCs with Smart App Control on; if it blocks DoMe, do not turn it off/);
@@ -93,6 +114,10 @@ describe("Download page", () => {
     const { container } = page();
     expect(screen.getByRole("link", { name: /Download DoMe-Setup-0\.2\.0\.exe/ })).toBeInTheDocument();
     expect(container.textContent).not.toContain("does not include YouTube control");
+    expect(container.textContent).not.toContain("not part of this version");
+    expect(screen.getByRole("heading", { name: "Chrome or Edge, for YouTube control" })).toBeInTheDocument();
+    // Screen view's switch is on the server, not in the release: still not switched on
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent(SCREEN_VIEW_NOTE);
   });
 
   it.each([

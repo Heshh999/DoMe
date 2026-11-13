@@ -1,7 +1,15 @@
 # Email to counsel: H.264 patents and the FFmpeg (LGPL) build
 
 Status: a draft for Justin to send. It asks questions; it is not legal advice. Facts checked against the
-repository on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:18-19`; `docs/LAUNCH_SETUP.md:838-840`).
+repository on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:101-102`). Windows release
+status added on 2026-11-13: DoMe for Windows 0.1.0, with Screen view and the FFmpeg build inside, was published on
+GitHub that day as a free beta, by Justin's decision before counsel answers [GitHub Actions Release run
+43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:854-875`; `docs/PROGRESS.md:15-22`;
+`docs/legal/founder-decisions.md:47-55`); Screen view stays switched off for accounts on domeremote.com
+(`docs/PROGRESS.md:15-22`; [GitHub Actions Deploy run 43508425555, 2026-11-13]). The FFmpeg build itself has been
+public longer: since 2026-10-22, inside a PyAV wheel published as the GitHub pre-release
+`av-lgpl-17.1.0-ffmpeg-n8.1.3-r3` (`docs/WINDOWS_INSTALL.md:545-547`; [GitHub release
+av-lgpl-17.1.0-ffmpeg-n8.1.3-r3, published 2026-10-22, pre-release]).
 
 ## For Justin only (do not send this part)
 
@@ -26,10 +34,11 @@ on H.264 patent licensing and on the LGPL rules for the FFmpeg libraries I ship.
 
 The product. A Windows program plus a phone web app for controlling your own PC from your iPhone, sold by
 subscription: Free, Pro ($9.99 a month) and Pro Plus ($24.99 a month); the paid plans are not on sale yet.
-It is new. My website and server have been live at domeremote.com since October 2026, with free accounts only;
-the Windows program is not yet published for download (only test builds exist). A beta feature, Screen view,
-shows the PC's screen live on the customer's own phone. It is built, but not switched on for customers until I
-hear from you.
+It is new. My website and server have been live at domeremote.com since October 2026, with free accounts only.
+On November 13, 2026, before hearing from you, I published the Windows program (version 0.1.0) for download from
+GitHub as a free beta. A beta feature, Screen view, shows the PC's screen live on the customer's own phone. Its
+code, including the FFmpeg build described below, is inside that installer, but Screen view is not switched on
+for customers until I hear from you.
 
 Who encodes and decodes the video.
 - Encoding: Windows, on the customer's PC. DoMe asks Microsoft's Media Foundation, through FFmpeg, for H.264:
@@ -40,16 +49,18 @@ Who encodes and decodes the video.
 - Path: directly between the two devices, encrypted; otherwise through Cloudflare's relay, which carries
   encrypted packets it cannot read. My own server never carries video.
 
-What I distribute. A Windows installer with my own LGPL-2.1-or-later build of FFmpeg 8.1.3, configured
---disable-gpl --disable-nonfree --disable-version3 --disable-everything --disable-network, enabling only the
-encoders h264_mf, libvpx_vp8 and libopus and one decoder, wrapped_avframe (it unwraps raw frames made on the
-same PC): no parsers, bitstream filters or hardware decoders. So its only H.264-related part is h264_mf,
-FFmpeg's wrapper that hands frames to Media Foundation and returns the result. No x264, OpenH264 or other
-H.264 encoder or decoder is included; a build check refuses any build that has one. My code and an open-source
-WebRTC library (aiortc) handle only the packaging of the encoder's output, never the pictures: they re-frame it
-where needed (length prefixes to start codes, for the encoder's setup data too), split it into network packets,
-repeat that setup data before key frames, and read a few header fields (to find key frames, and the profile and
-level for diagnostics). Nothing in DoMe decodes or re-encodes the H.264 video.
+What I distribute. Since November 13, 2026, publicly on GitHub: a Windows installer with my own LGPL-2.1-or-later
+build of FFmpeg 8.1.3. The same FFmpeg build has been publicly downloadable from my GitHub repository since
+October 22, 2026, as a pre-release for developers: a package of the Python library PyAV that contains the FFmpeg
+DLLs. The build is configured --disable-gpl --disable-nonfree --disable-version3 --disable-everything
+--disable-network, enabling only the encoders h264_mf, libvpx_vp8 and libopus and one decoder, wrapped_avframe
+(it unwraps raw frames made on the same PC): no parsers, bitstream filters or hardware decoders. So its only
+H.264-related part is h264_mf, FFmpeg's wrapper that hands frames to Media Foundation and returns the result. No
+x264, OpenH264 or other H.264 encoder or decoder is included; a build check refuses any build that has one. My
+code and an open-source WebRTC library (aiortc) handle only the packaging of the encoder's output, never the
+pictures: they re-frame it where needed (length prefixes to start codes, for the encoder's setup data too),
+split it into network packets, repeat that setup data before key frames, and read a few header fields (to find
+key frames, and the profile and level for diagnostics). Nothing in DoMe decodes or re-encodes the H.264 video.
 
 My LGPL steps (drafts). The FFmpeg DLLs are separate files in the install folder, loaded at run time, that a
 user may replace. The installer ships the LGPL text and a notices file with a written offer, good for at

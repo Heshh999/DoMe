@@ -1,7 +1,8 @@
 /**
  * Spec §12: no upgrade modal or banner on any Free flow; a deliberate Pro selection gets a clear,
  * dismissible explanation naming the benefit. Spec §11A: the Health page renders every layer with its
- * next action, bounded retries and the support path, and the walkthrough points at the failed step.
+ * next action, bounded retries and the support path, and the walkthrough points at the failed step; the
+ * Download page is honest before a release (the placeholder, mocked here) and with the committed one.
  */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -24,7 +25,13 @@ import { api } from "../../src/lib/api.ts";
 import { useSessionStore } from "../../src/store/session.ts";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useLiveStore } from "../../src/store/live.ts";
+import { committedRelease } from "../helpers/committedRelease.ts";
 import { CONTROLLER, freshStorage, installDialogPolyfill, makeRuntime, OFFICE_PC, PC, signedIn, TS, type RuntimeHarness } from "../helpers/harness.ts";
+
+// The Download page reads src/content/windows-release.json: the real, committed release, unless a test asks for the
+// placeholder the site carried before the first release, so both states stay tested.
+const release = vi.hoisted(() => ({ placeholder: false }));
+vi.mock("../../src/content/windows-release.json", async (importOriginal) => (await import("../helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
 
 installDialogPolyfill();
 // the website's prices ($9.99 / $24.99) and the old planned one ($5.99) must never show up on a Free flow
@@ -51,6 +58,7 @@ beforeEach(async () => {
 afterEach(() => {
   plans.mockRestore();
   h.teardown();
+  release.placeholder = false;
 });
 
 function page(el: React.ReactElement, path = "/app") {
@@ -158,18 +166,41 @@ describe("Upgrade experience (spec §12)", () => {
     expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Coming at paid launch \(Pro from \$9\.99 \/ month\); there is nothing to buy yet/);
   });
 
-  it("public pages: the official Windows download is visibly not yet published, and the release notes say pre-release with no device verification", () => {
+  it("public pages before a release: the official Windows download is visibly not yet published", () => {
+    release.placeholder = true;
     const d = page(<DownloadPage />, "/download");
     const button = screen.getByTestId("download-button");
     expect(button).toBeDisabled();
     expect(button).toHaveTextContent(/not yet published/);
     expect(d.container.querySelector('a[href$=".exe"], a[href$=".msi"]')).toBeNull();
     expect(d.container.textContent).toMatch(/never to disable antivirus/); // the only mention tells customers we will never ask for it
+    expect(d.container.textContent?.match(/antivirus/g)).toHaveLength(1);
+  });
+
+  it("public pages with the committed release: the signed Windows download with its version, SHA-256 and publisher, and the release notes say beta with no device verification", () => {
+    const r = committedRelease();
+    const d = page(<DownloadPage />, "/download");
+    const link = screen.getByTestId("download-button");
+    expect(link.tagName).toBe("A");
+    expect(link).toBeEnabled();
+    expect(link).toHaveAttribute("href", `https://github.com/Heshh999/DoMe/releases/download/v${r.version}/DoMe-Setup-${r.version}.exe`);
+    expect(d.container.querySelectorAll('a[href$=".exe"], a[href$=".msi"]')).toHaveLength(1); // the official installer, nothing else
+    const status = d.container.querySelector("#download-status");
+    expect(status).toHaveTextContent(`Release status: ${r.version}, published `);
+    expect(status).toHaveTextContent(`SHA-256 ${r.sha256}`);
+    expect(status).toHaveTextContent(`Signed for Windows by ${r.publisher}`);
+    expect(d.container.textContent).toContain("This version does not include YouTube control in Chrome or Edge");
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent(/not switched on for DoMe accounts yet/);
+    expect(d.container.textContent).toMatch(/We never ask you to turn off antivirus or other protection\./); // the only mention tells customers we never ask for it
+    expect(d.container.textContent?.match(/antivirus/g)).toHaveLength(1);
+    expect(d.container.textContent).not.toMatch(/not yet published|run anyway/i);
     d.unmount();
     const n = page(<ReleaseNotesPage />, "/release-notes");
-    expect(n.container.textContent).toMatch(/pre-release/);
+    expect(n.container.textContent).toContain("Beta");
+    expect(n.container.textContent).toContain(`DoMe for Windows ${r.version} is published as a free beta. This release has not been verified on a Windows 10 or 11 PC or on an iPhone yet.`);
     expect(screen.getByText("Known issues")).toBeInTheDocument();
     expect(n.container.textContent).toMatch(/Real iPhone Safari/);
+    expect(n.container.textContent).not.toContain("No official Windows download yet");
   });
 });
 

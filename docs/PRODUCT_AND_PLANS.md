@@ -1,9 +1,11 @@
 # DoMe product and plans
 
 Status: pre-release. The free service is live at https://domeremote.com (since 2026-10-15;
-updated 2026-11-13); no paid plan is on sale (billing is off in production), the Windows program is
-not yet published, and the owner's PC and iPhone have run it (owner-reported, no formal
-device-tested pass). Every feature below carries an evidence tag:
+updated 2026-11-13); no paid plan is on sale (billing is off in production), DoMe for Windows 0.1.0
+was published on GitHub on 2026-11-13 as a free beta (installed so far only on GitHub's Windows Server runner, not
+yet on any Windows 10 or 11 PC; its button on domeremote.com/download appears with the next Deploy), and the
+owner's PC and iPhone have run DoMe through test builds (owner-reported, no formal device-tested pass). Every
+feature below carries an evidence tag:
 
 - `unit-tested` — component tests on Linux (pytest / Vitest) with test doubles.
 - `integration-tested` — the real cloud-api, the real agent process and signed controllers on Linux
@@ -163,7 +165,7 @@ publicly available.
 | Custom layouts and named profiles | Phase C | `layouts` table |
 | One-tap routines (≤ 10 steps, ≤ 60 s, approved non-disruptive actions, stop on error, per-step results) | Phase C | `routines` table, agent-side `ENTITLEMENT_REQUIRED` gate, PWA preview cards |
 | Operator interface (health, billing reconciliation, plan configuration, redacted support records) with audited actions; operators can suspend but never execute PC commands | Phase C/D | `operator_users`, `operator_audit`, `support_diagnostics` tables |
-| Signed Windows installer, update manifest with downgrade protection, staged rollout, uninstall cleanup | Phase D | An unsigned per-user development installer with uninstall cleanup and downgrade refusal (per X.Y.Z version), built and smoke-tested by CI on the windows-latest runner (first green run 2026-10-14; `docs/WINDOWS_INSTALL.md` "The installer"); no signing, no updater |
+| Signed Windows installer, update manifest with downgrade protection, staged rollout, uninstall cleanup | Phase D | An unsigned per-user development installer with uninstall cleanup and downgrade refusal (per X.Y.Z version), built and smoke-tested by CI on the windows-latest runner (first green run 2026-10-14; `docs/WINDOWS_INSTALL.md` "The installer"). Signed: DoMe for Windows 0.1.0, published on GitHub on 2026-11-13 (Azure Artifact Signing, an Ed25519-signed `latest.json`; install-tested on the runner only). No updater connected yet, no staged rollout |
 | Chrome Web Store / Edge Add-ons listings (production extension id pinned in the agent) | Phase D | Unpacked developer loading only; `PRODUCTION_EXTENSION_IDS` empty |
 | Production identity provider (Auth0 or Keycloak), production hosting, backups/restore rehearsal, monitoring, incident runbooks | Phase D | ADR-0001 decisions, `cloud-api/README.md` settings; `deploy/` is a placeholder |
 | Real-device evidence: Windows 10/11 and iPhone Safari checklists | Phase B/D acceptance | Checklists in `pc-agent/README.md`, `mobile-app/README.md`, `browser-extension/README.md` |
@@ -181,7 +183,7 @@ publicly available.
 | A — foundation | Secure relay/agent/extension path, one real phone-to-PC YouTube action | Code complete; Next/Pause proven end to end only with a fake extension and fake platform on Linux |
 | B — Free beta | Pairing/revocation, native extension integration, all core controls, human-directed touchpad/keyboard with explicit grants and bounded input sessions, deterministic text, onboarding, connection health, single-instance agent, media-target clarity and power-state copy, truthful states, permission/replay/input-recovery tests, development installer, real-device evidence (including the actual phone keyboard and the Windows input adapter) | Code complete; the development installer awaits its first CI run; real-device evidence outstanding |
 | C — paid launch | Multi-PC limits (done), layouts, routines, billing lifecycle, deletion, cost model (done: `docs/COST_MODEL.md`) | Design only for billing/layouts/routines |
-| D — public release preparation | Signed distribution and updates, privacy/help/pricing pages (drafts exist), monitoring, store submissions, backup/restore, support flows, load checks | Not started beyond drafts and this documentation |
+| D — public release preparation | Signed distribution and updates, privacy/help/pricing pages (drafts exist), monitoring, store submissions, backup/restore, support flows, load checks | Signed distribution started: DoMe for Windows 0.1.0 published on GitHub on 2026-11-13 as a free beta (updates not yet connected). The rest not started beyond drafts and this documentation |
 | E — optional AI/voice | Provider adapter, consent, metering, quotas, real iPhone microphone behaviour | Step 1 in progress (2026-10-11): cloud-api implemented and tested with a fake provider and an HTTP stub; phone side being built; test kit ready for the owner's first live call. Not live-tested, not iPhone-tested, not offered. Step 2 (screen viewing, show-first clicking): designed hooks only |
 
 ## 5. What is deliberately not promised

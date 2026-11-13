@@ -7,7 +7,8 @@
  *
  * The plan answers follow what the server says (GET /v1/plans, lib/useBillingAvailability.ts): with no answer, or a
  * failed one, they keep the static "coming at paid launch" wording; once checkout exists they say how to subscribe, and
- * Pro Plus waits for the AI butler to be switched on. Prices are tax-inclusive (AI_RULES.billing).
+ * Pro Plus waits for the AI butler to be switched on. Prices are tax-inclusive (AI_RULES.billing). The YouTube answer
+ * follows the release the Download page offers (content/windowsAppStatus.ts): "Yes" only for one with the browser add-on.
  */
 import type { ReactNode } from "react";
 import { Link } from "react-router";
@@ -16,6 +17,7 @@ import type { IconName } from "../components/icons.tsx";
 import { aiSwitchedOn, sellsPlan, type BillingAvailability } from "../lib/useBillingAvailability.ts";
 import type { PublicIconName } from "../pages/public/publicIcons.tsx";
 import { AI_RULES, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WINDOW_HOURS } from "./plans.ts";
+import { youtubeNotAvailable } from "./windowsAppStatus.ts";
 
 export type FaqEntry = { q: string; a: ReactNode };
 export type FaqGroup = { id: string; title: string; icon: PublicIconName | Extract<IconName, "shield" | "ask">; status?: string; entries: FaqEntry[] };
@@ -29,8 +31,11 @@ const link = (to: string, label: string) => (
   </Link>
 );
 
-/** The FAQ for what the server says now; `null` (no answer yet, or a failed one) is today's static, honest wording. */
-export function faqGroups(availability: BillingAvailability | null): FaqGroup[] {
+/**
+ * The FAQ for what the server says now; `null` (no answer yet, or a failed one) is today's static, honest wording.
+ * `youtube` is why YouTube control is not available, or `null` when the offered release includes it.
+ */
+export function faqGroups(availability: BillingAvailability | null, youtube: string | null = youtubeNotAvailable()): FaqGroup[] {
   const selling = !!availability?.selling;
   const proPlusSold = sellsPlan(availability, "pro_plus");
   const aiOn = aiSwitchedOn(availability);
@@ -48,7 +53,12 @@ export function faqGroups(availability: BillingAvailability | null): FaqGroup[] 
       entries: [
         { q: "Do I need to open ports, set up a VPN or install anything on my router?", a: "No. The PC makes one outgoing, authenticated connection to the DoMe service, and your phone talks to the same service. Nothing on your PC listens on the internet." },
         { q: "Does it work when I am away from home?", a: "Yes, over mobile data or any Wi-Fi, as long as both your phone and your PC have internet. There is no local-only mode yet: if the DoMe service is unreachable, controls pause rather than pretending to work." },
-        { q: "Can DoMe control YouTube when the browser is in the background?", a: "Yes. The DoMe browser extension in Chrome or Edge on the PC controls the player in the chosen tab directly, so another window can have focus. The extension only asks for access to YouTube pages." },
+        {
+          q: "Can DoMe control YouTube when the browser is in the background?",
+          a: youtube
+            ? `Not yet. ${youtube} When the extension is available, it will control the player in the chosen tab directly, so another window can have focus, and it will only ask for access to YouTube pages.`
+            : "Yes. The DoMe browser extension in Chrome or Edge on the PC controls the player in the chosen tab directly, so another window can have focus. The extension only asks for access to YouTube pages.",
+        },
         { q: "Why does Next sometimes say “no next video”?", a: "DoMe only reports success when the player really moved to a different video. Ads, live streams, Shorts and some playlists behave differently; DoMe tells you instead of guessing." },
         { q: "Why can’t YouTube’s own full-screen button be pressed from my phone?", a: "The browser only lets a click on the PC start YouTube’s player full screen, so DoMe doesn’t fake it. DoMe can make an approved app’s whole window full screen (like pressing F11), and Theater mode always works." },
         { q: "What happens if my PC is asleep or off?", a: "The PC shows as offline and commands are not stored for later — nothing will run hours later by surprise. Waking a PC remotely (Wake-on-LAN) is not offered yet." },

@@ -79,12 +79,14 @@
     put it into its own full screen, reported as `WINDOW_STATE_UNCHANGED` (the owner opted in to F11 there).
     The phone's own copy for `FULLSCREEN_UNSUPPORTED` may still say only "Try Maximise instead" where it does
     not show the agent's message (mobile-app).
-19. **The PyPI `av` wheel is not the shipping build.** `uv sync --locked --extra dev` installs the stock PyAV wheel
-    from PyPI (it bundles GPL x264/x265 and every FFmpeg decoder) so that the Linux unit tests can run aiortc on
-    loopback; it never ships. The shipping LGPL FFmpeg + PyAV wheel comes from `.github/workflows/ffmpeg-lgpl.yml`
-    (written, never run) and will be pinned under `[tool.uv.sources]` with `marker = "sys_platform == 'win32'"`
-    once published (WP0.1). Until then a Windows developer's `uv sync` also gets the GPL wheel (fine for
-    development; `packaging/licence_gate.py` refuses it in a release). `DoMe.exe screen-worker --self-test`
+19. **The PyPI `av` wheel is not the shipping build, on Linux and macOS.** `uv sync --locked --extra dev` installs
+    the stock PyAV wheel from PyPI there (it bundles GPL x264/x265 and every FFmpeg decoder) so that the Linux unit
+    tests can run aiortc on loopback; it never ships. On Windows the shipping LGPL FFmpeg + PyAV wheel is used: built
+    by `.github/workflows/ffmpeg-lgpl.yml` (run 39840865306, 2026-10-22, licence gate 0 violations), published as the
+    GitHub pre-release `av-lgpl-17.1.0-ffmpeg-n8.1.3-r3`, and pinned under `[tool.uv.sources]` with
+    `marker = "sys_platform == 'win32'"` and its SHA-256 in `uv.lock` since commit fa8de22 (WP0.1;
+    `docs/WINDOWS_INSTALL.md` 4.13). A Windows developer's `uv sync` gets that wheel too. Should the GPL wheel ever
+    reach a Windows build, `packaging/licence_gate.py` refuses it in a release, and `screen-worker --self-test`
     reports `decoders.exactly_wrapped_avframe: false` on it, honestly.
 20. **Nothing in Screen view is verified on a device.** Capture (`ddagrab` through PyAV's `lavfi` device, the
     Windows.Graphics.Capture fallback), `h264_mf` encoding and whether a vendor's MFT repeats SPS/PPS, the Tk
@@ -178,11 +180,14 @@
     duplication starts, so a start may need the cursor to move); the CPU cost of the signature at 30 fps on a 4K
     monitor (about 0.4 ms per 1280x720 frame here); one UAC prompt pauses rather than ends. If the first frame does
     not come on a still desktop, the agent must nudge the desktop (repaint a bar) after the worker connects.
-33. **Current Windows builds do not include Screen view** (DECISIONS #86): they are made without the `screen` extra, so
-    they still announce protocol 1.4 (pairing needs `pc_key_mac`) but refuse every start with
+33. **Windows builds made without the `screen` extra do not include Screen view** (DECISIONS #86): they still announce
+    protocol 1.4 (pairing needs `pc_key_mac`) but refuse every start with
     `ACTION_UNAVAILABLE{reason: screen_view_not_included}` before any window or bar, and the tray shows "Screen view:
-    not in this version of DoMe". A build with the shipping LGPL wheel (`.github/workflows/ffmpeg-lgpl.yml`, never run)
-    is what turns it on.
+    not in this version of DoMe".
+    **Resolved for current builds (2026-10-22):** since commit fa8de22 pinned the shipping LGPL wheel (#19), Windows
+    builds include Screen view (`BUILD-INFO.txt` says "screen view: included (beta, not yet verified on a device)"),
+    and so does the published DoMe for Windows 0.1.0 (2026-11-13). Screen view is switched off for accounts on
+    domeremote.com by the server setting, and nothing in it is verified on a device (#20).
 34. **The DXGI, D3D11 and DisplayConfig code is written against the SDK, not run on a device** (DECISIONS #93, #95,
     #96; `platform/windows/dxgi.py`, `displayconfig.py`). COM is driven through ctypes by vtable slot; the slots, the
     IIDs, the structure layouts (fixed-width fields, UTF-16 `WCHAR` arrays) and the HRESULT constants are asserted on

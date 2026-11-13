@@ -2,6 +2,89 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-13 — DoMe for Windows 0.1.0 is published
+
+- **Published.** GitHub release `v0.1.0`, https://github.com/Heshh999/DoMe/releases/tag/v0.1.0, published
+  2026-11-13 at 21:56:46 UTC by GitHub Actions run 43513385142, "Release (signed Windows app)". The founder started
+  it with **publish** on, from the default branch, and approved its signing (`docs/LAUNCH_SETUP.md` section 17 step
+  7). It was built from commit bf83141, the commit production runs (`BUILD-INFO.txt`: `build: 0.1.0+bf83141`,
+  `kind: release build without the browser add-on`). Every job passed: version, branch, release and update key;
+  pc-agent tests (Windows); Build the PyInstaller folder; Sign and package; Install and test the signed Setup;
+  Publish the GitHub Release (a draft first, then GitHub's own digest of each file checked, then published). The
+  release is immutable: its files can never be replaced. [GitHub Actions Release run 43513385142, 2026-11-13]
+- **Files.** `DoMe-Setup-0.1.0.exe` (37,708,680 bytes, SHA-256
+  `b28d55a49a4a98fc29e6b9d09e1e7c4842d5c1da5ecf126b5b25acf6a1441fa2`), `latest.json`, `latest.json.sig`,
+  `SHA256SUMS`, `BUILD-INFO.txt` and `RELEASE-NOTES.md`. Signed through Azure Artifact Signing: the publisher Windows
+  shows is **Justin Gaskins**. `latest.json` says `browser_addon: false`: YouTube control in Chrome or Edge is not in
+  this version (no Chrome Web Store listing yet). Screen view is inside the program ("included (beta, not yet
+  verified on a device)"), but it is **switched off for accounts on domeremote.com**: production's server setting is
+  off, and the production Deploy summary of 2026-11-13 says "Screen view: off" (next entry). Billing is off
+  there too, so nothing can be bought.
+- **The release notes on GitHub** (part of the immutable release, so they cannot be changed) say: signed by Justin
+  Gaskins; Windows may still show "Windows protected your PC" while this version is new, so check the publisher
+  name; DoMe never asks you to turn off antivirus; not yet verified on Windows 11 PCs with Smart App Control on;
+  YouTube control in Chrome or Edge is not included; Screen view included (beta, not yet verified on a device).
+  They do not say that Screen view is switched off for accounts, so every page of the website that describes this
+  release must say it.
+- **What was tested:** install, upgrade, uninstall and the Authenticode signatures, on GitHub's Windows Server
+  runner (administrator, UAC off). **Not tested:** any Windows 10 or 11 PC, a standard user, Smart App Control,
+  Screen view on a device with this build. **Evidence tag: integration-tested on the windows-latest runner; not
+  Windows-device-tested.**
+- **The founder's decision (2026-11-13): publish now, as a free beta, before counsel answers** either email
+  (`docs/legal/founder-decisions.md` 1.2). The licence terms Setup shows are still marked DRAFT
+  (`pc-agent/packaging/installer/licence-terms.txt:3,23-24`), and the website's Privacy notice and Terms are drafts
+  under the DRAFT banner (`mobile-app/src/pages/public/DraftBanner.tsx:10`). Paid ads wait for counsel. Screen view
+  stays off for accounts until counsel answers on H.264 and its other launch conditions are met
+  (`docs/LAUNCH_SETUP.md` section 16, last paragraph). The Inno Setup commercial licence is still to be bought
+  before the paid launch.
+- **The website.** The release's `latest.json` and `latest.json.sig` were copied byte for byte into
+  `mobile-app/src/content/windows-release.json` and `mobile-app/src/content/windows-release.sig`. The signature
+  verifies against the pinned update key: `mobile-app/scripts/check-release.ts` passes,
+  `mobile-app/test/public/windowsRelease.test.ts` passes (its placeholder-only case is now skipped, as designed), and
+  a separate Ed25519 check passed. With these files, the two tests that asserted the not-yet-published Download
+  page failed (`mobile-app/test/components/UpgradeAndHealth.test.tsx`, "public pages: the official Windows
+  download is visibly not yet published …", and `mobile-app/test/public/pages.test.tsx`, "Download stays honest
+  …"); they have since been replaced (below).
+- **The website follows the release.** The Download page shows 0.1.0 with its SHA-256 and publisher, says that
+  YouTube control in Chrome or Edge is not in this version, that Screen view is not switched on for accounts, and
+  what it was tested on; the Release notes page lists "DoMe for Windows 0.1.0" (published, free beta) with its
+  own known issues, and the two older builds are renamed "Development build (protocol 1.1)" and "Internal build
+  (protocol 1.0)". The home page's Windows button and the line under it, the footer of every page and the demo
+  page's closing line now name 0.1.0 as a free beta instead of "not published yet"
+  (`mobile-app/src/content/windowsAppStatus.ts`); the home page's YouTube card and the FAQ's YouTube answer say
+  that YouTube control needs the extension, which is not in the stores yet, so 0.1.0 does not include it. The
+  draft Privacy notice and Terms no longer describe a daily update check: 0.1.0 does not check for updates yet.
+  Tests cover both states, the placeholder and the committed release: `mobile-app/test/public/pages.test.tsx`
+  ("Download stays honest before a release: …", "Download offers the committed release: …", "Release notes show
+  the beta status, …"), `mobile-app/test/components/UpgradeAndHealth.test.tsx` ("public pages before a release:
+  …", "public pages with the committed release: …"), `test/film/LandingPage.test.tsx`,
+  `test/film/DemoPage.test.tsx`, `test/public/PublicLayout.test.tsx`, `test/public/FaqPage.test.tsx` and
+  `test/public/windowsAppStatus.test.ts`. mobile-app typecheck, lint, every test and build pass. **Nothing is
+  deployed yet:** the download button appears on https://domeremote.com/download only after the founder's next
+  Deploy (staging, then production) of the commit that carries these changes. Until then the GitHub release page
+  is where the download is, and the live site still says "not published yet".
+- **Docs updated** to say all this instead of "not yet published", "only test builds exist" or "step 7 waits":
+  `README.md`, `docs/LAUNCH_SETUP.md` section 17, `docs/WINDOWS_INSTALL.md`, `docs/HANDOFF.md`, `docs/ACCEPTANCE.md`,
+  `docs/SECURITY.md` T12, `docs/PRODUCT_AND_PLANS.md`, `docs/SUPPORT.md`, `docs/TROUBLESHOOTING.md` §21,
+  `mobile-app/README.md` and the legal packet (`docs/legal/`: the README, both counsel emails, the data map, the
+  vendor list and the founder decisions). Every line citation into a changed file was re-pointed to the same text.
+  A review then corrected: the H.264 email (DoMe's FFmpeg build has been public as a GitHub pre-release since
+  2026-10-22, not only since 2026-11-13); the data map (0.1.0 installs the browser bridge program but registers it
+  with no browser); `docs/PRODUCT_AND_PLANS.md` (the owner ran test builds, not 0.1.0); `docs/ACCEPTANCE.md`
+  (signing has worked on the runner since 2026-10-30); `docs/LAUNCH_SETUP.md` section 17 (step 7 item 3, the
+  Deploy, is still to do); `docs/TROUBLESHOOTING.md` §21 (Smart App Control: write to support); and
+  `pc-agent/KNOWN_ISSUES.md` #19 and #33 (the LGPL wheel is published and pinned, and Screen view is built in).
+- **Next (founder):** (1) Install 0.1.0 over the older test build on your own PC, **without unlinking**. Setup keeps
+  the link, the paired phones and the settings (`docs/WINDOWS_INSTALL.md` "Updating"); only `DoMe.exe link` reads the
+  server address Setup writes (`pc-agent/dome_agent/settings.py:7`), so the PC stays linked to the server it is
+  linked to now. YouTube control through the development add-on stops, because 0.1.0 removes that browser
+  registration (same section). Before you run it, check that **Properties > Digital Signatures** shows Justin
+  Gaskins, and note what Windows showed. (2) Work through the device checklist (`docs/WINDOWS_INSTALL.md` section 7)
+  and record the results in `docs/ACCEPTANCE.md`. (3) Press **Deploy** for staging, then production, of the commit
+  that carries the two files and the copy above, so the Download page shows the button and no page says "not
+  published yet" (`docs/LAUNCH_SETUP.md` section 17, step 7 item 3). (4) Later: the Chrome Web Store listing, so
+  that a later version includes YouTube control.
+
 ## 2026-11-13 — Correction: domeremote.com has been live since 2026-10-15; updated to bf83141 on 2026-11-13
 
 - **What was wrong.** Several documents said or implied that production (https://domeremote.com) was not live yet,

@@ -261,9 +261,10 @@ and Edge, as a standard user: run `DoMe-Setup` (wizard and keyboard only), `DoMe
 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.dome.agent` (and Edge) keys with a store or
 development extension; tray **Start at login** writes `HKCU\…\Run\DoMe` and the agent starts after
 sign-in; upgrade over a running DoMe; uninstall removes the keys and manifest; then the full checklist
-in `pc-agent/README.md`. Code signing and a signed update manifest are blocked on founder-held
-credentials (`docs/WINDOWS_INSTALL.md` §9). Record as **Windows-device-tested** with Windows build
-numbers.
+in `pc-agent/README.md`. Code signing and the signed update manifest have worked on GitHub's runner since
+2026-10-30 (GitHub Actions run 41127340896, publish off), and were first published with DoMe for Windows 0.1.0 on
+2026-11-13 (run 43513385142; on GitHub's runner only, `docs/WINDOWS_INSTALL.md` §9): install that release for
+this round. Record as **Windows-device-tested** with Windows build numbers.
 
 **Device runs:**
 
@@ -482,14 +483,15 @@ check (checkout, entitlement after purchase) cannot be exercised: no checkout ex
 | --- | --- |
 | Support tickets. Account-scoped create, list and get; a body with a typed-text input event, a YouTube URL and pairing codes is redacted before storage; session, CSRF and valid body are required; 10 per hour per account, held under 40 concurrent posts; a reference collision is retried. `cloud-api/tests/test_support_tickets.py` (6 tests) | integration-tested |
 | Support page. Category and code are preselected from the help link; the body is contract-valid with reviewed diagnostics; a 201 shows the reference; a 4xx shows "Not sent" with a copyable redacted summary. A 5xx, an unreadable 201 or a network failure shows "Not confirmed", and "Refresh your requests" comes before any resend. When signed out, nothing is sent. `mobile-app/test/components/SupportPage.test.tsx`, `test/support.test.ts` | unit-tested (jsdom) |
-| The download page states that the official Windows download is not yet published; release notes say pre-release with no device verification. `mobile-app/test/components/UpgradeAndHealth.test.tsx` | unit-tested |
+| The Download page before and after the first release. Before (the placeholder `{ "status": "not-published" }`): a disabled button saying the official Windows download is not yet published, and no installer link. With the committed signed release DoMe for Windows 0.1.0 (`mobile-app/src/content/windows-release.json`, `.sig`; signature checked by `mobile-app/test/public/windowsRelease.test.ts` and `mobile-app/scripts/check-release.ts`): one enabled link to exactly its GitHub installer, its version, SHA-256 and publisher, that YouTube control in Chrome or Edge is not in this version, that Screen view is not switched on for accounts, and what it was tested on; the release notes say "Beta" and "published — free beta", with nothing device-verified. `mobile-app/test/components/UpgradeAndHealth.test.tsx` ("public pages before a release: …", "public pages with the committed release: …"); `mobile-app/test/public/pages.test.tsx` ("Download stays honest before a release: …", "Download offers the committed release: …", "Release notes show the beta status, …"); rule checks with mocked releases in `mobile-app/test/public/DownloadPage.test.tsx`. The home page, every page's footer, the demo page and the FAQ's YouTube answer follow the same release (`mobile-app/test/film/LandingPage.test.tsx`, `test/film/DemoPage.test.tsx`, `test/public/PublicLayout.test.tsx`, `test/public/FaqPage.test.tsx`, `test/public/windowsAppStatus.test.ts`). Not deployed yet: domeremote.com shows the button after the next Deploy | unit-tested (jsdom; the placeholder and the committed release); not yet deployed |
 | Power confirmation copy. The agent's challenge detail says the action can interrupt or end remote access and that there is no remote wake in V1. The phone adds the same fixed copy to every Sleep/Restart/Shutdown confirmation, and a non-power confirmation does not get it. `pc-agent/tests/test_confirmations.py::test_power_confirmation_copy_states_access_loss_and_no_remote_wake`, `mobile-app/test/components/PowerConfirmation.test.tsx` | unit-tested |
 | Keyboard-only PC setup: `dome-agent link`, `pair`, `pair-approve`, `grant` and `repair` are CLI commands usable without a mouse (`pc-agent/tests/test_control_cli_misc.py`, `test_link_pairing.py`). Tray/tkinter keyboard navigation is not tested | unit-tested (CLI only) |
 
-**Outstanding:** there is no published download, so the broken-download check **cannot be run** yet.
-An unsigned development installer exists (Scenario 16, `docs/WINDOWS_INSTALL.md`): its
+**Outstanding:** the first published download, DoMe for Windows 0.1.0 (GitHub, 2026-11-13), exists, so the
+broken-download check can now be run on a PC; it has not been. The Download page's button appears with the
+next Deploy. Unsigned development installers also exist (Scenario 16, `docs/WINDOWS_INSTALL.md`): their
 stop-and-change-nothing upgrade path (DoMe will not quit; Setup exits with code 7, changes nothing and
-registers the browser bridge again) is in the CI smoke test, **not yet verified** until its first run.
+registers the browser bridge again) is in the CI smoke test (**integration-tested** on the runner, not on a PC).
 Interrupting Setup by hand (cancelling or closing it mid-install), keyboard-only use of the Setup wizard
 and the broken-download check remain outstanding on a PC. Run these:
 - **Keyboard-only setup.** On Windows with only a keyboard: link, pair (tray window or CLI) and
@@ -640,7 +642,7 @@ ease and a 24 px `data:` URL image moved at 60 Hz (mobile-app KNOWN_ISSUES #43, 
 | Layered connection health and guided recovery | `/app/health`, `lib/health.ts`, failure links to Health and Support | unit-tested | spec §11A cases on devices (Scenario 21) |
 | Single-instance agent | named mutex / `flock`, `show`, distinct reports, `repair` | unit- and integration-tested on Linux | Windows mutex and second-session refusal (Scenario 22) |
 | Clear media targets and power-state explanations | Now Playing, target resolution, power copy in agent and phone | unit-tested | Scenario 23 on devices; Scenario 25 power copy on an iPhone |
-| Development installer packaged | One PyInstaller folder for `DoMe.exe` and `dome-native-host.exe`; an unsigned per-user Inno Setup installer with uninstall cleanup, built and smoke-tested by `windows-installer.yml` (first green run 2026-10-14) | PyInstaller folder built and run on Linux; installer **integration-tested on the CI runner** (2026-10-14, run 38488799434; runner only, not a PC) | the founder installs it on their Windows 11 PC as a standard user |
+| Development installer packaged | One PyInstaller folder for `DoMe.exe` and `dome-native-host.exe`; an unsigned per-user Inno Setup installer with uninstall cleanup, built and smoke-tested by `windows-installer.yml` (first green run 2026-10-14) | PyInstaller folder built and run on Linux; installer **integration-tested on the CI runner** (2026-10-14, run 38488799434; runner only, not a PC); the signed release DoMe for Windows 0.1.0 published 2026-11-13 (run 43513385142; install-tested on the runner only) | the founder installs 0.1.0 on their Windows 11 PC as a standard user |
 | Real-device evidence | none | **not yet verified** | Scenarios 1, 2, 3, 7, 9, 10, 11, 16 and 18–25 device checks above, including the actual phone keyboard and the Windows input adapter |
 
 ## 5. Required documents (spec §18) — status

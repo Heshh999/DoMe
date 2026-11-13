@@ -4,7 +4,8 @@
  *   ?t=<ms>&paused=1    any moment of the film clock
  *   ?layout=vertical    the 9:16 restack (phones and social)
  *   ?export=1           chrome-less, controls hidden, deterministic from t = 0 (scripts/export-film.mjs)
- * The page sits inside PublicLayout's reading column, so the stage breaks out to the viewport's width.
+ * The page sits inside PublicLayout's reading column, so the stage breaks out to the viewport's width. Its closing line
+ * says where the Windows app stands, from the release the Download page offers (content/windowsAppStatus.ts).
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -13,6 +14,7 @@ import { Film } from "../../components/film/Film.tsx";
 import type { FilmLayout } from "../../components/film/layout.ts";
 import { CONCEPT_NOTE, PLAN_FACTS, sceneByNumber, SCENES } from "../../components/film/timeline.ts";
 import { Icon } from "../../components/icons.tsx";
+import { windowsAppStatus } from "../../content/windowsAppStatus.ts";
 
 /** The document's client width (no scrollbar), so a full-bleed band never causes sideways scroll. */
 function useViewportWidth(): number | null {
@@ -115,7 +117,7 @@ export function DemoPage() {
             </Link>
           </div>
           <p className="mt-8 text-xs text-text-faint">
-            Scenes: {SCENES.map((s) => `${s.n} ${s.title}`).join(" · ")}. Nothing is recorded; the AI never sees your screen. DoMe is in development: the Windows app is not published yet.
+            Scenes: {SCENES.map((s) => `${s.n} ${s.title}`).join(" · ")}. Nothing is recorded; the AI never sees your screen. {windowsAppStatus().demo}
           </p>
         </div>
       </section>

@@ -24,7 +24,7 @@ Words used here:
 - **Server**: DoMe's online service (`cloud-api`), hosted at Fly.io. It includes the **relay**, the part that
   passes messages between the phone and the PC.
 - **Database**: the server's database. Production uses Fly Managed Postgres (Basic plan, iad), in place since
-  the first production deploy on 2026-10-15 (`docs/PROGRESS.md:18-19,964`); staging uses Neon.
+  the first production deploy on 2026-10-15 (`docs/PROGRESS.md:101-102,1047`); staging uses Neon.
 - **Hash** (or fingerprint): a one-way code computed from a value; the value cannot be read back from it. A
   **keyed hash** is computed with a secret only the server holds. The same value always gives the same keyed
   hash, so it can still link events together. Whether a keyed hash of an address counts as personal
@@ -35,24 +35,34 @@ Words used here:
 Environments. Staging is public at https://staging.domeremote.com (`deploy/launch/environments.toml:24-28`).
 The repository calls staging "test data only", but it holds real sign-ups: at least the founder's own account and
 a test sign-up; whether anyone else has signed up is not recorded (`docs/DATA_RETENTION.md:55`;
-`docs/PROGRESS.md:121-124`; `docs/LAUNCH_SETUP.md:821-823`).
+`docs/PROGRESS.md:204-207`; `docs/LAUNCH_SETUP.md:821-823`).
 Production is live at https://domeremote.com. Its first deploy (commit 7a590ad) ran on 2026-10-15
-(`docs/PROGRESS.md:18-19`; [GitHub Actions Deploy run on commit 7a590ad, 2026-10-15]) on Fly.io, with Fly Managed
-Postgres in iad, and sign-in works there (`docs/PROGRESS.md:962-966`). It holds real accounts: at least the
+(`docs/PROGRESS.md:101-102`; [GitHub Actions Deploy run on commit 7a590ad, 2026-10-15]) on Fly.io, with Fly Managed
+Postgres in iad, and sign-in works there (`docs/PROGRESS.md:1045-1049`). It holds real accounts: at least the
 founder's own. The founder linked their Windows PC and paired an iPhone there on 2026-10-16
-(`docs/PROGRESS.md:968-970`); the PC was pointed at staging for the device rounds from 2026-10-26
-(`docs/ACCEPTANCE.md:523`; `docs/HANDOFF.md:416-420`). Whether anyone else has signed up is not recorded
-(`docs/PROGRESS.md:22-23`). From 2026-10-20 it ran commit 35a203f [GitHub Actions Deploy run 39464803237,
+(`docs/PROGRESS.md:1051-1053`); the PC was pointed at staging for the device rounds from 2026-10-26
+(`docs/ACCEPTANCE.md:525`; `docs/HANDOFF.md:425-429`). Whether anyone else has signed up is not recorded
+(`docs/PROGRESS.md:105-106`). From 2026-10-20 it ran commit 35a203f [GitHub Actions Deploy run 39464803237,
 2026-10-20], which did not refuse unconfirmed emails and did not have self-serve account deletion or the hourly
-clean-up described below (`docs/PROGRESS.md:29-32`). On 2026-11-13 it was updated to commit bf83141, which has
-them [GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:33-42`; the features themselves are
+clean-up described below (`docs/PROGRESS.md:112-115`). On 2026-11-13 it was updated to commit bf83141, which has
+them [GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:116-125`; the features themselves are
 cloud-api DECISIONS #118-#123). After the update the founder signed in there, and Settings ends with Delete
-account [founder-reported 2026-11-13] (`docs/PROGRESS.md:43-46`). No account deletion has been tried there yet,
-and nothing reports the clean-up's first pass there yet (`docs/PROGRESS.md:47-49`). Billing is off in production
-(`docs/LAUNCH_SETUP.md:375-378`; `docs/PROGRESS.md:29-32`; [GitHub Actions Deploy run 43508425555, 2026-11-13]),
-and so is Screen view (`docs/LAUNCH_SETUP.md:830-833`; [GitHub Actions Deploy run 43508425555, 2026-11-13]). Both sites sign in through one
+account [founder-reported 2026-11-13] (`docs/PROGRESS.md:126-129`). No account deletion has been tried there yet,
+and nothing reports the clean-up's first pass there yet (`docs/PROGRESS.md:130-132`). Billing is off in production
+(`docs/LAUNCH_SETUP.md:375-378`; `docs/PROGRESS.md:112-115`; [GitHub Actions Deploy run 43508425555, 2026-11-13]),
+and so is Screen view (`docs/LAUNCH_SETUP.md:830-834`; [GitHub Actions Deploy run 43508425555, 2026-11-13]). Both sites sign in through one
 Auth0 tenant, each with its own application (`cloud-api/DECISIONS.md:1014-1025`); their databases are separate
 ("Database" above).
+
+The Windows program. DoMe for Windows 0.1.0 has been published on GitHub since 2026-11-13, as a free beta, before
+counsel's answers [GitHub Actions Release run 43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:854-875`;
+`docs/PROGRESS.md:7-14`). It is built from the same commit as production, bf83141 (`docs/PROGRESS.md:7-14`).
+It installs the browser bridge program (`dome-native-host.exe`) but does not register it with any browser, so no
+extension can connect to it, and it has no YouTube control (`pc-agent/packaging/installer/DoMe.iss:164,683-686`;
+`mobile-app/src/content/windows-release.json:2`; `docs/WINDOWS_INSTALL.md:202-205`). Screen view is inside it
+but switched off for accounts on domeremote.com (`docs/PROGRESS.md:15-22`), and its update check (section 4) is
+not started by it yet (`docs/WINDOWS_INSTALL.md:745`); the draft Privacy notice says so too
+(`mobile-app/src/pages/public/PrivacyPage.tsx:80`). Section 4 lists what it keeps on the PC.
 
 ## Summary for counsel
 
@@ -165,7 +175,7 @@ removes the program but deletes this data only if the person answers Yes, or a s
 | `input_holds.json`: which keys and buttons were held down (never typed text) | Release stuck keys after a crash | PC | Deleted once released. Not described in `docs/DATA_RETENTION.md` | That Windows user | `pc-agent/dome_agent/input_session.py:111,420-438`; `docs/SECURITY.md:112` |
 | `update-check.json` (last check time and result, highest version seen) and `downloads/` (an installer the person asked to download) | Update check | PC | Not described in `docs/DATA_RETENTION.md` | That Windows user | `pc-agent/dome_agent/update_check.py:77-78,343-345` |
 | `agent.lock`, `agent.pid` and the bridge socket | Run one copy; talk to the extension | PC | While running. Not described in `docs/DATA_RETENTION.md` | That Windows user | `pc-agent/dome_agent/single_instance.py:40-41`; `pc-agent/dome_agent/settings.py:82` |
-| The update check: about every 24 hours (first 10 minutes after start), two small files fetched over HTTPS from GitHub, sending only "DoMe-agent/" plus the version as the user agent. GitHub therefore sees the PC's IP address and DoMe version. An installer is downloaded only when the person asks | Tell the person a newer version exists | GitHub (outside service) | GitHub's own terms | GitHub | `pc-agent/dome_agent/update_check.py:16-21,59-65,74-76,292` |
+| The update check: about every 24 hours (first 10 minutes after start), two small files fetched over HTTPS from GitHub, sending only "DoMe-agent/" plus the version as the user agent. GitHub therefore sees the PC's IP address and DoMe version. An installer is downloaded only when the person asks. Built, but not yet started by the program: DoMe for Windows 0.1.0 does not run it, and the draft Privacy notice and Terms say so | Tell the person a newer version exists | GitHub (outside service) | GitHub's own terms | GitHub | `pc-agent/dome_agent/update_check.py:16-21,59-65,74-76,292`; not started: `docs/WINDOWS_INSTALL.md:745`; `docs/SECURITY.md:103`; the drafts: `mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57` |
 
 ## 5. In the browser extension
 
@@ -177,7 +187,9 @@ removes the program but deletes this data only if the person answers Yes, or a s
 | YouTube search words: placed only in the search address of youtube.com/results, in the person's own browser | Run a search the person asked for | The person's browser sends it to YouTube | DoMe keeps no copy (the server keeps only the command's hash) | YouTube | `browser-extension/src/shared/youtubeUrl.ts:44-53`; `shared/protocol/version.json:70` |
 
 The extension is not published on the Chrome Web Store or Edge Add-ons; it is loaded by hand for development
-(`docs/PRODUCT_AND_PLANS.md:167`; `docs/WINDOWS_INSTALL.md:737`).
+(`docs/PRODUCT_AND_PLANS.md:169`; `docs/WINDOWS_INSTALL.md:748`). The published DoMe for Windows 0.1.0 installs
+the browser bridge program the extension talks to, but does not register it with any browser, so no extension can
+connect to it (`pc-agent/packaging/installer/DoMe.iss:164,683-686`; `mobile-app/src/content/windows-release.json:2`).
 
 ## 6. What DoMe never collects or keeps
 
@@ -259,9 +271,9 @@ listed here.
 | `docs/DATA_RETENTION.md:65` | PC row contents | Leaves out protocol versions and the plan-disabled time | `cloud-api/dome_api/db/models.py:181,186-188` |
 | `docs/DATA_RETENTION.md:68` | Linking codes hold a "SHA-256 of requester IP" | It is a keyed hash | `cloud-api/dome_api/routes/agent_link.py:62`; `cloud-api/dome_api/security/tokens.py:41-44` |
 | `docs/DATA_RETENTION.md` (whole file) | — | No rows for the PC files `input_holds.json`, `update-check.json`, `downloads/`, `native-host.log`, lock and socket files; the PC diagnostics' hardware inventory; most phone storage keys | Sections 1, 3 and 4 above |
-| `docs/DATA_RETENTION.md:55`; `docs/OPERATIONS.md:172` | Staging holds test data only | Staging holds real sign-ups (at least the founder's own account and a test sign-up); whether anyone else has signed up is not recorded | `docs/PROGRESS.md:121-124`; `docs/LAUNCH_SETUP.md:821-823` |
+| `docs/DATA_RETENTION.md:55`; `docs/OPERATIONS.md:172` | Staging holds test data only | Staging holds real sign-ups (at least the founder's own account and a test sign-up); whether anyone else has signed up is not recorded | `docs/PROGRESS.md:204-207`; `docs/LAUNCH_SETUP.md:821-823` |
 | `docs/design/assistant.md:1606` (draft consent text) | Counts are kept "to apply your monthly allowance" | The app's own consent sheet says "your allowance", and the code uses rolling 5-hour and weekly windows | `mobile-app/src/components/AssistantConsentSheet.tsx:34`; `cloud-api/KNOWN_ISSUES.md:87-90` |
-| `docs/PRODUCT_AND_PLANS.md:33` | Lists "no screen capture" as a principle | Screen view (a live picture of the PC's screen) is built and switched on in staging | `docs/LAUNCH_SETUP.md:533-540,555-557` |
+| `docs/PRODUCT_AND_PLANS.md:35` | Lists "no screen capture" as a principle | Screen view (a live picture of the PC's screen) is built and switched on in staging | `docs/LAUNCH_SETUP.md:533-540,555-557` |
 
 ## 9. Questions for counsel about this data
 
@@ -316,14 +328,27 @@ which changed that day, was re-pointed to the changed files by matching the cite
 `docs/PROGRESS.md` had still given the lines of commit 297f991), and the citation of `docs/OPERATIONS.md`
 section 12 now names its backup and restore lines. The same script confirmed again that every cited file exists
 and every cited line is inside it. After a review later that day, each go-live date also cites the entry that states
-it (`docs/PROGRESS.md:18-19`), the founder's devices are given as a dated event, and every citation into a file
+it (`docs/PROGRESS.md:101-102`), the founder's devices are given as a dated event, and every citation into a file
 changed by that review was re-pointed again.
 
 Later on 2026-11-13 production was updated to commit bf83141, and "Environments" above now says so instead of
 "being updated". That paragraph was rewritten from the records of that day's staging and production Deploys
 [GitHub Actions Deploy run 43408148197, 2026-11-13; GitHub Actions Deploy run 43508425555, 2026-11-13] and the
-founder's check after the update [founder-reported 2026-11-13]. The update cites `docs/PROGRESS.md:33-42`, the
-founder's check `docs/PROGRESS.md:43-46`, and what is not yet confirmed on production `docs/PROGRESS.md:47-49`.
+founder's check after the update [founder-reported 2026-11-13]. The update cites `docs/PROGRESS.md:116-125`, the
+founder's check `docs/PROGRESS.md:126-129`, and what is not yet confirmed on production `docs/PROGRESS.md:130-132`.
 The top entry of `docs/PROGRESS.md` grew by 14 lines, so every citation of it past line 41 was moved down by 14
 and re-read against the cited text. The same script confirmed again that every cited file exists and every cited
 line is inside it.
+
+Later still on 2026-11-13 DoMe for Windows 0.1.0 was published. The paragraph "The Windows program" (after
+"Environments"), the update-check row of section 4 and the note under section 5 were added from the record of the
+release run [GitHub Actions Release run 43513385142, 2026-11-13] and the founder's decision to publish before
+counsel answers [founder decision, 2026-11-13]. `docs/PROGRESS.md` gained a new top entry, and
+`docs/LAUNCH_SETUP.md`, `docs/WINDOWS_INSTALL.md`, `docs/HANDOFF.md`, `docs/ACCEPTANCE.md` and
+`docs/PRODUCT_AND_PLANS.md` changed, so every citation into them was re-pointed to the same text (compared with the
+previous commit) and the checker script was run again. After a review of that change, two statements were
+corrected: 0.1.0 installs the browser bridge program but does not register it with any browser ("The Windows
+program" and the note under section 5, `pc-agent/packaging/installer/DoMe.iss:164,683-686`), and the draft Privacy
+notice and Terms, which had described a daily update check, now say that 0.1.0 does not check for updates yet
+(`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57`). Every citation
+into a file changed by that review was re-pointed again.

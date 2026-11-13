@@ -54,7 +54,7 @@ const SECTIONS: ReadonlyArray<readonly [string, ReactNode]> = [
       <li>DoMe includes software made by others, each under its own licence. THIRD_PARTY_NOTICES.txt and the “licenses” folder in DoMe’s folder on your PC list them with their licence texts. These terms do not limit the rights those licences give you.</li>
       <li>Some of those parts are licensed under the GNU Lesser General Public License: the pystray library and, in versions that include Screen view, the FFmpeg libraries. You may replace those parts with your own versions, and you may modify DoMe for your own use and reverse engineer it to debug such modifications. Nothing in these terms forbids that.</li>
       <li>DoMe’s own code is closed-source software. © [FOUNDER: year] [FOUNDER: legal name of the business]. [COUNSEL: whether to add the usual licence limits (personal, non-transferable, no resale or redistribution) without limiting the rights above.]</li>
-      <li>About once a day the program checks for a new version. It downloads one only when you ask, and you start the installer yourself.</li>
+      <li>DoMe for Windows 0.1.0 does not check for new versions yet; to update, you run a newer installer yourself. A later version will check about once a day, download a new version only when you ask, and leave starting the installer to you.</li>
       <li>The DoMe browser extension for YouTube follows the same rules. It is not yet published in the Chrome Web Store. [COUNSEL: whether YouTube’s or the Chrome Web Store’s terms need anything here.]</li>
       <li>The program and the extension are provided “as is”, as described under Disclaimer and liability.</li>
     </ul>,

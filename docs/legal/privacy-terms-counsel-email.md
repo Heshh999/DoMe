@@ -1,8 +1,8 @@
 # Email to counsel: Privacy notice, Terms of service and launch questions
 
 Status: a draft for Justin to send. It asks questions; it is not legal advice. Facts checked against the
-repository on 2026-11-12; where each one comes from is listed at the end (do not send that part). The H.264
-email (`h264-counsel-email.md`) is separate.
+repository on 2026-11-12, and the Windows release status on 2026-11-13; where each one comes from is listed at
+the end (do not send that part). The H.264 email (`h264-counsel-email.md`) is separate.
 
 ## For Justin only (do not send this part)
 
@@ -20,16 +20,20 @@ Before you send it, fill in whatever you have already decided in your own downlo
 
 Check the live site first. The live site, https://domeremote.com, ran the code of 2026-10-20 (commit 35a203f
 [GitHub Actions Deploy run 39464803237, 2026-10-20]) until 2026-11-13, when it was updated to commit bf83141
-[GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:33-42`). It now has the renewal wording
+[GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:116-125`). It now has the renewal wording
 and the Delete account button that questions 1 and 4 describe, which the test site has had since earlier that
-day (`docs/PROGRESS.md:59-69,81-82`); its /privacy and /terms serve the current drafts under the DRAFT banner,
+day (`docs/PROGRESS.md:142-152,164-165`); its /privacy and /terms serve the current drafts under the DRAFT banner,
 known from the commit deployed, not from a look at the pages [GitHub Actions Deploy run 43508425555, 2026-11-13]
-(`docs/PROGRESS.md:43-46`). After the update you signed in there, and Settings ends with Delete account
+(`docs/PROGRESS.md:126-129`). After the update you signed in there, and Settings ends with Delete account
 [founder-reported 2026-11-13]. So before you send, open https://domeremote.com/privacy and /terms: the Privacy
 notice should start with "Who we are" and the Terms with "About these terms" (`README.md`, "Which version of the
-drafts the website shows"). If they do not, tell an engineer before you send. The email also says you have not
+drafts the website shows"). If they do not, tell an engineer before you send. One paragraph of each draft changed
+after bf83141: they now say that DoMe for Windows 0.1.0 does not check for updates yet, where the live pages still
+describe a daily check (`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57`;
+`docs/WINDOWS_INSTALL.md:104-107`). The live pages show the new wording after the next Deploy; if you send before
+then, tell the lawyer that this paragraph is being corrected. The email also says you have not
 yet checked whether anyone besides you has signed up on the live site (the repository does not record it,
-`docs/PROGRESS.md:22-23`); if you have counted the accounts by then (`founder-decisions.md` section 5), say so instead.
+`docs/PROGRESS.md:105-106`); if you have counted the accounts by then (`founder-decisions.md` section 5), say so instead.
 
 Attach:
 
@@ -65,9 +69,12 @@ consents, sends requests to Anthropic's API (not switched on anywhere). Plans: F
 $9.99/month or $99.99/year; Pro Plus $24.99/month or $249.99/year; one-off AI top-ups ($2.99). Payment is
 through Stripe, with DoMe as the seller and any tax included. Nothing is on sale yet. My website and server
 have been live at domeremote.com since October 2026, with free accounts only. The live service holds at
-least my own account; I have not yet checked whether anyone else has signed up. The Windows program is not yet
-published for download (only test builds exist). I attach a data map and a vendor list, traced to the code,
-the AI consent screen word for word, and the short licence terms my Windows installer shows.
+least my own account; I have not yet checked whether anyone else has signed up. On November 13, 2026, before
+hearing from you, I published the Windows program (version 0.1.0) for download from GitHub as a free beta. Its
+installer shows the short licence terms, which are still marked as a draft, and the Privacy notice and Terms on
+my website are drafts under a "DRAFT" banner. I will not run paid ads until I have your answers. I attach a data
+map and a vendor list, traced to the code, the AI consent screen word for word, and the short licence terms my
+Windows installer shows.
 
 My questions:
 1. Renewal and cancellation. Plans renew automatically; customers cancel online in Stripe's portal, at
@@ -117,9 +124,9 @@ My questions:
     problem (question 15)?
 11. Vendors. Which of Fly.io, Neon, Auth0, Resend, Stripe, Cloudflare, Anthropic and GitHub act as my
     processors, and which data processing agreements should I accept or sign?
-12. Export and sanctions. DoMe uses standard encryption and will be downloadable from anywhere. Must I
-    classify it or file anything under US export rules, and should I sell only in the US or block
-    sanctioned countries?
+12. Export and sanctions. DoMe uses standard encryption, and the Windows program can already be downloaded
+    from anywhere. Must I classify it or file anything under US export rules, and should I sell only in the US
+    or block sanctioned countries?
 13. Source code and ownership. All of DoMe's source code (server, Windows program, web app, and these
     drafts and emails) is in a public GitHub repository with no licence file. It stays public because, on
     GitHub's plans below Enterprise, a private repository loses the approval step my deploys rely on. The
@@ -132,13 +139,14 @@ My questions:
     License 2.0, plus the smaller libraries these use), and my browser extension includes Ajv; neither shows a
     notices page. Do they need one?
 14. Security and incidents. DoMe can restart or shut down a customer's PC (after the customer confirms), my
-    server can read commands and typed text while routing them, and the Windows program offers updates that
-    must carry a signature made with my update key, which is kept as a secret of my release workflow on
-    GitHub. The program never installs anything by itself; the customer starts any new installer. If there
-    were a breach (for example someone reading traffic on my server, or a forged update), what must I do,
-    and how fast, under New Jersey's and other states' notice laws? What should my written incident plan
-    and security program contain? I have only an outline of an incident procedure, never run. Do the Terms
-    or the Windows licence need wording about updates?
+    server can read commands and typed text while routing them, and the Windows program's update check, built
+    but not yet switched on in version 0.1.0, accepts only update information signed with my update key, which
+    is kept as a secret of my release workflow on GitHub. The program never installs anything by itself; the
+    customer starts any new installer. The drafts say that 0.1.0 does not check for updates yet and that a later
+    version will check about once a day. If there were a breach (for example someone reading traffic on my server,
+    or a forged update), what must I do, and how fast, under New Jersey's and other states' notice laws? What
+    should my written incident plan and security program contain? I have only an outline of an incident
+    procedure, never run. Do the Terms or the Windows licence need wording about updates?
 15. YouTube. My optional browser extension, named "DoMe for YouTube", controls YouTube's player in the
     customer's own browser (play, pause, volume, search; it never skips ads). Do YouTube's terms or brand
     rules, or the Chrome Web Store's policies, require changes to its name, to the extension or to my Terms?
@@ -174,11 +182,12 @@ New Jersey
 Paths are from the top of the repository; line numbers as of 2026-11-12, with the Privacy and Terms drafts as
 rewritten that day, and with the citations of files changed on 2026-11-13 (the production status correction,
 then the production update the same day, which moved the citations of `docs/PROGRESS.md` past line 41 down by
-14 lines) re-pointed that day.
+14 lines, then the Windows release the same day, which added a new top entry to `docs/PROGRESS.md`) re-pointed
+that day to the same text.
 
-- Founder in New Jersey: `docs/legal/h264-counsel-email.md:24`.
+- Founder in New Jersey: `docs/legal/h264-counsel-email.md:32`.
 - The repository is public: `docs/LAUNCH_SETUP.md:69-72`; `docs/SECURITY.md:312`; `.github/workflows/deploy.yml:13`.
-- What DoMe controls, confirmation before power actions: `docs/PRODUCT_AND_PLANS.md:33-35`;
+- What DoMe controls, confirmation before power actions: `docs/PRODUCT_AND_PLANS.md:35-37`;
   `pc-agent/dome_agent/authz.py:279-291`; `pc-agent/dome_agent/actions/power.py:86-95`.
 - Four parts, server in Virginia on Fly.io: `mobile-app/src/pages/public/PrivacyPage.tsx:21`;
   `deploy/fly.toml:18-19`.
@@ -193,17 +202,22 @@ then the production update the same day, which moved the citations of `docs/PROG
   `docs/LAUNCH_SETUP.md:770`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
   `mobile-app/src/pages/public/TermsPage.tsx:120`; `mobile-app/src/pages/public/PrivacyPage.tsx:85`;
   `mobile-app/src/components/AssistantConsentSheet.tsx:24`.
-- Prices and top-up: `shared/protocol/plans.json:149-164`. Free needs no card: `docs/PRODUCT_AND_PLANS.md:20`.
+- Prices and top-up: `shared/protocol/plans.json:149-164`. Free needs no card: `docs/PRODUCT_AND_PLANS.md:22`.
 - DoMe the seller, tax included: `cloud-api/dome_api/billing/stripe_provider.py:222-237`;
   `cloud-api/DECISIONS.md:522-531`; `shared/protocol/plans.json:166`.
 - Nothing on sale: `docs/LAUNCH_SETUP.md:375-383`.
-- Website and server live since 2026-10-15, with the founder's own account: `docs/PROGRESS.md:18-19,962-970`;
-  free accounts only, billing off in production `docs/PROGRESS.md:29-32`; deployed 2026-10-20 at commit 35a203f
+- Website and server live since 2026-10-15, with the founder's own account: `docs/PROGRESS.md:101-102,1045-1053`;
+  free accounts only, billing off in production `docs/PROGRESS.md:112-115`; deployed 2026-10-20 at commit 35a203f
   [GitHub Actions Deploy run 39464803237, 2026-10-20] and updated 2026-11-13 to commit bf83141 [GitHub Actions
-  Deploy run 43508425555, 2026-11-13] `docs/PROGRESS.md:33-42`; the founder signed in after the update and
-  Settings ends with Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:43-46`;
-  whether anyone else has signed up is not recorded `docs/PROGRESS.md:22-23`. The Windows program not yet
-  published for download, only test builds: `docs/LAUNCH_SETUP.md:838-840`.
+  Deploy run 43508425555, 2026-11-13] `docs/PROGRESS.md:116-125`; the founder signed in after the update and
+  Settings ends with Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:126-129`;
+  whether anyone else has signed up is not recorded `docs/PROGRESS.md:105-106`. The Windows program, version
+  0.1.0, published on GitHub on 2026-11-13 as a free beta [GitHub Actions Release run 43513385142, 2026-11-13]
+  `docs/PROGRESS.md:7-14`; `docs/LAUNCH_SETUP.md:854-875`; before counsel's answers, by the
+  founder's decision `docs/PROGRESS.md:33-39`; `docs/legal/founder-decisions.md:47-55`; the
+  licence terms still marked as a draft `pc-agent/packaging/installer/licence-terms.txt:3`; the Privacy and Terms
+  drafts under the DRAFT banner `mobile-app/src/pages/public/DraftBanner.tsx:10`; no paid ads before counsel's
+  answers [founder decision, 2026-11-13] `docs/PROGRESS.md:33-39`.
 - Question 1: renewal and cancellation in Stripe's portal `mobile-app/src/pages/public/TermsPage.tsx:82,93-94`;
   `docs/LAUNCH_SETUP.md:450-452`. The renewal statement (bold, larger), how to cancel and the Terms and
   Privacy links `mobile-app/src/content/SubscriptionTerms.tsx:1-42`; `mobile-app/src/content/plans.ts:161-178`;
@@ -228,13 +242,14 @@ then the production update the same day, which moved the citations of `docs/PROG
 - Question 6: three steps, fixed list `docs/design/assistant.md:409-445`; simple actions run at once
   `mobile-app/src/content/plans.ts:254`; consent screen `mobile-app/src/components/AssistantConsentSheet.tsx:1-5,24-48`,
   copied in `docs/legal/ai-consent-text.md`; mistakes wording `mobile-app/src/pages/public/TermsPage.tsx:124`.
-- Question 7: PC sound planned `docs/design/screen-view.md:75-77`; `mobile-app/src/content/faq.tsx:121`.
+- Question 7: PC sound planned `docs/design/screen-view.md:75-77`; `mobile-app/src/content/faq.tsx:131`.
 - Question 8: `mobile-app/src/pages/public/TermsPage.tsx:145`; `pc-agent/packaging/installer/licence-terms.txt:21-24`.
-- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:841-846,866-869`.
+- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:843-848,891-894`.
 - Question 10: the extension's name `browser-extension/public/manifest.json:3`.
 - Question 11: `docs/legal/subprocessors.md` section 1.
 - Question 12: encryption `mobile-app/src/pages/public/PrivacyPage.tsx:100,185`; public downloads on GitHub
-  `docs/LAUNCH_SETUP.md:999-1006`; checkout restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
+  `docs/LAUNCH_SETUP.md:1024-1031`, published since 2026-11-13 `docs/LAUNCH_SETUP.md:854-875`; checkout
+  restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
 - Question 13: public repository, as above; no licence file at the top of the repository (`git ls-files`: the
   only licence texts are third-party ones under `pc-agent/packaging/licenses`); "closed-source"
   `mobile-app/src/pages/public/TermsPage.tsx:56`; `pc-agent/packaging/THIRD_PARTY_NOTICES.txt:21-22`; the
@@ -246,17 +261,19 @@ then the production update the same day, which moved the citations of `docs/PROG
   (directory listing).
 - Question 14: power actions need confirmation `mobile-app/src/pages/public/PrivacyPage.tsx:188`; the server
   reads what it routes `PrivacyPage.tsx:64,190`; signed updates and no automatic install
-  `pc-agent/dome_agent/update_check.py:1-25,66-69`; publishing a release `docs/LAUNCH_SETUP.md:999-1006`;
+  `pc-agent/dome_agent/update_check.py:1-25,66-69`; the update check not yet started by the program
+  `docs/WINDOWS_INSTALL.md:745`; `docs/SECURITY.md:103`; what the drafts say about it `PrivacyPage.tsx:80`;
+  `TermsPage.tsx:57`; publishing a release `docs/LAUNCH_SETUP.md:1024-1031`;
   incident outline "procedure, not yet run" `docs/OPERATIONS.md:345-350,430`; the breach note
   `PrivacyPage.tsx:191`.
 - Question 15: `browser-extension/public/manifest.json:3,7-10`; no ad skipping
   `browser-extension/src/content/adapter.ts:30,102`; `mobile-app/src/pages/public/TermsPage.tsx:58`; not
-  yet listed in the Chrome Web Store `docs/WINDOWS_INSTALL.md:737`.
+  yet listed in the Chrome Web Store `docs/WINDOWS_INSTALL.md:748`.
 - Question 16: the paid Screen view and everyday-command wording `mobile-app/src/content/plans.ts:109,113,209`;
   `mobile-app/src/lib/pricing.ts:44-45`; no "unlimited" on any rendered public page
   `mobile-app/test/public/honestClaims.test.tsx`; the per-phone command limits
-  `shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:49`; Screen view relay limits
-  `mobile-app/src/pages/public/TermsPage.tsx:116`; features not built `mobile-app/src/content/faq.tsx:123`;
+  `shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:51`; Screen view relay limits
+  `mobile-app/src/pages/public/TermsPage.tsx:116`; features not built `mobile-app/src/content/faq.tsx:133`;
   AI requests as minutes `mobile-app/src/content/plans.ts:125-131,150-155`; the Terms' limits wording
   `TermsPage.tsx:134,140`.
 - Question 17: `mobile-app/README.md:61`; `mobile-app/DECISIONS.md:481`; `docs/design/assistant.md:2139`; no

@@ -14,39 +14,42 @@ counsel to confirm; email 2 asks them where to keep it.
 ## What this folder is
 
 This folder holds what a lawyer needs to review DoMe before paid plans go on sale (the website and server have
-been live at https://domeremote.com since 2026-10-15, with free accounts only, `docs/PROGRESS.md:18-19,29-32,962-966`;
-the Windows program is not yet published for download, `docs/LAUNCH_SETUP.md:838-840`), so that all you have to do is
-choose a lawyer and send it. It has two emails ready to send, each with its questions; two fact sheets saying what
-data DoMe handles and which outside companies receive it, with each fact traced to the code; the AI
-assistant's consent screen, word for word; and a list of the business decisions only you can make. The
-Privacy notice and Terms of service drafts are pages of the website, and the Windows program's licence terms
-and notices ship with the installer; the table below says where each one is. Everything was checked against
-the repository on 2026-11-12: commit 297f991, plus the drafts rewritten that day (the Privacy notice, the
-Terms, and the Windows licence terms and notices).
+been live at https://domeremote.com since 2026-10-15, with free accounts only,
+`docs/PROGRESS.md:101-102,112-115,1045-1049`; the Windows program, DoMe for Windows 0.1.0, has been published for
+download on GitHub since 2026-11-13 as a free beta, by your decision before counsel answers [GitHub Actions
+Release run 43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:854-875`; `founder-decisions.md` 1.2)), so that all
+you have to do is choose a lawyer and send it. It has two emails ready to send, each with its questions; two fact
+sheets saying what data DoMe handles and which outside companies receive it, with each fact traced to the code;
+the AI assistant's consent screen, word for word; and a list of the business decisions only you can make. The
+Privacy notice and Terms of service drafts are pages of the website, and the Windows program's licence terms and
+notices ship with the installer; the table below says where each one is. Everything was checked against the
+repository on 2026-11-12: commit 297f991, plus the drafts rewritten that day (the Privacy notice, the Terms, and
+the Windows licence terms and notices). The Windows release of 2026-11-13 was added to this folder the same day
+[GitHub Actions Release run 43513385142, 2026-11-13].
 
 ## What is here, and where each piece stands
 
 | Document | What it is | Status on 2026-11-12 |
 | --- | --- | --- |
-| `h264-counsel-email.md` | Email 1: H.264 video patents and the FFmpeg (LGPL) build used by Screen view | **Ready to send.** Facts checked on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:18-19`). Not recorded as sent: the latest progress entry still lists "Send the counsel email" as next (`docs/PROGRESS.md:186-187`) |
-| `privacy-terms-counsel-email.md` | Email 2: review of the Privacy notice, the Terms and the Windows licence terms, and seventeen launch questions | **Ready to send** once you replace [name] in your own email program |
+| `h264-counsel-email.md` | Email 1: H.264 video patents and the FFmpeg (LGPL) build used by Screen view | **Ready to send.** Facts checked on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:101-102`); the Windows release of 2026-11-13 added the same day [GitHub Actions Release run 43513385142, 2026-11-13], with the correction that the FFmpeg build itself has been public as a GitHub pre-release since 2026-10-22 (`docs/WINDOWS_INSTALL.md:545-547`; [GitHub release av-lgpl-17.1.0-ffmpeg-n8.1.3-r3, 2026-10-22]). Not recorded as sent: the latest progress entry still lists "Send the counsel email" as next (`docs/PROGRESS.md:269-270`) |
+| `privacy-terms-counsel-email.md` | Email 2: review of the Privacy notice, the Terms and the Windows licence terms, and seventeen launch questions | **Ready to send** once you replace [name] in your own email program. The Windows release of 2026-11-13 added the same day [GitHub Actions Release run 43513385142, 2026-11-13]; question 14 now notes that the drafts say 0.1.0 does not check for updates yet (`mobile-app/src/pages/public/TermsPage.tsx:57`) |
 | `ai-consent-text.md` | The AI assistant's consent screen, word for word, with its three allowance sentences | **Ready to attach** to email 2 (question 6). Copied from `mobile-app/src/components/AssistantConsentSheet.tsx`, which is draft text "the founder and a lawyer review" (lines 2-3) |
 | `founder-decisions.md` | The decisions only you can make, with suggested defaults; every [FOUNDER] gap and every [COUNSEL] note in the drafts | **To fill in**, in a downloaded copy. Not needed before you send the emails, but the lawyer can then review your choices instead of blanks |
-| `data-map.md` | Every kind of information DoMe handles: what, why, where, how long, who can see it | **Ready to attach.** Updated on 2026-11-12 to match the rewritten Privacy draft: its citations point to the new draft, and the four mismatches of the old draft are recorded as fixed (section 8) |
+| `data-map.md` | Every kind of information DoMe handles: what, why, where, how long, who can see it | **Ready to attach.** Updated on 2026-11-12 to match the rewritten Privacy draft: its citations point to the new draft, and the four mismatches of the old draft are recorded as fixed (section 8). Corrected on 2026-11-13: 0.1.0 installs the browser bridge program but registers it with no browser (`pc-agent/packaging/installer/DoMe.iss:164,683-686`), and the drafts now say 0.1.0 does not check for updates (`mobile-app/src/pages/public/PrivacyPage.tsx:80`) |
 | `subprocessors.md` | One row per outside company: Fly.io, Neon, Auth0, Resend, Stripe, Cloudflare, Anthropic, GitHub and others | **Ready to attach.** Updated on 2026-11-12 to match the rewritten Privacy draft, which names the companies (`mobile-app/src/pages/public/PrivacyPage.tsx:136-144`) |
 | Privacy notice | `mobile-app/src/pages/public/PrivacyPage.tsx`, shown at `/privacy` (`mobile-app/src/app/router.tsx:44`) | **Draft for review.** Rewritten on 2026-11-12 to match the code; carries a DRAFT banner and [FOUNDER] and [COUNSEL] marks. Final only after the lawyer's review |
 | Terms of service | `mobile-app/src/pages/public/TermsPage.tsx`, shown at `/terms` (`mobile-app/src/app/router.tsx:45`) | **Draft for review.** Same as the Privacy notice |
-| Windows licence terms | `pc-agent/packaging/installer/licence-terms.txt`, shown by Setup | **Draft** "for review by the DoMe founder and counsel" (line 3); [FOUNDER] name and governing law, [COUNSEL] liability wording (lines 23-24). **Required attachment to email 2** (question 8); optional attachment to email 1 |
+| Windows licence terms | `pc-agent/packaging/installer/licence-terms.txt`, shown by Setup | **Draft** "for review by the DoMe founder and counsel" (line 3); [FOUNDER] name and governing law, [COUNSEL] liability wording (lines 23-24). Since 2026-11-13 the published Setup of DoMe for Windows 0.1.0 shows this draft to everyone who installs it [GitHub Actions Release run 43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:867-869`). **Required attachment to email 2** (question 8); optional attachment to email 1 |
 | Third-party notices | `pc-agent/packaging/THIRD_PARTY_NOTICES.txt`, installed with DoMe | **Draft**, "not yet reviewed by counsel" (line 13); [FOUNDER] copyright line (line 22). Optional attachment to email 1 |
 
 **Which version of the drafts the website shows.** The test site, https://staging.domeremote.com, has shown the
-rewritten drafts since its deploy of 2026-11-13 (commit 63de996, `docs/PROGRESS.md:81-82`). The live site,
-https://domeremote.com, has been up since 2026-10-15 (`docs/PROGRESS.md:18-19,962-966`). Until 2026-11-13 it ran
+rewritten drafts since its deploy of 2026-11-13 (commit 63de996, `docs/PROGRESS.md:164-165`). The live site,
+https://domeremote.com, has been up since 2026-10-15 (`docs/PROGRESS.md:101-102,1045-1049`). Until 2026-11-13 it ran
 commit 35a203f of 2026-10-20 [GitHub Actions Deploy run 39464803237, 2026-10-20], which showed the older drafts.
 On 2026-11-13 it was updated to commit bf83141 [GitHub Actions Deploy run 43508425555, 2026-11-13]
-(`docs/PROGRESS.md:33-42`), so its /privacy and /terms now serve the rewritten drafts too, still under the DRAFT
+(`docs/PROGRESS.md:116-125`), so its /privacy and /terms now serve the rewritten drafts too, still under the DRAFT
 banner; that follows from the commit deployed, not from a look at the pages [GitHub Actions Deploy run
-43508425555, 2026-11-13] (`docs/PROGRESS.md:43-46`). After the update you signed in there, and Settings ends with
+43508425555, 2026-11-13] (`docs/PROGRESS.md:126-129`). After the update you signed in there, and Settings ends with
 Delete account [founder-reported 2026-11-13]. So open each page once before you send a link: the new Privacy
 notice starts with the heading "Who we are", and the new Terms with "About these terms". If you see "What DoMe is"
 or "The service" first, an old draft is showing: send the staging link or a PDF instead, tell an engineer, and do
@@ -110,18 +113,19 @@ Fly.io, Stripe, GitHub, Auth0, Cloudflare, Neon, Resend or Microsoft dashboards;
 customer data (sign-ups, support requests, database exports, logs); or the source code (the lawyer can be
 told it is public, as email 2 does). If the lawyer asks for another repository document, ask an engineer to
 check it first: some older engineering notes are out of date. `data-map.md` section 8 lists the known ones;
-another is the old price line in `docs/PRODUCT_AND_PLANS.md:220`.
+another is the old price line in `docs/PRODUCT_AND_PLANS.md:222`.
 
 ## Launch steps that wait on counsel
 
 | Launch step | What it waits on from the lawyer | Other conditions the repository names | Source |
 | --- | --- | --- | --- |
-| Screen view switched on for customers (the production switch `DOME_SCREEN_VIEW_ENABLED`) | The answer on H.264 and on the LGPL notice and source offer (email 1); if the answer is no, Screen view ships with VP8 video only. A privacy notice that names Cloudflare, the connection relay, as a sub-processor: the new draft does (`PrivacyPage.tsx:102,140`), and it becomes final with the lawyer's review | The device round on a real PC and iPhone; a signed Windows build that includes Screen view; code signing and the update check; branch protection with required review | `docs/LAUNCH_SETUP.md:830-833`; `docs/design/screen-view.md:1469-1473`; `docs/ACCEPTANCE.md:567-572`; `docs/HANDOFF.md:432-437` |
-| Final Privacy notice and Terms (DRAFT banner removed, effective date set) | Review of both drafts (email 2) | Your [FOUNDER] details (`founder-decisions.md`); a support contact: `support@domeremote.com`, on staging and on the live site since 2026-11-13 (`docs/LAUNCH_SETUP.md:783-788`; `docs/PROGRESS.md:33-42`; [GitHub Actions Deploy run 43508425555, 2026-11-13]); a way to send customers notices, not built (`founder-decisions.md` 4.6). An engineer applies the changes in a "legal round" and updates the test that checks the pages' headings (`mobile-app/test/public/pages.test.tsx`) | `PrivacyPage.tsx:1,13`; `TermsPage.tsx:1,188`; `DraftBanner.tsx:10` |
-| Paid plans on sale (Stripe live mode in production) | The renewal disclosures, acceptance step, notices and refund policy (email 2, questions 1 and 2); the business entity (question 9) | Stripe's live activation (business details, bank account, identity); an Inno Setup commercial licence; where to collect sales tax, a question for an accountant | `TermsPage.tsx:79,85,103,108`; `docs/LAUNCH_SETUP.md:697`; `docs/WINDOWS_INSTALL.md:736`; `docs/HANDOFF.md:470` |
+| Screen view switched on for customers (the production switch `DOME_SCREEN_VIEW_ENABLED`) | The answer on H.264 and on the LGPL notice and source offer (email 1); if the answer is no, Screen view ships with VP8 video only. A privacy notice that names Cloudflare, the connection relay, as a sub-processor: the new draft does (`PrivacyPage.tsx:102,140`), and it becomes final with the lawyer's review | The device round on a real PC and iPhone; a signed Windows build that includes Screen view (DoMe for Windows 0.1.0, published 2026-11-13, includes it, switched off for accounts and not yet verified on a device, `docs/LAUNCH_SETUP.md:830-834,864-865`); code signing (done for 0.1.0) and the update check; branch protection with required review | `docs/LAUNCH_SETUP.md:830-834`; `docs/design/screen-view.md:1469-1473`; `docs/ACCEPTANCE.md:569-574`; `docs/HANDOFF.md:441-446` |
+| Final Privacy notice and Terms (DRAFT banner removed, effective date set) | Review of both drafts (email 2) | Your [FOUNDER] details (`founder-decisions.md`); a support contact: `support@domeremote.com`, on staging and on the live site since 2026-11-13 (`docs/LAUNCH_SETUP.md:783-788`; `docs/PROGRESS.md:116-125`; [GitHub Actions Deploy run 43508425555, 2026-11-13]); a way to send customers notices, not built (`founder-decisions.md` 4.6). An engineer applies the changes in a "legal round" and updates the test that checks the pages' headings (`mobile-app/test/public/pages.test.tsx`) | `PrivacyPage.tsx:1,13`; `TermsPage.tsx:1,188`; `DraftBanner.tsx:10` |
+| Paid plans on sale (Stripe live mode in production) | The renewal disclosures, acceptance step, notices and refund policy (email 2, questions 1 and 2); the business entity (question 9) | Stripe's live activation (business details, bank account, identity); an Inno Setup commercial licence; where to collect sales tax, a question for an accountant | `TermsPage.tsx:79,85,103,108`; `docs/LAUNCH_SETUP.md:697`; `docs/WINDOWS_INSTALL.md:747`; `docs/HANDOFF.md:479` |
+| Paid ads | Your choice (2026-11-13): no paid advertising before the lawyer has answered; the advertising-claims question is email 2, question 16 | — | [founder decision, 2026-11-13]; `docs/PROGRESS.md:33-39`; `founder-decisions.md` 1.2 |
 | AI assistant switched on, and with it Pro Plus on sale | Review of the consent text and the AI wording (email 2, question 6) | Anthropic's API data terms confirmed; tests on real iPhones and measured costs; the consent text brought in line with the Privacy draft (`PrivacyPage.tsx:230`) | `docs/design/assistant.md:2090-2093`; `docs/DATA_RETENTION.md:104-109`; `AssistantConsentSheet.tsx:2-3`; `docs/BILLING.md:227-230` |
 | Self-serve account deletion (built: Settings, Delete account, then erased 30 days later by the hourly clean-up) | Whether the process meets the law, how fast a request sent to support must be completed, and how long billing records must be kept (email 2, question 4) | Your run on staging against Auth0 and Stripe's test mode (so far tested with automated tests only); deleting the Auth0 login by hand when someone asks (`founder-decisions.md` 4.3) | `cloud-api/KNOWN_ISSUES.md:110-111,210-224`; `PrivacyPage.tsx:168`; `DeleteAccountSheet.tsx:80-100` |
-| The browser extension in the Chrome Web Store | Whether the privacy notice covers the extension well enough, and whether YouTube's terms or the store's policies affect its name "DoMe for YouTube" (email 2, question 15). Outside research (Chrome developer pages, via web search on 2026-11-12, not verified by counsel): a listing needs a privacy policy link and disclosure in the product | A listing in your developer account, then the extension's id built into the Windows release | `docs/WINDOWS_INSTALL.md:737`; `PrivacyPage.tsx:232`; `browser-extension/public/manifest.json:3` |
+| The browser extension in the Chrome Web Store | Whether the privacy notice covers the extension well enough, and whether YouTube's terms or the store's policies affect its name "DoMe for YouTube" (email 2, question 15). Outside research (Chrome developer pages, via web search on 2026-11-12, not verified by counsel): a listing needs a privacy policy link and disclosure in the product | A listing in your developer account, then the extension's id built into the Windows release | `docs/WINDOWS_INSTALL.md:748`; `PrivacyPage.tsx:232`; `browser-extension/public/manifest.json:3` |
 
 ## Coming back to this later
 

@@ -1,1 +1,12 @@
-{ "status": "not-published" }
+{
+  "browser_addon": false,
+  "product": "DoMe for Windows",
+  "published_at": "2026-11-13T21:54:27Z",
+  "publisher": "Justin Gaskins",
+  "release_page": "https://github.com/Heshh999/DoMe/releases/tag/v0.1.0",
+  "schema": 1,
+  "sha256": "b28d55a49a4a98fc29e6b9d09e1e7c4842d5c1da5ecf126b5b25acf6a1441fa2",
+  "size": 37708680,
+  "url": "https://github.com/Heshh999/DoMe/releases/download/v0.1.0/DoMe-Setup-0.1.0.exe",
+  "version": "0.1.0"
+}

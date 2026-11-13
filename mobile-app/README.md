@@ -546,8 +546,15 @@ left in this window", "Free Screen view refreshes today at 4:12 pm") and open th
   network drop, 5xx or unreadable 2xx → "Not confirmed: DoMe could not confirm whether support
   received this request" with "Refresh your requests" before any deliberate resend (component- and
   unit-tested; DECISIONS 41); both with a copyable redacted summary, never a receipt claim; `GET /v1/support/tickets` lists the account's requests. `/release-notes` renders
-  `src/content/release-notes.json` honestly (pre-release, no device verification). The Download page's
-  official Windows path reads "not yet published".
+  `src/content/release-notes.json` honestly (no device verification claimed). The Download page's
+  official Windows path reads "not yet published" until `src/content/windows-release.json` and
+  `windows-release.sig` hold a signed release (`src/content/windowsRelease.ts`); since 2026-11-13 they hold
+  DoMe for Windows 0.1.0's, so a build of this commit offers that download once deployed. The home page's Windows
+  button and the line under it, every public page's footer, the demo page's closing line, the home page's YouTube
+  card and the FAQ's YouTube answer follow the same release (`src/content/windowsAppStatus.ts`): "not published
+  yet" only for the placeholder, then the version as a free beta, without YouTube control while the release has
+  no browser add-on. Tests render both states through a pass-through mock of `windows-release.json`
+  (`test/helpers/committedRelease.ts`).
 - **Upgrade experience** (component-tested): no upgrade copy, modal or banner on Dashboard, Remote,
   Touchpad, Devices, Health or the shell (online or offline); Routines and Custom remotes (deliberate
   selections from More) show one dismissible `ProExplanation` naming the benefit and never a
@@ -677,8 +684,8 @@ compose draft never leaks into the live field), `health` (PC input session owned
 another controller), `support` (submission failure classification), `NowPlaying`, `PowerConfirmation`,
 `SupportPage` (201 reference, 4xx "Not sent", 5xx / unreadable 201 / network "Not confirmed" with a
 list refresh and no resend, signed-out), `UpgradeAndHealth`
-(no upgrade copy on Free flows, dismissible Pro explanation, download not published, release notes,
-Health page layers/details/retries/walkthrough). Expectations updated for 1.1: `pairing.test.ts`
+(no upgrade copy on Free flows, dismissible Pro explanation, the Download page before a release and with the
+committed DoMe for Windows 0.1.0, release notes, Health page layers/details/retries/walkthrough). Expectations updated for 1.1: `pairing.test.ts`
 (default capability list now includes pointer/keyboard), `Dashboard.test.tsx` (the PC name also
 appears in the Now Playing panel), and the `hello_ack`/agent `protocol_version` fixtures in
 `test/helpers/harness.ts`, `relay.test.ts`, `runtime.test.ts`, `protocol-parity.test.ts` and `api.test.ts` now say

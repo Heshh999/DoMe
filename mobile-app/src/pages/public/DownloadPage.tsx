@@ -1,7 +1,8 @@
 /**
  * Download page. The button stays disabled with honest copy until a signed installer exists; then it is the
  * real download of the release named in src/content/windows-release.json (see windowsRelease.ts for where
- * that file comes from and the signature test that allows the button).
+ * that file comes from and the signature test that allows the button), with what that version leaves out and
+ * what it was tested on. The first published release is DoMe for Windows 0.1.0 (2026-11-13), a free beta.
  */
 import { Link } from "react-router";
 
@@ -16,11 +17,32 @@ import { PublicIcon } from "./publicIcons.tsx";
 export const SMART_APP_CONTROL_NOTE =
   "Not yet verified on Windows 11 PCs with Smart App Control on; if it blocks DoMe, do not turn it off. See the release page for what to do.";
 
-const NEEDS: Array<{ icon: IconName; title: string; text: string }> = [
-  { icon: "pc", title: "Windows 10 or 11, 64-bit", text: "Windows 10 (version 1809 or later) or Windows 11, 64-bit, signed in to a normal user account (no administrator rights for everyday use). The agent runs inside your signed-in session; it does not run as a service." },
-  { icon: "youtube", title: "Chrome or Edge, for YouTube control", text: "Chrome or Edge (current stable release) with the DoMe extension if you want YouTube control. The extension will be published through the browser stores; developer loading is only for development. Windows media, volume, apps, lock, power and the touchpad/keyboard work without it." },
-  { icon: "shield", title: "Internet access, nothing else", text: "Internet access from the PC. No port forwarding, VPN or extra software." },
-];
+/**
+ * The published program includes Screen view (beta), but the server keeps it switched off for accounts, so the page
+ * says so even though the GitHub release notes list it as included. Remove it when Screen view is switched on, with
+ * SCREEN_VIEW_STATUS ("Coming") in content/plans.ts.
+ */
+export const SCREEN_VIEW_NOTE = "The program includes Screen view (beta), but it is not switched on for DoMe accounts yet, so it cannot be used.";
+
+/**
+ * What the published release was tested on: the release run's install, upgrade, uninstall and signature checks on
+ * GitHub's Windows Server runner, never a Windows 10/11 PC or a standard user (the GitHub release notes say the same).
+ * Change it only when a release has device evidence, as src/content/release-notes.json records it.
+ */
+export const TESTED_NOTE =
+  "This version is a free beta, tested so far only on GitHub’s Windows Server test machine (an administrator account with UAC off): install, upgrade, uninstall and the signatures. It has not yet been tested on a Windows 10 or 11 PC or by a standard user.";
+
+type Need = { icon: IconName; title: string; text: string };
+
+const WINDOWS_NEED: Need = { icon: "pc", title: "Windows 10 or 11, 64-bit", text: "Windows 10 (version 1809 or later) or Windows 11, 64-bit, signed in to a normal user account (no administrator rights for everyday use). The agent runs inside your signed-in session; it does not run as a service." };
+const YOUTUBE_NEED: Need = { icon: "youtube", title: "Chrome or Edge, for YouTube control", text: "Chrome or Edge (current stable release) with the DoMe extension if you want YouTube control. The extension will be published through the browser stores; developer loading is only for development. Windows media, volume, apps, lock, power and the touchpad/keyboard work without it." };
+/** A published release without the browser add-on: nothing to set up in a browser for this version. */
+const YOUTUBE_NOT_IN_VERSION: Need = { icon: "youtube", title: "Chrome or Edge, for YouTube control (not in this version)", text: "YouTube control in Chrome or Edge is not part of this version: it needs the DoMe extension, which is not in the Chrome or Edge stores yet. Windows media, volume, apps, lock, power and the touchpad/keyboard work without it." };
+const INTERNET_NEED: Need = { icon: "shield", title: "Internet access, nothing else", text: "Internet access from the PC. No port forwarding, VPN or extra software." };
+
+function needs(release: WindowsRelease | null): Need[] {
+  return [WINDOWS_NEED, release && !release.browserAddon ? YOUTUBE_NOT_IN_VERSION : YOUTUBE_NEED, INTERNET_NEED];
+}
 
 const IPHONE_STEPS = ["Open this site in Safari and sign in.", "Tap Share, then “Add to Home Screen”, then Add.", "Open DoMe from the home screen and pair it with your PC under Devices."];
 
@@ -79,6 +101,12 @@ function Published({ release }: { release: WindowsRelease }) {
         {SMART_APP_CONTROL_NOTE}
       </p>
       {release.browserAddon ? null : <p className="mt-3 text-[15px] leading-relaxed text-text-muted">This version does not include YouTube control in Chrome or Edge; everything else in DoMe is included.</p>}
+      <p className="mt-3 text-[15px] leading-relaxed text-text-muted" data-testid="screen-view-note">
+        {SCREEN_VIEW_NOTE}
+      </p>
+      <p className="mt-3 text-[15px] leading-relaxed text-text-muted" data-testid="tested-note">
+        {TESTED_NOTE}
+      </p>
       <p className="mt-3 text-[15px] text-text-muted">
         See the{" "}
         <a href={release.releasePage} className={LINK_CLASS} rel="noopener noreferrer">
@@ -121,10 +149,10 @@ export function DownloadPage() {
 
       <section aria-labelledby="needs" className="mt-14">
         <h2 id="needs" className="text-title font-semibold">
-          What the app will need
+          {release ? "What the app needs" : "What the app will need"}
         </h2>
         <ul className="dome-hairlines mt-4">
-          {NEEDS.map((n) => (
+          {needs(release).map((n) => (
             <li key={n.title} className="flex gap-4 py-5">
               <span className="dome-well dome-well-sm">
                 <Icon name={n.icon} size={18} />

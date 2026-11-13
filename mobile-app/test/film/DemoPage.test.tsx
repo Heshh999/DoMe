@@ -1,15 +1,22 @@
 /**
- * /demo: the public page around the film, its query flags, and the route itself.
+ * /demo: the public page around the film, its query flags, and the route itself. Its closing line follows the committed
+ * release (DoMe for Windows 0.1.0, a free beta without YouTube control) and the placeholder before it.
  */
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 import { CONCEPT_NOTE, SCENES } from "../../src/components/film/timeline.ts";
 import { DemoPage } from "../../src/pages/public/DemoPage.tsx";
+import { committedRelease } from "../helpers/committedRelease.ts";
+
+// the real committed release, or the placeholder the site carried before it while `release.placeholder` is set
+const release = vi.hoisted(() => ({ placeholder: false }));
+vi.mock("../../src/content/windows-release.json", async (importOriginal) => (await import("../helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
 
 afterEach(() => {
   delete window.__domeFilm;
+  release.placeholder = false;
 });
 
 function at(url: string) {
@@ -43,7 +50,18 @@ describe("DemoPage", () => {
       expect(card.querySelector("li:nth-child(3)")).toHaveTextContent(/^Screen view: .*Coming$/);
     }
     expect(screen.getByText(/Nothing is recorded; the AI never sees your screen/)).toBeInTheDocument();
-    expect(screen.getByText(/the Windows app is not published yet/)).toBeInTheDocument();
+    // the Windows app's status: the committed release, a free beta without YouTube control in Chrome or Edge
+    const r = committedRelease();
+    expect(r.browserAddon).toBe(false);
+    expect(screen.getByText(new RegExp(`DoMe for Windows ${r.version.replace(/\./g, "\\.")} is a free beta without YouTube control in Chrome or Edge: see Download for what it includes\\.$`))).toBeInTheDocument();
+    expect(screen.queryByText(/not published yet/)).toBeNull();
+  });
+
+  it("before a release, the closing line says the Windows app is not published yet", () => {
+    release.placeholder = true;
+    at("/demo");
+    expect(screen.getByText(/DoMe is in development: the Windows app is not published yet\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/free beta/)).toBeNull();
   });
 
   it("?scene=N&paused=1 renders that scene's representative still, not playing", () => {

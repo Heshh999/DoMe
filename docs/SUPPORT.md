@@ -192,7 +192,7 @@ The public page `/release-notes` renders `mobile-app/src/content/release-notes.j
 (`title`, `detail`, `workaround`). Rules for keeping it honest:
 
 1. **Every release gets an entry before it is published**, with `state` saying exactly what it is
-   (today: "in development — not published"). List only changes that exist in that build.
+   (whether it is published, and on which channel). List only changes that exist in that build.
 2. **`verified` lists only evidence that exists**, with its kind (unit, integration, Windows device,
    iPhone, load). Anything without device evidence goes to `not_verified`. Never move an item to
    `verified` because tests on a simulator passed.

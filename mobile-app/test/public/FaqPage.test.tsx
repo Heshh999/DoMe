@@ -1,6 +1,7 @@
 /**
  * The FAQ keeps every honest answer and adds the AI butler, limits, Screen view, screen/speech privacy, plans,
- * top-ups and cancelling. The screen answers say "no screenshots" and the speech answer says "never records".
+ * top-ups and cancelling. The screen answers say "no screenshots" and the speech answer says "never records". The
+ * YouTube answer follows the release the Download page offers: the committed DoMe for Windows 0.1.0 has no browser add-on.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -11,8 +12,11 @@ import type { rest } from "@dome/protocol";
 
 import { FAQ_GROUPS, faqGroups } from "../../src/content/faq.tsx";
 import { api, ApiError } from "../../src/lib/api.ts";
+import { youtubeNotAvailable } from "../../src/content/windowsAppStatus.ts";
+import { getWindowsRelease } from "../../src/content/windowsRelease.ts";
 import type { BillingAvailability } from "../../src/lib/useBillingAvailability.ts";
 import { FaqPage } from "../../src/pages/public/FaqPage.tsx";
+import { committedRelease } from "../helpers/committedRelease.ts";
 
 let plans: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
@@ -148,6 +152,30 @@ describe("FAQ", () => {
     );
     await waitFor(() => expect(container.textContent).toContain("Yes: Pro can be bought from Billing"));
     expect(container.textContent).not.toContain("nothing can be bought in this version");
+  });
+
+  it("answers the YouTube question from the offered release: not in DoMe for Windows 0.1.0, which has no browser add-on", () => {
+    const q = "Can DoMe control YouTube when the browser is in the background?";
+    const youtubeAnswer = (youtube: string | null) => faqGroups(null, youtube).flatMap((g) => g.entries).find((e) => e.q === q)!.a as string;
+    const r = committedRelease();
+    expect(r.browserAddon).toBe(false);
+    const committed = `Not yet. It needs the DoMe extension for Chrome or Edge, which is not in the Chrome or Edge stores yet, so DoMe for Windows ${r.version} does not include it. When the extension is available, it will control the player in the chosen tab directly, so another window can have focus, and it will only ask for access to YouTube pages.`;
+    expect(answerFor(null, q)).toBe(committed);
+    // the rendered page says the same
+    const { container } = render(
+      <MemoryRouter initialEntries={["/faq"]}>
+        <FaqPage />
+      </MemoryRouter>,
+    );
+    const details = Array.from(container.querySelectorAll("details")).find((d) => d.querySelector("summary")?.textContent?.includes(q))!;
+    expect(details.textContent).toContain(committed);
+    expect(details.textContent).not.toMatch(/Yes\./);
+    // before a release: not yet, without a version
+    expect(youtubeAnswer(youtubeNotAvailable(null))).toMatch(/^Not yet\. It needs the DoMe extension for Chrome or Edge, which is not in the Chrome or Edge stores yet\. When/);
+    // a release with the browser add-on: yes
+    const withAddon = { ...getWindowsRelease()!, version: "0.2.0", browserAddon: true };
+    expect(youtubeNotAvailable(withAddon)).toBeNull();
+    expect(youtubeAnswer(youtubeNotAvailable(withAddon))).toMatch(/^Yes\. The DoMe browser extension in Chrome or Edge on the PC controls the player/);
   });
 });
 

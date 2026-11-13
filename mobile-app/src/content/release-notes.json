@@ -1,15 +1,39 @@
 {
-  "$comment": "Public release history and known issues (spec §11A). Every entry is honest about verification: nothing in this build is Windows-device-tested or iPhone-tested. Rendered by src/pages/public/ReleaseNotesPage.tsx.",
+  "$comment": "Public release history and known issues (spec §11A, docs/SUPPORT.md §8). DoMe for Windows 0.1.0 is published as a free beta (GitHub release v0.1.0, 2026-11-13, the release in src/content/windows-release.json); nothing in it is Windows-device-tested or iPhone-tested, and Screen view is in the program but switched off for accounts on domeremote.com. Every entry is honest about verification. Rendered by src/pages/public/ReleaseNotesPage.tsx.",
   "status": {
-    "channel": "pre-release",
-    "headline": "DoMe is a pre-release build. There is no public Windows installer yet and no customer-facing release has been verified on real devices.",
-    "verification": "Automated tests run on every component (unit and integration, with simulated Windows and phone behavior). Real iPhone and real Windows PC checks are listed as pending below; nothing on this page claims they passed."
+    "channel": "beta",
+    "headline": "DoMe for Windows 0.1.0 is published as a free beta. This release has not been verified on a Windows 10 or 11 PC or on an iPhone yet.",
+    "verification": "Automated tests run on every component (unit and integration, with simulated Windows and phone behavior), and the signed Windows installer was tested on GitHub’s Windows Server test machine. Real iPhone and real Windows PC checks are listed as pending below; nothing on this page claims they passed."
   },
   "releases": [
     {
-      "version": "0.1.0 (protocol 1.1)",
+      "version": "DoMe for Windows 0.1.0",
+      "date": "2026-11-13",
+      "state": "published — free beta",
+      "changes": [
+        "The first official download of DoMe for Windows: DoMe-Setup-0.1.0.exe, with its SHA-256, on the Download page and the GitHub release page. It is signed for Windows by Justin Gaskins through Azure Artifact Signing and installs for your Windows account only.",
+        "In this version: the touchpad and keyboard (with the permissions you grant each phone on the PC), Windows media and volume, approved apps, Lock, confirmed Sleep, Restart and Shutdown, and pairing phones by QR code with approval on the PC.",
+        "Not in this version: YouTube control in Chrome or Edge. The DoMe browser extension is not in the Chrome or Edge stores yet, and Setup says so.",
+        "Screen view (beta) is in the program, but it is not switched on for DoMe accounts yet, so it cannot be used.",
+        "Free: nothing can be bought yet. The licence terms Setup shows are still a draft, like this site’s Privacy notice and Terms of service."
+      ],
+      "verified": [
+        "Integration-tested on GitHub’s Windows Server test machine (an administrator account with UAC off): install, upgrade and uninstall of the signed Setup, and the signatures on Setup and the installed program.",
+        "Unit-tested on GitHub’s Windows test machine: the PC app’s automated tests.",
+        "Every file on the GitHub release was compared with the checked build (SHA-256) before the release was published.",
+        "The version information behind the Download button is signed with DoMe’s update key, and this site checks that signature when it is built."
+      ],
+      "not_verified": [
+        "Install, upgrade and uninstall on a Windows 10 or 11 PC, and by a standard (non-administrator) user.",
+        "Windows 11 PCs with Smart App Control on.",
+        "Screen view on any device.",
+        "Everything listed as not verified for the builds below: no check on a real Windows PC or a real iPhone has been recorded for this release."
+      ]
+    },
+    {
+      "version": "Development build (protocol 1.1)",
       "date": "2026-10",
-      "state": "in development — not published",
+      "state": "development build — not published",
       "changes": [
         "Free touchpad and keyboard: cursor movement, clicks, double click, right click, scrolling, explicit Drag mode, literal typing with a Compose and Send fallback, tested shortcuts (Ctrl+A/C/V/Z, Ctrl+L in browsers).",
         "Explicit, independently revocable touchpad and keyboard permissions per phone, granted by the PC owner on the PC; existing pairings do not receive them automatically.",
@@ -23,19 +47,44 @@
       "not_verified": ["Real iPhone Safari / installed PWA gestures, keyboard varieties (IME, autocorrect, dictation, emoji), rotation and backgrounding.", "Real Windows input injection, multi-monitor and mixed-DPI behavior, lock screen and UAC restrictions.", "Network loss during a drag, key hold or text send on real devices.", "Installer, update and uninstall on Windows 10/11.", "Ask on a real iPhone: speech recognition, spoken replies and AI requests against the live AI service."]
     },
     {
-      "version": "0.1.0 (protocol 1.0)",
+      "version": "Internal build (protocol 1.0)",
       "date": "2026-10",
       "state": "internal build — not published",
-      "changes": ["YouTube control through the browser extension in a background tab, Windows media sessions and system volume, approved apps, Lock, confirmed Sleep/Restart/Shutdown.", "Pairing by QR code with local approval on the PC; per-phone signing keys; revocation."],
+      "changes": ["YouTube control through the browser extension in a background tab (not in the published DoMe for Windows 0.1.0), Windows media sessions and system volume, approved apps, Lock, confirmed Sleep/Restart/Shutdown.", "Pairing by QR code with local approval on the PC; per-phone signing keys; revocation."],
       "verified": ["Component test suites and an end-to-end relay-path test between the real services on one machine."],
       "not_verified": ["Any real-device scenario."]
     }
   ],
   "known_issues": [
     {
-      "title": "No official Windows download yet",
-      "detail": "The signed installer and update channel are not published. The Download page says so instead of offering a dead or unsigned link.",
-      "workaround": "None for customers; developers run the agent from source as described in the repository."
+      "title": "Windows may warn about DoMe while this version is new",
+      "detail": "DoMe for Windows 0.1.0 is signed by Justin Gaskins, but Windows may still show “Windows protected your PC” while this version is new.",
+      "workaround": "Check that the publisher the dialog names is Justin Gaskins before you continue. DoMe never asks you to turn off antivirus or other protection."
+    },
+    {
+      "title": "Not yet verified with Smart App Control",
+      "detail": "It has not been verified yet whether DoMe runs on a Windows 11 PC with Smart App Control on. It may be blocked there: only the DoMe programs, Setup and the uninstaller are signed, not the libraries that come with them.",
+      "workaround": "If Smart App Control blocks DoMe, do not turn Smart App Control off: Windows cannot switch it back on without resetting the PC. Tell us through Support instead."
+    },
+    {
+      "title": "No YouTube control in Chrome or Edge in this version",
+      "detail": "The DoMe browser extension is not in the Chrome or Edge stores yet, so DoMe for Windows 0.1.0 does not include YouTube control in Chrome or Edge.",
+      "workaround": "None in this version."
+    },
+    {
+      "title": "Screen view is not switched on yet",
+      "detail": "Screen view (beta) is in DoMe for Windows 0.1.0, and the GitHub release page lists it, but it is not switched on for DoMe accounts yet, so it cannot be used. It has not been verified on a device either.",
+      "workaround": "None yet."
+    },
+    {
+      "title": "Linking the PC to your account takes one command",
+      "detail": "DoMe’s menu has no “Link this PC” item yet. Until the PC is linked, the menu says “Not linked — run DoMe link”.",
+      "workaround": "Open Windows PowerShell (not as administrator), run & \"$env:LOCALAPPDATA\\Programs\\DoMe\\DoMe.exe\" link | Out-Host, then on the Link a PC page that opens, check the code, name the PC and click Link this PC."
+    },
+    {
+      "title": "DoMe for Windows does not check for updates yet",
+      "detail": "This version does not look for newer versions by itself.",
+      "workaround": "When the Download page lists a newer version, download it and run its Setup over the old one. Setup keeps your link, paired phones and settings."
     },
     {
       "title": "Double tap on the touchpad relies on Windows’ double-click timing",

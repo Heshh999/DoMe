@@ -1,7 +1,8 @@
 /**
  * Product explanation. No testimonials, counts, certifications or platform claims that are not verified. Also where a
  * sign-in that was refused or could not be finished lands (`?sign_in=<reason>`, `lib/signInProblem.ts`): the notice
- * for it sits above the hero.
+ * for it sits above the hero. The Windows button, the line under it and the YouTube card follow the release the Download
+ * page offers (content/windowsAppStatus.ts).
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -12,6 +13,7 @@ import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Notice } from "../../components/ui.tsx";
 import { FREE_SCREEN_VIEW_MINUTES, planById, SCREEN_VIEW_FAIR_USE, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { windowsAppStatus, youtubeNotAvailable } from "../../content/windowsAppStatus.ts";
 import { loginUrl } from "../../lib/api.ts";
 import { ACCOUNT_DELETED_HERE, SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, carriedAccountDeleted, carriedSignInProblem, carrySignInProblem, signInAgainOptions, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
 import { paidPlansLine, useBillingAvailability } from "../../lib/useBillingAvailability.ts";
@@ -35,6 +37,11 @@ const CAPABILITIES: Array<{ icon: IconName; title: string; text: string; status?
   { icon: "check", title: "Honest results", text: "Every control shows what the PC actually did. “Sent” is never shown as “done”." },
   { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. In development: Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window. ${SCREEN_VIEW_FAIR_USE}`, status: "Coming" },
 ];
+
+/** The capabilities, with the YouTube card saying why it is not available when the offered release leaves it out. */
+function capabilities(youtube: string | null): typeof CAPABILITIES {
+  return youtube ? CAPABILITIES.map((c) => (c.icon === "youtube" ? { ...c, text: `${c.text} ${youtube}` } : c)) : CAPABILITIES;
+}
 
 const TRUST: Array<{ title: string; text: React.ReactNode }> = [
   { title: "Nothing listens on your PC", text: "It opens one outbound, authenticated connection to the DoMe service." },
@@ -246,6 +253,7 @@ function SignInNotice() {
 
 export function LandingPage() {
   const availability = useBillingAvailability();
+  const windows = windowsAppStatus();
   return (
     <div>
       <SignInNotice />
@@ -269,10 +277,12 @@ export function LandingPage() {
               </Link>
               <Link to="/download" data-testid="hero-windows" className="tap dome-press inline-flex w-full items-center justify-center gap-2 rounded-full sm:whitespace-nowrap border border-border-strong bg-bg-elevated px-7 text-base font-semibold hover:bg-surface sm:w-auto sm:min-h-[52px]">
                 <Icon name="pc" size={18} />
-                Windows app · coming soon
+                {windows.heroButton}
               </Link>
             </div>
-            <p data-testid="hero-caveat" className="mt-4 text-xs text-text-faint">DoMe is in development. The Windows app is not published yet: see Download for its status.</p>
+            <p data-testid="hero-caveat" className="mt-4 text-xs text-text-faint">
+              {windows.heroCaveat}
+            </p>
           </div>
           <PhonePicture />
         </div>
@@ -319,7 +329,7 @@ export function LandingPage() {
           Everything within reach.
         </h2>
         <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {CAPABILITIES.map((c) =>
+          {capabilities(youtubeNotAvailable()).map((c) =>
             c.status ? (
               // the one that is still being built: a full-width row with its status chip, never dressed as available
               <li key={c.title} className="dome-card flex gap-4 p-5 sm:col-span-2 sm:items-center sm:p-6 lg:col-span-3">

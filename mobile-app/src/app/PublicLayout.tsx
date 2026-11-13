@@ -1,7 +1,8 @@
 /**
  * Public website chrome: a translucent header (wordmark, site links with the current page underlined,
  * the Light / Auto / Dark switch, "Open app"; on phones the links and the switch sit in a menu under the
- * header), and a footer with the full DoMe REMOTE lockup, every page and the switch again. The home,
+ * header), and a footer with the full DoMe REMOTE lockup, every page, the switch again and the Windows app's status
+ * (content/windowsAppStatus.ts: "not published yet" until a release is committed, then that release). The home,
  * pricing, FAQ and demo pages lay out their own full-width sections; every other page gets a reading column.
  * Page styles live in src/styles/public.css, scoped to `.dome-public` (styles.css is the design system).
  */
@@ -13,6 +14,7 @@ import { Wordmark } from "../components/brand.tsx";
 import { Icon } from "../components/icons.tsx";
 import { ThemeSwitch } from "../components/ThemeSwitch.tsx";
 import { FOOTER, NAV } from "../content/nav.ts";
+import { windowsAppStatus } from "../content/windowsAppStatus.ts";
 import { publicTitle, useDocumentTitle } from "./documentTitle.ts";
 
 /** Pages that draw their own full-width sections. */
@@ -137,7 +139,7 @@ export function PublicLayout() {
             <p>DoMe Remote · for Windows PCs and iPhone</p>
             <p className="inline-flex items-center gap-2">
               <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-coral" />
-              In development: the Windows app is not published yet.
+              {windowsAppStatus().footer}
             </p>
           </div>
         </div>
