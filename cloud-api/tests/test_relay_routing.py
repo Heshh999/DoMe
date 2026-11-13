@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import secrets
+import time
 import uuid
 from typing import Any
 
@@ -26,6 +27,7 @@ from dome_protocol.keys import b64url_encode
 from websockets.exceptions import InvalidStatus
 
 from tests.conftest import (
+    RECV_TIMEOUT,
     REGISTRY,
     AgentSim,
     Browser,
@@ -221,6 +223,19 @@ async def _fresh_account(env: Env) -> Browser:
     return b
 
 
+async def _rejection_reasons(browser: Browser, expected: set[str], timeout: float = RECV_TIMEOUT) -> set[str]:
+    """The reasons of the account's command_rejected security events, read again until they include ``expected`` or
+    ``timeout`` passes. The relay answers the phone first and writes the event after (router._reject), so a read made
+    as soon as the last result arrives can miss that one event."""
+    deadline = time.monotonic() + timeout
+    while True:
+        events = (await browser.get("/v1/account/security-events?limit=50"))["events"]
+        reasons = {e["detail"]["reason"] for e in events if e["kind"] == "command_rejected"}
+        if reasons >= expected or time.monotonic() > deadline:
+            return reasons
+        await asyncio.sleep(0.05)
+
+
 async def _expect_relay_failure(ctrl: ControllerSim, cid: str, code: str) -> dict[str, Any]:
     result = await ctrl.recv_type("result", command_id=cid)
     assert result["origin"] == "relay" and result["state"] == "failed" and result["error"]["code"] == code, result
@@ -266,17 +281,8 @@ async def test_rejection_rules_each_become_a_relay_result(
     cid = await paired.command(pc, "windows.lock")
     await _expect_relay_failure(paired, cid, "GRANT_MISSING")
     # every rejection is a security event
-    kinds = [
-        e
-        for e in (await alice.get("/v1/account/security-events?limit=50"))["events"]
-        if e["kind"] == "command_rejected"
-    ]
-    assert {e["detail"]["reason"] for e in kinds} >= {
-        "SIGNATURE_INVALID",
-        "CONTROLLER_MISMATCH",
-        "GRANT_MISSING",
-        "TARGET_PC_MISMATCH",
-    }
+    expected = {"SIGNATURE_INVALID", "CONTROLLER_MISMATCH", "GRANT_MISSING", "TARGET_PC_MISMATCH"}
+    assert await _rejection_reasons(alice, expected) >= expected
     await second.close()
 
 
