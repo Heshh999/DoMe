@@ -14,7 +14,7 @@ receive any of it are listed in `docs/legal/subprocessors.md`.
 Line numbers refer to commit 297f991, except those in the draft Privacy page
 (`mobile-app/src/pages/public/PrivacyPage.tsx`) and Terms (`mobile-app/src/pages/public/TermsPage.tsx`), which
 refer to the drafts as rewritten on 2026-11-12, the versions sent to counsel with this file, and except the
-citations re-pointed when account deletion and the clean-up were built (see "How this was checked").
+citations re-pointed when account deletion and the clean-up were built and on 2026-11-13 (see "How this was checked").
 
 Words used here:
 
@@ -23,8 +23,8 @@ Words used here:
 - **Extension**: the DoMe browser add-on that controls YouTube (`browser-extension`).
 - **Server**: DoMe's online service (`cloud-api`), hosted at Fly.io. It includes the **relay**, the part that
   passes messages between the phone and the PC.
-- **Database**: the server's database. Production would use Fly Managed Postgres (not created yet); staging
-  uses Neon.
+- **Database**: the server's database. Production uses Fly Managed Postgres (Basic plan, iad), in place since
+  the first production deploy on 2026-10-15 (`docs/PROGRESS.md:18-19,964`); staging uses Neon.
 - **Hash** (or fingerprint): a one-way code computed from a value; the value cannot be read back from it. A
   **keyed hash** is computed with a secret only the server holds. The same value always gives the same keyed
   hash, so it can still link events together. Whether a keyed hash of an address counts as personal
@@ -35,9 +35,24 @@ Words used here:
 Environments. Staging is public at https://staging.domeremote.com (`deploy/launch/environments.toml:24-28`).
 The repository calls staging "test data only", but it holds real sign-ups: at least the founder's own account and
 a test sign-up; whether anyone else has signed up is not recorded (`docs/DATA_RETENTION.md:55`;
-`docs/PROGRESS.md:7-10`; `docs/LAUNCH_SETUP.md:774-776`). The
-brief for this pack says production is not live yet. The repository is not consistent on this point
-(`docs/LAUNCH_SETUP.md:335-337` speaks of domeremote.com "today"), so the founder should confirm it.
+`docs/PROGRESS.md:121-124`; `docs/LAUNCH_SETUP.md:821-823`).
+Production is live at https://domeremote.com. Its first deploy (commit 7a590ad) ran on 2026-10-15
+(`docs/PROGRESS.md:18-19`; [GitHub Actions Deploy run on commit 7a590ad, 2026-10-15]) on Fly.io, with Fly Managed
+Postgres in iad, and sign-in works there (`docs/PROGRESS.md:962-966`). It holds real accounts: at least the
+founder's own. The founder linked their Windows PC and paired an iPhone there on 2026-10-16
+(`docs/PROGRESS.md:968-970`); the PC was pointed at staging for the device rounds from 2026-10-26
+(`docs/ACCEPTANCE.md:523`; `docs/HANDOFF.md:416-420`). Whether anyone else has signed up is not recorded
+(`docs/PROGRESS.md:22-23`). From 2026-10-20 it ran commit 35a203f [GitHub Actions Deploy run 39464803237,
+2026-10-20], which did not refuse unconfirmed emails and did not have self-serve account deletion or the hourly
+clean-up described below (`docs/PROGRESS.md:29-32`). On 2026-11-13 it was updated to commit bf83141, which has
+them [GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:33-42`; the features themselves are
+cloud-api DECISIONS #118-#123). After the update the founder signed in there, and Settings ends with Delete
+account [founder-reported 2026-11-13] (`docs/PROGRESS.md:43-46`). No account deletion has been tried there yet,
+and nothing reports the clean-up's first pass there yet (`docs/PROGRESS.md:47-49`). Billing is off in production
+(`docs/LAUNCH_SETUP.md:375-378`; `docs/PROGRESS.md:29-32`; [GitHub Actions Deploy run 43508425555, 2026-11-13]),
+and so is Screen view (`docs/LAUNCH_SETUP.md:830-833`; [GitHub Actions Deploy run 43508425555, 2026-11-13]). Both sites sign in through one
+Auth0 tenant, each with its own application (`cloud-api/DECISIONS.md:1014-1025`); their databases are separate
+("Database" above).
 
 ## Summary for counsel
 
@@ -55,7 +70,7 @@ brief for this pack says production is not live yet. The repository is not consi
    direct path exists, an outside relay company (Cloudflare) carries the encrypted stream and sees the devices'
    network addresses, times and data amounts (sections 2 and 6).
 5. The AI assistant is switched off by default, and no deployment sets its provider key
-   (`cloud-api/dome_api/settings.py:153`; `docs/LAUNCH_SETUP.md:724`). When it is on, the words of a request go
+   (`cloud-api/dome_api/settings.py:153`; `docs/LAUNCH_SETUP.md:770`). When it is on, the words of a request go
    to Anthropic through the server, and DoMe stores none of them (sections 2 and 6).
 6. An hourly clean-up deletes old records after most of the stated periods, and a person can delete their own
    account in the app; the account is then erased 30 days later. Both are built and tested with automated tests
@@ -162,7 +177,7 @@ removes the program but deletes this data only if the person answers Yes, or a s
 | YouTube search words: placed only in the search address of youtube.com/results, in the person's own browser | Run a search the person asked for | The person's browser sends it to YouTube | DoMe keeps no copy (the server keeps only the command's hash) | YouTube | `browser-extension/src/shared/youtubeUrl.ts:44-53`; `shared/protocol/version.json:70` |
 
 The extension is not published on the Chrome Web Store or Edge Add-ons; it is loaded by hand for development
-(`docs/PRODUCT_AND_PLANS.md:165`; `docs/WINDOWS_INSTALL.md:737`).
+(`docs/PRODUCT_AND_PLANS.md:167`; `docs/WINDOWS_INSTALL.md:737`).
 
 ## 6. What DoMe never collects or keeps
 
@@ -176,7 +191,7 @@ The extension is not published on the Chrome Web Store or Edge Add-ons; it is lo
 | Voice audio | DoMe never records or uploads audio; it receives text from the iPhone | `mobile-app/src/lib/speech.ts:5-7` |
 | Plain IP addresses | No IP column on sessions; keyed hashes only on some events and linking codes; request logs carry no IP; the masker hides addresses in free text | `cloud-api/dome_api/db/models.py:134-151`; `cloud-api/dome_api/security/tokens.py:41-44`; `cloud-api/dome_api/security/headers.py:120-149`; `cloud-api/dome_api/logging.py:209-215` |
 | Passwords | Typed on the sign-in provider's pages; the product never sees a password | `docs/adr/0001-foundational-decisions.md:36-39`; `docs/DATA_RETENTION.md:206-207` |
-| Card details | Typed only on Stripe's own pages; billing tables hold no card data or email | `docs/LAUNCH_SETUP.md:334-335`; `cloud-api/dome_api/db/models.py:384-386` |
+| Card details | Typed only on Stripe's own pages; billing tables hold no card data or email | `docs/LAUNCH_SETUP.md:375-376`; `cloud-api/dome_api/db/models.py:384-386` |
 | Pairing codes | Only a hash on the server; on the phone the code is read once from the link, cleared from the address bar and discarded after use | `cloud-api/dome_api/db/models.py:303`; `docs/DATA_RETENTION.md:165` |
 | Command parameters, results, media titles | Not stored by the server (lifecycle and hashes only) | `cloud-api/dome_api/db/models.py:1-5,320-344` |
 | Raw payment notices from Stripe | Never stored; only a hash | `cloud-api/dome_api/db/models.py:424-425` |
@@ -226,7 +241,7 @@ The extension is not published on the Chrome Web Store or Edge Add-ons; it is lo
   (`cloud-api/dome_api/db/alembic/versions/0008_financial_records_outlive_accounts.py`). How long DoMe must keep
   them is for counsel to confirm; nothing deletes them yet. Stripe holds its own records.
 - **Backups and encryption at rest** for both databases, and production backup retention, are "not yet
-  verified". No restore has been rehearsed (`docs/DATA_RETENTION.md:53-58,113-115`; `docs/OPERATIONS.md:168-178,407-408`).
+  verified". No restore has been rehearsed (`docs/DATA_RETENTION.md:53-58,113-115`; `docs/OPERATIONS.md:168-178,408-409`).
 - **Operator access** is the founder's direct database access only, to be audited through the hosting provider's
   logs (`docs/DATA_RETENTION.md:46-49`).
 
@@ -244,9 +259,9 @@ listed here.
 | `docs/DATA_RETENTION.md:65` | PC row contents | Leaves out protocol versions and the plan-disabled time | `cloud-api/dome_api/db/models.py:181,186-188` |
 | `docs/DATA_RETENTION.md:68` | Linking codes hold a "SHA-256 of requester IP" | It is a keyed hash | `cloud-api/dome_api/routes/agent_link.py:62`; `cloud-api/dome_api/security/tokens.py:41-44` |
 | `docs/DATA_RETENTION.md` (whole file) | — | No rows for the PC files `input_holds.json`, `update-check.json`, `downloads/`, `native-host.log`, lock and socket files; the PC diagnostics' hardware inventory; most phone storage keys | Sections 1, 3 and 4 above |
-| `docs/DATA_RETENTION.md:55`; `docs/OPERATIONS.md:172` | Staging holds test data only | Staging holds real sign-ups (at least the founder's own account and a test sign-up); whether anyone else has signed up is not recorded | `docs/PROGRESS.md:7-10`; `docs/LAUNCH_SETUP.md:774-776` |
+| `docs/DATA_RETENTION.md:55`; `docs/OPERATIONS.md:172` | Staging holds test data only | Staging holds real sign-ups (at least the founder's own account and a test sign-up); whether anyone else has signed up is not recorded | `docs/PROGRESS.md:121-124`; `docs/LAUNCH_SETUP.md:821-823` |
 | `docs/design/assistant.md:1606` (draft consent text) | Counts are kept "to apply your monthly allowance" | The app's own consent sheet says "your allowance", and the code uses rolling 5-hour and weekly windows | `mobile-app/src/components/AssistantConsentSheet.tsx:34`; `cloud-api/KNOWN_ISSUES.md:87-90` |
-| `docs/PRODUCT_AND_PLANS.md:31` | Lists "no screen capture" as a principle | Screen view (a live picture of the PC's screen) is built and switched on in staging | `docs/LAUNCH_SETUP.md:492-499,514-516` |
+| `docs/PRODUCT_AND_PLANS.md:33` | Lists "no screen capture" as a principle | Screen view (a live picture of the PC's screen) is built and switched on in staging | `docs/LAUNCH_SETUP.md:533-540,555-557` |
 
 ## 9. Questions for counsel about this data
 
@@ -292,3 +307,23 @@ tree. Every citation of `docs/DATA_RETENTION.md`, `cloud-api/dome_api/db/models.
 `mobile-app/src/lib/signInProblem.ts` was re-pointed to the changed files by matching the cited text. Citations of
 other files changed in the same round (for example `cloud-api/KNOWN_ISSUES.md`, `docs/OPERATIONS.md` and the public
 pages other than the Privacy and Terms drafts) were not all re-checked and may still give the lines of commit 297f991.
+
+On 2026-11-13 the statements on production were corrected. This file had said that production was not live and
+that its database was not created yet; production has been live since 2026-10-15 ("Environments" above). Those
+statements were rewritten from `docs/PROGRESS.md` and the record of the production Deploy of 2026-10-20 [GitHub
+Actions Deploy run 39464803237, 2026-10-20]. Every citation of `docs/PROGRESS.md` and `docs/LAUNCH_SETUP.md`,
+which changed that day, was re-pointed to the changed files by matching the cited text (the citations of
+`docs/PROGRESS.md` had still given the lines of commit 297f991), and the citation of `docs/OPERATIONS.md`
+section 12 now names its backup and restore lines. The same script confirmed again that every cited file exists
+and every cited line is inside it. After a review later that day, each go-live date also cites the entry that states
+it (`docs/PROGRESS.md:18-19`), the founder's devices are given as a dated event, and every citation into a file
+changed by that review was re-pointed again.
+
+Later on 2026-11-13 production was updated to commit bf83141, and "Environments" above now says so instead of
+"being updated". That paragraph was rewritten from the records of that day's staging and production Deploys
+[GitHub Actions Deploy run 43408148197, 2026-11-13; GitHub Actions Deploy run 43508425555, 2026-11-13] and the
+founder's check after the update [founder-reported 2026-11-13]. The update cites `docs/PROGRESS.md:33-42`, the
+founder's check `docs/PROGRESS.md:43-46`, and what is not yet confirmed on production `docs/PROGRESS.md:47-49`.
+The top entry of `docs/PROGRESS.md` grew by 14 lines, so every citation of it past line 41 was moved down by 14
+and re-read against the cited text. The same script confirmed again that every cited file exists and every cited
+line is inside it.

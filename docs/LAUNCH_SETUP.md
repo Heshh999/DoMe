@@ -4,13 +4,16 @@ This guide takes you from "accounts not created" to "DoMe running at https://dom
 never type a command. You create accounts, paste values into settings pages, and press one button on
 GitHub called **Deploy**.
 
-> **Honest status (2026-10-14).** The Deploy button and everything behind it are written and tested
-> against stand-ins, but **have never run against the real Fly.io, Neon, Auth0 or Cloudflare**. Your
-> first staging run is the real test. Each run ends with a plain-English summary that says what happened
-> and what to click next. The vendor screens below come from each vendor's documentation, read on
-> 2026-10-13 (Neon's from its documentation as shown in search results on 2026-10-14). They are marked
-> *(per vendor docs, not yet exercised)* because nobody has clicked through them for DoMe yet, and
-> dashboards change. If a button has moved, look for the same words nearby.
+> **Status (2026-11-13).** Both environments run. Staging is at https://staging.domeremote.com.
+> Production has been live at https://domeremote.com since its first Deploy on 2026-10-15
+> (`docs/PROGRESS.md` 2026-10-16). On 2026-11-13 it was updated from commit 35a203f (2026-10-20) to bf83141
+> (GitHub Actions Deploy run 43508425555; section 11, "Updating production later"). Each run
+> ends with a plain-English summary that says what happened and what to click next. The vendor screens
+> below come from each vendor's documentation, read on 2026-10-13 (Neon's on 2026-10-14). Sections you have
+> already clicked through for DoMe say so in their heading, with the date. Where only part of a section is
+> done (11A, 11B, 17), its heading says which part, and a dated **Status** box at its top says what happened.
+> Sections marked only *(per vendor docs, not yet exercised)* have not been done yet. Dashboards change: if a
+> button has moved, look for the same words nearby.
 
 Order: **staging first, then production.** Staging is a full copy at https://staging.domeremote.com,
 where you can try things safely. Production only accepts the exact version that already runs well on
@@ -21,8 +24,8 @@ staging.
 > - **Commit**: one saved version of DoMe's code, shown as a short code like `1a2b3c4d5e6f`.
 > - **Default branch**: the line of saved versions the Deploy button uses; today it is called
 >   `claude/stoic-heisenberg-txq6ja`.
-> - **Tenant** (Auth0): a separate Auth0 space with its own users. You need one for staging and one
->   for production.
+> - **Tenant** (Auth0): a separate Auth0 space with its own users. Auth0's free plan allows one, so
+>   staging and production share it, each with its own application (sections 5 and 10).
 > - **DNSSEC**: a free Cloudflare setting that stops others from faking your domain's addresses.
 > - **Neon**: the company that hosts staging's free database (section 6).
 > - **Direct connection string**: the database address Neon shows with **Connection pooling** turned
@@ -80,7 +83,7 @@ plans, keep the repository public. Ask an engineer before changing this.
 
 Names like `FLY_API_TOKEN` are labels, not secrets, so it is fine to write them anywhere.
 
-## 2. Fly.io: account and card *(per vendor docs, not yet exercised)*
+## 2. Fly.io: account and card *(done for staging and production by 2026-10-15)*
 
 1. Go to https://fly.io, sign up, and confirm your email.
 2. Open https://fly.io/dashboard/personal/billing and add a credit card **before the first deploy**.
@@ -92,7 +95,7 @@ Names like `FLY_API_TOKEN` are labels, not secrets, so it is fine to write them 
    Settings > Environments > each environment > **Environment variables** > **Add environment
    variable**; section 3 creates the environments).
 
-## 3. GitHub: two environments *(per vendor docs, not yet exercised)*
+## 3. GitHub: two environments *(done for staging and production by 2026-10-15)*
 
 **Do not press Deploy until both environments are set up as below.** The Deploy button checks these
 settings before every run and refuses to start while one is missing or wrong.
@@ -122,7 +125,7 @@ run someone else (or an AI assistant) started looks exactly the same as your own
 If the default branch is ever renamed (for example to `main`), these two rules must be changed to the
 new name, or every deploy is refused.
 
-## 4. Fly tokens into GitHub *(per vendor docs, not yet exercised)*
+## 4. Fly tokens into GitHub *(done for staging and production by 2026-10-15)*
 
 1. Open https://fly.io/dashboard/personal/tokens (on the Fly dashboard: your organization in the
    organization drop-down, then **Tokens**).
@@ -142,15 +145,13 @@ while a repository secret named `FLY_API_TOKEN`, `DOME_OIDC_CLIENT_SECRET`, `DAT
 `DOME_STRIPE_SECRET_KEY` or `DOME_STRIPE_WEBHOOK_SECRET` exists, and tells you to delete it and make a
 new one.
 
-## 5. Auth0 for staging *(per vendor docs, not yet exercised)*
+## 5. Auth0 for staging *(done by 2026-10-15)*
 
-1. Sign up at https://auth0.com. A **tenant** is a separate Auth0 space; you need one for staging and
-   one for production. In the Auth0 dashboard (https://manage.auth0.com), click the tenant name at the
-   top left > **Create tenant**. Tenant Domain `domeremote-staging`, Region **US**, Environment Tag
-   **Development** > **Create**. The tenant name cannot be changed later.
-   If sign-up already made a tenant with a random name (like `dev-abc123`), you may use it for staging
-   instead: set its Environment Tag to **Development** under **Settings > General**. Only the Domain
-   you paste in step 5 is different.
+1. Sign up at https://auth0.com. Sign-up makes one **tenant**, a separate Auth0 space with a random
+   name; DoMe's is `dev-d0zmb20xjn5fs1dq`, Region **US**. Auth0's free plan allows only this one tenant,
+   so staging and production share it, each with its own application (this section and section 10;
+   cloud-api DECISIONS #124). Because it also serves the real site, its Environment Tag (**Settings >
+   General**) is **Production**. The tenant name cannot be changed later.
 2. **Applications > Applications > Create Application**. Name it `DoMe staging`, choose **Regular Web
    Application**, and click **Create**.
 3. On the **Settings** tab:
@@ -161,9 +162,9 @@ new one.
    DoMe sends its secret that way.
 5. Paste into GitHub > Settings > Environments > **staging**:
    - Under **Environment variables** > **Add environment variable**:
-     - `DOME_OIDC_ISSUER` = the **Domain** shown on the Auth0 Settings tab (for example
-       `domeremote-staging.us.auth0.com`). Paste it as shown; the button accepts it with or without
-       `https://` and a trailing `/`.
+     - `DOME_OIDC_ISSUER` = the **Domain** shown on the Auth0 Settings tab (DoMe's is
+       `dev-d0zmb20xjn5fs1dq.us.auth0.com`, the same Domain production uses). Paste it as shown; the
+       button accepts it with or without `https://` and a trailing `/`.
      - `DOME_OIDC_CLIENT_ID` = the **Client ID**.
      - Optional: `VITE_DOME_SUPPORT_URL` = your support address, for example
        `mailto:support@domeremote.com` (it is shown publicly on the Support page).
@@ -174,10 +175,10 @@ Variables appear in the public run log. **Only the Client Secret is a secret.** 
 Variables. If you ever do, rotate it in Auth0 (Credentials > Rotate) and paste the new one under
 Secrets. The Deploy button refuses a Client ID that looks like a secret.
 
-## 6. Neon: staging's free database *(per vendor docs, not yet exercised)*
+## 6. Neon: staging's free database *(done by 2026-10-15)*
 
-Staging keeps its data in a free database at Neon, not at Fly. Production gets its own Fly database
-later (section 11). Neon's free plan, as of October 2026 (check https://neon.com/pricing):
+Staging keeps its data in a free database at Neon, not at Fly. Production has its own Fly database
+(Fly Managed Postgres, in place since the first production deploy on 2026-10-15, section 11). Neon's free plan, as of October 2026 (check https://neon.com/pricing):
 
 - 1 GB of storage per project (Neon raised it from 0.5 GB on 2026-10-02; some of Neon's pages may still
   say 0.5 GB). Either is plenty for testing.
@@ -223,7 +224,7 @@ you just want a new password: in Neon open the project > **Branches** > `product
 `DATABASE_URL` (in GitHub, click the pencil next to it, paste, **Update secret**), and run Deploy for
 staging. Every staging deploy stores the address from GitHub in Fly again, so nothing else is needed.
 
-## 7. First staging deploy
+## 7. First staging deploy *(done by 2026-10-15)*
 
 1. Open https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml and click **Run workflow** on
    the right.
@@ -244,7 +245,7 @@ staging. Every staging deploy stores the address from GitHub in Fly again, so no
    generated passwords. The run also checks that DoMe's sign-in page sends visitors to Auth0 with your
    settings and that PCs can reach DoMe through Fly; it cannot sign in for you.
 
-## 8. Cloudflare record for staging *(per vendor docs, not yet exercised)*
+## 8. Cloudflare record for staging *(done by 2026-10-15)*
 
 Do exactly what the summary's **What to do next** says. Normally that is:
 
@@ -255,7 +256,7 @@ Do exactly what the summary's **What to do next** says. Normally that is:
 3. Click the orange cloud so it turns **grey ("DNS only")**. This matters: with the orange cloud, Fly
    cannot issue the security certificate. Click **Save**.
 
-## 9. Check staging and sign in
+## 9. Check staging and sign in *(done by 2026-10-15)*
 
 1. About 10 minutes later, run **Deploy** again with **environment: staging** and **action:
    status**. Status needs no approval and changes nothing. A status run is red only when something is
@@ -270,16 +271,21 @@ Do exactly what the summary's **What to do next** says. Normally that is:
 5. Staging sleeps when nobody uses it. If a page takes a few seconds to appear after a quiet spell,
    that is the machine and the database waking up.
 
-## 10. Auth0 for production: a second app in the same tenant *(founder-run 2026-11-13)*
+## 10. Auth0 for production: a second app in the same tenant *(in use since 2026-10-15; settings re-checked 2026-11-13)*
 
-Auth0's free plan allows **one tenant**, and staging already uses it (`dev-d0zmb20xjn5fs1dq`, its
-Environment Tag set to **Production**). Production gets its **own application** inside that tenant
-instead of its own tenant (cloud-api DECISIONS #124). A paid Auth0 plan would allow a separate tenant;
-if you ever buy one, move **staging** out to it, not production, so real customers never move.
+Auth0's free plan allows **one tenant**, and DoMe has only ever had one: `dev-d0zmb20xjn5fs1dq` (Region
+US, Environment Tag **Production**). Staging signs in through the app `DoMe staging` (section 5). Since its
+first deploy on 2026-10-15, production has signed in through its **own application**, `DoMe`, in that same
+tenant (cloud-api DECISIONS #124). On 2026-11-13 you re-checked the `DoMe` app's settings against the steps
+below, found that the free plan cannot hold a second tenant, and chose to keep sharing rather than pay. A
+paid Auth0 plan would allow a separate tenant; if you ever buy one, move **staging** out to it, not
+production, so real customers never move. Use the steps below to check the `DoMe` app, or to make it again
+if it is ever deleted.
 
 1. In https://manage.auth0.com, open the tenant `dev-d0zmb20xjn5fs1dq` (tenant name at the top left).
-2. **Applications > Applications > Create Application**. Name `DoMe`, **Regular Web Application** >
-   **Create**. Skip the Quickstart page.
+2. **Applications > Applications**: the `DoMe` app (a **Regular Web Application**) is listed. Only if it
+   is ever missing: **Create Application**, Name `DoMe`, **Regular Web Application** > **Create**, and
+   skip the Quickstart page.
 3. **Settings** tab: **Allowed Callback URLs**: exactly `https://domeremote.com/v1/auth/callback`.
    Leave **Allowed Logout URLs** and **Allowed Web Origins** empty. **Save**.
 4. **Credentials** tab: **Authentication Method: Client Secret (Post)**. **Save**.
@@ -290,8 +296,9 @@ if you ever buy one, move **staging** out to it, not production, so real custome
    verification and password-reset emails for both apps. Check once that **Branding > Email Templates >
    Verification Email** has no **Redirect To** address that points at staging (empty is fine: Auth0 then
    shows its own "email verified" page).
-7. Paste into the GitHub **production** environment (https://github.com/Heshh999/DoMe/settings/environments
-   > **production**):
+7. Check that the GitHub **production** environment
+   (https://github.com/Heshh999/DoMe/settings/environments > **production**) holds the following. All of
+   it has been there since 2026-10-15 except `VITE_DOME_SUPPORT_URL`, which was there by the update of 2026-11-13.
    - **Environment variables**: `DOME_OIDC_ISSUER` = the **Domain** on the `DoMe` app's Settings tab (the
      same as staging's, `dev-d0zmb20xjn5fs1dq.us.auth0.com`); `DOME_OIDC_CLIENT_ID` = the `DoMe` app's
      **Client ID** (not the staging app's); `VITE_DOME_SUPPORT_URL` = `mailto:support@domeremote.com`.
@@ -309,6 +316,10 @@ Client Secret and its connections. DoMe checks that every ID token names its own
 production and the other way round.
 
 ## 11. Production deploy
+
+**The first production deploy was done on 2026-10-15** (commit 7a590ad; `docs/PROGRESS.md` 2026-10-16).
+Steps 1 to 5 below are for that first time only. To update production, use "Updating production later"
+at the end of this section.
 
 1. Open https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml > **Run workflow**:
    **environment: production**, **action: deploy**, tick **create the database** (about $41 a month
@@ -329,7 +340,37 @@ production and the other way round.
 5. Run **status** for production until it says **"Production is live at https://domeremote.com"**.
    Then sign up and sign in there yourself.
 
-## 11A. Stripe (payments) *(per vendor docs, not yet exercised)*
+### Updating production later
+
+Production already exists, so an update skips the first-time steps above. Before you start, check that
+the GitHub **production** environment holds everything in section 10, step 7. **Last done 2026-11-13**:
+production updated to commit bf83141 (GitHub Actions Deploy run 43508425555; `docs/PROGRESS.md` 2026-11-13).
+
+Since the update of 2026-11-13, https://domeremote.com also refuses anyone whose email is not confirmed;
+you signed in there afterwards (founder-reported, 2026-11-13). If you or a tester
+ever sees "Confirm your email first" there: in Auth0, **User Management > Users** (one list for staging and
+production), open that user and check that the email address shows as verified. If it does not, use
+**Forgot password?** on Auth0's sign-in page: setting a new password through the emailed link also confirms
+the address (section 16).
+
+1. Deploy **staging** first, at the same version: open
+   https://github.com/Heshh999/DoMe/actions/workflows/deploy.yml > **Run workflow**, **environment:
+   staging**, **action: deploy**. Approve it as in section 7 and wait until it finishes green.
+2. Right away, **Run workflow** again: **environment: production**, **action: deploy**, and leave
+   **create the database** **unticked**. Production's database already exists; that box is only for the
+   very first production deploy.
+3. The first job checks that staging runs this exact version and is healthy. If it does not, the run
+   stops before asking you for anything and says so. Deploy staging again, then production right after.
+4. When asked: **Review deployments** > tick **production** > **Approve and deploy**.
+   **Approve only a run you started yourself in the last few minutes.** If GitHub asks you to approve
+   any other run, click **Reject** and tell an engineer.
+5. Leave the Cloudflare records as they are: an update changes nothing in DNS.
+6. When the run finishes green, its summary's **Database** line should say "already connected,
+   unchanged". Open https://domeremote.com and sign in yourself. If your phone still shows the old app,
+   reload the page once. On 2026-11-13, **Settings** ending with **Delete account** showed that update had
+   arrived (founder-reported); the summary's healthz line names the commit production runs.
+
+## 11A. Stripe (payments) *(test mode done on staging 2026-10-26; live mode and production not yet)*
 
 Stripe is the company that takes card payments for DoMe. Card details are typed on Stripe's own pages and
 never reach DoMe. Until the values below are in place, DoMe sells nothing: the Billing page says
@@ -487,7 +528,7 @@ button stops before changing anything and says which name to fix.
    Stripe first. Deleting only some of the seven stops the next Deploy instead ("Payments are half set
    up").
 
-## 11B. Screen view (beta) *(per vendor docs, not yet exercised)*
+## 11B. Screen view (beta) *(done for staging 2026-11-09; production not yet)*
 
 Screen view shows your PC's screen on the phone. It is built (protocol 1.4) but **off**, and it stays
 off until you turn it on. Read this whole section before you do.
@@ -578,7 +619,11 @@ usage nears 1,000 GB, tell an engineer.
 To turn Screen view off again: set `DOME_SCREEN_VIEW_ENABLED` to `false` (or delete it) and run Deploy.
 Sessions that are running continue until they stop; nothing new starts.
 
-## 12. Redirects and DNSSEC *(per vendor docs, not yet exercised)*
+## 12. Redirects and DNSSEC *(domeremote.com: www redirect done, DNSSEC started 2026-10-16; domeremote.app part for later)*
+
+The `www` redirect for domeremote.com is in place, and DNSSEC was being turned on on 2026-10-16
+(`docs/PROGRESS.md` 2026-10-16). That it finished is not recorded: in the domeremote.com zone, check that
+**DNS > Settings** shows DNSSEC as active. domeremote.app stays parked for now, by your choice.
 
 Only `https://domeremote.com` serves DoMe. The other names send visitors there. All of this is in
 https://dash.cloudflare.com.
@@ -614,7 +659,8 @@ To stop **staging**: delete the app `domeremote-staging` on fly.io the same way.
 free; to remove it and its data too, open the project in Neon > **Settings** > **Delete project**.
 
 Then revoke the Fly tokens (Tokens page), delete the GitHub Environment (Settings > Environments), the
-Auth0 application or tenant, and the Cloudflare records.
+Auth0 application of that environment (`DoMe staging` or `DoMe`; delete the tenant only if you stop both,
+because staging and production share it), and the Cloudflare records.
 
 ## 14. If a run stops: what the summary means
 
@@ -674,7 +720,7 @@ yourself even when the headline says "needs an engineer".
 | Note: "Billing was switched **off** by this deploy" | Expected only if you deleted all seven Stripe values on purpose (section 11A, step 9). Existing subscriptions keep charging at Stripe: cancel them there, or put the seven values back and run Deploy. |
 | Note: "**Production is in Stripe Test mode**" | Expected while you try production in Test mode (section 11A, step 8). Keep it short; before Live mode, cancel every test subscription. |
 | "Staging and production would both use the Fly app ..." | GitHub > Settings > **Secrets and variables** > **Actions** > **Variables** tab: correct `FLY_STAGING_APP` or `FLY_PRODUCTION_APP` so that the two names differ (without these variables, staging is `domeremote-staging` and production is `domeremote-production`). Run Deploy again. Nothing was changed. |
-| "Production has no database yet ... about $41 a month" | If you agree, run Deploy for production again with **create the database** ticked. If the summary also says the production secret `DATABASE_URL` was not used, you can delete that secret. If it lists other Fly databases by name, do not tick: ask an engineer first. |
+| "Production has no database yet ... about $41 a month" | Production's database has existed since 2026-10-15, so a production run should not say this any more: if it does, do not tick; ask an engineer first. (Before the first production deploy only:) If you agree, run Deploy for production again with **create the database** ticked. If the summary also says the production secret `DATABASE_URL` was not used, you can delete that secret. If it lists other Fly databases by name, do not tick: ask an engineer first. |
 | "The **create the database** tick is for production only" | Nothing to do: staging uses its Neon database and nothing was created. |
 | "Staging is deployed but not healthy (HTTP 503)", "Staging's database at Neon is not answering", or a staging deploy says `/healthz` is HTTP 503 | Open https://console.neon.tech first. If the project says this month's compute-hours are used up, staging is down until the next month, and no new version can reach production until then (production itself keeps running). Either wait for the next month, or ask an engineer about switching Neon to a paid plan for the rest of the month (Neon bills by use with no monthly minimum; `docs/COST_MODEL.md` section 2). If you reset the Neon password, paste the new address into GitHub and run Deploy. Otherwise share the run link with an engineer. |
 | "Fly did not finish the deploy" (staging) | If the log says the database could not be reached, check Neon as in the row above: staging's migrations cannot run while its Neon database is paused. Otherwise share the run link with an engineer. |
@@ -684,9 +730,9 @@ yourself even when the headline says "needs an engineer".
 | "Fly is still preparing the database" | Nothing is broken. Run Deploy again in about 10 minutes. |
 | "Fly would not let this token create or list Managed Postgres databases" | Follow the dashboard steps in the summary: create the database on fly.io (name, region, plan, storage 10 GB and PostgreSQL 16 are listed; about $41 a month), then run Deploy again. |
 | "Production only receives a commit that staging already runs" | If the staging check in that summary shows `HTTP 503` or `database unavailable`, open https://console.neon.tech first (the HTTP 503 row above): a staging deploy cannot finish while Neon's compute-hours are used up. Otherwise run Deploy for **staging** again, wait for it to finish green, then run production right away. If anyone changed the code in between, staging must be deployed again first. |
-| "The sign-in provider ... could not be reached" or "names a different issuer" | Check `DOME_OIDC_ISSUER` is the Auth0 **Domain** of the right tenant. |
+| "The sign-in provider ... could not be reached" or "names a different issuer" | Check that `DOME_OIDC_ISSUER` is the Auth0 **Domain** exactly as Auth0 shows it (`dev-d0zmb20xjn5fs1dq.us.auth0.com`, the same for staging and production). |
 | "looks like the Client Secret, not the Client ID" | Rotate the secret in Auth0 (Credentials), put the new secret under **Secrets** and the Client ID under **Variables**. |
-| "... sign-in request carries a different client id" or "... sends visitors to ... instead of the sign-in provider" | Check that `DOME_OIDC_ISSUER` and `DOME_OIDC_CLIENT_ID` both come from the same Auth0 application of the right tenant. If they do, share the run link with an engineer. |
+| "... sign-in request carries a different client id" or "... sends visitors to ... instead of the sign-in provider" | Check that `DOME_OIDC_CLIENT_ID` is the Client ID of that environment's own Auth0 application (`DoMe staging` for staging, `DoMe` for production) and that `DOME_OIDC_ISSUER` is the tenant's Domain. If they are, share the run link with an engineer. |
 | "a WebSocket upgrade to /ws/agent ..." or "resolves, but unhealthy" | Share the run link with an engineer. |
 | "no DNS record yet" | Add the Cloudflare record(s) listed (sections 8 and 11). |
 | "DNS record is proxied by Cloudflare" | Click the record's orange cloud so it turns grey ("DNS only"). |
@@ -734,33 +780,34 @@ summary lists them again until an engineer closes them:
 - a rehearsal of recovering from a failed deploy;
 - an outside uptime monitor on https://domeremote.com/healthz that alerts you;
 - the database backup retention, written down in `docs/OPERATIONS.md`;
-- a support contact (`VITE_DOME_SUPPORT_URL`): **staging done 2026-11-13** (production: section 10 step 7). Cloudflare Email Routing on
+- ~~a support contact (`VITE_DOME_SUPPORT_URL`)~~ **done 2026-11-13, staging and production** (section 10 step 7). Cloudflare Email Routing on
   domeremote.com forwards `support@domeremote.com` to the founder's verified mailbox (routing rule
-  Active; catch-all left Disabled), and staging's variable is `mailto:support@domeremote.com` (the Deploy
-  of 63de996 built it in). Still open: the same variable in the **production** Environment. Until it is
-  set there, someone whose email confirmation link never arrived has no way to ask DoMe for a new one
+  Active; catch-all left Disabled), and both builds carry `mailto:support@domeremote.com` (staging: the Deploy
+  of 63de996; production: the Deploy of bf83141, GitHub Actions run 43508425555). Someone whose email
+  confirmation link never arrived can write there to ask for a new one
   (the next item);
 - ~~an Auth0 email provider~~ **done 2026-10-20**: Resend on the verified sending domain
   `mail.domeremote.com`, From `DoMe Remote <no-reply@mail.domeremote.com>`, connected under Auth0
   **Branding > Email Provider**; Auth0's test email arrived. Resend's free plan allows 3,000 emails a
-  month and at most 100 a day [vendor page, October 2026]. Still open: Google sign-in either off or with
-  your own keys;
+  month and at most 100 a day [vendor page, October 2026]. Google sign-in: off on the production app `DoMe`
+  (re-checked 2026-11-13, section 10 step 5); whether it is on for the `DoMe staging` app is not recorded;
 - ~~DoMe refuses sign-in for an unverified address~~ **done 2026-11-09**: DoMe now lets a new person in
   only after they click the link in Auth0's verification email; until then the DoMe home page tells them
-  "Confirm your email first". In Auth0, for both the staging and the production tenant, check that
+  "Confirm your email first". In Auth0 (the one tenant both apps use), check that
   **Branding > Email Templates > Verification Email** is turned on, so new users actually receive that link.
   This also applies to people who already have an account, you included: Auth0 sends the link only once, at
   sign-up, and it stops working after a few days; anyone who signed up before the email provider was
   connected (2026-10-20) may never have received it. So **before the first deploy that includes this
-  change**, in both tenants, open Auth0 **User Management > Users**, open your own user and each tester,
+  change** (for production, the update of 2026-11-13; it is done, so check now instead), open Auth0 **User
+  Management > Users** (one list for staging and production), open your own user and each tester,
   and check the email address shows as verified. If it does not, that address still has to be
   confirmed. Auth0's button for this is **Send Verification Email** on that user's page, but when it
   was tried on staging on 2026-11-12 it did not deliver (see below). So for now use **Forgot
   password?** on Auth0's sign-in page instead: on staging, setting a new password through the emailed
   link also confirmed the address. Tell the same to anyone who writes in that they see "Confirm your
-  email first". When the support contact (previous item) is set, that notice also says "Still nothing?
-  Contact support and we'll send a new link." (menu names per Auth0's dashboard: **Send Verification
-  Email** was tried on staging on 2026-11-12 and did not deliver, see below; the others are not yet
+  email first". With the support contact (previous item) set on both sites since 2026-11-13, that notice also
+  says "Still nothing? Contact support and we'll send a new link." (menu names per Auth0's dashboard: **Send
+  Verification Email** was tried on staging on 2026-11-12 and did not deliver, see below; the others are not yet
   exercised).
   **What happened on staging (founder-run, 2026-11-12):** the notice showed on your iPhone. **Send
   Verification Email** in the Auth0 dashboard said it was sent, but nothing reached Resend; the cause is
@@ -774,7 +821,9 @@ summary lists them again until an engineer closes them:
   dev-idp); not yet verified on your iPhone). **A new sign-up does get its link (founder-reported,
   2026-11-12):** a fresh test account received Auth0's verification email and confirmed it, so the
   sign-up email works; only the dashboard's resend button did not deliver;
-- signing in yourself on production (the button cannot test sign-in);
+- ~~signing in yourself on production~~ **done by 2026-10-16**: sign-in works on https://domeremote.com
+  (`docs/PROGRESS.md` 2026-10-16). The button still cannot test sign-in, so sign in again after every
+  production update;
 - branch protection with required review on the default branch, so that no code reaches the Deploy
   button without someone reading it first (an engineer sets this up; `docs/SECURITY.md` section 6).
 
@@ -784,7 +833,7 @@ counsel's answer on H.264, and the privacy notice naming the connection relay pr
 sub-processor (the Privacy page draft of 2026-11-12 names Cloudflare; it becomes final after counsel's
 review, `docs/legal/README.md`).
 
-## 17. Code signing and releases *(per vendor docs, not yet exercised)*
+## 17. Code signing and releases *(steps 1 to 6 done 2026-10-30; publishing not yet)*
 
 This section makes DoMe for Windows downloadable as a **signed** program: Windows then shows your name as
 the publisher instead of "Unknown publisher". Until you do it, domeremote.com/download keeps saying

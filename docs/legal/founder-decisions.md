@@ -7,7 +7,7 @@ repository. Line numbers in the Privacy and Terms drafts are those of 2026-11-12
 for the quoted text. Outside research is labelled with its source and date and has not been checked by a
 lawyer.
 
-**The DoMe repository on GitHub is public** (`docs/LAUNCH_SETUP.md:66-69`; `docs/SECURITY.md:312`): anyone can
+**The DoMe repository on GitHub is public** (`docs/LAUNCH_SETUP.md:69-72`; `docs/SECURITY.md:312`): anyone can
 read this folder. Fill in a downloaded copy of this file on your own computer (on github.com, open the file
 and use the "Download raw file" button). Do not add your answers, your address or the lawyer's replies to the
 repository.
@@ -25,10 +25,10 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
     copyright line, and Stripe needs business details before it takes real payments.
   - What the repository shows: no business is named anywhere; every draft says "[FOUNDER: legal name of the
     business]" (section 7). Stripe's live mode needs business details, a bank account and identity
-    (`docs/LAUNCH_SETUP.md:651`), and its payment page needs a public business name
-    (`docs/LAUNCH_SETUP.md:650`). Business details on invoices are an open billing decision
+    (`docs/LAUNCH_SETUP.md:697`), and its payment page needs a public business name
+    (`docs/LAUNCH_SETUP.md:696`). Business details on invoices are an open billing decision
     (`docs/BILLING.md:423`). Windows code signing uses your individual identity, so Windows shows your legal
-    name as the publisher (`docs/LAUNCH_SETUP.md:792-797,814-817`), while Setup names the publisher "DoMe"
+    name as the publisher (`docs/LAUNCH_SETUP.md:841-846,866-869`), while Setup names the publisher "DoMe"
     (`pc-agent/packaging/installer/DoMe.iss:78`).
   - Outside research (New Jersey Division of Revenue fee page, via web search on 2026-11-12, not verified by
     counsel): forming a New Jersey LLC costs $100, and its annual report $75.
@@ -39,7 +39,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **1.2 Publisher name on Windows (code signing).** Decide together with 1.1.
   - What the repository shows: signing as a company later is a new identity, and Windows' trust in DoMe
     (SmartScreen reputation) starts again from zero; the setup guide says to choose now
-    (`docs/LAUNCH_SETUP.md:814-817`). Signing costs $9.99 a month (`docs/LAUNCH_SETUP.md:821`).
+    (`docs/LAUNCH_SETUP.md:866-869`). Signing costs $9.99 a month (`docs/LAUNCH_SETUP.md:871`).
   - Suggestion: settle it before the first public release, for the reason the guide gives.
   - Your answer:
 
@@ -55,12 +55,19 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **1.4 Contact email for privacy requests and support.**
   - Why it matters: the drafts send privacy requests and account deletions to "[FOUNDER: contact email for
     privacy requests]" and the Terms to "[FOUNDER: contact email]". A direct support contact
-    (`VITE_DOME_SUPPORT_URL`) is still an open production item (`docs/LAUNCH_SETUP.md:737`). Without it,
-    someone who cannot sign in cannot reach DoMe, because the support form needs sign-in
+    (`VITE_DOME_SUPPORT_URL`) is set on staging since 2026-11-13: `support@domeremote.com`, which Cloudflare
+    Email Routing forwards to your own mailbox (`docs/LAUNCH_SETUP.md:783-786`; `docs/PROGRESS.md:81-83`).
+    **Answered for the live site (2026-11-13):** it was updated that day from commit 35a203f, which had no
+    support contact (`docs/PROGRESS.md:29-32`), to commit bf83141, whose build carries
+    `VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com` [GitHub Actions Deploy run 43508425555, 2026-11-13]
+    (`docs/PROGRESS.md:33-42`; `docs/LAUNCH_SETUP.md:783-786`). **Still open:** the address the drafts name for
+    privacy requests and in the Terms (the [FOUNDER] marks above). Without a support contact, someone
+    who cannot sign in cannot reach DoMe, because the support form needs sign-in
     (`mobile-app/src/pages/public/SupportPage.tsx:183-189`). The FFmpeg source offer in the Windows notices
     points to that Support page (`pc-agent/packaging/THIRD_PARTY_NOTICES.txt:51-55`).
   - What exists: mail.domeremote.com only sends Auth0's emails, from a no-reply sender, through Resend
-    (`docs/LAUNCH_SETUP.md:743-745`). The repository records no mailbox that receives email.
+    (`docs/LAUNCH_SETUP.md:789-791`); support@domeremote.com receives email and forwards it to you
+    (`docs/LAUNCH_SETUP.md:783-785`).
   - Suggestion, not legal advice: one address on domeremote.com that you read, used for privacy requests and
     support at first, and set as the support contact. Not a personal address.
   - Your answer:
@@ -122,14 +129,14 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
   - What is built: no trial (`cloud-api/KNOWN_ISSUES.md:107-109`; `docs/BILLING.md:423`); the Terms draft says
     "There is no free trial" (`TermsPage.tsx:102`).
   - Suggestion, not legal advice: no trial at launch. Free already needs no card
-    (`docs/PRODUCT_AND_PLANS.md:18`), and outside research (law-firm summaries, via web search on 2026-11-12, not
+    (`docs/PRODUCT_AND_PLANS.md:20`), and outside research (law-firm summaries, via web search on 2026-11-12, not
     verified by counsel) says California's renewal law also covers trials that turn into paid plans.
   - Your answer:
 
 - [ ] **3.3 Yearly plans at launch, or monthly only.** Ask counsel first (question 1).
   - What is built: Pro at $99.99 a year and Pro Plus at $249.99 a year (`shared/protocol/plans.json:152-158`).
     Payments need all five Stripe prices, the yearly ones included (`cloud-api/dome_api/settings.py:327-328`;
-    `docs/LAUNCH_SETUP.md:639`), so leaving yearly plans out needs an engineer's change. DoMe's server sends no
+    `docs/LAUNCH_SETUP.md:685`), so leaving yearly plans out needs an engineer's change. DoMe's server sends no
     email of its own (`docs/legal/subprocessors.md`, row 6), and how Stripe's own customer emails are set is not
     recorded (see 4.6).
   - Outside research (law-firm summaries, via web search on 2026-11-12, not verified by counsel): several
@@ -158,7 +165,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
   - Your answer:
 
 - [ ] **3.7 Sales tax, and who is the seller.** Already decided on 2026-10-20: prices include tax, Stripe Tax
-  is off, and DoMe is the seller (`docs/PROGRESS.md:787-797`; `cloud-api/DECISIONS.md:522-531`).
+  is off, and DoMe is the seller (`docs/PROGRESS.md:901-911`; `cloud-api/DECISIONS.md:522-531`).
   - Still open: where DoMe must register for and collect sales tax (`TermsPage.tsx:79`), a question for an
     accountant. Selling through Stripe's Managed Payments instead (Stripe becomes the seller and handles sales
     tax, for an extra fee) is your business decision (`cloud-api/DECISIONS.md:528-531`).
@@ -171,7 +178,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **3.8 What Stripe's customer portal allows.** Proposed: upgrades and monthly-to-yearly take effect at
   once with unused time credited; downgrades and yearly-to-monthly at the end of the period; cancelling at
   the end of the period with no partial refund (`docs/BILLING.md:292-301,418`). The setup guide already asks
-  for cancelling at period end and no pausing (`docs/LAUNCH_SETUP.md:409-411`).
+  for cancelling at period end and no pausing (`docs/LAUNCH_SETUP.md:450-452`).
   - Suggestion, not legal advice: adopt the proposal; the lawyer checks the wording (questions 1 and 2).
   - Your answer:
 
@@ -208,8 +215,11 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
     minutes, signs in again first. The subscription is cancelled at once with no automatic refund
     (`docs/BILLING.md:375-395`), every phone and PC is disconnected and signed out at once, the email and name are removed at once, and the hourly clean-up erases the account 30 days
     later (`cloud-api/dome_api/purge.py:10-14`). Built and tested with automated tests only; not yet tried against
-    Auth0 or Stripe's test mode (`cloud-api/KNOWN_ISSUES.md:210-218`). The product spec asks that deletion
-    revoke access at once and stop billing (`docs/spec/MASTER_PROMPT.md:490`); the route does both, as tested.
+    Auth0 or Stripe's test mode (`cloud-api/KNOWN_ISSUES.md:210-218`). The live site has had it since its update
+    of 2026-11-13 [GitHub Actions Deploy run 43508425555, 2026-11-13]: Settings there ends with Delete account
+    [founder-reported 2026-11-13], but no deletion has been tried there yet (`docs/PROGRESS.md:47-49`). The
+    product spec asks that deletion revoke access at once and stop billing (`docs/spec/MASTER_PROMPT.md:490`);
+    the route does both, as tested.
   - Suggestion: none in the repository.
   - Your answer:
 
@@ -237,8 +247,8 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 
 - [ ] **4.5 Who may sign up on the test site (staging).**
   - What the repository shows: staging is public (`deploy/launch/environments.toml:24-28`) and holds real
-    sign-ups, at least your own account and a test sign-up (`docs/PROGRESS.md:7-10`;
-    `docs/LAUNCH_SETUP.md:774-775`). The Privacy draft asks the lawyer whether the test site needs its own
+    sign-ups, at least your own account and a test sign-up (`docs/PROGRESS.md:121-124`;
+    `docs/LAUNCH_SETUP.md:821-822`). The Privacy draft asks the lawyer whether the test site needs its own
     notice (`PrivacyPage.tsx:142`).
   - Choice: keep staging open to anyone, or keep it for you and your testers (ask an engineer how).
   - Suggestion: none in the repository.
@@ -250,7 +260,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
   - Why it matters: the drafts promise notice "by email or in the app" before a price change, a change to the
     Terms and some changes to the Privacy notice, and renewal reminders may be required (question 1).
   - What is built: DoMe's server sends no email (a search of `cloud-api/dome_api` finds no sending code); only
-    Auth0 sends sign-in emails, through Resend (`docs/LAUNCH_SETUP.md:743-745`). The app has no notice or
+    Auth0 sends sign-in emails, through Resend (`docs/LAUNCH_SETUP.md:789-791`). The app has no notice or
     message feature. Stripe can send its own customer emails, but how they are set for DoMe is not recorded.
   - Choice: Stripe's customer emails, email sent by DoMe (an engineer's work and a sending service), a notice
     shown in the app, or a mix.
@@ -272,24 +282,35 @@ are facts other files in this packet ask you to confirm.
 - [ ] Where Stripe, Resend, Cloudflare and Anthropic process data (`PrivacyPage.tsx:145`).
 - [ ] Data processing agreements: accept or sign each vendor's, as the lawyer advises (question 11). None is
   recorded today (`docs/legal/subprocessors.md:18-19`).
-- [ ] Is domeremote.com (production) running, with real accounts? The brief for this packet says production
-  is not live yet, but one guide speaks of domeremote.com "today" (`docs/legal/data-map.md`, "Environments";
-  `docs/LAUNCH_SETUP.md:335-337`).
+- [ ] Has anyone besides you signed up on domeremote.com (production)? **Partly answered (2026-11-13):**
+  production has been live at https://domeremote.com since 2026-10-15 (first deploy at commit 7a590ad,
+  `docs/PROGRESS.md:18-19,962-966`). It ran commit 35a203f from 2026-10-20 [GitHub Actions Deploy run
+  39464803237, 2026-10-20] and was updated to commit bf83141 on 2026-11-13 [GitHub Actions Deploy run
+  43508425555, 2026-11-13] (`docs/PROGRESS.md:33-42`); you signed in there after the update
+  [founder-reported 2026-11-13]. It holds real accounts: at least your own. You linked your Windows PC and
+  paired an iPhone there on 2026-10-16
+  (`docs/PROGRESS.md:968-970`); the PC was pointed at staging for the device rounds from 2026-10-26
+  (`docs/ACCEPTANCE.md:523`; `docs/HANDOFF.md:416-420`). **Still open:** whether anyone else has signed up
+  there; the repository does not record it (`docs/PROGRESS.md:22-23`). You or an engineer can count the
+  accounts in production's database. Auth0's user list cannot tell, because staging and production share one
+  tenant (cloud-api DECISIONS #124).
 - [ ] For the staging app in the Auth0 tenant, is the Google connection on? If yes, Google takes part in sign-ins on the
   test site and must be named in the Privacy notice, which does not mention it today
-  (`docs/legal/subprocessors.md` row 5; `docs/LAUNCH_SETUP.md:286-288`).
+  (`docs/legal/subprocessors.md` row 5; `docs/LAUNCH_SETUP.md:292-294`).
 
 ## 6. Other launch choices the repository leaves to you
 
-- [ ] **6.1 Google sign-in in production: off, or on with your own Google keys.** Still open
-  (`docs/LAUNCH_SETUP.md:746-747`). The guide says to turn Auth0's Google connection off for production,
-  because Auth0's shared Google keys are not meant for it (`docs/LAUNCH_SETUP.md:286-288`). If it is on, Google
-  joins the vendor list.
-  - Suggestion: off at launch, as the guide says, until an engineer has set up your own keys.
+- [ ] **6.1 Google sign-in in production: turn it on later, with your own Google keys?** **Off today:** the
+  production application in Auth0 (`DoMe`) has its `google-oauth2` connection off [founder-reported,
+  2026-11-13] (whether it was on there before 2026-11-13 is not recorded, `cloud-api/DECISIONS.md:1019-1020`), as
+  the guide says, because Auth0's shared Google keys are not meant for production
+  (`docs/LAUNCH_SETUP.md:292-294`). Still open: whether to turn it on once an engineer has set up your own
+  Google keys. If you do, Google joins the vendor list.
+  - Suggestion: keep it off until then.
   - Your answer:
 
 - [ ] **6.2 Listing the browser extension in the Chrome Web Store**, in your own developer account
-  (`docs/WINDOWS_INSTALL.md:737`; `docs/HANDOFF.md:461`); $5 once, per the vendor page
+  (`docs/WINDOWS_INSTALL.md:737`; `docs/HANDOFF.md:468`); $5 once, per the vendor page
   (`docs/COST_MODEL.md:62`). Without a listing, release builds leave the YouTube add-on out
   (`docs/WINDOWS_INSTALL.md:737`). Outside research (Chrome developer pages, via web search on 2026-11-12,
   not verified by counsel): a listing needs a privacy policy link and disclosure inside the product. The
@@ -298,7 +319,7 @@ are facts other files in this packet ask you to confirm.
   - Your answer:
 
 - [ ] **6.3 Buy an Inno Setup commercial licence before the paid launch.** Its makers ask commercial users to
-  buy one (`docs/WINDOWS_INSTALL.md:736`; `docs/HANDOFF.md:463`). An action rather than a choice.
+  buy one (`docs/WINDOWS_INSTALL.md:736`; `docs/HANDOFF.md:470`). An action rather than a choice.
   - Your answer:
 
 - [ ] **6.4 Website wording the lawyer may question.** No page calls anything "unlimited" any more (changed on
@@ -307,7 +328,7 @@ are facts other files in this packet ask you to confirm.
   Everyday commands read "Everyday commands without AI: free, never counted" and "Never counted against AI
   limits", next to "Fair-use limit on manual controls: 120 per minute" (`mobile-app/src/content/plans.ts:209`;
   `mobile-app/src/lib/pricing.ts:44-45`); each phone may send at most 120 commands a minute, and slider moves at
-  most 360 a minute (`shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:47`). The FAQ says Screen view
+  most 360 a minute (`shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:49`). The FAQ says Screen view
   is in development and not in the app yet, and that hearing the PC's sound and a TV-style remote are coming later;
   it no longer offers a floating mini view (`mobile-app/src/content/faq.tsx:123`). AI requests are still also shown
   as minutes (`mobile-app/src/content/plans.ts:125-131,150-155`). Email 2 asks about all of this (question 16).

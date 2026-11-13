@@ -85,7 +85,7 @@ libraries bundled with them (`docs/SECURITY.md` T12). Whether a signed release r
 Smart App Control on is **not yet verified**: the release smoke test runs on a Windows Server runner, which
 has no Smart App Control.
 
-**Linking.** domeremote.com is live (2026-10-16), so the installed DoMe links to your account. Open
+**Linking.** domeremote.com has been live since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16), so the installed DoMe links to your account. Open
 Windows PowerShell (not as administrator) and run
 `& "$env:LOCALAPPDATA\Programs\DoMe\DoMe.exe" link | Out-Host`. It shows a code and opens the
 domeremote.com **Link a PC** page: check the code, name the PC, keep **Enable remote control** ticked and

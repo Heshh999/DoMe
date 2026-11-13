@@ -3,8 +3,8 @@
 Status: this table describes every record class the code stores today (cloud-api PostgreSQL models,
 the agent's SQLite store and files, the PWA's browser storage, the extension's storage, logs) and the
 retention rule for each. **Implemented** means the code enforces the rule now (evidence tag given);
-**proposed** means the rule is the design and no job enforces it yet. Since 2026-11-12 cloud-api runs
-the hourly retention purge (§4, cloud-api DECISIONS #122): a rule marked **implemented (purge job)** is
+**proposed** means the rule is the design and no job enforces it yet. Since 2026-11-12 cloud-api's code has
+the hourly retention purge (§4, cloud-api DECISIONS #122); staging has had it since the Deploy of 63de996 (2026-11-13; a pass there is not yet seen either, and its machine stops when idle), and production, which ran 35a203f without it, has had it since its update to bf83141 on 2026-11-13 (GitHub Actions Deploy run 43508425555; its first pass there, an hour after start-up, is not yet seen). A rule marked **implemented (purge job)** is
 enforced by it, at most 500 rows per table per pass, integration-tested against real PostgreSQL
 (cloud-api `tests/test_retention_purge.py`). What is still marked `proposed` (the financial records'
 7 years, the operator audit, server logs, aggregated activation events) is a policy statement, not a
@@ -51,8 +51,8 @@ audited by the hosting provider's own access logs.
 ## 1. Cloud (cloud-api, PostgreSQL)
 
 Encryption at rest: the managed PostgreSQL on the chosen host (Fly.io Managed Postgres in ADR-0001 D2)
-is expected to encrypt volumes and backups at rest; this must be confirmed on the vendor page before
-launch (**not yet verified**). Staging's database is Neon's free plan (since 2026-10-14): test data only,
+is expected to encrypt volumes and backups at rest; this must be confirmed on the vendor page; production has
+run on Fly Managed Postgres since 2026-10-15 without that confirmation (**not yet verified**). Staging's database is Neon's free plan (since 2026-10-14): test data only,
 reached over TLS with channel binding (`sslmode=require&channel_binding=require`), kept recoverable for 6 hours by Neon's restore window and nothing
 else; Neon's encryption at rest is likewise **not yet verified**. Application-level column encryption is not used; secrets are stored
 only as hashes.
@@ -111,8 +111,8 @@ Never sent: audio, screenshots, the app list or the PC's app names, titles, clip
 anything typed with the Touchpad keyboard.
 
 Database backups: included with the managed Postgres; retention and encryption follow the vendor's
-plan and must be confirmed (**not yet verified**). A restore rehearsal is required before release
-(`docs/spec/MASTER_PROMPT.md` §15).
+plan and must be confirmed (**not yet verified**). A restore rehearsal is required (`docs/spec/MASTER_PROMPT.md` §15)
+and has not been done, although production has been live since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16).
 
 ## 2. Windows PC (pc-agent)
 

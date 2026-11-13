@@ -1,8 +1,10 @@
 # Handoff
 
-Last updated 2026-10-14 (UTC), branch `claude/stoic-heisenberg-txq6ja`. Read this first if you are
-continuing the work. `docs/PROGRESS.md` is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix;
-each component keeps its own `README.md`, `DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
+Last updated 2026-11-13 (UTC), branch `claude/stoic-heisenberg-txq6ja`. §0 below describes 2026-10-14,
+except its first bullet (Production), the last sentence of its launch-tooling bullet and its Domain
+paragraph, which describe 2026-11-13. Read this first if you are continuing the work. `docs/PROGRESS.md`
+is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix; each component keeps its own `README.md`,
+`DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
 
 Evidence tags used everywhere in this repository: **unit-tested**, **integration-tested**,
 **load-tested**, **Windows-device-tested**, **iPhone-tested**, **not yet verified**. No formal
@@ -13,6 +15,16 @@ reported features working on their Windows 11 PC and iPhone through the test kit
 
 What happened since the 2026-10-09 baseline that §1–§6 describe (details in `docs/PROGRESS.md`):
 
+- **Production (2026-11-13).** Live at https://domeremote.com since the first production Deploy on 2026-10-15
+  (commit 7a590ad; Fly app `domeremote-production`, Fly Managed Postgres Basic in `iad`; `docs/PROGRESS.md`
+  2026-10-16). Updated on 2026-11-13 from 35a203f (Deploy of 2026-10-20, run 39464803237) to bf83141 (staging
+  run 43408148197, then production run 43508425555, both green), so it now has the confirmed-email rule,
+  self-updates, account deletion, the retention purge, the renewal wording, the honest plan claims and the support
+  contact; the founder signed in afterwards and Settings ends with Delete account (founder-reported). Not yet
+  confirmed there: a deletion, the purge's first pass. It holds real accounts, at least the founder's own (they
+  linked their PC and paired an iPhone there on 2026-10-16; the PC was moved to staging for the device rounds from
+  2026-10-26, §7 item 2, step 2); whether anyone else has signed up is not recorded. Billing and Screen view are
+  off there. Both environments sign in through their own app in one Auth0 tenant (cloud-api DECISIONS #124).
 - **Owner's devices** (2026-10-09 to 10-11, through `testkit/`): the iPhone (Safari) paired with the
   Windows 11 PC over quick tunnels; after the second test round's fixes the owner reports the Remote
   volume slider, YouTube control in Edge and Remote → Search YouTube, the Type phrases, the Apps window
@@ -49,8 +61,8 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   secret `DATABASE_URL`, copied to Fly on every deploy, and staging's machine sleeps when idle (about $4 a
   month). Staging never runs `flyctl mpg`; production refuses a Neon `DATABASE_URL` and uses its GitHub
   `DATABASE_URL` only when Fly will not list or attach the cluster; every run refuses staging and production
-  on one Fly app. **Written and statically checked only: never run against
-  Fly.io, Neon, Auth0 or Cloudflare**; the founder's first staging run is the test.
+  on one Fly app. Run by the founder against Fly.io, Neon, Auth0 and Cloudflare since
+  2026-10-15 (staging, then production; `docs/PROGRESS.md` 2026-10-16).
 - **Windows installer** (2026-10-13/14, §7 item 4, pulled forward): an unsigned per-user development
   installer, `DoMe-Setup-<version>.exe` (Inno Setup), and `.github/workflows/windows-installer.yml`,
   which is to build it and smoke-test it on a GitHub Windows Server runner. Its first run was green on 2026-10-14 (run 38488799434: Windows unit tests, the build and 157
@@ -65,9 +77,10 @@ account) on 2026-10-13**. Commit 0a7bf6a made `https://domeremote.com` the singl
 website, PWA, API and WebSockets (`staging.domeremote.com` for staging; `.app` and `www` only redirect,
 because the session cookie, the Origin check and the phone's signing key are per origin) and wired it
 into the code: link-preview tags and image, `robots.txt`, `sitemap.xml`, `X-Robots-Tag: noindex` outside
-production, the extension's homepage link. **Nothing is configured at Cloudflare yet.** The DNS records,
-redirect rules, DNSSEC and identity-provider callbacks are written up in `deploy/README.md` "Domain";
-carry them out once the Fly apps exist (§7 item 0; the Deploy summary prints the exact records). The Windows installer points `DoMe.exe link` at
+production, the extension's homepage link. **Configured at Cloudflare since 2026-10-15/16**: the apex A and
+AAAA records (DNS only), the `staging` record and the `www` redirect rule; DNSSEC was being turned on
+(`docs/PROGRESS.md` 2026-10-16); `domeremote.app` stays parked by the founder's choice. The details are in
+`deploy/README.md` "Domain". The Windows installer points `DoMe.exe link` at
 `https://domeremote.com` (`dome-server.json` in the install folder, no environment variable; §7 item 4).
 
 ## 1. Where things stand
@@ -85,7 +98,7 @@ Test counts in this table are from 2026-10-09 unless dated; §2 has the latest r
 | `tools/dev-idp` | Development-only OpenID Connect issuer (RS256, PKCE S256). Never deployed; cloud-api has no auth bypass. Optional passphrase gate (`DEV_IDP_PASSPHRASE`) for the test kit: the right passphrase always works, wrong ones never lock anyone out; readable refusal page for browsers. | unit-tested: 14 tests (run in CI) |
 | `testkit/` | Try DoMe on a Windows PC and an iPhone without development tools: `1 Start test server.cmd` (whole stack in Docker, two Cloudflare quick tunnels or your own stable HTTPS addresses, passphrase-gated sign-in, QR code), `2 Start DoMe on this PC.cmd` (uv-managed agent from source, extension built in Docker with a pinned ID, native host, link; re-links automatically when the test account changed), `3 Stop test server.cmd`; `testkit/README.md` is the tester's guide. | 28 pwsh checks (parse, ASCII, helpers; run in CI). Rehearsed end to end on Linux with pwsh 7 and an HTTPS stand-in in stable-address mode: sign-in, link, wss relay, pairing, a phone command executed. Since then run by the owner on Windows 11 with quick tunnels and an iPhone (§0, §4) |
 | `brand/` | The owner's DoMe Remote logo traced into editable SVG (full and compact lockups for light and dark, mark, icon, mono), a dependency-free export script producing PWA icons, favicons, Windows tray PNGs and `.ico` files, and `BRAND.md` (palette measured from the logo, recommended and as-shipped UI tokens, type, sizes, usage). The PWA, extension, tray, both Windows programs, Setup and the Start menu shortcut use the exports (the last three since 2026-10-13, built by the first green Windows run on 2026-10-14). | unit-tested: 33 tests plus export and consumer-copy drift checks (2026-10-13); renders not compared against a browser rasterizer |
-| `deploy/`, `.github/workflows/ci.yml`, `.github/workflows/deploy.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck, build commit), entrypoint that refuses to invent a signing key outside development, an environment-neutral `fly.toml` tuned for long-lived WebSockets, the one-button Deploy workflow and `deploy/launch/dome_deploy.py` (2026-10-14), Compose file for machines with Docker, deploy README; CI with Python/Windows/Node/integration/container/deploy-tooling jobs and pinned actions. | CI runs on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green; the Windows job runs the pipe, native-host, tray and adapter tests); `windows-installer.yml` (2026-10-13) awaits its first run; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); **not yet verified**: deployed (no Fly account here) |
+| `deploy/`, `.github/workflows/ci.yml`, `.github/workflows/deploy.yml` | Multi-stage Dockerfile (PWA + API, non-root, healthcheck, build commit), entrypoint that refuses to invent a signing key outside development, an environment-neutral `fly.toml` tuned for long-lived WebSockets, the one-button Deploy workflow and `deploy/launch/dome_deploy.py` (2026-10-14), Compose file for machines with Docker, deploy README; CI with Python/Windows/Node/integration/container/deploy-tooling jobs and pinned actions. | CI runs on GitHub Actions since 2026-10-11 (13 runs by 2026-10-13, the latest green; the Windows job runs the pipe, native-host, tray and adapter tests); `windows-installer.yml` (2026-10-13) awaits its first run; the image was built and run by the test kit rehearsal (Linux, the sandbox proxy certificate added to the two build stages only); deployed by the founder through the Deploy button: staging and production on Fly.io since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16); still no Fly account in the engineer's environment |
 | `docs/` | ADR-0001, design docs per component, the product spec, and the user/operator documents listed in `README.md`. | n/a |
 
 ## 2. Running everything on a fresh machine
@@ -220,17 +233,16 @@ unless stated.
 - **iPhone**: the owner has used the PWA in iOS Safari (pairing, the remote, touchpad, keyboard, Type);
   standalone (Home Screen) mode, resume behaviour, QR scanning and key persistence across restarts are
   not reported; see `docs/IPHONE_SETUP.md` and `mobile-app/KNOWN_ISSUES.md` #5.
-- **Production identity provider**: only `tools/dev-idp` was used. The two Auth0 incompatibilities found
-  by reading (trailing-slash issuer, client authentication method) are fixed and unit-tested
-  (`cloud-api/tests/test_oidc_issuer.py`), but no sign-in against a real Auth0 tenant has happened.
-- **Hosting**: nothing is deployed. The Deploy workflow and `deploy/launch/dome_deploy.py` are tested
-  against a fake `flyctl` only; flyctl output shapes were read from its v0.4.110 source. Unverified until
-  the first staging run: the client-address self-check (`forwarded_client: ok`) on a live machine, Fly's
-  `release_command` with this image, the certificate and DNS steps, and on staging the Neon connection
-  (direct string, TLS and channel binding against the real Neon; only a stand-in server was used), the
-  machine stopping when idle and the cold start after a nap. Unverified until the first production run:
-  `flyctl mpg create`/`attach` with an organization token. The domain is registered but no DNS record, redirect or certificate exists
-  yet (§0 "Domain").
+- **Production identity provider**: real Auth0 sign-ins work on staging (app `DoMe staging`) and on
+  production (app `DoMe`, since 2026-10-15; `docs/PROGRESS.md` 2026-10-16), both in the one tenant
+  `dev-d0zmb20xjn5fs1dq` (cloud-api DECISIONS #124). The two Auth0 incompatibilities found by reading
+  (trailing-slash issuer, client authentication method) are fixed and unit-tested
+  (`cloud-api/tests/test_oidc_issuer.py`). The automated suites still use `tools/dev-idp`.
+- **Hosting**: staging and production run on Fly.io since 2026-10-15 (production: Fly Managed Postgres
+  Basic in `iad`, machine always on, certificate for domeremote.com Ready; `docs/PROGRESS.md` 2026-10-16;
+  last production Deploy 2026-11-13, GitHub Actions run 43508425555). The Deploy button's own tests still
+  use a fake `flyctl`. Not yet checked on the live machines: an idle agent staying connected for an hour,
+  and memory under real agents (`deploy/README.md` "Deployment-time facts").
 - **Billing and plans**: no Stripe code exists. `cloud-api` only reports `billing_enabled` from the
   presence of a Stripe key, and the PWA shows plan state without any checkout. `docs/BILLING.md` is a
   design. The website's Free / Pro / Pro Plus figures are static content (`mobile-app/src/content/plans.ts`);
@@ -310,22 +322,17 @@ in a protocol MINOR bump (`shared/protocol/version.json`), regenerate fixtures a
 Finish polish round 2 of the redesign first (checkpoint 6d76945); item 0 runs in parallel because it is
 founder-driven; then:
 
-0. **Launch setup (founder-driven, `docs/LAUNCH_SETUP.md`)**: the founder creates the Fly.io account
-   (card on file), the GitHub Environments `staging` and `production` (default branch only, themselves as
-   required reviewer on **both**), one Fly organization token per environment, one Auth0 tenant (the free plan's
-   only one) with a Regular Web Application per environment (Client Secret (Post); DECISIONS #124), a free Neon account with the project
-   `domeremote-staging` (its direct connection string as the staging Environment secret `DATABASE_URL`),
-   pastes the values, and runs Deploy for staging (no database tick), then the Cloudflare record,
-   `status`, a real sign-in, then production (ticking the database: about $41 a month). An engineer reads
-   the first staging run's log and summary and fixes whatever the real Fly.io or Neon answers differently
-   from what was read; in particular, confirm staging's machine stops when idle, the first request after a
-   nap succeeds within the deploy's wake-up tries, and Neon's monthly compute hours hold up (a test PC
-   left linked to staging keeps it awake; when they run out, staging is down and the production gate
-   refuses every production deploy until the next month or a paid Neon plan, while production keeps
-   running). Before production is called ready: restore rehearsal,
-   failed-deploy rehearsal, external `/healthz` monitor, backup retention recorded, support URL, Auth0
-   email provider and Google keys (`docs/OPERATIONS.md` §12). Follow-ups: branch protection with
-   required review on the default branch (the founder's approval otherwise authorizes unreviewed code;
+0. **Launch setup (founder-driven, `docs/LAUNCH_SETUP.md`): done.** Staging and production have run since
+   2026-10-15 (production's database in place since the first production deploy; `docs/PROGRESS.md` 2026-10-16),
+   with one Auth0 tenant and an app per environment (DECISIONS #124). Later production updates follow
+   `docs/LAUNCH_SETUP.md` section 11 "Updating production later" ("create the database" unticked). Not
+   recorded yet: that staging's machine stops when idle and the first request after a nap succeeds within the
+   deploy's wake-up tries. Still to watch: Neon's monthly compute hours (a test PC left linked to staging keeps it awake; when they run out,
+   staging is down and the production gate refuses every production deploy until the next month or a paid
+   Neon plan, while production keeps running). Before production is called ready: restore rehearsal,
+   failed-deploy rehearsal, external `/healthz` monitor, backup retention recorded, and Google keys if Google
+   sign-in is wanted (`docs/OPERATIONS.md` §12; the support URL is in production since 2026-11-13). Follow-ups: branch
+   protection with required review on the default branch (the founder's approval otherwise authorizes unreviewed code;
    `docs/SECURITY.md` §6), a rollback action (redeploy the previous `git-<sha>` image), a
    rotate-generated-secrets action, app-scoped tokens or separate Fly organizations per environment
    (`docs/SECURITY.md` §9), reusing staging's image for production (needs the release channel as runtime
@@ -503,8 +510,8 @@ founder-driven; then:
    signed as Justin Gaskins, `signtool verify` on all four files, and the signed Setup's install test passed all
    183 checks (Valid, timestamped signatures; release build ignores /ApiUrl= and /ExtensionId=). Step 6 is done.
    Step 7 (publish, then the Download page and a production deploy) waits until DoMe is ready for the public.
-5. **Domain and staging**: now item 0 (the Deploy button creates the apps, database, secrets and
-   certificates; `docs/LAUNCH_SETUP.md` covers DNS, redirects, DNSSEC and the Auth0 callbacks).
+5. **Domain and staging**: done with item 0 (staging and production live since 2026-10-15;
+   `docs/PROGRESS.md` 2026-10-16). domeremote.app stays parked by the founder's choice.
    (`ci.yml` runs on pushes to `main` and `claude/**` branches and on pull requests;
    `windows-installer.yml` runs when PC code changes; first green run 2026-10-14.)
 6. **Device evidence**: record the owner's Windows 11 + iPhone results in `docs/ACCEPTANCE.md` with build

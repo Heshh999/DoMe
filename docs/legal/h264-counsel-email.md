@@ -1,7 +1,7 @@
 # Email to counsel: H.264 patents and the FFmpeg (LGPL) build
 
 Status: a draft for Justin to send. It asks questions; it is not legal advice. Facts checked against the
-repository on 2026-11-09.
+repository on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:18-19`; `docs/LAUNCH_SETUP.md:838-840`).
 
 ## For Justin only (do not send this part)
 
@@ -26,8 +26,10 @@ on H.264 patent licensing and on the LGPL rules for the FFmpeg libraries I ship.
 
 The product. A Windows program plus a phone web app for controlling your own PC from your iPhone, sold by
 subscription: Free, Pro ($9.99 a month) and Pro Plus ($24.99 a month); the paid plans are not on sale yet.
-It is new, so it will be small at launch. A beta feature, Screen view, shows the PC's screen live on the
-customer's own phone. It is built, but not switched on for customers until I hear from you.
+It is new. My website and server have been live at domeremote.com since October 2026, with free accounts only;
+the Windows program is not yet published for download (only test builds exist). A beta feature, Screen view,
+shows the PC's screen live on the customer's own phone. It is built, but not switched on for customers until I
+hear from you.
 
 Who encodes and decodes the video.
 - Encoding: Windows, on the customer's PC. DoMe asks Microsoft's Media Foundation, through FFmpeg, for H.264:

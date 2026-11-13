@@ -1,17 +1,17 @@
 # DoMe operations
 
 Status: written on 2026-10-09 from the code in this repository; updated 2026-10-14 for the Deploy
-workflow and, the same day, for staging on Neon's free plan with a machine that sleeps when idle. **No DoMe deployment exists yet.** The image (`deploy/Dockerfile`) is built by CI on every push;
-`deploy/fly.toml`, the Deploy workflow (`.github/workflows/deploy.yml`) and its program
-(`deploy/launch/dome_deploy.py`) exist and are tested against a fake `flyctl`, but have never run against
-Fly.io. The founder's guide is `docs/LAUNCH_SETUP.md`. Everything below is one of two kinds, and each
+workflow and, the same day, for staging on Neon's free plan with a machine that sleeps when idle; production status updated 2026-11-13. **Staging (https://staging.domeremote.com) and production (https://domeremote.com) both run on Fly.io**, deployed with the Deploy workflow (`.github/workflows/deploy.yml`, `deploy/launch/dome_deploy.py`).
+Production has been live since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16). On 2026-11-13 it was updated from commit 35a203f (Deploy of 2026-10-20, GitHub Actions run 39464803237) to commit bf83141 (GitHub Actions Deploy run 43508425555, after staging's run 43408148197); its summary: migrations first, database already connected, healthz ok at bf83141, certificate Ready, billing and Screen view off.
+The image (`deploy/Dockerfile`) is built by CI on every push, and the Deploy program's own tests use a fake `flyctl`.
+The founder's guide is `docs/LAUNCH_SETUP.md`. Everything below is one of two kinds, and each
 section says which:
 
 - **as implemented** — behaviour the service and agent code has today, with the test that shows it
   (tag: unit-tested / integration-tested on Linux);
 - **procedure, not yet run** — the steps an operator will follow, derived from ADR-0001 D1/D2 and the
-  constraints the code imposes (`docs/ARCHITECTURE.md` §5). None of these has been executed against
-  Fly.io or any other host (**not yet verified**). Spec §15 requires a restore and a failed-deployment
+  constraints the code imposes (`docs/ARCHITECTURE.md` §5). Deploying (§3) has run since 2026-10-15. The other procedures
+  (backup and restore, rollback, secret rotation, incident response) have not been executed against Fly.io or any other host (**not yet verified**). Spec §15 requires a restore and a failed-deployment
   recovery to be *tested* before a release is called production-ready; neither has been.
 
 Related: `cloud-api/README.md` (every setting), `docs/SECURITY.md` §6 (operator boundaries),
@@ -74,15 +74,15 @@ built from (`DOME_BUILD_COMMIT`, reported by `/healthz` → `commit`). The Deplo
 
 Before deploying any commit, the suites in `docs/ACCEPTANCE.md` §1 must pass on it (CI).
 
-## 3. Deployment to Fly.io (via the Deploy workflow; never run yet)
+## 3. Deployment to Fly.io (via the Deploy workflow; run for staging and production since 2026-10-15)
 
 ADR-0001 D2 chose Fly.io for long-lived WebSockets on ordinary VMs plus managed Postgres; nothing in
 the code is Fly-specific and Render/Railway are equivalents. The founder deploys with GitHub > Actions >
 **Deploy** (`docs/LAUNCH_SETUP.md`); every step is listed in `deploy/README.md` "The Deploy button". What
 it guarantees, in operator terms:
 
-1. **Database.** Production: Fly Managed Postgres, Basic plan, PostgreSQL 16, region `iad`, created only
-   when the founder ticks the checkbox; `flyctl mpg attach` sets the pooled `DATABASE_URL` (PgBouncer,
+1. **Database.** Production: Fly Managed Postgres, Basic plan, PostgreSQL 16, region `iad`, in place since the
+   first production deploy (2026-10-15); the checkbox creates it only when it is missing; `flyctl mpg attach` sets the pooled `DATABASE_URL` (PgBouncer,
    session mode). Encryption at rest and backup retention are to be confirmed on Fly's page and recorded
    (`docs/DATA_RETENTION.md` §1, **not yet verified**). Staging: Neon's free plan (project
    `domeremote-staging`, PostgreSQL 16, AWS `us-east-1`), outside Fly; the job never runs `flyctl mpg` for
@@ -102,11 +102,11 @@ it guarantees, in operator terms:
    the GitHub Environment on every deploy; the entrypoint writes the key file 0600.
 4. **Identity provider.** Callback `https://domeremote.com/v1/auth/callback` (production) and
    `https://staging.domeremote.com/v1/auth/callback` (staging). The job checks the issuer's discovery
-   document and that it accepts `client_secret_post`. Only `tools/dev-idp` has been signed in against so
-   far (`docs/HANDOFF.md` §4).
+   document and that it accepts `client_secret_post`. Real Auth0 sign-ins work on staging (app `DoMe staging`) and on production (app `DoMe`,
+   since 2026-10-15; `docs/PROGRESS.md` 2026-10-16), both in the one tenant (cloud-api DECISIONS #124). The automated tests use `tools/dev-idp`.
 5. **Trusted proxies.** Fixed in `deploy/fly.toml`: private IPv4 ranges plus `DOME_CLIENT_IP_HEADER=
    fly-client-ip` (`deploy/README.md` "Client addresses"). Verified on every deploy through `/healthz` →
-   `forwarded_client: ok`; **not yet verified on a live machine**.
+   `forwarded_client: ok`; checked on the live machines by every deploy since 2026-10-15 (production's 2026-10-20 Deploy, GitHub Actions run 39464803237, passed it). Nothing watches it between deploys (no external monitor yet).
 6. **Migrations** run once per deploy as Fly's `release_command` (`alembic upgrade head`, in a temporary
    machine, before the new version starts); the app process starts with `--skip-migrations` and still
    refuses to serve unless the schema is at head (§4). A failing migration stops the deploy and leaves
@@ -401,10 +401,10 @@ scenario to this table.
   components disagree; `shared/python` and `shared/ts` fixtures (`make fixtures`) plus every suite
   must pass first.
 
-## 12. Pre-production checklist (spec §15/§18 D) — none of it done
+## 12. Pre-production checklist (spec §15/§18 D), status 2026-11-13
 
-- [ ] Container image and `fly.toml` written, built and deployed to **staging** (§2–§3); `DOME_TRUSTED_PROXIES` verified with `ss -tn`
-- [ ] Production OIDC application registered; sign-in tested from an iPhone over the real origin
+- [ ] Container image and `fly.toml` written, built and deployed to **staging** (§2–§3) (done: staging and production on Fly.io since 2026-10-15); `DOME_TRUSTED_PROXIES` verified with `ss -tn` (not done; every deploy checks `/healthz` → `forwarded_client: ok`)
+- [x] Production OIDC application registered (`DoMe`, in the one Auth0 tenant; cloud-api DECISIONS #124); sign-in on https://domeremote.com works and the founder's iPhone paired there (owner-reported, `docs/PROGRESS.md` 2026-10-16)
 - [ ] Encryption at rest and backup retention confirmed on the database vendor's page and recorded in `docs/DATA_RETENTION.md`
 - [ ] Nightly logical dump to a second location configured; **restore rehearsed** into a temporary cluster and timed (§5; staging's Neon database cannot stand in for it)
 - [ ] **Failed-deployment recovery rehearsed** on staging (§6)
@@ -414,8 +414,8 @@ scenario to this table.
 - [ ] Load smoke run against staging from a separate machine; sustained idle/reconnect test (24 h) recorded in `docs/ACCEPTANCE.md` Scenario 17
 - [ ] Agent socket frame budget (`cloud-api/KNOWN_ISSUES.md` #1) implemented or explicitly accepted
 - [x] CI workflow exists and runs every suite on every push (`ci.yml`, green since 2026-10-11)
-- [ ] First staging deploy through the Deploy workflow; `forwarded_client: ok` and a real Auth0 sign-in confirmed
-- [ ] Staging and production separated: apps, databases, OIDC clients, entitlement keys, agents never cross
+- [x] First staging deploy through the Deploy workflow (by 2026-10-15); `forwarded_client: ok` checked by every deploy; real Auth0 sign-ins on staging (founder-run)
+- [x] Staging and production separated: apps, databases (Neon; Fly Managed Postgres), OIDC clients (`DoMe staging`, `DoMe`) and entitlement keys. The one Auth0 tenant is shared (cloud-api DECISIONS #124). Agents never cross (rule).
 - [ ] `docs/SECURITY.md` §6 operator boundaries re-read; the operator interface (Phase C/D) or a written manual-access procedure with audit in place
 - [ ] Incident contacts and the write-up template agreed (§10)
 
@@ -426,6 +426,6 @@ scenario to this table.
 | Settings validation, start-up migration and head check, start-up sweep, `/healthz`, limits in §9, log event names and security-event kinds | code read; integration-tested where a test is named |
 | Reconnect/ping/idle behaviour of the agent, PWA and extension | unit-tested against fakes |
 | Image build | CI-tested (`container` job) |
-| Deploy workflow logic | unit-tested against a fake `flyctl` (`deploy/launch/tests/`); never run against Fly.io |
-| Everything about Fly.io itself, backups, restore, rollback, rotation procedures, incident handling | not yet verified (procedure, never run) |
-| Behaviour of the hosting provider's proxy, idle timeouts, `kill_timeout` semantics, encryption at rest | not yet verified; confirm against the vendor's current documentation at first deployment |
+| Deploy workflow logic | unit-tested against a fake `flyctl` (`deploy/launch/tests/`); run against Fly.io by the founder for staging and production since 2026-10-15 (last production Deploy 2026-11-13, GitHub Actions run 43508425555, commit bf83141) |
+| Backups, restore, rollback, rotation procedures, incident handling on Fly.io | not yet verified (procedure, never run) |
+| Behaviour of the hosting provider's proxy, idle timeouts, `kill_timeout` semantics, encryption at rest | not yet verified; confirm against the vendor's current documentation (production has run since 2026-10-15 without this check) |

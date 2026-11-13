@@ -1,7 +1,9 @@
 # DoMe product and plans
 
-Status: pre-release engineering build. Nothing is publicly available, no live billing exists, and
-no Windows PC or iPhone has yet run this code. Every feature below carries an evidence tag:
+Status: pre-release. The free service is live at https://domeremote.com (since 2026-10-15;
+updated 2026-11-13); no paid plan is on sale (billing is off in production), the Windows program is
+not yet published, and the owner's PC and iPhone have run it (owner-reported, no formal
+device-tested pass). Every feature below carries an evidence tag:
 
 - `unit-tested` — component tests on Linux (pytest / Vitest) with test doubles.
 - `integration-tested` — the real cloud-api, the real agent process and signed controllers on Linux

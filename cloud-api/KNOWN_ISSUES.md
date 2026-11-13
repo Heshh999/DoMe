@@ -16,11 +16,11 @@ Items the review surfaced that are deliberately deferred, with the reason and th
    `pc_status`. A dedicated code would be a contract change (`errors.json` is frozen for this component).
 4. **Proof of possession at link start** is a contract gap (`CONTRACT_ISSUES.md` #10); the backend-side
    mitigation (no takeover of a linked PC) is in place, the cryptographic fix needs the MINOR bump.
-5. **The Fly.io client-address settings are verified by a self-check, not yet on a live machine.**
+5. **The Fly.io client-address settings are verified by a self-check, on every deploy only.**
    `deploy/fly.toml` trusts the private IPv4 ranges and reads `Fly-Client-IP` (`DOME_CLIENT_IP_HEADER`),
    based on Fly's documentation (the proxy connects over a private IPv4 address; the right-most
    `X-Forwarded-For` hop is the app's own address). `/healthz` → `forwarded_client` reports whether the
-   resolved address equals `Fly-Client-IP`; the Deploy workflow refuses a deploy where it is not `ok`, and
+   resolved address equals `Fly-Client-IP`; the Deploy workflow refuses a deploy where it is not `ok` (passed on staging and production since 2026-10-15), and
    production requires `ok` on staging. Nothing outside a deploy run watches it until an external monitor
    exists. Staging and production still refuse to start without an explicit `DOME_TRUSTED_PROXIES`.
 6. **Operators have no support route.** Tickets are written and read by the owning account only; the
@@ -111,9 +111,9 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     fresh sign-in, and the hourly purge that hard-deletes the account 30 days later. Its limits are #40 to #42.
 23. **Single-process reconciler.** The hourly pass runs in the API process (ADR-0001 D1). Every step is idempotent
     (deduplicated events, fetch-then-apply, conditional updates), so a second process would only repeat work.
-24. **The Deploy button does not carry the Stripe values yet.** `deploy/` and `.github/workflows/deploy.yml` were
-    outside this build; until they pass the seven `DOME_STRIPE_*` values to Fly, staging and production run with
-    billing off whatever is pasted into GitHub.
+24. ~~**The Deploy button does not carry the Stripe values yet.**~~ Resolved (2026-10-21, `docs/PROGRESS.md`
+    2026-10-21): the Deploy button carries the seven values. Staging has run Stripe test mode since 2026-10-23.
+    Production has no Stripe values, so billing there is off.
 25. **The phone learns the plan by polling.** After Checkout the PWA polls `GET /v1/session` and
     `GET /v1/account/billing`; there is no push to the phone, so activation shows within the poll interval of the
     webhook, not instantly.
@@ -228,5 +228,5 @@ Items the review surfaced that are deliberately deferred, with the reason and th
     (`subscriptions`, `topup_purchases`, `billing_events`) are never deleted, pending counsel's period (7 years
     proposed). Activation events are not aggregated before deletion (none is emitted yet). Database backups and the
     host's logs follow the provider's retention, not this job (docs/DATA_RETENTION.md). The pass runs hourly in the
-    one API process; a process that restarts more often than hourly would never run it (staging and production keep
-    one machine running).
+    one API process; a process that restarts more often than hourly would never run it (production keeps one machine always on and has had the job since its update of 2026-11-13, first pass not yet seen;
+    staging's machine stops when idle, so its pass runs only while it is awake).

@@ -4,8 +4,8 @@ Status: written on 2026-10-09 from the repository as it stands. This is the matr
 `docs/spec/MASTER_PROMPT.md` §17: for every required scenario and every Phase A/B deliverable it
 names the evidence that **exists now**, tagged, with the file or test that produces it, and the
 **exact outstanding manual check**. Nothing in this repository has been **Windows-device-tested**,
-**iPhone-tested** or run against a real browser on youtube.com; the only hosting that has run is
-loopback on a Linux build machine.
+**iPhone-tested** or run against a real browser on youtube.com; at the time of writing (2026-10-09) the only hosting that had run was
+loopback on a Linux build machine. Staging and production have run on Fly.io since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16); each device row names the hosting it used.
 
 Evidence tags (spec §17): **unit-tested** · **integration-tested** · **sandbox-provider-tested** ·
 **Windows-device-tested** · **iPhone-tested** · **load-tested** · **not yet verified**. A tag applies
@@ -111,9 +111,9 @@ PC; focus from a non-foreground process → `FOCUS_DENIED` where Windows refuses
 | Evidence now | Tag |
 | --- | --- |
 | Topology is outbound-only on the PC (`wss://…/ws/agent` with a bearer token, no listener) and the relay routes by account/PC/controller; the agent reconnects with backoff 1 → 60 s and application pings every 25 s; the PWA pings every 25 s with a 75 s idle rule and a resume nudge. `pc-agent/tests/test_relay_client.py` (10 tests), `mobile-app/test/relay.test.ts`, `cloud-api/tests/test_relay_routing.py::test_agent_socket_auth_rules` | unit-tested / integration-tested on loopback only |
-| Hosting constraints the code imposes are written down (`docs/ARCHITECTURE.md` §5, `docs/OPERATIONS.md` §9). `deploy/` is a placeholder; no Fly.io deployment exists. | not yet verified |
+| Hosting constraints the code imposes are written down (`docs/ARCHITECTURE.md` §5, `docs/OPERATIONS.md` §9). `deploy/` holds the image, `fly.toml` and the Deploy button; staging and production have run on Fly.io since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16). | not yet verified |
 
-**Outstanding:** Deploy a staging service (`docs/OPERATIONS.md` §3), put the PC on a home connection
+**Outstanding:** On staging or production (both live since 2026-10-15), put the PC on a home connection
 behind NAT with no port forwarding, put the iPhone on cellular with Wi-Fi off, run Scenario 1. Also
 leave both idle for 30 minutes and confirm the pill stays *Online* (proxy idle timeouts vs the 25 s
 pings). Record as **Windows-device-tested** + **iPhone-tested** with the hosting provider named.

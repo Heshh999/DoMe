@@ -6,8 +6,8 @@
 #                        its database is a free Neon database whose address is the secret DATABASE_URL)
 # Step by step, in plain English: docs/LAUNCH_SETUP.md. What each step does: deploy/README.md.
 #
-# STATUS (2026-10-14): written and statically checked (actionlint, tests in deploy/launch/tests). It has
-# NEVER run against Fly.io, Neon, Auth0 or Cloudflare; the first staging run is the real test.
+# STATUS (2026-11-13): run by the founder for staging and production since 2026-10-15 (docs/PROGRESS.md
+# 2026-10-16); statically checked (actionlint); tests in deploy/launch/tests use a fake flyctl.
 #
 # Shape and safety rules (enforced by deploy/launch/tests/test_workflow_policy.py):
 # * workflow_dispatch only. Never push, pull_request or pull_request_target: the repository is public,

@@ -1,6 +1,6 @@
 # DoMe on your iPhone — sign in, pair, install
 
-Status: **pre-release engineering build. The DoMe web app has not been opened on an iPhone yet.**
+Status: the DoMe web app has been used on the founder's iPhone against production (https://domeremote.com, paired by 2026-10-16) and staging (owner-reported; `docs/PROGRESS.md` 2026-10-16 and 2026-11-12); no formal iPhone-tested pass is recorded.
 The app (`mobile-app/`) is built iPhone-first and its libraries and screens are unit-tested in a
 browser-like test environment (293 tests in 32 files at the last run recorded in
 `mobile-app/README.md`, with a fake socket and a fake IndexedDB), and the pairing, command and
@@ -9,7 +9,7 @@ Camera scanning, key persistence in Safari, Add to Home Screen, resume after the
 touchpad gestures and the phone keyboard (IME, autocorrect, dictation) are **not iPhone-tested**. This document describes the flow
 as the code implements it and marks every iOS-specific behaviour that still needs a real device.
 
-To try the whole flow on your own iPhone and Windows PC without a deployment, use `testkit/README.md`.
+The live service is https://domeremote.com (since 2026-10-15). To try the whole flow without it, use `testkit/README.md`.
 
 Related: `docs/WINDOWS_INSTALL.md` (the PC side), `docs/TROUBLESHOOTING.md`, `docs/INPUT_CONTROL.md`
 (touchpad and keyboard in depth), `docs/SUPPORT.md`, `mobile-app/README.md`.

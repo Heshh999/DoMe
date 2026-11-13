@@ -221,9 +221,10 @@ the only way to validate conversion is the pricing experiment itself.
 
 ## 7A. Active touchpad/keyboard sessions (assumptions)
 
-Everything in this section is an assumption or a computation from the inputs in §3. No touchpad
-session has run on a device or against a deployed relay, so the active-use rate and the
-concurrency are guesses until real usage exists.
+Everything in this section is an assumption or a computation from the inputs in §3. Touchpad
+sessions have run only in the owner's own tests (the test kit from 2026-10-09, production on
+2026-10-16, staging device rounds from 2026-10-26; `docs/PROGRESS.md`); no usage was measured, so
+the active-use rate and the concurrency are guesses until real usage exists.
 
 Per active session (one phone controlling one PC):
 

@@ -5,13 +5,13 @@ run in **development**, **staging** and **production**, how the founder deploys 
 and the operational procedures the product spec requires (migrations, rollback, backup/restore,
 secret rotation, incident basics). ADR-0001 D1/D2 are the decisions behind it.
 
-> **Status (2026-10-14): nothing has been deployed to Fly.io yet.** The image is built by CI on every
-> push since 2026-10-11 and was run in the test-kit rehearsal (Linux). The Deploy workflow and its
-> program (`launch/dome_deploy.py`) are written and tested against a fake `flyctl`
-> (`launch/tests/`), but have **never run against Fly.io, Neon, Auth0 or Cloudflare**: the founder's
-> first staging run is the real test. Since 2026-10-14 (budget about $50 a month) staging's database is
-> Neon's free plan and staging's machine sleeps when idle; production is unchanged. What was verified is listed in
-> [What was actually verified](#what-was-actually-verified).
+> **Status (2026-11-13): staging and production run on Fly.io.** Production (`domeremote-production`, Fly
+> Managed Postgres Basic in `iad`) has been live at https://domeremote.com since its first Deploy on
+> 2026-10-15 (commit 7a590ad; `docs/PROGRESS.md` 2026-10-16). On 2026-11-13 it was updated from 35a203f
+> (2026-10-20) to commit bf83141 (GitHub Actions Deploy run 43508425555, after staging's run 43408148197):
+> migrations first, database already connected, certificate Ready, healthz ok at bf83141. Since 2026-10-14
+> (budget about $50 a month), staging's database has been Neon's free plan, and staging's machine sleeps when
+> idle. What was verified is listed in [What was actually verified](#what-was-actually-verified).
 >
 > **Founder: start with [`docs/LAUNCH_SETUP.md`](../docs/LAUNCH_SETUP.md)**, the click-by-click guide.
 > You never need a command line; everything below is for engineers.
@@ -98,13 +98,15 @@ The PC agent runs on the host, not in a container (`make agent`, `DOME_AGENT_API
 ## Environments
 
 One Fly app, one database, one OIDC client, one signing key and one origin **per environment**.
-Nothing is shared between them; a secret that exists in two environments is a mistake.
+Nothing else is shared between them, with one exception: both OIDC clients are applications in the one
+Auth0 tenant the free plan allows, so its user list, email provider and tenant-wide settings are shared
+(cloud-api DECISIONS #124). A secret that exists in two environments is a mistake.
 
 | | development | staging | production |
 | --- | --- | --- | --- |
 | Where | developer machine (Makefile) or Compose | Fly app `domeremote-staging`, region `iad` | Fly app `domeremote-production`, region `iad` |
 | `DOME_ENV` | `development` | `staging` | `production` |
-| Identity provider | `tools/dev-idp` (never deployed) | the real provider, a **separate** application/client ("DoMe staging") | the real provider, production client |
+| Identity provider | `tools/dev-idp` (never deployed) | the real provider, a **separate** application/client ("DoMe staging") | the real provider, its own application/client ("DoMe") in the same tenant |
 | Origin | `http://localhost:5173` (Vite) or `:8080` | `https://staging.domeremote.com` from the first deploy (`<app>.fly.dev` serves `/healthz` until DNS exists; sign-in waits for DNS) | `https://domeremote.com` |
 | TLS / HSTS | plain http | Fly-terminated TLS | Fly-terminated TLS; `production` enables HSTS |
 | `DOME_TRUSTED_PROXIES` | unset (TCP peer is the client) | private IPv4 ranges + `DOME_CLIENT_IP_HEADER=fly-client-ip` (`fly.toml`); checked by `/healthz` on every deploy | same |
@@ -132,7 +134,8 @@ guide. In short:
    branch with the founder as **required reviewer** and no administrator bypass (the `gate` job checks
    this), approving only runs they started themselves, holding the secrets and variables in
    [Secrets and configuration](#secrets-and-configuration-names-only--values-never-enter-this-repository).
-3. **Auth0**: one tenant per environment, one Regular Web Application each, callback URL exactly
+3. **Auth0**: one tenant (the free plan allows only one), with one Regular Web Application per environment
+   (`DoMe staging`, `DoMe`; cloud-api DECISIONS #124), callback URL exactly
    `<origin>/v1/auth/callback`, Credentials > Authentication Method **Client Secret (Post)** (what
    `cloud-api/dome_api/auth/oidc.py` sends). Keycloak or another compliant issuer also works.
 4. **Cloudflare**: the DNS records each Deploy summary prints, as **DNS only**; the redirects and DNSSEC
@@ -318,15 +321,20 @@ v0.4.110 comes from its GitHub release tarball, checked with `sha256sum -c` agai
 workflow (from the release's `flyctl_0.4.110_checksums.txt`) before extraction; only the `flyctl`
 binary is extracted, into `$RUNNER_TEMP/flyctl`, which is then added to `$GITHUB_PATH`. Child output is
 decoded as UTF-8 with replacement, and a failure while streaming kills the child before the error is
-reported. `cd deploy/launch && uv sync --extra dev && uv run pytest` runs its tests. Unverified until the
-first real run, so parsed leniently with plain stops: the JSON shapes of `flyctl` 0.4.110 (read from its
-source), `mpg create`/`attach` with an organization token, and attach before the app has machines.
+reported. `cd deploy/launch && uv sync --extra dev && uv run pytest` runs its tests. Real runs have used
+these paths since 2026-10-15 (production's database is attached: "Database already connected", GitHub
+Actions Deploy run 39464803237, 2026-10-20). The repository does not record whether the first production run
+created the database with the organization token or the founder made it in the dashboard. Output is still
+parsed leniently with plain stops: the JSON shapes of `flyctl` 0.4.110 (read from its source), `mpg
+create`/`attach`, and attach before the app has machines.
 
 ## Domain
 
 Registered 2026-10-13 by the founder (Cloudflare Registrar, founder's account): `domeremote.com` and
-`domeremote.app`. **Nothing below is configured yet**; it is the plan for when the Fly apps exist, and
-`docs/LAUNCH_SETUP.md` walks the founder through it.
+`domeremote.app`. Configured for `domeremote.com` since 2026-10-15/16: the apex A and AAAA records (DNS
+only), the `staging` record and the `www` redirect rule. DNSSEC was being turned on on 2026-10-16
+(`docs/PROGRESS.md` 2026-10-16). `domeremote.app` stays parked by the founder's choice, and its redirects
+below are for later. `docs/LAUNCH_SETUP.md` walks the founder through it.
 Cloudflare's dashboard changes over time, so compare these steps with its current documentation.
 
 - **One origin per environment.** Production is `https://domeremote.com`: the website, the PWA, the REST
@@ -412,7 +420,8 @@ minute) and the `ip_hash` of security events need the real client address. On Fl
   `Fly-Client-IP`), `not_checked` (no header, e.g. Fly's own health checks), `unresolved_private` (the
   proxy's address was not trusted: the ranges are wrong) or `unresolved_other`. The deploy job fails on
   anything but `ok` for requests it sends through Fly's edge, and production requires `ok` on staging.
-  **Not yet verified on a live machine**; the first staging deploy is that check.
+  Checked on the live machines by every deploy since 2026-10-15 (the 2026-10-20 production Deploy, GitHub
+  Actions run 39464803237, passed it).
 - Do not put Cloudflare's proxy (orange cloud) in front of the app hosts: `Fly-Client-IP` would then be
   Cloudflare's address for everyone.
 
@@ -479,9 +488,9 @@ What the code relies on, and why:
   month.
 - **Region.** AWS `us-east-1` (northern Virginia), Neon's nearest to Fly `iad`.
 
-### Deployment-time facts still to confirm on the first machine
+### Deployment-time facts still to confirm on the live machines
 
-- `forwarded_client` is `ok` (above).
+- ~~`forwarded_client` is `ok`~~ confirmed by every deploy since 2026-10-15 (above).
 - Fly's proxy closes idle connections; the API pings every WebSocket every 20 s
   (`ws_ping_interval` in `cloud-api/dome_api/cli.py`) and the agent pings every 25 s, which the
   design assumes is enough. Confirm an idle agent stays connected for an hour.
@@ -593,13 +602,13 @@ Six jobs, no secrets, SHA-pinned actions (tag in the trailing comment). Green on
 
 | Item | Evidence | Tag |
 | --- | --- | --- |
-| Image | built by CI's `container` job on every push since 2026-10-11; run in the test-kit rehearsal (Linux) | built, not run on Fly.io |
+| Image | built by CI's `container` job on every push since 2026-10-11; run in the test-kit rehearsal (Linux) | built; runs on Fly.io (staging and production since 2026-10-15) |
 | `entrypoint.sh` | `sh -n`; all four paths exercised locally (staging without key → exit 2; development → generated 0600 PEM; `_B64` → identical PEM and `DATABASE_URL` translated; existing key untouched); shellcheck 0.11.0 clean; a Neon-style `DATABASE_URL` keeps `?sslmode=require&channel_binding=require` (`cloud-api/tests/test_database_url.py`, 2026-10-14) | unit-tested (shell, locally) |
-| `fly.toml` | parses; `launch/tests/test_fly_config.py` (no secrets or placeholders, ports, release command, region, trusted ranges); flags and merge rules checked in the flyctl v0.4.110 source | not yet verified on Fly.io |
-| Deploy workflow + `dome_deploy.py` | `launch/tests/` (387 tests: order of operations, re-runs, stops before changes, the Stripe values (all or none, shapes, live key refused on staging, removal, `/v1/plans` check, status, agreement with cloud-api's names, events and webhook path), the Stripe check against a fake Stripe API (every stop and warning, `*` events, 401/403, Stripe unreachable, no flyctl call on a stop, the key never in the log or summary even when Stripe quotes it; its eight requests also accepted by stripe-mock v0.206.0), database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | written and statically checked; **never run against Fly.io, Neon, Auth0, Cloudflare, Stripe or GitHub's environments API** |
+| `fly.toml` | parses; `launch/tests/test_fly_config.py` (no secrets or placeholders, ports, release command, region, trusted ranges); flags and merge rules checked in the flyctl v0.4.110 source | in use on Fly.io since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16) |
+| Deploy workflow + `dome_deploy.py` | `launch/tests/` (387 tests: order of operations, re-runs, stops before changes, the Stripe values (all or none, shapes, live key refused on staging, removal, `/v1/plans` check, status, agreement with cloud-api's names, events and webhook path), the Stripe check against a fake Stripe API (every stop and warning, `*` events, 401/403, Stripe unreachable, no flyctl call on a stop, the key never in the log or summary even when Stripe quotes it; its eight requests also accepted by stripe-mock v0.206.0), database paths (staging never runs `mpg`; a missing or unusable Neon address stops; production unchanged), the per-environment `fly.toml` copy, production gate, the gate's repository-secret and environment-protection checks against GitHub-shaped API answers, sign-in start and WebSocket checks, DNS states, red/green exit codes, secret hygiene across scenarios); actionlint 1.7.12 + shellcheck clean; SHAs re-checked with `git ls-remote` on 2026-10-14; the flyctl install step run locally against the real release (hash OK; a changed hash stops it before extraction) | run by the founder since 2026-10-15 against Fly.io, Neon, Auth0, Cloudflare DNS and GitHub's environments API (last production Deploy 2026-11-13, GitHub Actions run 43508425555, commit bf83141); its Stripe check against real Stripe since Deploy #9 on staging (`docs/PROGRESS.md` 2026-10-26) |
 | `docker-compose.dev.yml` | `docker compose config --quiet` (Compose v5.6.0) | not brought up |
 | `ci.yml` | green on GitHub Actions since 2026-10-11 | CI-tested |
 
-Remaining before "deployed": the founder's accounts and the first staging run (`docs/LAUNCH_SETUP.md`),
-then the restore rehearsal, a failed-deploy rehearsal and an external uptime monitor before production
-is called ready.
+Deployed: staging and production since 2026-10-15. Remaining before production is called ready: the
+restore rehearsal, a failed-deploy rehearsal and an external uptime monitor (`docs/LAUNCH_SETUP.md`
+section 16).

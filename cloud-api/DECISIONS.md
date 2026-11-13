@@ -719,7 +719,7 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     at sign-up, and it expires after a few days; people who signed up before the email provider was connected
     (2026-10-20), the founder's own users among them, may never have had one, and nothing in DoMe sends a new one.
     The founder sends it from Auth0 (User Management > Users > the user > Send Verification Email);
-    `docs/LAUNCH_SETUP.md` §16 says to check the founder's own and the testers' users in both tenants before the first deploy
+    `docs/LAUNCH_SETUP.md` §16 says to check the founder's own and the testers' users in the tenant's one user list (staging and production share it, #124) before the first deploy
     with this check, and to do the same for anyone who writes in. The home-page notice adds "Still nothing? Contact
     support and we'll send a new link." only when a support contact (`VITE_DOME_SUPPORT_URL`) is configured, and links
     to that contact, never to `/support`, whose form needs a sign-in this person cannot complete; the founder's
@@ -771,13 +771,13 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     login rate limit, not logout; nothing new is logged and there is no setting. A cookie, not a parameter on the
     notice's button, because the person may come back through the header's Sign in or the app shell's own redirect,
     and all of them go through `/v1/auth/login`. Not taken: signing the person out of Auth0 after a refusal (needs an
-    allowed logout URL configured in each tenant and one more round trip), and `prompt=login` on every sign-in
+    allowed logout URL configured in each Auth0 application and one more round trip), and `prompt=login` on every sign-in
     (everyone would type their password every time).
     For (b), the home-page notice keeps the founder's title and first paragraph and adds "No email? Tap Sign in, then
     Forgot password?. Setting a new password confirms your email too." and a "Sign in again" button to
     `/v1/auth/login?return_to=/app` (`mobile-app/src/lib/signInProblem.ts`, `pages/public/LandingPage.tsx`); the
     optional support line stays after these. That a completed password reset marks the address verified is Auth0's
-    behaviour as seen on the staging tenant (founder-run), not something DoMe does.
+    behaviour as seen on staging (founder-run, in the one tenant both environments use, #124), not something DoMe does.
     `tools/dev-idp` already ignored parameters it does not know and keeps no sign-in session, so it accepts
     `prompt=login` unchanged; `tools/dev-idp/tests/test_prompt.py` pins that for both its sign-in paths.
     Integration-tested (Linux, dev-idp, real PostgreSQL; `tests/test_auth_email_verified.py`): a refusal sets exactly
@@ -1009,15 +1009,20 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     `agent_link.released_from_deleted_account` with the two PC ids. Tested: after a deletion the same key links to
     another account with no grants, and nothing of the old PC is left.
 
-## Production sign-in (2026-11-13)
+## Production sign-in (in use since 2026-10-15; recorded 2026-11-13)
 
-124. **Production signs in through its own Auth0 application in the tenant staging already uses.** The launch
-    guide planned one Auth0 tenant per environment (spec §18 D). Auth0's free plan allows one tenant, and the
-    founder's (`dev-d0zmb20xjn5fs1dq`) already serves staging; the founder chose to share it rather than pay for a
-    second one. Production gets a separate Regular Web Application (`DoMe`, Client Secret (Post), callback
-    `https://domeremote.com/v1/auth/callback` only, `google-oauth2` off). Separate per environment: the callback,
-    the Client ID and Client Secret, and the connections. Shared: the login list, the email provider and
-    templates (Resend, already working), the password rules, and Auth0's remembered sign-in within one browser.
+124. **Production signs in through its own Auth0 application in the one tenant staging also uses.** The launch
+    guide planned one Auth0 tenant per environment (spec §18 D). Auth0's free plan allows one tenant, and there has
+    only ever been one: the founder's `dev-d0zmb20xjn5fs1dq` (US region, Environment Tag Production). Staging signs
+    in through the application `DoMe staging`. Since its first Deploy on 2026-10-15 (`docs/PROGRESS.md` 2026-10-16),
+    production has signed in through a separate Regular Web Application, `DoMe`, in that same tenant. On 2026-11-13
+    the founder re-checked the `DoMe` app's settings (as found that day: Client Secret (Post), callback
+    `https://domeremote.com/v1/auth/callback` only, `google-oauth2` off; earlier states are not recorded), found that
+    the free plan cannot hold a second tenant, and chose to keep sharing rather than pay; this entry records that
+    decision. Separate per environment: the callback, the Client ID and Client Secret, and the connections.
+    Shared: the login list, the email provider and templates (Resend on `mail.domeremote.com`, connected
+    2026-10-20, serving both applications), the password rules, and Auth0's remembered sign-in within one
+    browser.
     Nothing in DoMe assumes separate tenants: an account is keyed by issuer and subject inside each
     environment's own database, so a staging test login that signs in at domeremote.com starts an empty
     production account; and `OIDCClient._verify_id_token` refuses an ID token whose `aud` does not name this
@@ -1025,5 +1030,5 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     staging app is useless to production and the other way round. The cost: every tenant-wide change made while
     testing staging also changes production, so the tenant is treated as production (its Environment Tag
     already says so). If a paid plan is ever bought, **staging** moves to the new tenant, so real customers
-    never move. `docs/LAUNCH_SETUP.md` section 10 has the founder's steps.
+    never move. `docs/LAUNCH_SETUP.md` section 10 lists the `DoMe` app's settings, to check or to redo.
 

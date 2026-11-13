@@ -19,8 +19,8 @@ nothing can be bought and everyone stays on Free. On staging and production the 
 Environment through the Deploy button, which checks them before touching Fly (all seven or none, key and price-id
 shapes, no live key on staging), stores the two secrets in Fly, passes the five price ids, removes Stripe secrets
 GitHub no longer has, and reports "Stripe: off", "Stripe: TEST MODE — no real charges" or "Stripe: LIVE — real
-charges" (`deploy/README.md` "Billing (Stripe) through the Deploy button"; unit-tested against a fake `flyctl`, never
-run against Fly).
+charges" (`deploy/README.md` "Billing (Stripe) through the Deploy button"; unit-tested against a fake `flyctl`; run against
+Fly with the Stripe values on staging since Deploy #8, 2026-10-23, `docs/PROGRESS.md` 2026-10-23; production has none).
 
 Evidence tags used below: `unit-tested`, `integration-tested (fake provider)` (Linux, real PostgreSQL, real
 OIDC through `tools/dev-idp`, simulated agents/phones, `FakeStripe` signing its deliveries exactly the way
@@ -36,7 +36,7 @@ pinned SDK sends; it knows no account, so a price's existence and type, the acco
 | --- | --- | --- |
 | Plan catalogue | `shared/protocol/plans.json` (protocol 1.3): Free, Pro, Pro Plus; `pricing_defaults` is the only place display prices live; `GET /v1/plans` returns plans, `pricing`, `billing_enabled`, `billing_mode` and `ai_enabled` (whether the assistant can be used, so the website labels AI allowances honestly) | integration-tested (`test_entitlement_and_misc.py`, `test_billing_settings.py::test_plans_endpoint_reports_billing_mode`) |
 | Configuration | Seven values switch billing on: `DOME_STRIPE_SECRET_KEY`, `DOME_STRIPE_WEBHOOK_SECRET`, `DOME_STRIPE_PRICE_PRO_MONTHLY`, `_PRO_ANNUAL`, `_PRO_PLUS_MONTHLY`, `_PRO_PLUS_ANNUAL`, `_TOPUP`. All or none: a partial set refuses start-up and names the missing variables (never values); a live key refuses start-up outside production | unit-tested (`test_billing_settings.py`) |
-| Deploy button | Carries the seven values from a GitHub Environment (two secrets on stdin, five price-id variables with `-e`), applies the same rules before any Fly call, removes leftover Stripe secrets when GitHub has none, checks `GET /v1/plans` after the deploy and reports off / test / live (`deploy/README.md`) | unit-tested (`deploy/launch/tests/test_deploy_billing.py`, fake `flyctl`); never run against Fly |
+| Deploy button | Carries the seven values from a GitHub Environment (two secrets on stdin, five price-id variables with `-e`), applies the same rules before any Fly call, removes leftover Stripe secrets when GitHub has none, checks `GET /v1/plans` after the deploy and reports off / test / live (`deploy/README.md`) | unit-tested (`deploy/launch/tests/test_deploy_billing.py`, fake `flyctl`); run against Fly with the Stripe values on staging since Deploy #8 (2026-10-23, `docs/PROGRESS.md` 2026-10-23); production runs with none (billing off) |
 | Checkout | `POST /v1/billing/checkout {plan, interval}` → a Stripe-hosted page; one open page per account is reused | integration-tested (fake provider) |
 | Customer Portal | `POST /v1/billing/portal {}` → Stripe's portal for card, interval, plan changes, invoices, cancellation | integration-tested (fake provider) |
 | AI top-up | `POST /v1/billing/topup {}` → a one-off hosted page for 100 AI requests; credited once from a verified paid Checkout | integration-tested (fake provider) |

@@ -2,6 +2,58 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-13 — Correction: domeremote.com has been live since 2026-10-15; updated to bf83141 on 2026-11-13
+
+- **What was wrong.** Several documents said or implied that production (https://domeremote.com) was not live yet,
+  that staging and production used two separate Auth0 tenants, or that production's database would be created
+  later: the legal packet (`docs/legal/data-map.md`, `subprocessors.md`, `founder-decisions.md`, `README.md` and
+  both counsel emails), `docs/LAUNCH_SETUP.md` (its status note, the Auth0 steps of sections 5 and 10, and section
+  11), cloud-api DECISIONS #124, `docs/HANDOFF.md`, `docs/OPERATIONS.md`, `deploy/README.md`,
+  `cloud-api/KNOWN_ISSUES.md` #5, #24 and #42, `docs/DATA_RETENTION.md`, `docs/SECURITY.md`, `docs/ACCEPTANCE.md`,
+  `docs/ARCHITECTURE.md`, `docs/IPHONE_SETUP.md`, `docs/BILLING.md`, `docs/PRODUCT_AND_PLANS.md`,
+  `docs/COST_MODEL.md` §7A, the top-level `README.md`, the STATUS comments of `.github/workflows/deploy.yml` and
+  `deploy/fly.toml`, and the 2026-11-09 entry below ("in both tenants"). Today's earlier commits (7f20037,
+  060df4d, 3f314cc) wrote `docs/LAUNCH_SETUP.md` section 10 and DECISIONS #124 as if production's Auth0 app were
+  being set up for the first time on 2026-11-13.
+- **What is true.** Production has been live since its first Deploy on 2026-10-15 (commit 7a590ad; Fly app
+  `domeremote-production`, Fly Managed Postgres Basic in `iad`; the 2026-10-16 entry below). Its previous Deploy was
+  on 2026-10-20 (commit 35a203f, GitHub Actions run 39464803237, success): sign-in provider the one Auth0 tenant,
+  the Fly app and its database already there and connected, machine always on, certificate for domeremote.com
+  Ready, healthz ok at 35a203f. It holds real accounts, at least the founder's own (they linked their Windows PC
+  and paired an iPhone there on 2026-10-16); whether anyone else has signed up is not recorded. There has only
+  ever been one Auth0 tenant, `dev-d0zmb20xjn5fs1dq` (US, Environment Tag Production): staging signs in through
+  the application `DoMe staging` and production, since 2026-10-15, through `DoMe`. Resend (`mail.domeremote.com`)
+  has sent both apps' emails since 2026-10-20. On 2026-11-13 the founder re-checked the `DoMe` app's settings,
+  found the free plan cannot hold a second tenant, and chose to keep sharing rather than pay (DECISIONS #124, kept
+  as the decision record).
+- **What production at 35a203f did not have** (all on staging first): the confirmed-email sign-in rule
+  (DECISIONS #118–#120), self-updates, self-serve account deletion and the retention purge (#121–#123), the
+  renewal wording before payment, the honest plan claims and the support contact. Billing is off in
+  production (no Stripe values) and so is Screen view (no TURN values); both stayed off after the update.
+- **Updated 2026-11-13** from 35a203f (61 commits behind) to bf83141; the steps are in `docs/LAUNCH_SETUP.md`
+  section 11 "Updating production later" (written that day for this and every later update). Staging first: GitHub
+  Actions Deploy run 43408148197, finished 10:21 UTC, success. Then production: run 43508425555, job "Deploy
+  production" finished 21:29 UTC, success. Its summary: migrations ran first (release command `alembic -c
+  alembic.ini upgrade head` completed successfully); Fly app `domeremote-production` already there, unchanged;
+  database already connected, unchanged; image built from commit bf83141; healthz status ok, database ok,
+  commit bf83141; certificate for domeremote.com Ready; Billing (Stripe) off, nothing can be bought, everyone
+  stays on Free; Screen view off, relay server none; the build carries
+  `VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com`; the sign-in provider answers (the workflow does not
+  test sign-in itself). [GitHub Actions Deploy runs 43408148197 and 43508425555, 2026-11-13]
+- **After the update:** the founder signed in at https://domeremote.com, and Settings ends with Delete account
+  [founder-reported 2026-11-13]. From the commit it now runs, not from that check: production has everything the
+  "did not have" bullet lists, and its /privacy and /terms serve the current drafts (rewritten on 2026-11-12),
+  still under the DRAFT banner; Billing and Screen view stay off [GitHub Actions Deploy run 43508425555, 2026-11-13].
+- **Not yet confirmed on production:** deleting an account there or against the real Auth0 (the next entry);
+  the hourly purge's first pass (due an hour after start-up; nothing reports it yet); how many accounts it holds
+  besides the founder's own.
+- **What was run for this correction:** documentation and two code comments only (the STATUS lines above); no
+  behaviour changed. Every line citation into a changed file was re-pointed to the same text, and a script
+  confirmed that every cited file exists and every cited line is inside it. [docs corrected from the Deploy run
+  records and this log; nothing deployed by this change]
+- **Next (founder):** nothing more for the update. Deleting a throwaway account against the real Auth0 is still
+  open: see the next entry.
+
 ## 2026-11-13 — Customers can delete their own account; old data is cleaned up automatically; the plan pages say only what is true
 
 - **Delete account (Settings, last section).** The phone asks the person to sign in again with their password,
@@ -29,8 +81,9 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
 - **Deployed to staging (2026-11-13, commit 63de996):** the Deploy ran migrations 0008 and 0009 first,
   /healthz reports this commit, and the build carries `VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com`.
   The founder set up `support@domeremote.com` in Cloudflare Email Routing, forwarding to their own mailbox.
-- **Deleting against the real Auth0: not yet confirmed.** The founder chose to move on to production first
-  (2026-11-13). It fails safe: if Auth0 does not confirm the password entry, deletion is refused with
+- **Deleting against the real Auth0: not yet confirmed.** The founder chose to update production first
+  (2026-11-13: production, live since 2026-10-15 at 35a203f, was updated to bf83141 that day, staging first; see
+  the correction entry above). It fails safe: if Auth0 does not confirm the password entry, deletion is refused with
   REAUTH_REQUIRED and the log shows `oidc.reauth_unconfirmed` (KNOWN_ISSUES #40). To try it later:
 - **Next (founder, on staging after the Deploy):** delete a throwaway test account from the iPhone. Auth0 should
   show its login page when you tap "Sign in again", and the deletion should go through afterwards. If it is
@@ -119,8 +172,8 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   only when the provider says `email_verified` is exactly true; otherwise no account, session or session cookie is made,
   and the home page says "Confirm your email first" (cloud-api DECISIONS #118, `docs/SECURITY.md` T1). The notice
   survives the app reloading itself for an update in the minute after the refusal. Before the first Deploy with
-  this, the founder checks that their own and any tester's Auth0 users show the email as verified, in both tenants
-  (`docs/LAUNCH_SETUP.md` §16).
+  this, the founder checks that their own and any tester's Auth0 users show the email as verified, in the one tenant
+  both apps share (`docs/LAUNCH_SETUP.md` §16; cloud-api DECISIONS #124).
 - **The counsel email** is in `docs/legal/h264-counsel-email.md`: the H.264 licensing and FFmpeg LGPL questions
   for a short paid consult, each fact traced to the repository; its answer is a condition before Screen view is
   switched on for customers.

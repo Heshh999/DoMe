@@ -1,7 +1,7 @@
 # DoMe cloud-api + relay + PWA on Fly.io (ADR-0001 D2: Fly.io, single region; reversible).
 #
-# STATUS (2026-10-14): written against the Fly.io configuration reference and the flyctl v0.4.110 source;
-# NOT YET DEPLOYED. Nothing in this file has been verified against a live Fly app.
+# STATUS (2026-11-13): written against the Fly.io configuration reference and the flyctl v0.4.110 source;
+# deployed for staging and production since 2026-10-15 (docs/PROGRESS.md 2026-10-16).
 #
 # This is the environment-neutral base for BOTH environments. The "Deploy" GitHub Actions workflow
 # (.github/workflows/deploy.yml -> deploy/launch/dome_deploy.py) always passes --app and the

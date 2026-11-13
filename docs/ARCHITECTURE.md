@@ -186,7 +186,8 @@ gives the exact shapes. "Relay" means cloud-api.
    `Origin`; both are checked in `current_account`.
 
 Evidence: integration-tested (cloud-api `tests/test_auth_and_sessions.py` against `tools/dev-idp`).
-Not tested against Auth0 or Keycloak; a production issuer must be registered by the founder.
+Auth0 sign-in founder-run on staging and on production since 2026-10-15 (`docs/PROGRESS.md` 2026-10-16),
+each through its own application in one tenant (cloud-api DECISIONS #124); not tested against Keycloak.
 
 ### 4.2 Linking a PC to an account (device-code shape, ADR-0001 D4)
 

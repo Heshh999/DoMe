@@ -11,12 +11,25 @@ Send the email below to a US lawyer who advises small online businesses on priva
 technology and IP licensing, they can take the H.264 email too; then send both together and say so in the
 last paragraph.
 
-The DoMe repository on GitHub is public: anyone can read this folder (`docs/LAUNCH_SETUP.md:66-69`;
+The DoMe repository on GitHub is public: anyone can read this folder (`docs/LAUNCH_SETUP.md:69-72`;
 `docs/SECURITY.md:312`). So copy the email into your own email program and replace [name] there; do not write
 the lawyer's name, your answers or the lawyer's replies into the files in the repository.
 
 Before you send it, fill in whatever you have already decided in your own downloaded copy of
 `founder-decisions.md`, so the lawyer reviews your choices rather than blanks.
+
+Check the live site first. The live site, https://domeremote.com, ran the code of 2026-10-20 (commit 35a203f
+[GitHub Actions Deploy run 39464803237, 2026-10-20]) until 2026-11-13, when it was updated to commit bf83141
+[GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:33-42`). It now has the renewal wording
+and the Delete account button that questions 1 and 4 describe, which the test site has had since earlier that
+day (`docs/PROGRESS.md:59-69,81-82`); its /privacy and /terms serve the current drafts under the DRAFT banner,
+known from the commit deployed, not from a look at the pages [GitHub Actions Deploy run 43508425555, 2026-11-13]
+(`docs/PROGRESS.md:43-46`). After the update you signed in there, and Settings ends with Delete account
+[founder-reported 2026-11-13]. So before you send, open https://domeremote.com/privacy and /terms: the Privacy
+notice should start with "Who we are" and the Terms with "About these terms" (`README.md`, "Which version of the
+drafts the website shows"). If they do not, tell an engineer before you send. The email also says you have not
+yet checked whether anyone besides you has signed up on the live site (the repository does not record it,
+`docs/PROGRESS.md:22-23`); if you have counted the accounts by then (`founder-decisions.md` section 5), say so instead.
 
 Attach:
 
@@ -33,7 +46,7 @@ fixed fee or an estimate that covers all of it before you agree, and ask for the
 
 ## The email
 
-Subject: Pre-launch review: Privacy notice, Terms of service and subscription questions for my app
+Subject: Review before I start selling: Privacy notice, Terms of service and subscription questions for my app
 
 Hi [name],
 
@@ -50,9 +63,11 @@ the action's name, timing and outcome). Two optional features are built but not 
 test site); and an AI assistant (called "the AI butler" in the app and in the drafts) that, after the customer
 consents, sends requests to Anthropic's API (not switched on anywhere). Plans: Free (no card); Pro
 $9.99/month or $99.99/year; Pro Plus $24.99/month or $249.99/year; one-off AI top-ups ($2.99). Payment is
-through Stripe, with DoMe as the seller and any tax included. Nothing is on sale yet, and DoMe will be small
-at launch. I attach a data map and a vendor list, traced to the code, the AI consent screen word for word,
-and the short licence terms my Windows installer shows.
+through Stripe, with DoMe as the seller and any tax included. Nothing is on sale yet. My website and server
+have been live at domeremote.com since October 2026, with free accounts only. The live service holds at
+least my own account; I have not yet checked whether anyone else has signed up. The Windows program is not yet
+published for download (only test builds exist). I attach a data map and a vendor list, traced to the code,
+the AI consent screen word for word, and the short licence terms my Windows installer shows.
 
 My questions:
 1. Renewal and cancellation. Plans renew automatically; customers cancel online in Stripe's portal, at
@@ -68,10 +83,10 @@ My questions:
    What refund policy should I publish, and are never-expiring credits a problem? When a customer disputes a
    card payment (a chargeback), my system only flags it for me; access is not paused. What should my Terms
    say about access while a payment is disputed, and what records should I keep to answer a dispute?
-3. Privacy laws. Which state laws apply at launch, and from what size (New Jersey's, California's,
-   others)? What must the notice contain regardless? The app has no analytics or advertising code; could a
-   vendor arrangement still count as a "sale" or "sharing"? Is a keyed hash of an IP address personal
-   information?
+3. Privacy laws. Which state laws apply now that my website is live with free accounts, and once paid plans
+   go on sale, and from what size (New Jersey's, California's, others)? What must the notice contain
+   regardless? The app has no analytics or advertising code; could a vendor arrangement still count as a
+   "sale" or "sharing"? Is a keyed hash of an IP address personal information?
 4. Account deletion. Customers can delete their account in the app (Settings, Delete account). They type
    a phrase and, unless they did so in the last 10 minutes, sign in again with their password. The
    subscription is cancelled at once with no automatic refund, unused AI top-up requests are lost, every
@@ -94,8 +109,9 @@ My questions:
    Jersey's TCCWNA? Which governing law, venue and dispute terms (arbitration, class waiver) do you advise?
    The short Windows licence terms that Setup shows (attached) should match the Terms on all of this:
    what should their liability and governing-law wording say?
-9. Business entity. Sole proprietor or LLC before launch? My Windows code signing is in my own name. Should
-   vendor accounts move to an LLC, and what insurance do I need?
+9. Business entity. Sole proprietor or LLC, and how soon, given that my website is already live with free
+   accounts and selling has not started? My Windows code signing is in my own name. Should vendor accounts move
+   to an LLC, and what insurance do I need?
 10. Trademark. Could you run or recommend a clearance search for "DoMe" and "DoMe Remote" for software and
     online services? My browser extension is named "DoMe for YouTube"; is using "YouTube" in its name a
     problem (question 15)?
@@ -156,11 +172,13 @@ New Jersey
 ## Where the facts come from (for Justin and an engineer; do not send)
 
 Paths are from the top of the repository; line numbers as of 2026-11-12, with the Privacy and Terms drafts as
-rewritten that day.
+rewritten that day, and with the citations of files changed on 2026-11-13 (the production status correction,
+then the production update the same day, which moved the citations of `docs/PROGRESS.md` past line 41 down by
+14 lines) re-pointed that day.
 
 - Founder in New Jersey: `docs/legal/h264-counsel-email.md:24`.
-- The repository is public: `docs/LAUNCH_SETUP.md:66-69`; `docs/SECURITY.md:312`; `.github/workflows/deploy.yml:13`.
-- What DoMe controls, confirmation before power actions: `docs/PRODUCT_AND_PLANS.md:31-33`;
+- The repository is public: `docs/LAUNCH_SETUP.md:69-72`; `docs/SECURITY.md:312`; `.github/workflows/deploy.yml:13`.
+- What DoMe controls, confirmation before power actions: `docs/PRODUCT_AND_PLANS.md:33-35`;
   `pc-agent/dome_agent/authz.py:279-291`; `pc-agent/dome_agent/actions/power.py:86-95`.
 - Four parts, server in Virginia on Fly.io: `mobile-app/src/pages/public/PrivacyPage.tsx:21`;
   `deploy/fly.toml:18-19`.
@@ -170,23 +188,30 @@ rewritten that day.
   `mobile-app/src/pages/public/PrivacyPage.tsx:43`.
 - Screen view encrypted, Cloudflare relay: `shared/protocol/version.json:76-77`;
   `cloud-api/dome_api/screen/turn.py:1-3`. On only on staging: `cloud-api/dome_api/settings.py:175`;
-  `docs/LAUNCH_SETUP.md:492-499,514-516`.
+  `docs/LAUNCH_SETUP.md:533-540,555-557`.
 - Assistant only after consent, not switched on: `cloud-api/dome_api/settings.py:150`;
-  `docs/LAUNCH_SETUP.md:724`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
+  `docs/LAUNCH_SETUP.md:770`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
   `mobile-app/src/pages/public/TermsPage.tsx:120`; `mobile-app/src/pages/public/PrivacyPage.tsx:85`;
   `mobile-app/src/components/AssistantConsentSheet.tsx:24`.
-- Prices and top-up: `shared/protocol/plans.json:149-164`. Free needs no card: `docs/PRODUCT_AND_PLANS.md:18`.
+- Prices and top-up: `shared/protocol/plans.json:149-164`. Free needs no card: `docs/PRODUCT_AND_PLANS.md:20`.
 - DoMe the seller, tax included: `cloud-api/dome_api/billing/stripe_provider.py:222-237`;
   `cloud-api/DECISIONS.md:522-531`; `shared/protocol/plans.json:166`.
-- Nothing on sale: `docs/LAUNCH_SETUP.md:334-342`.
+- Nothing on sale: `docs/LAUNCH_SETUP.md:375-383`.
+- Website and server live since 2026-10-15, with the founder's own account: `docs/PROGRESS.md:18-19,962-970`;
+  free accounts only, billing off in production `docs/PROGRESS.md:29-32`; deployed 2026-10-20 at commit 35a203f
+  [GitHub Actions Deploy run 39464803237, 2026-10-20] and updated 2026-11-13 to commit bf83141 [GitHub Actions
+  Deploy run 43508425555, 2026-11-13] `docs/PROGRESS.md:33-42`; the founder signed in after the update and
+  Settings ends with Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:43-46`;
+  whether anyone else has signed up is not recorded `docs/PROGRESS.md:22-23`. The Windows program not yet
+  published for download, only test builds: `docs/LAUNCH_SETUP.md:838-840`.
 - Question 1: renewal and cancellation in Stripe's portal `mobile-app/src/pages/public/TermsPage.tsx:82,93-94`;
-  `docs/LAUNCH_SETUP.md:409-411`. The renewal statement (bold, larger), how to cancel and the Terms and
+  `docs/LAUNCH_SETUP.md:450-452`. The renewal statement (bold, larger), how to cancel and the Terms and
   Privacy links `mobile-app/src/content/SubscriptionTerms.tsx:1-42`; `mobile-app/src/content/plans.ts:161-178`;
   under each subscribe button `mobile-app/src/pages/app/BillingPage.tsx:400` and each paid plan on Pricing
   `mobile-app/src/pages/public/PricingPage.tsx:212`. No tick box and no acceptance at checkout
   `cloud-api/dome_api/billing/stripe_provider.py:222-237`; `mobile-app/src/pages/public/TermsPage.tsx:15,85`.
   No email sent by DoMe's server: search of `cloud-api/dome_api` (no email-sending code); Auth0's emails go
-  through Resend `docs/LAUNCH_SETUP.md:743-745`. No in-app notice feature: search of `mobile-app/src`. The
+  through Resend `docs/LAUNCH_SETUP.md:789-791`. No in-app notice feature: search of `mobile-app/src`. The
   drafts' notice promises and [FOUNDER] notes: `TermsPage.tsx:34,108,157`; `PrivacyPage.tsx:213`.
 - Question 2: `mobile-app/src/pages/public/TermsPage.tsx:102`; `docs/BILLING.md:298,334-335,408`;
   `cloud-api/KNOWN_ISSUES.md:107-109`; `shared/protocol/plans.json:2`. Disputes flagged, access not paused:
@@ -205,11 +230,11 @@ rewritten that day.
   copied in `docs/legal/ai-consent-text.md`; mistakes wording `mobile-app/src/pages/public/TermsPage.tsx:124`.
 - Question 7: PC sound planned `docs/design/screen-view.md:75-77`; `mobile-app/src/content/faq.tsx:121`.
 - Question 8: `mobile-app/src/pages/public/TermsPage.tsx:145`; `pc-agent/packaging/installer/licence-terms.txt:21-24`.
-- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:792-797,814-817`.
+- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:841-846,866-869`.
 - Question 10: the extension's name `browser-extension/public/manifest.json:3`.
 - Question 11: `docs/legal/subprocessors.md` section 1.
 - Question 12: encryption `mobile-app/src/pages/public/PrivacyPage.tsx:100,185`; public downloads on GitHub
-  `docs/LAUNCH_SETUP.md:950-957`; checkout restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
+  `docs/LAUNCH_SETUP.md:999-1006`; checkout restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
 - Question 13: public repository, as above; no licence file at the top of the repository (`git ls-files`: the
   only licence texts are third-party ones under `pc-agent/packaging/licenses`); "closed-source"
   `mobile-app/src/pages/public/TermsPage.tsx:56`; `pc-agent/packaging/THIRD_PARTY_NOTICES.txt:21-22`; the
@@ -221,8 +246,8 @@ rewritten that day.
   (directory listing).
 - Question 14: power actions need confirmation `mobile-app/src/pages/public/PrivacyPage.tsx:188`; the server
   reads what it routes `PrivacyPage.tsx:64,190`; signed updates and no automatic install
-  `pc-agent/dome_agent/update_check.py:1-25,66-69`; publishing a release `docs/LAUNCH_SETUP.md:950-957`;
-  incident outline "procedure, not yet run" `docs/OPERATIONS.md:340-345,425`; the breach note
+  `pc-agent/dome_agent/update_check.py:1-25,66-69`; publishing a release `docs/LAUNCH_SETUP.md:999-1006`;
+  incident outline "procedure, not yet run" `docs/OPERATIONS.md:345-350,430`; the breach note
   `PrivacyPage.tsx:191`.
 - Question 15: `browser-extension/public/manifest.json:3,7-10`; no ad skipping
   `browser-extension/src/content/adapter.ts:30,102`; `mobile-app/src/pages/public/TermsPage.tsx:58`; not
@@ -230,7 +255,7 @@ rewritten that day.
 - Question 16: the paid Screen view and everyday-command wording `mobile-app/src/content/plans.ts:109,113,209`;
   `mobile-app/src/lib/pricing.ts:44-45`; no "unlimited" on any rendered public page
   `mobile-app/test/public/honestClaims.test.tsx`; the per-phone command limits
-  `shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:47`; Screen view relay limits
+  `shared/protocol/plans.json:28-33`; `docs/PRODUCT_AND_PLANS.md:49`; Screen view relay limits
   `mobile-app/src/pages/public/TermsPage.tsx:116`; features not built `mobile-app/src/content/faq.tsx:123`;
   AI requests as minutes `mobile-app/src/content/plans.ts:125-131,150-155`; the Terms' limits wording
   `TermsPage.tsx:134,140`.
