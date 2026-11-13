@@ -2,6 +2,34 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-13 — Customers can delete their own account; old data is cleaned up automatically; the plan pages say only what is true
+
+- **Delete account (Settings, last section).** The phone asks the person to sign in again with their password,
+  then to type a confirmation. The server then signs every phone and PC out at once, cancels the subscription,
+  and removes the account's links, keys and settings. The account itself is erased 30 days later. Payment
+  records are kept without a name or email. If a payment page that was already open gets paid after the
+  deletion, DoMe never applies it and logs `billing.needs_operator` (kind=refund) so the founder can refund it
+  by hand in Stripe (cloud-api DECISIONS #121–#123, KNOWN_ISSUES #40–#42).
+- **Automatic clean-up.** An hourly job now applies every retention period in `docs/DATA_RETENTION.md`, up to
+  500 rows per table each pass, and logs one `purge.run` line with counts only. It can be switched off with
+  `DOME_PURGE_ENABLED=false` (DECISIONS #122). Migrations 0008 and 0009 run with the next Deploy.
+- **Before payment.** Under each subscribe button: the price it renews at and how often, how to cancel, and
+  links to the Terms and Privacy pages.
+- **Honest claims.** No page says "unlimited" any more: paid Screen view has "no time limit (fair-use limits
+  apply)". The FAQ, the film and the plan explanation describe only what is built; PC sound and the TV remote
+  say "coming later".
+- **Legal packet updated** to match: the counsel email (questions 1, 4 and 16), the Terms notes, the data map and
+  the founder decisions now describe the delete button, the clean-up job and the renewal wording.
+- **What was run (Linux, 2026-11-12 and 13):** two independent reviews (security and data; customer wording and
+  legal), 14 findings, all fixed with a test each; cloud-api 697 passed (7 skipped), ruff, format, mypy; an
+  Alembic round trip on a scratch database; shared/python 360; shared/ts 201; mobile-app typecheck, lint, 1,735
+  passed (5 skipped), build; pc-agent 1,357 passed (3 skipped); dev-idp 26; end-to-end security, input and
+  version suites 18 passed. **Evidence tag: unit- and integration-tested on Linux; not yet tried against the real
+  Auth0 or on a phone.**
+- **Next (founder, on staging after the Deploy):** delete a throwaway test account from the iPhone. Auth0 should
+  show its login page when you tap "Sign in again", and the deletion should go through afterwards. If it is
+  always refused, the server log shows `oidc.reauth_unconfirmed` (KNOWN_ISSUES #40).
+
 ## 2026-11-12 — The legal packet for counsel is ready (docs/legal/)
 
 - **What it is.** Everything a lawyer needs before launch, so the founder only has to choose one and send it
