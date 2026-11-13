@@ -312,8 +312,8 @@ founder-driven; then:
 
 0. **Launch setup (founder-driven, `docs/LAUNCH_SETUP.md`)**: the founder creates the Fly.io account
    (card on file), the GitHub Environments `staging` and `production` (default branch only, themselves as
-   required reviewer on **both**), one Fly organization token per environment, two Auth0 tenants with a
-   Regular Web Application each (Client Secret (Post)), a free Neon account with the project
+   required reviewer on **both**), one Fly organization token per environment, one Auth0 tenant (the free plan's
+   only one) with a Regular Web Application per environment (Client Secret (Post); DECISIONS #124), a free Neon account with the project
    `domeremote-staging` (its direct connection string as the staging Environment secret `DATABASE_URL`),
    pastes the values, and runs Deploy for staging (no database tick), then the Cloudflare record,
    `status`, a real sign-in, then production (ticking the database: about $41 a month). An engineer reads

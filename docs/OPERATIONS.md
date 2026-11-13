@@ -120,8 +120,9 @@ it guarantees, in operator terms:
    in from a phone; link a development agent (`DOME_AGENT_API_URL=https://staging.domeremote.com`);
    confirm `agent_connected` in security activity and `/healthz` → `relay.agents` is 1; then Scenario 4
    of `docs/ACCEPTANCE.md`.
-8. **Environments.** Staging and production are separate Fly apps, databases, Auth0 tenants and
-   entitlement keys (spec §18 D). Production is refused unless staging runs the same commit, healthy.
+8. **Environments.** Staging and production are separate Fly apps, databases, Auth0 applications and
+   entitlement keys (spec §18 D). Both Auth0 applications live in the one tenant the free plan allows
+   (cloud-api DECISIONS #124): tenant-wide settings, the login list and the email provider are shared. Production is refused unless staging runs the same commit, healthy.
    Never point a staging agent at production.
 
 Idle WebSockets: the agent sends an application `ping` every 25 s and closes a socket silent for

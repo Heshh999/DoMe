@@ -35,9 +35,9 @@ Words used here:
 Environments. Staging is public at https://staging.domeremote.com (`deploy/launch/environments.toml:24-28`).
 The repository calls staging "test data only", but it holds real sign-ups: at least the founder's own account and
 a test sign-up; whether anyone else has signed up is not recorded (`docs/DATA_RETENTION.md:55`;
-`docs/PROGRESS.md:7-10`; `docs/LAUNCH_SETUP.md:748-750`). The
+`docs/PROGRESS.md:7-10`; `docs/LAUNCH_SETUP.md:774-776`). The
 brief for this pack says production is not live yet. The repository is not consistent on this point
-(`docs/LAUNCH_SETUP.md:313-315` speaks of domeremote.com "today"), so the founder should confirm it.
+(`docs/LAUNCH_SETUP.md:335-337` speaks of domeremote.com "today"), so the founder should confirm it.
 
 ## Summary for counsel
 
@@ -55,7 +55,7 @@ brief for this pack says production is not live yet. The repository is not consi
    direct path exists, an outside relay company (Cloudflare) carries the encrypted stream and sees the devices'
    network addresses, times and data amounts (sections 2 and 6).
 5. The AI assistant is switched off by default, and no deployment sets its provider key
-   (`cloud-api/dome_api/settings.py:153`; `docs/LAUNCH_SETUP.md:702`). When it is on, the words of a request go
+   (`cloud-api/dome_api/settings.py:153`; `docs/LAUNCH_SETUP.md:724`). When it is on, the words of a request go
    to Anthropic through the server, and DoMe stores none of them (sections 2 and 6).
 6. An hourly clean-up deletes old records after most of the stated periods, and a person can delete their own
    account in the app; the account is then erased 30 days later. Both are built and tested with automated tests
@@ -176,7 +176,7 @@ The extension is not published on the Chrome Web Store or Edge Add-ons; it is lo
 | Voice audio | DoMe never records or uploads audio; it receives text from the iPhone | `mobile-app/src/lib/speech.ts:5-7` |
 | Plain IP addresses | No IP column on sessions; keyed hashes only on some events and linking codes; request logs carry no IP; the masker hides addresses in free text | `cloud-api/dome_api/db/models.py:134-151`; `cloud-api/dome_api/security/tokens.py:41-44`; `cloud-api/dome_api/security/headers.py:120-149`; `cloud-api/dome_api/logging.py:209-215` |
 | Passwords | Typed on the sign-in provider's pages; the product never sees a password | `docs/adr/0001-foundational-decisions.md:36-39`; `docs/DATA_RETENTION.md:206-207` |
-| Card details | Typed only on Stripe's own pages; billing tables hold no card data or email | `docs/LAUNCH_SETUP.md:312-313`; `cloud-api/dome_api/db/models.py:384-386` |
+| Card details | Typed only on Stripe's own pages; billing tables hold no card data or email | `docs/LAUNCH_SETUP.md:334-335`; `cloud-api/dome_api/db/models.py:384-386` |
 | Pairing codes | Only a hash on the server; on the phone the code is read once from the link, cleared from the address bar and discarded after use | `cloud-api/dome_api/db/models.py:303`; `docs/DATA_RETENTION.md:165` |
 | Command parameters, results, media titles | Not stored by the server (lifecycle and hashes only) | `cloud-api/dome_api/db/models.py:1-5,320-344` |
 | Raw payment notices from Stripe | Never stored; only a hash | `cloud-api/dome_api/db/models.py:424-425` |
@@ -244,9 +244,9 @@ listed here.
 | `docs/DATA_RETENTION.md:65` | PC row contents | Leaves out protocol versions and the plan-disabled time | `cloud-api/dome_api/db/models.py:181,186-188` |
 | `docs/DATA_RETENTION.md:68` | Linking codes hold a "SHA-256 of requester IP" | It is a keyed hash | `cloud-api/dome_api/routes/agent_link.py:62`; `cloud-api/dome_api/security/tokens.py:41-44` |
 | `docs/DATA_RETENTION.md` (whole file) | — | No rows for the PC files `input_holds.json`, `update-check.json`, `downloads/`, `native-host.log`, lock and socket files; the PC diagnostics' hardware inventory; most phone storage keys | Sections 1, 3 and 4 above |
-| `docs/DATA_RETENTION.md:55`; `docs/OPERATIONS.md:172` | Staging holds test data only | Staging holds real sign-ups (at least the founder's own account and a test sign-up); whether anyone else has signed up is not recorded | `docs/PROGRESS.md:7-10`; `docs/LAUNCH_SETUP.md:748-750` |
+| `docs/DATA_RETENTION.md:55`; `docs/OPERATIONS.md:172` | Staging holds test data only | Staging holds real sign-ups (at least the founder's own account and a test sign-up); whether anyone else has signed up is not recorded | `docs/PROGRESS.md:7-10`; `docs/LAUNCH_SETUP.md:774-776` |
 | `docs/design/assistant.md:1606` (draft consent text) | Counts are kept "to apply your monthly allowance" | The app's own consent sheet says "your allowance", and the code uses rolling 5-hour and weekly windows | `mobile-app/src/components/AssistantConsentSheet.tsx:34`; `cloud-api/KNOWN_ISSUES.md:87-90` |
-| `docs/PRODUCT_AND_PLANS.md:31` | Lists "no screen capture" as a principle | Screen view (a live picture of the PC's screen) is built and switched on in staging | `docs/LAUNCH_SETUP.md:470-477,492-494` |
+| `docs/PRODUCT_AND_PLANS.md:31` | Lists "no screen capture" as a principle | Screen view (a live picture of the PC's screen) is built and switched on in staging | `docs/LAUNCH_SETUP.md:492-499,514-516` |
 
 ## 9. Questions for counsel about this data
 

@@ -270,21 +270,43 @@ Do exactly what the summary's **What to do next** says. Normally that is:
 5. Staging sleeps when nobody uses it. If a page takes a few seconds to appear after a quiet spell,
    that is the machine and the database waking up.
 
-## 10. Auth0 for production *(per vendor docs, not yet exercised)*
+## 10. Auth0 for production: a second app in the same tenant *(founder-run 2026-11-13)*
 
-Same as section 5, with these differences:
+Auth0's free plan allows **one tenant**, and staging already uses it (`dev-d0zmb20xjn5fs1dq`, its
+Environment Tag set to **Production**). Production gets its **own application** inside that tenant
+instead of its own tenant (cloud-api DECISIONS #124). A paid Auth0 plan would allow a separate tenant;
+if you ever buy one, move **staging** out to it, not production, so real customers never move.
 
-- A **separate tenant**: in https://manage.auth0.com, click the tenant name at the top left > **Create
-  tenant**. Tenant Domain `domeremote`, Region **US**, Environment Tag **Production** > **Create**.
-- Application name `DoMe`. **Allowed Callback URLs**: exactly `https://domeremote.com/v1/auth/callback`.
-- **Credentials > Authentication Method: Client Secret (Post)**.
-- In the application's **Connections** tab, turn **off** `google-oauth2` and keep
-  **Username-Password-Authentication** on. Auth0's shared Google keys are not meant for production.
-  Turn Google back on only after an engineer has set up your own Google keys.
-- Before real customers: set up an email provider in Auth0 for sign-up and password-reset emails
-  (Auth0's built-in email is for testing).
-- Paste `DOME_OIDC_ISSUER` and `DOME_OIDC_CLIENT_ID` (Variables) and `DOME_OIDC_CLIENT_SECRET` (Secret)
-  into the GitHub **production** environment.
+1. In https://manage.auth0.com, open the tenant `dev-d0zmb20xjn5fs1dq` (tenant name at the top left).
+2. **Applications > Applications > Create Application**. Name `DoMe`, **Regular Web Application** >
+   **Create**. Skip the Quickstart page.
+3. **Settings** tab: **Allowed Callback URLs**: exactly `https://domeremote.com/v1/auth/callback`.
+   Leave **Allowed Logout URLs** and **Allowed Web Origins** empty. **Save**.
+4. **Credentials** tab: **Authentication Method: Client Secret (Post)**. **Save**.
+5. **Connections** tab: turn **off** `google-oauth2`; keep **Username-Password-Authentication** on.
+   Auth0's shared Google keys are not meant for production. Turn Google back on only after an engineer
+   has set up your own Google keys. (Connections are per application, so the staging app is unchanged.)
+6. Nothing to do for emails: the tenant's email provider (Resend, section 16) already sends the
+   verification and password-reset emails for both apps. Check once that **Branding > Email Templates >
+   Verification Email** has no **Redirect To** address that points at staging (empty is fine: Auth0 then
+   shows its own "email verified" page).
+7. Paste into the GitHub **production** environment (https://github.com/Heshh999/DoMe/settings/environments
+   > **production**):
+   - **Environment variables**: `DOME_OIDC_ISSUER` = the **Domain** on the `DoMe` app's Settings tab (the
+     same as staging's, `dev-d0zmb20xjn5fs1dq.us.auth0.com`); `DOME_OIDC_CLIENT_ID` = the `DoMe` app's
+     **Client ID** (not the staging app's); `VITE_DOME_SUPPORT_URL` = `mailto:support@domeremote.com`.
+   - **Environment secrets**: `DOME_OIDC_CLIENT_SECRET` = the `DoMe` app's **Client Secret** (Auth0's copy
+     button).
+
+What the two apps share, and why that is acceptable for now: one list of logins (a staging test login
+can also sign in at domeremote.com, where it starts an empty DoMe account; DoMe's two databases stay
+separate), the email provider and templates, the password rules, and Auth0's remembered sign-in in one
+browser (signing in on staging and then opening domeremote.com in the same browser can sign you in
+without the password page). Every tenant-wide change you make while testing staging also changes
+production, so treat this tenant as production. What stays separate: each app's callback address, its
+Client Secret and its connections. DoMe checks that every ID token names its own Client ID
+(`cloud-api/dome_api/auth/oidc.py` `aud` check), so a sign-in made for the staging app is refused by
+production and the other way round.
 
 ## 11. Production deploy
 
@@ -712,7 +734,7 @@ summary lists them again until an engineer closes them:
 - a rehearsal of recovering from a failed deploy;
 - an outside uptime monitor on https://domeremote.com/healthz that alerts you;
 - the database backup retention, written down in `docs/OPERATIONS.md`;
-- a support contact (`VITE_DOME_SUPPORT_URL`): **staging done 2026-11-13**. Cloudflare Email Routing on
+- a support contact (`VITE_DOME_SUPPORT_URL`): **staging done 2026-11-13** (production: section 10 step 7). Cloudflare Email Routing on
   domeremote.com forwards `support@domeremote.com` to the founder's verified mailbox (routing rule
   Active; catch-all left Disabled), and staging's variable is `mailto:support@domeremote.com` (the Deploy
   of 63de996 built it in). Still open: the same variable in the **production** Environment. Until it is

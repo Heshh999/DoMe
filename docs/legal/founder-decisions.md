@@ -25,10 +25,10 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
     copyright line, and Stripe needs business details before it takes real payments.
   - What the repository shows: no business is named anywhere; every draft says "[FOUNDER: legal name of the
     business]" (section 7). Stripe's live mode needs business details, a bank account and identity
-    (`docs/LAUNCH_SETUP.md:629`), and its payment page needs a public business name
-    (`docs/LAUNCH_SETUP.md:628`). Business details on invoices are an open billing decision
+    (`docs/LAUNCH_SETUP.md:651`), and its payment page needs a public business name
+    (`docs/LAUNCH_SETUP.md:650`). Business details on invoices are an open billing decision
     (`docs/BILLING.md:423`). Windows code signing uses your individual identity, so Windows shows your legal
-    name as the publisher (`docs/LAUNCH_SETUP.md:766-771,788-791`), while Setup names the publisher "DoMe"
+    name as the publisher (`docs/LAUNCH_SETUP.md:792-797,814-817`), while Setup names the publisher "DoMe"
     (`pc-agent/packaging/installer/DoMe.iss:78`).
   - Outside research (New Jersey Division of Revenue fee page, via web search on 2026-11-12, not verified by
     counsel): forming a New Jersey LLC costs $100, and its annual report $75.
@@ -39,7 +39,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **1.2 Publisher name on Windows (code signing).** Decide together with 1.1.
   - What the repository shows: signing as a company later is a new identity, and Windows' trust in DoMe
     (SmartScreen reputation) starts again from zero; the setup guide says to choose now
-    (`docs/LAUNCH_SETUP.md:788-791`). Signing costs $9.99 a month (`docs/LAUNCH_SETUP.md:795`).
+    (`docs/LAUNCH_SETUP.md:814-817`). Signing costs $9.99 a month (`docs/LAUNCH_SETUP.md:821`).
   - Suggestion: settle it before the first public release, for the reason the guide gives.
   - Your answer:
 
@@ -55,12 +55,12 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **1.4 Contact email for privacy requests and support.**
   - Why it matters: the drafts send privacy requests and account deletions to "[FOUNDER: contact email for
     privacy requests]" and the Terms to "[FOUNDER: contact email]". A direct support contact
-    (`VITE_DOME_SUPPORT_URL`) is still an open production item (`docs/LAUNCH_SETUP.md:715`). Without it,
+    (`VITE_DOME_SUPPORT_URL`) is still an open production item (`docs/LAUNCH_SETUP.md:737`). Without it,
     someone who cannot sign in cannot reach DoMe, because the support form needs sign-in
     (`mobile-app/src/pages/public/SupportPage.tsx:183-189`). The FFmpeg source offer in the Windows notices
     points to that Support page (`pc-agent/packaging/THIRD_PARTY_NOTICES.txt:51-55`).
   - What exists: mail.domeremote.com only sends Auth0's emails, from a no-reply sender, through Resend
-    (`docs/LAUNCH_SETUP.md:717-719`). The repository records no mailbox that receives email.
+    (`docs/LAUNCH_SETUP.md:743-745`). The repository records no mailbox that receives email.
   - Suggestion, not legal advice: one address on domeremote.com that you read, used for privacy requests and
     support at first, and set as the support contact. Not a personal address.
   - Your answer:
@@ -129,7 +129,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **3.3 Yearly plans at launch, or monthly only.** Ask counsel first (question 1).
   - What is built: Pro at $99.99 a year and Pro Plus at $249.99 a year (`shared/protocol/plans.json:152-158`).
     Payments need all five Stripe prices, the yearly ones included (`cloud-api/dome_api/settings.py:327-328`;
-    `docs/LAUNCH_SETUP.md:617`), so leaving yearly plans out needs an engineer's change. DoMe's server sends no
+    `docs/LAUNCH_SETUP.md:639`), so leaving yearly plans out needs an engineer's change. DoMe's server sends no
     email of its own (`docs/legal/subprocessors.md`, row 6), and how Stripe's own customer emails are set is not
     recorded (see 4.6).
   - Outside research (law-firm summaries, via web search on 2026-11-12, not verified by counsel): several
@@ -171,7 +171,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **3.8 What Stripe's customer portal allows.** Proposed: upgrades and monthly-to-yearly take effect at
   once with unused time credited; downgrades and yearly-to-monthly at the end of the period; cancelling at
   the end of the period with no partial refund (`docs/BILLING.md:292-301,418`). The setup guide already asks
-  for cancelling at period end and no pausing (`docs/LAUNCH_SETUP.md:387-389`).
+  for cancelling at period end and no pausing (`docs/LAUNCH_SETUP.md:409-411`).
   - Suggestion, not legal advice: adopt the proposal; the lawyer checks the wording (questions 1 and 2).
   - Your answer:
 
@@ -238,7 +238,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
 - [ ] **4.5 Who may sign up on the test site (staging).**
   - What the repository shows: staging is public (`deploy/launch/environments.toml:24-28`) and holds real
     sign-ups, at least your own account and a test sign-up (`docs/PROGRESS.md:7-10`;
-    `docs/LAUNCH_SETUP.md:748-749`). The Privacy draft asks the lawyer whether the test site needs its own
+    `docs/LAUNCH_SETUP.md:774-775`). The Privacy draft asks the lawyer whether the test site needs its own
     notice (`PrivacyPage.tsx:142`).
   - Choice: keep staging open to anyone, or keep it for you and your testers (ask an engineer how).
   - Suggestion: none in the repository.
@@ -250,7 +250,7 @@ decision that fills it; section 8 lists every [COUNSEL] note and the email quest
   - Why it matters: the drafts promise notice "by email or in the app" before a price change, a change to the
     Terms and some changes to the Privacy notice, and renewal reminders may be required (question 1).
   - What is built: DoMe's server sends no email (a search of `cloud-api/dome_api` finds no sending code); only
-    Auth0 sends sign-in emails, through Resend (`docs/LAUNCH_SETUP.md:717-719`). The app has no notice or
+    Auth0 sends sign-in emails, through Resend (`docs/LAUNCH_SETUP.md:743-745`). The app has no notice or
     message feature. Stripe can send its own customer emails, but how they are set for DoMe is not recorded.
   - Choice: Stripe's customer emails, email sent by DoMe (an engineer's work and a sending service), a notice
     shown in the app, or a mix.
@@ -274,16 +274,16 @@ are facts other files in this packet ask you to confirm.
   recorded today (`docs/legal/subprocessors.md:18-19`).
 - [ ] Is domeremote.com (production) running, with real accounts? The brief for this packet says production
   is not live yet, but one guide speaks of domeremote.com "today" (`docs/legal/data-map.md`, "Environments";
-  `docs/LAUNCH_SETUP.md:313-315`).
-- [ ] In the staging Auth0 tenant, is the Google connection on? If yes, Google takes part in sign-ins on the
+  `docs/LAUNCH_SETUP.md:335-337`).
+- [ ] For the staging app in the Auth0 tenant, is the Google connection on? If yes, Google takes part in sign-ins on the
   test site and must be named in the Privacy notice, which does not mention it today
-  (`docs/legal/subprocessors.md` row 5; `docs/LAUNCH_SETUP.md:281-283`).
+  (`docs/legal/subprocessors.md` row 5; `docs/LAUNCH_SETUP.md:286-288`).
 
 ## 6. Other launch choices the repository leaves to you
 
 - [ ] **6.1 Google sign-in in production: off, or on with your own Google keys.** Still open
-  (`docs/LAUNCH_SETUP.md:720-721`). The guide says to turn Auth0's Google connection off for production,
-  because Auth0's shared Google keys are not meant for it (`docs/LAUNCH_SETUP.md:281-283`). If it is on, Google
+  (`docs/LAUNCH_SETUP.md:746-747`). The guide says to turn Auth0's Google connection off for production,
+  because Auth0's shared Google keys are not meant for it (`docs/LAUNCH_SETUP.md:286-288`). If it is on, Google
   joins the vendor list.
   - Suggestion: off at launch, as the guide says, until an engineer has set up your own keys.
   - Your answer:

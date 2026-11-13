@@ -1008,3 +1008,22 @@ consistent with ADR-0001 and the frozen contract; all are reversible.
     cascade, as at the hard delete) and links the key as a new PC; a live owner still gets the 409. Log:
     `agent_link.released_from_deleted_account` with the two PC ids. Tested: after a deletion the same key links to
     another account with no grants, and nothing of the old PC is left.
+
+## Production sign-in (2026-11-13)
+
+124. **Production signs in through its own Auth0 application in the tenant staging already uses.** The launch
+    guide planned one Auth0 tenant per environment (spec §18 D). Auth0's free plan allows one tenant, and the
+    founder's (`dev-d0zmb20xjn5fs1dq`) already serves staging; the founder chose to share it rather than pay for a
+    second one. Production gets a separate Regular Web Application (`DoMe`, Client Secret (Post), callback
+    `https://domeremote.com/v1/auth/callback` only, `google-oauth2` off). Separate per environment: the callback,
+    the Client ID and Client Secret, and the connections. Shared: the login list, the email provider and
+    templates (Resend, already working), the password rules, and Auth0's remembered sign-in within one browser.
+    Nothing in DoMe assumes separate tenants: an account is keyed by issuer and subject inside each
+    environment's own database, so a staging test login that signs in at domeremote.com starts an empty
+    production account; and `OIDCClient._verify_id_token` refuses an ID token whose `aud` does not name this
+    environment's Client ID (and, with more than one audience, whose `azp` is not it), so a token issued to the
+    staging app is useless to production and the other way round. The cost: every tenant-wide change made while
+    testing staging also changes production, so the tenant is treated as production (its Environment Tag
+    already says so). If a paid plan is ever bought, **staging** moves to the new tenant, so real customers
+    never move. `docs/LAUNCH_SETUP.md` section 10 has the founder's steps.
+

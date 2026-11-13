@@ -1960,8 +1960,8 @@ PRODUCTION_NOT_READY = [
     "External uptime monitor on https://domeremote.com/healthz with alerts - not set up.",
     "Backup retention recorded in docs/OPERATIONS.md - not done.",
     "Support contact (variable VITE_DOME_SUPPORT_URL) - check it is set.",
-    "Auth0 production tenant: own email provider for sign-up/reset emails - not checked by this run.",
-    "Auth0 production: Google sign-in either off or using your own Google keys - not checked by this run.",
+    "Auth0 (one tenant shared with staging): an email provider for sign-up/reset emails - not checked by this run.",
+    "Auth0 production app: Google sign-in either off or using your own Google keys - not checked by this run.",
     "Sign-in itself is never tested by this workflow: sign up and sign in by hand.",
     "Branch protection with required review on the default branch (docs/SECURITY.md section 6) - not set up.",
 ]

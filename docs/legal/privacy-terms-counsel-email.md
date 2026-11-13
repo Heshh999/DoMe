@@ -170,23 +170,23 @@ rewritten that day.
   `mobile-app/src/pages/public/PrivacyPage.tsx:43`.
 - Screen view encrypted, Cloudflare relay: `shared/protocol/version.json:76-77`;
   `cloud-api/dome_api/screen/turn.py:1-3`. On only on staging: `cloud-api/dome_api/settings.py:175`;
-  `docs/LAUNCH_SETUP.md:470-477,492-494`.
+  `docs/LAUNCH_SETUP.md:492-499,514-516`.
 - Assistant only after consent, not switched on: `cloud-api/dome_api/settings.py:150`;
-  `docs/LAUNCH_SETUP.md:702`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
+  `docs/LAUNCH_SETUP.md:724`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
   `mobile-app/src/pages/public/TermsPage.tsx:120`; `mobile-app/src/pages/public/PrivacyPage.tsx:85`;
   `mobile-app/src/components/AssistantConsentSheet.tsx:24`.
 - Prices and top-up: `shared/protocol/plans.json:149-164`. Free needs no card: `docs/PRODUCT_AND_PLANS.md:18`.
 - DoMe the seller, tax included: `cloud-api/dome_api/billing/stripe_provider.py:222-237`;
   `cloud-api/DECISIONS.md:522-531`; `shared/protocol/plans.json:166`.
-- Nothing on sale: `docs/LAUNCH_SETUP.md:312-320`.
+- Nothing on sale: `docs/LAUNCH_SETUP.md:334-342`.
 - Question 1: renewal and cancellation in Stripe's portal `mobile-app/src/pages/public/TermsPage.tsx:82,93-94`;
-  `docs/LAUNCH_SETUP.md:387-389`. The renewal statement (bold, larger), how to cancel and the Terms and
+  `docs/LAUNCH_SETUP.md:409-411`. The renewal statement (bold, larger), how to cancel and the Terms and
   Privacy links `mobile-app/src/content/SubscriptionTerms.tsx:1-42`; `mobile-app/src/content/plans.ts:161-178`;
   under each subscribe button `mobile-app/src/pages/app/BillingPage.tsx:400` and each paid plan on Pricing
   `mobile-app/src/pages/public/PricingPage.tsx:212`. No tick box and no acceptance at checkout
   `cloud-api/dome_api/billing/stripe_provider.py:222-237`; `mobile-app/src/pages/public/TermsPage.tsx:15,85`.
   No email sent by DoMe's server: search of `cloud-api/dome_api` (no email-sending code); Auth0's emails go
-  through Resend `docs/LAUNCH_SETUP.md:717-719`. No in-app notice feature: search of `mobile-app/src`. The
+  through Resend `docs/LAUNCH_SETUP.md:743-745`. No in-app notice feature: search of `mobile-app/src`. The
   drafts' notice promises and [FOUNDER] notes: `TermsPage.tsx:34,108,157`; `PrivacyPage.tsx:213`.
 - Question 2: `mobile-app/src/pages/public/TermsPage.tsx:102`; `docs/BILLING.md:298,334-335,408`;
   `cloud-api/KNOWN_ISSUES.md:107-109`; `shared/protocol/plans.json:2`. Disputes flagged, access not paused:
@@ -205,11 +205,11 @@ rewritten that day.
   copied in `docs/legal/ai-consent-text.md`; mistakes wording `mobile-app/src/pages/public/TermsPage.tsx:124`.
 - Question 7: PC sound planned `docs/design/screen-view.md:75-77`; `mobile-app/src/content/faq.tsx:121`.
 - Question 8: `mobile-app/src/pages/public/TermsPage.tsx:145`; `pc-agent/packaging/installer/licence-terms.txt:21-24`.
-- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:766-771,788-791`.
+- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:792-797,814-817`.
 - Question 10: the extension's name `browser-extension/public/manifest.json:3`.
 - Question 11: `docs/legal/subprocessors.md` section 1.
 - Question 12: encryption `mobile-app/src/pages/public/PrivacyPage.tsx:100,185`; public downloads on GitHub
-  `docs/LAUNCH_SETUP.md:924-931`; checkout restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
+  `docs/LAUNCH_SETUP.md:950-957`; checkout restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
 - Question 13: public repository, as above; no licence file at the top of the repository (`git ls-files`: the
   only licence texts are third-party ones under `pc-agent/packaging/licenses`); "closed-source"
   `mobile-app/src/pages/public/TermsPage.tsx:56`; `pc-agent/packaging/THIRD_PARTY_NOTICES.txt:21-22`; the
@@ -221,7 +221,7 @@ rewritten that day.
   (directory listing).
 - Question 14: power actions need confirmation `mobile-app/src/pages/public/PrivacyPage.tsx:188`; the server
   reads what it routes `PrivacyPage.tsx:64,190`; signed updates and no automatic install
-  `pc-agent/dome_agent/update_check.py:1-25,66-69`; publishing a release `docs/LAUNCH_SETUP.md:924-931`;
+  `pc-agent/dome_agent/update_check.py:1-25,66-69`; publishing a release `docs/LAUNCH_SETUP.md:950-957`;
   incident outline "procedure, not yet run" `docs/OPERATIONS.md:340-345,425`; the breach note
   `PrivacyPage.tsx:191`.
 - Question 15: `browser-extension/public/manifest.json:3,7-10`; no ad skipping
