@@ -29,6 +29,9 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
 - **Deployed to staging (2026-11-13, commit 63de996):** the Deploy ran migrations 0008 and 0009 first,
   /healthz reports this commit, and the build carries `VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com`.
   The founder set up `support@domeremote.com` in Cloudflare Email Routing, forwarding to their own mailbox.
+- **Deleting against the real Auth0: not yet confirmed.** The founder chose to move on to production first
+  (2026-11-13). It fails safe: if Auth0 does not confirm the password entry, deletion is refused with
+  REAUTH_REQUIRED and the log shows `oidc.reauth_unconfirmed` (KNOWN_ISSUES #40). To try it later:
 - **Next (founder, on staging after the Deploy):** delete a throwaway test account from the iPhone. Auth0 should
   show its login page when you tap "Sign in again", and the deletion should go through afterwards. If it is
   always refused, the server log shows `oidc.reauth_unconfirmed` (KNOWN_ISSUES #40).
