@@ -17,7 +17,7 @@ import dataclasses
 import json
 import secrets
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -33,11 +33,21 @@ JWK = json.dumps({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"})
 
 
 @pytest.fixture
-def purge(env: Env) -> Iterator[PurgeService]:
+async def purge(env: Env) -> AsyncIterator[PurgeService]:
+    """The purge service, with the assistant's background sweeper paused for the test. That sweeper settles stale
+    pending turns once a minute; a pass between seeding and ``purge(now)`` would turn the old pending turn the purge
+    must keep into an abandoned one it then deletes (seen in CI). The tests call ``purge()`` themselves."""
     svc = env.services.purge
     saved = svc.config
-    yield svc
-    svc.config = saved
+    assistant = env.services.assistant
+    was_sweeping = assistant._sweeper is not None
+    await assistant.stop()
+    try:
+        yield svc
+    finally:
+        svc.config = saved
+        if was_sweeping:
+            await assistant.start()
 
 
 def kid() -> str:
