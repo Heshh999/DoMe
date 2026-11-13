@@ -26,6 +26,9 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   passed (5 skipped), build; pc-agent 1,357 passed (3 skipped); dev-idp 26; end-to-end security, input and
   version suites 18 passed. **Evidence tag: unit- and integration-tested on Linux; not yet tried against the real
   Auth0 or on a phone.**
+- **Deployed to staging (2026-11-13, commit 63de996):** the Deploy ran migrations 0008 and 0009 first,
+  /healthz reports this commit, and the build carries `VITE_DOME_SUPPORT_URL=mailto:support@domeremote.com`.
+  The founder set up `support@domeremote.com` in Cloudflare Email Routing, forwarding to their own mailbox.
 - **Next (founder, on staging after the Deploy):** delete a throwaway test account from the iPhone. Auth0 should
   show its login page when you tap "Sign in again", and the deletion should go through afterwards. If it is
   always refused, the server log shows `oidc.reauth_unconfirmed` (KNOWN_ISSUES #40).

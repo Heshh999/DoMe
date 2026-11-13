@@ -712,8 +712,12 @@ summary lists them again until an engineer closes them:
 - a rehearsal of recovering from a failed deploy;
 - an outside uptime monitor on https://domeremote.com/healthz that alerts you;
 - the database backup retention, written down in `docs/OPERATIONS.md`;
-- a support contact (`VITE_DOME_SUPPORT_URL`); until it is set, someone whose email confirmation link
-  never arrived has no way to ask DoMe for a new one (the next item);
+- a support contact (`VITE_DOME_SUPPORT_URL`): **staging done 2026-11-13**. Cloudflare Email Routing on
+  domeremote.com forwards `support@domeremote.com` to the founder's verified mailbox (routing rule
+  Active; catch-all left Disabled), and staging's variable is `mailto:support@domeremote.com` (the Deploy
+  of 63de996 built it in). Still open: the same variable in the **production** Environment. Until it is
+  set there, someone whose email confirmation link never arrived has no way to ask DoMe for a new one
+  (the next item);
 - ~~an Auth0 email provider~~ **done 2026-10-20**: Resend on the verified sending domain
   `mail.domeremote.com`, From `DoMe Remote <no-reply@mail.domeremote.com>`, connected under Auth0
   **Branding > Email Provider**; Auth0's test email arrived. Resend's free plan allows 3,000 emails a
