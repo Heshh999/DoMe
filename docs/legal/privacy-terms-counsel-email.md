@@ -1,8 +1,8 @@
 # Email to counsel: Privacy notice, Terms of service and launch questions
 
 Status: a draft for Justin to send. It asks questions; it is not legal advice. Facts checked against the
-repository on 2026-11-12, and the Windows release status on 2026-11-13; where each one comes from is listed at
-the end (do not send that part). The H.264 email (`h264-counsel-email.md`) is separate.
+repository on 2026-11-12, the Windows release status on 2026-11-13 and the live site's Deploy on 2026-11-14; where
+each one comes from is listed at the end (do not send that part). The H.264 email (`h264-counsel-email.md`) is separate.
 
 ## For Justin only (do not send this part)
 
@@ -28,11 +28,11 @@ known from the commit deployed, not from a look at the pages [GitHub Actions Dep
 [founder-reported 2026-11-13]. So before you send, open https://domeremote.com/privacy and /terms: the Privacy
 notice should start with "Who we are" and the Terms with "About these terms" (`README.md`, "Which version of the
 drafts the website shows"). If they do not, tell an engineer before you send. One paragraph of each draft changed
-after bf83141: they now say that DoMe for Windows 0.1.0 does not check for updates yet, where the live pages still
-describe a daily check (`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57`;
-`docs/WINDOWS_INSTALL.md:104-107`). The live pages show the new wording after the next Deploy; if you send before
-then, tell the lawyer that this paragraph is being corrected. The email also says you have not
-yet checked whether anyone besides you has signed up on the live site (the repository does not record it,
+after bf83141: they now say that DoMe for Windows 0.1.0 does not check for updates yet, instead of describing a
+daily check (`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57`;
+`docs/WINDOWS_INSTALL.md:104-107`); your Deploy of 2026-11-14 put that wording live (commit 78d5bb8 [GitHub
+Actions Deploy run 43535164002, 2026-11-14], `docs/PROGRESS.md:18-19`). The email also says you have not yet
+checked whether anyone besides you has signed up on the live site (the repository does not record it,
 `docs/PROGRESS.md:121-122`); if you have counted the accounts by then (`founder-decisions.md` section 5), say so instead.
 
 Attach:
@@ -208,16 +208,16 @@ that day to the same text.
 - Nothing on sale: `docs/LAUNCH_SETUP.md:375-397`.
 - Website and server live since 2026-10-15, with the founder's own account: `docs/PROGRESS.md:117-118,1061-1069`;
   free accounts only, billing off in production `docs/PROGRESS.md:128-131`; deployed 2026-10-20 at commit 35a203f
-  [GitHub Actions Deploy run 39464803237, 2026-10-20] and updated 2026-11-13 to commit bf83141 [GitHub Actions
-  Deploy run 43508425555, 2026-11-13] `docs/PROGRESS.md:132-141`; the founder signed in after the update and
-  Settings ends with Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:142-145`;
-  whether anyone else has signed up is not recorded `docs/PROGRESS.md:121-122`. The Windows program, version
-  0.1.0, published on GitHub on 2026-11-13 as a free beta [GitHub Actions Release run 43513385142, 2026-11-13]
-  `docs/PROGRESS.md:23-30`; `docs/LAUNCH_SETUP.md:868-889`; before counsel's answers, by the
-  founder's decision `docs/PROGRESS.md:49-55`; `docs/legal/founder-decisions.md:49-57`; the
-  licence terms still marked as a draft `pc-agent/packaging/installer/licence-terms.txt:3`; the Privacy and Terms
-  drafts under the DRAFT banner `mobile-app/src/pages/public/DraftBanner.tsx:10`; no paid ads before counsel's
-  answers [founder decision, 2026-11-13] `docs/PROGRESS.md:49-55`.
+  [GitHub Actions Deploy run 39464803237, 2026-10-20], updated 2026-11-13 to commit bf83141 [GitHub Actions Deploy run
+  43508425555, 2026-11-13] `docs/PROGRESS.md:132-141` and 2026-11-14 to commit 78d5bb8 [GitHub Actions Deploy run
+  43535164002, 2026-11-14] `docs/PROGRESS.md:18-19`; the founder signed in after the first update and Settings ends with
+  Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:142-145`; whether anyone else has signed up is not
+  recorded `docs/PROGRESS.md:121-122`. The Windows program, version 0.1.0, published on GitHub on 2026-11-13 as a free
+  beta [GitHub Actions Release run 43513385142, 2026-11-13] `docs/PROGRESS.md:23-30`; `docs/LAUNCH_SETUP.md:868-889`;
+  before counsel's answers, by the founder's decision `docs/PROGRESS.md:49-55`; `docs/legal/founder-decisions.md:49-57`;
+  the licence terms still marked as a draft `pc-agent/packaging/installer/licence-terms.txt:3`; the Privacy and Terms
+  drafts under the DRAFT banner `mobile-app/src/pages/public/DraftBanner.tsx:10`; no paid ads before counsel's answers
+  [founder decision, 2026-11-13] `docs/PROGRESS.md:49-55`.
 - Question 1: renewal and cancellation in Stripe's portal `mobile-app/src/pages/public/TermsPage.tsx:82,93-94`;
   `docs/LAUNCH_SETUP.md:464-466`. The renewal statement (bold, larger), how to cancel and the Terms and
   Privacy links `mobile-app/src/content/SubscriptionTerms.tsx:1-42`; `mobile-app/src/content/plans.ts:161-178`;

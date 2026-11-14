@@ -1,9 +1,9 @@
 # DoMe product and plans
 
 Status: pre-release. The free service is live at https://domeremote.com (since 2026-10-15;
-updated 2026-11-13); no paid plan is on sale (billing is off in production), DoMe for Windows 0.1.0
+last updated 2026-11-14); no paid plan is on sale (billing is off in production), DoMe for Windows 0.1.0
 was published on GitHub on 2026-11-13 as a free beta (installed so far only on GitHub's Windows Server runner, not
-yet on any Windows 10 or 11 PC; its button on domeremote.com/download appears with the next Deploy), and the
+yet on any Windows 10 or 11 PC; the Deploy of 2026-11-14 put its button on domeremote.com/download live), and the
 owner's PC and iPhone have run DoMe through test builds (owner-reported, no formal device-tested pass). Every
 feature below carries an evidence tag:
 

@@ -23,7 +23,7 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
 - **Published.** GitHub release `v0.1.0`, https://github.com/Heshh999/DoMe/releases/tag/v0.1.0, published
   2026-11-13 at 21:56:46 UTC by GitHub Actions run 43513385142, "Release (signed Windows app)". The founder started
   it with **publish** on, from the default branch, and approved its signing (`docs/LAUNCH_SETUP.md` section 17 step
-  7). It was built from commit bf83141, the commit production runs (`BUILD-INFO.txt`: `build: 0.1.0+bf83141`,
+  7). It was built from commit bf83141, the commit production then ran (`BUILD-INFO.txt`: `build: 0.1.0+bf83141`,
   `kind: release build without the browser add-on`). Every job passed: version, branch, release and update key;
   pc-agent tests (Windows); Build the PyInstaller folder; Sign and package; Install and test the signed Setup;
   Publish the GitHub Release (a draft first, then GitHub's own digest of each file checked, then published). The
@@ -75,10 +75,10 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   the beta status, …"), `mobile-app/test/components/UpgradeAndHealth.test.tsx` ("public pages before a release:
   …", "public pages with the committed release: …"), `test/film/LandingPage.test.tsx`,
   `test/film/DemoPage.test.tsx`, `test/public/PublicLayout.test.tsx`, `test/public/FaqPage.test.tsx` and
-  `test/public/windowsAppStatus.test.ts`. mobile-app typecheck, lint, every test and build pass. **Nothing is
-  deployed yet:** the download button appears on https://domeremote.com/download only after the founder's next
-  Deploy (staging, then production) of the commit that carries these changes. Until then the GitHub release page
-  is where the download is, and the live site still says "not published yet".
+  `test/public/windowsAppStatus.test.ts`. mobile-app typecheck, lint, every test and build pass. **Deployed
+  afterwards (2026-11-14):** the founder deployed the commit that carries these changes, 78d5bb8, to staging
+  (Deploy run 43534500706), then production (run 43535164002; healthz ok at 78d5bb8), which put the download
+  button on https://domeremote.com/download live (nobody has reported looking at the live page yet).
 - **Docs updated** to say all this instead of "not yet published", "only test builds exist" or "step 7 waits":
   `README.md`, `docs/LAUNCH_SETUP.md` section 17, `docs/WINDOWS_INSTALL.md`, `docs/HANDOFF.md`, `docs/ACCEPTANCE.md`,
   `docs/SECURITY.md` T12, `docs/PRODUCT_AND_PLANS.md`, `docs/SUPPORT.md`, `docs/TROUBLESHOOTING.md` §21,
@@ -88,7 +88,7 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   2026-10-22, not only since 2026-11-13); the data map (0.1.0 installs the browser bridge program but registers it
   with no browser); `docs/PRODUCT_AND_PLANS.md` (the owner ran test builds, not 0.1.0); `docs/ACCEPTANCE.md`
   (signing has worked on the runner since 2026-10-30); `docs/LAUNCH_SETUP.md` section 17 (step 7 item 3, the
-  Deploy, is still to do); `docs/TROUBLESHOOTING.md` §21 (Smart App Control: write to support); and
+  Deploy, was then still to do); `docs/TROUBLESHOOTING.md` §21 (Smart App Control: write to support); and
   `pc-agent/KNOWN_ISSUES.md` #19 and #33 (the LGPL wheel is published and pinned, and Screen view is built in).
 - **Next (founder):** (1) Install 0.1.0 over the older test build on your own PC, **without unlinking**. Setup keeps
   the link, the paired phones and the settings (`docs/WINDOWS_INSTALL.md` "Updating"); only `DoMe.exe link` reads the
@@ -96,10 +96,10 @@ Newest first. Each entry: what changed, what was actually run, evidence tag, wha
   linked to now. YouTube control through the development add-on stops, because 0.1.0 removes that browser
   registration (same section). Before you run it, check that **Properties > Digital Signatures** shows Justin
   Gaskins, and note what Windows showed. (2) Work through the device checklist (`docs/WINDOWS_INSTALL.md` section 7)
-  and record the results in `docs/ACCEPTANCE.md`. (3) Press **Deploy** for staging, then production, of the commit
-  that carries the two files and the copy above, so the Download page shows the button and no page says "not
-  published yet" (`docs/LAUNCH_SETUP.md` section 17, step 7 item 3). (4) Later: the Chrome Web Store listing, so
-  that a later version includes YouTube control.
+  and record the results in `docs/ACCEPTANCE.md`. (3) Done 2026-11-14: you pressed **Deploy** for staging, then
+  production, of the commit that carries the two files and the copy above (78d5bb8; runs 43534500706 and
+  43535164002), which put the Download page's button and that copy live (`docs/LAUNCH_SETUP.md` section 17, step
+  7 item 3). (4) Later: the Chrome Web Store listing, so that a later version includes YouTube control.
 
 ## 2026-11-13 — Correction: domeremote.com has been live since 2026-10-15; updated to bf83141 on 2026-11-13
 

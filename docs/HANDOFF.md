@@ -1,10 +1,10 @@
 # Handoff
 
-Last updated 2026-11-13 (UTC), branch `claude/stoic-heisenberg-txq6ja`. §0 below describes 2026-10-14,
-except its first two bullets (Production; Windows release), the last sentence of its launch-tooling bullet and
-its Domain paragraph, which describe 2026-11-13. Read this first if you are continuing the work. `docs/PROGRESS.md`
-is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix; each component keeps its own `README.md`,
-`DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
+Last updated 2026-11-14 (UTC), branch `claude/stoic-heisenberg-txq6ja`. §0 below describes 2026-10-14, except its
+first two bullets (Production; Windows release), the last sentence of its launch-tooling bullet and its Domain
+paragraph, which describe 2026-11-13 (the Windows release bullet also the Deploy of 2026-11-14). Read this first
+if you are continuing the work. `docs/PROGRESS.md` is the dated log; `docs/ACCEPTANCE.md` is the evidence matrix;
+each component keeps its own `README.md`, `DECISIONS.md`, `KNOWN_ISSUES.md` and `CONTRACT_ISSUES.md`.
 
 Evidence tags used everywhere in this repository: **unit-tested**, **integration-tested**,
 **load-tested**, **Windows-device-tested**, **iPhone-tested**, **not yet verified**. No formal
@@ -32,8 +32,8 @@ What happened since the 2026-10-09 baseline that §1–§6 describe (details in 
   domeremote.com. Tested on GitHub's Windows Server runner only (administrator, UAC off), not on a Windows
   10/11 PC as a standard user. The founder chose to publish it as a free beta before counsel answers; the
   licence terms Setup shows are still DRAFT. Its `latest.json` and `.sig` are in `mobile-app/src/content/`; the
-  download button on domeremote.com/download appears with the next Deploy (§7 item 4; `docs/PROGRESS.md`
-  2026-11-13).
+  Deploy of 2026-11-14 (78d5bb8, staging then production) put the download button on domeremote.com/download
+  live (§7 item 4; `docs/PROGRESS.md` 2026-11-13).
 - **Owner's devices** (2026-10-09 to 10-11, through `testkit/`): the iPhone (Safari) paired with the
   Windows 11 PC over quick tunnels; after the second test round's fixes the owner reports the Remote
   volume slider, YouTube control in Edge and Remote → Search YouTube, the Type phrases, the Apps window
@@ -478,8 +478,8 @@ founder-driven; then:
    production extension id in the release build; Authenticode signing (most likely Azure Trusted
    Signing) in a separate protected job; an Inno Setup commercial licence before paid launch; an updater
    with signature verification (`docs/SECURITY.md` T12). The Download page says "not yet published" until
-   a signed release's two files are in the site and deployed (0.1.0's since 2026-11-13; the next Deploy shows
-   the button). **Release pipeline built (2026-10-20); first green run 2026-10-30; it published 0.1.0 on
+   a signed release's two files are in the site and deployed (0.1.0's since 2026-11-13; the Deploy of 2026-11-14
+   put its button live). **Release pipeline built (2026-10-20); first green run 2026-10-30; it published 0.1.0 on
    2026-11-13:** `.github/workflows/release.yml`
    (Azure Artifact Signing in the protected `release` environment, an Ed25519-signed `latest.json`, both
    verify steps now hash the installer itself), the update check (`dome_agent/update_check.py`, not yet
@@ -520,7 +520,7 @@ founder-driven; then:
    PowerShell 7's module path (fixed in the smoke test). Third try (run 41127340896, 2026-10-30): **green**:
    signed as Justin Gaskins, `signtool verify` on all four files, and the signed Setup's install test passed all
    183 checks (Valid, timestamped signatures; release build ignores /ApiUrl= and /ExtensionId=). Step 6 is done.
-   **Step 7 items 1 and 2 done 2026-11-13 (item 3, the Deploy, still to do):** the founder chose to publish
+   **Step 7 items 1 and 2 done 2026-11-13 (item 3, the Deploy, done 2026-11-14):** the founder chose to publish
    now, as a free beta, before counsel answers (`docs/legal/founder-decisions.md` 1.2), and ran the release with
    publish on (run 43513385142, from the default branch, signing approved by the founder). Every job passed; release v0.1.0 was published at 21:56:46
    UTC with `DoMe-Setup-0.1.0.exe` (37,708,680 bytes, SHA-256 `b28d55a4…1441fa2`), `latest.json`,
@@ -532,9 +532,9 @@ founder-driven; then:
    YouTube control, Screen view not switched on), and the draft Privacy notice and Terms say 0.1.0 does not check
    for updates yet. Tests cover both the placeholder and the committed release (`mobile-app/test/public/pages.test.tsx`
    "Download offers the committed release: …", `mobile-app/test/components/UpgradeAndHealth.test.tsx` "public pages
-   with the committed release: …", and the page tests listed in `docs/PROGRESS.md` 2026-11-13). **Next:** the
-   founder's Deploy (staging, then production) of that change, so domeremote.com/download shows the button and
-   no page says "not published yet"; the founder installs 0.1.0 over the older test build
+   with the committed release: …", and the page tests listed in `docs/PROGRESS.md` 2026-11-13). The founder's
+   Deploy of that change, 78d5bb8 (staging, then production, 2026-11-14), put the button on
+   domeremote.com/download live. **Next:** the founder installs 0.1.0 over the older test build
    on their own PC without unlinking, then the device checklist (`docs/WINDOWS_INSTALL.md` §7); the Chrome Web
    Store listing for YouTube control in a later version; the Inno Setup licence before the paid launch.
 5. **Domain and staging**: done with item 0 (staging and production live since 2026-10-15;

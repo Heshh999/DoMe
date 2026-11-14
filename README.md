@@ -15,12 +15,12 @@ itself. It is off unless the owner consents, metered, never sees the screen and 
 touchpad or keyboard; buttons and typed commands never need it.
 
 > Status: **pre-release; the free service is live.** https://domeremote.com has run since
-> 2026-10-15 (`docs/PROGRESS.md` 2026-10-16) and was updated to commit bf83141 on
-> 2026-11-13. No paid plan is on sale (billing is off in production). **DoMe for Windows 0.1.0 was
+> 2026-10-15 (`docs/PROGRESS.md` 2026-10-16) and was last updated to commit 78d5bb8 on
+> 2026-11-14. No paid plan is on sale (billing is off in production). **DoMe for Windows 0.1.0 was
 > published on 2026-11-13** as a free beta (https://github.com/Heshh999/DoMe/releases/tag/v0.1.0; signed,
 > publisher Justin Gaskins; no YouTube control in Chrome or Edge yet; Screen view inside but switched off for
 > accounts); it was tested on GitHub's Windows Server runner only, not on a Windows 10/11 PC as a standard user,
-> and its button on domeremote.com/download appears with the next Deploy (`docs/PROGRESS.md` 2026-11-13).
+> and the Deploy of 2026-11-14 put its button on domeremote.com/download live (`docs/PROGRESS.md` 2026-11-13).
 > The whole path phone → relay → PC agent → browser extension is
 > implemented and proven end to end on Linux with the operating-system adapters and the browser
 > replaced by explicit test doubles. The owner has reported it working on their Windows 11 PC
