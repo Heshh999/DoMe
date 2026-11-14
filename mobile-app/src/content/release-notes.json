@@ -1,8 +1,8 @@
 {
-  "$comment": "Public release history and known issues (spec §11A, docs/SUPPORT.md §8). DoMe for Windows 0.1.0 is published as a free beta (GitHub release v0.1.0, 2026-11-13, the release in src/content/windows-release.json); nothing in it is Windows-device-tested or iPhone-tested, and Screen view is in the program but switched off for accounts on domeremote.com. Every entry is honest about verification. Rendered by src/pages/public/ReleaseNotesPage.tsx.",
+  "$comment": "Public release history and known issues (spec §11A, docs/SUPPORT.md §8). DoMe for Windows 0.1.0 is published as a free beta (GitHub release v0.1.0, 2026-11-13, the release in src/content/windows-release.json); the release itself is not Windows-device-tested or iPhone-tested, and Screen view is in the program but switched off for accounts on domeremote.com. Every entry is honest about verification. An entry written as {\"text\", \"screen_view\": \"off\"|\"on\"} is shown only while the server's Screen view switch (GET /healthz screen_view) is off (or unknown) or on. Rendered by src/pages/public/ReleaseNotesPage.tsx.",
   "status": {
     "channel": "beta",
-    "headline": "DoMe for Windows 0.1.0 is published as a free beta. This release has not been verified on a Windows 10 or 11 PC or on an iPhone yet.",
+    "headline": "DoMe for Windows 0.1.0 is published as a free beta. This release has not been verified on a Windows 10 or 11 PC or on an iPhone yet. Remote control (media, volume, approved apps, lock and power, the touchpad, the keyboard and typed commands) was checked with test builds on the founder’s own Windows PC and iPhone, as the founder reports.",
     "verification": "Automated tests run on every component (unit and integration, with simulated Windows and phone behavior), and the signed Windows installer was tested on GitHub’s Windows Server test machine. Real iPhone and real Windows PC checks are listed as pending below; nothing on this page claims they passed."
   },
   "releases": [
@@ -14,8 +14,9 @@
         "The first official download of DoMe for Windows: DoMe-Setup-0.1.0.exe, with its SHA-256, on the Download page and the GitHub release page. It is signed for Windows by Justin Gaskins through Azure Artifact Signing and installs for your Windows account only.",
         "In this version: the touchpad and keyboard (with the permissions you grant each phone on the PC), Windows media and volume, approved apps, Lock, confirmed Sleep, Restart and Shutdown, and pairing phones by QR code with approval on the PC.",
         "Not in this version: YouTube control in Chrome or Edge. The DoMe browser extension is not in the Chrome or Edge stores yet, and Setup says so.",
-        "Screen view (beta) is in the program, but it is not switched on for DoMe accounts yet, so it cannot be used.",
-        "Free: nothing can be bought yet. The licence terms Setup shows are still a draft, like this site’s Privacy notice and Terms of service."
+        { "text": "Screen view (beta) is in the program, but it is not switched on for DoMe accounts yet, so it cannot be used.", "screen_view": "off" },
+        { "text": "Screen view (beta) is in the program, and it is switched on for DoMe accounts.", "screen_view": "on" },
+        "Free to download: paid plans are bought on the website, not in the program, and nothing could be bought when this version was released. The licence terms Setup shows are still a draft, like this site’s Privacy notice and Terms of service."
       ],
       "verified": [
         "Integration-tested on GitHub’s Windows Server test machine (an administrator account with UAC off): install, upgrade and uninstall of the signed Setup, and the signatures on Setup and the installed program.",
@@ -26,7 +27,7 @@
       "not_verified": [
         "Install, upgrade and uninstall on a Windows 10 or 11 PC, and by a standard (non-administrator) user.",
         "Windows 11 PCs with Smart App Control on.",
-        "Screen view on any device.",
+        "Screen view with this release on a device (a test build was checked on the founder’s own Windows PC and iPhone through DoMe’s test service, as the founder reports).",
         "Everything listed as not verified for the builds below: no check on a real Windows PC or a real iPhone has been recorded for this release."
       ]
     },
@@ -73,8 +74,9 @@
     },
     {
       "title": "Screen view is not switched on yet",
-      "detail": "Screen view (beta) is in DoMe for Windows 0.1.0, and the GitHub release page lists it, but it is not switched on for DoMe accounts yet, so it cannot be used. It has not been verified on a device either.",
-      "workaround": "None yet."
+      "detail": "Screen view (beta) is in DoMe for Windows 0.1.0, and the GitHub release page lists it, but it is not switched on for DoMe accounts yet, so it cannot be used. A test build was checked on the founder’s own Windows PC and iPhone through DoMe’s test service (as the founder reports); this release has not been checked on a device yet.",
+      "workaround": "None yet.",
+      "screen_view": "off"
     },
     {
       "title": "Linking the PC to your account takes one command",

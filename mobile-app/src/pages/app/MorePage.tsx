@@ -3,12 +3,21 @@ import { Link } from "react-router";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { ThemeSwitch } from "../../components/ThemeSwitch.tsx";
 import { PageHeader } from "../../components/ui.tsx";
+import { AI_OFF_STATUS, LAYOUTS_STATUS } from "../../content/plans.ts";
+import { useAssistantStore } from "../../store/assistant.ts";
 import { useSessionStore } from "../../store/session.ts";
+
+const ASK_TEXT = "Talk to the AI butler";
+/** The Ask row as the server last said (GET /v1/assistant/status): "not switched on" when it says so, neutral while unknown. */
+function askRowText(status: { unavailable_reason?: string | null } | null): string {
+  if (!status) return "Say or type what you want";
+  return status.unavailable_reason === "not_configured" ? `Voice commands · AI butler ${AI_OFF_STATUS.toLowerCase()}` : ASK_TEXT;
+}
 
 const GROUPS: Array<Array<{ to: string; title: string; text: string; icon: IconName }>> = [
   [
     { to: "/app/apps", title: "Apps", text: "Open and switch approved apps", icon: "apps" },
-    { to: "/app/assistant", title: "Ask", text: "Talk to the AI butler", icon: "ask" },
+    { to: "/app/assistant", title: "Ask", text: ASK_TEXT, icon: "ask" },
     { to: "/app/command", title: "Type a command", text: "Commands without any AI", icon: "keyboard" },
   ],
   [
@@ -16,8 +25,9 @@ const GROUPS: Array<Array<{ to: string; title: string; text: string; icon: IconN
     { to: "/app/health", title: "Connection health", text: "What works, and what to do next", icon: "pulse" },
   ],
   [
-    { to: "/app/routines", title: "Routines", text: "One-tap sequences · Pro preview", icon: "sparkle" },
-    { to: "/app/layouts", title: "Custom remotes", text: "Your own layouts · Pro preview", icon: "remote" },
+    // not built yet: "Coming", whether or not Pro is on sale
+    { to: "/app/routines", title: "Routines", text: `One-tap sequences · ${LAYOUTS_STATUS}`, icon: "sparkle" },
+    { to: "/app/layouts", title: "Custom remotes", text: `Your own layouts · ${LAYOUTS_STATUS}`, icon: "remote" },
     { to: "/app/billing", title: "Billing", text: "Your plan and limits", icon: "card" },
     { to: "/app/settings", title: "Settings & help", text: "Install, diagnostics, sign out", icon: "settings" },
   ],
@@ -25,6 +35,7 @@ const GROUPS: Array<Array<{ to: string; title: string; text: string; icon: IconN
 
 export function MorePage() {
   const session = useSessionStore((s) => s.session);
+  const assistantStatus = useAssistantStore((s) => s.status);
   return (
     <div className="space-y-5">
       <PageHeader title="More" subtitle={session ? <>Signed in as <span className="text-text">{session.account.display_name || session.account.email}</span></> : undefined} />
@@ -38,7 +49,7 @@ export function MorePage() {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block font-semibold">{i.title}</span>
-                  <span className="block truncate text-[13px] text-text-muted">{i.text}</span>
+                  <span className="block truncate text-[13px] text-text-muted">{i.text === ASK_TEXT ? askRowText(assistantStatus) : i.text}</span>
                 </span>
                 <Icon name="chevron" size={18} className="text-text-faint" />
               </Link>

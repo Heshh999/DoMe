@@ -6,6 +6,8 @@
 import { ERRORS, registry, type ActionName } from "@dome/protocol";
 import type { relayFrames } from "@dome/protocol";
 
+import { youtubeComing } from "../content/windowsAppStatus.ts";
+
 export interface LabelContext {
   /** app_id → display name from the PC's approved-app list (untrusted text, rendered as text). */
   appNames?: Record<string, string>;
@@ -338,8 +340,10 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
     case "PC_SESSION_LOCKED_MEDIA_ONLY":
       return ["Unlock Windows on the PC to use this control.", "Media controls while locked can be allowed in the DoMe tray settings on the PC."];
     case "EXTENSION_NOT_INSTALLED":
+      if (youtubeComing()) return [youtubeComing()!, "Windows media, volume and apps work now."];
       return ["Install the DoMe extension in Chrome or Edge on the PC.", "Open a YouTube video, then try again."];
     case "EXTENSION_DISCONNECTED":
+      if (youtubeComing()) return [youtubeComing()!, "Windows media, volume and apps work now."];
       return ["Open Chrome or Edge on the PC.", "Check that the DoMe extension is enabled.", "Reload the YouTube tab if the extension icon shows it is not connected."];
     case "EXTENSION_UPDATE_REQUIRED":
       return ["The DoMe browser extension on the PC is older than this control.", "Update it (or reload it from the browser's Extensions page after updating DoMe on the PC), then try again.", "The other YouTube controls keep working meanwhile."];
@@ -397,7 +401,7 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
     case "PC_PLAN_DISABLED":
     case "CONTROLLER_PLAN_DISABLED":
     case "DEVICE_LIMIT_REACHED":
-      return ["Your plan limits how many PCs and phones are enabled.", "Choose which devices stay enabled under Devices, or upgrade to DoMe Pro when available."];
+      return ["Your plan limits how many PCs and phones are enabled.", "Choose which devices stay enabled under Devices, or see Billing for DoMe Pro."];
     case "OUTCOME_UNKNOWN":
       return ["The PC's connection was lost before it reported a result, so this may or may not have run.", "Check the PC's current state here before sending it again; the PC reports what happened once it reconnects."];
     case "COMMAND_EXPIRED":

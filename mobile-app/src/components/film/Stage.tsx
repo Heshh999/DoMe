@@ -12,7 +12,8 @@ import { endCardRows, lockupHeight, type StageLayout } from "./layout.ts";
 import { PcScreen } from "./Pc.tsx";
 import { Phone } from "./Phone.tsx";
 import { handAt, linkAt, pcAt, phoneAt, stageAt } from "./script.ts";
-import { beatAt, CONCEPT_NOTE, lerp, PLAN_FACTS, sceneAt, seg, type StatusTone } from "./timeline.ts";
+import { useFilmSignals } from "./signals.ts";
+import { beatAt, conceptNote, lerp, planFacts, sceneAt, sceneStatus, seg, type StatusTone } from "./timeline.ts";
 
 /* ── the room ────────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -184,6 +185,7 @@ export const CAPTION_ID = "dome-film-caption";
 
 function Captions({ L, t, announce }: { L: StageLayout; t: number; announce: boolean }) {
   const scene = sceneAt(t);
+  const status = sceneStatus(scene, useFilmSignals());
   const beat = beatAt(t);
   const c = L.caption;
   const vertical = L.name === "vertical";
@@ -206,8 +208,8 @@ function Captions({ L, t, announce }: { L: StageLayout; t: number; announce: boo
           </p>
         ) : null}
         <p className={`inline-flex items-center gap-[0.45em] rounded-[1em] border border-white/14 bg-white/[0.08] px-[0.9em] font-semibold leading-[1.25] text-[#dfe6f8] ${vertical ? "mt-[0.45em] max-w-full py-[0.36em] text-[0.72em]" : "mt-[0.55em] py-[0.42em] text-[0.5em]"}`}>
-          <span className={`h-[0.55em] w-[0.55em] shrink-0 rounded-full ${TONE_DOT[scene.status.tone]}`} />
-          <span>{scene.status.label}</span>
+          <span className={`h-[0.55em] w-[0.55em] shrink-0 rounded-full ${TONE_DOT[status.tone]}`} />
+          <span>{status.label}</span>
         </p>
       </div>
     </div>
@@ -227,12 +229,13 @@ function StatusPill({ tone, children, size }: { tone: StatusTone; children: Reac
 }
 
 function PlanCards({ L, t }: { L: StageLayout; t: number }) {
+  const facts = planFacts(useFilmSignals());
   const s = stageAt(t);
   if (s.cards.every((c) => c <= 0)) return null;
   const wide = L.name === "wide";
   return (
     <>
-      {PLAN_FACTS.map((plan, i) => {
+      {facts.map((plan, i) => {
         const r = L.cards[i]!;
         const e = s.cards[i]!;
         const pro = plan.id === "pro";
@@ -345,6 +348,7 @@ const END_PRIMARY = "dome-primary inline-flex h-[64px] items-center gap-2 rounde
 const END_SECONDARY = "inline-flex h-[64px] items-center gap-1.5 rounded-full border border-white/25 px-9 text-[22px] font-semibold text-white";
 
 function EndCard({ L, t, actions }: { L: StageLayout; t: number; actions: EndActions }) {
+  const signals = useFilmSignals();
   const s = stageAt(t);
   if (s.lockup <= 0) return null;
   const { cx, cy, w } = L.lockup;
@@ -390,7 +394,7 @@ function EndCard({ L, t, actions }: { L: StageLayout; t: number; actions: EndAct
         </div>
       )}
       <p aria-hidden="true" className={`absolute w-full px-12 text-center leading-[1.45] text-[#8f9dc4] ${vertical ? "text-[28px]" : "text-[20px]"}`} style={{ top: rows.concept, opacity: s.concept }}>
-        {CONCEPT_NOTE}
+        {conceptNote(signals)}
       </p>
     </div>
   );

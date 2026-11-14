@@ -11,6 +11,7 @@ import { capabilitySatisfied, registry, type JsonValue } from "@dome/protocol";
 
 import type { CommandRecord } from "./commands.ts";
 import type { IntentApp, IntentContext, PlanStep } from "./intents.ts";
+import { youtubeComing } from "../content/windowsAppStatus.ts";
 import { capabilityLabel } from "./labels.ts";
 import { browserLabel, controllableTabs, playingElsewhere, resolveMediaTarget, resolveYoutubeBrowserTarget, resolveYoutubeTarget, tabKey, targetForSearchResult, youtubeTargetFor, type YoutubeBrowserResolution, type YoutubeProblem } from "./targets.ts";
 import type { LastSearch, MediaSession, PcState, YoutubeSearchItem, YoutubeTab } from "../store/live.ts";
@@ -84,7 +85,7 @@ function youtubeProblem(reason: YoutubeProblem): string {
     case "ambiguous":
       return "More than one YouTube tab is playing. Choose one in the remote first.";
     case "no_extension":
-      return "The DoMe browser extension is not connected on the PC.";
+      return youtubeComing() ?? "The DoMe browser extension is not connected on the PC.";
     case "none_attached":
       return "Reload the YouTube tab on the PC so DoMe can control it.";
     case "no_player":
@@ -97,7 +98,7 @@ function youtubeProblem(reason: YoutubeProblem): string {
 function browserProblem(reason: "no_extension" | "no_browser" | "ambiguous"): string {
   switch (reason) {
     case "no_extension":
-      return "Searching needs the DoMe browser extension, which is not connected on the PC.";
+      return youtubeComing() ?? "Searching needs the DoMe browser extension, which is not connected on the PC.";
     case "no_browser":
       return "Open Chrome or Edge with the DoMe extension on the PC to search.";
     case "ambiguous":

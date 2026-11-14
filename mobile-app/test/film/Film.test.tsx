@@ -9,7 +9,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 
 import { Film } from "../../src/components/film/Film.tsx";
 import { VERTICAL } from "../../src/components/film/layout.ts";
-import { SCENES, TOTAL_MS } from "../../src/components/film/timeline.ts";
+import { FilmSignalsContext } from "../../src/components/film/signals.ts";
+import { FILM_SIGNALS_OFF, SCENES, TOTAL_MS } from "../../src/components/film/timeline.ts";
 
 afterEach(() => {
   delete window.__domeFilm;
@@ -20,6 +21,25 @@ function filmTime(): number {
 }
 
 describe("Film", () => {
+  it("draws the server's state: the phone's Screen view chip says Coming while off and Beta where it is on, and the captions follow", () => {
+    const still = SCENES[2]!.still;
+    const off = render(<Film reducedMotion={false} initialTime={still} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Screen view · Coming");
+    expect(within(off.container).getAllByText("Coming").length).toBeGreaterThanOrEqual(1);
+    expect(within(off.container).queryByText("Beta")).toBeNull();
+    off.unmount();
+    delete window.__domeFilm;
+    const on = render(
+      <FilmSignalsContext.Provider value={{ ...FILM_SIGNALS_OFF, screenOn: true, aiOn: true }}>
+        <Film reducedMotion={false} initialTime={still} />
+      </FilmSignalsContext.Provider>,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Screen view (beta) · Free: 10 min per 5 h");
+    expect(within(on.container).getByText("Beta")).toBeInTheDocument();
+    expect(within(on.container).queryByText("Coming")).toBeNull();
+  });
+
+
   it("renders the stage with play/pause, a progress bar, scene chips and the caption in a live region", () => {
     render(<Film reducedMotion={false} />);
     expect(screen.getByRole("group", { name: "DoMe demo film" })).toBeInTheDocument();

@@ -334,4 +334,28 @@ describe("navigation", () => {
     expect(screen.getByRole("link", { name: /^Ask/ })).toHaveAttribute("href", "/app/assistant");
     expect(screen.getByRole("link", { name: /Type a command/ })).toHaveAttribute("href", "/app/command");
   });
+
+  it("More's Ask row follows the server's assistant status, and Routines and Custom remotes say Coming", () => {
+    const more = () =>
+      render(
+        <MemoryRouter>
+          <MorePage />
+        </MemoryRouter>,
+      );
+    useAssistantStore.setState({ status: null });
+    const unknown = more();
+    expect(screen.getByRole("link", { name: /^Ask/ })).toHaveTextContent("Say or type what you want");
+    expect(screen.getByRole("link", { name: /^Routines/ })).toHaveTextContent("One-tap sequences · Coming");
+    expect(screen.getByRole("link", { name: /^Custom remotes/ })).toHaveTextContent("Your own layouts · Coming");
+    expect(screen.queryByText(/Pro preview/)).toBeNull();
+    unknown.unmount();
+    useAssistantStore.setState({ status: { unavailable_reason: "not_configured" } as never });
+    const off = more();
+    expect(screen.getByRole("link", { name: /^Ask/ })).toHaveTextContent("Voice commands · AI butler not switched on yet");
+    off.unmount();
+    useAssistantStore.setState({ status: { unavailable_reason: null } as never });
+    more();
+    expect(screen.getByRole("link", { name: /^Ask/ })).toHaveTextContent("Talk to the AI butler");
+    useAssistantStore.setState({ status: null });
+  });
 });

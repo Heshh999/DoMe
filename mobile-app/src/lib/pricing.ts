@@ -5,7 +5,7 @@
  */
 import { PLANS } from "@dome/protocol";
 
-import { AI_OFF_STATUS, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, LAYOUTS_STATUS, planById, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../content/plans.ts";
+import { AI_OFF_STATUS, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, LAYOUTS_STATUS, planById, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS, YOUTUBE_STATUS } from "../content/plans.ts";
 
 /** Cell values with a fixed meaning: the page draws a check mark or a dash for them. */
 export const INCLUDED = "Included";
@@ -19,12 +19,15 @@ export type RowGroup = { title: string; status?: string; summary?: string; rows:
 
 const same = (label: string, value: string): Row => ({ label, free: value, pro: value, proPlus: value });
 
-export function pricingRows(options: { aiOn?: boolean } = {}): Row[] {
+export function pricingRows(options: { aiOn?: boolean; screenOn?: boolean } = {}): Row[] {
   return pricingGroups(options).flatMap((g) => g.rows);
 }
 
-/** `aiOn`: the server says the assistant can be used; otherwise the AI group carries "Not switched on yet". */
-export function pricingGroups({ aiOn = false }: { aiOn?: boolean } = {}): RowGroup[] {
+/**
+ * `aiOn`: the server says the assistant can be used; otherwise the AI group carries "Not switched on yet".
+ * `screenOn`: the server has Screen view switched on (GET /healthz `screen_view`); otherwise its group carries "Coming".
+ */
+export function pricingGroups({ aiOn = false, screenOn = false }: { aiOn?: boolean; screenOn?: boolean } = {}): RowGroup[] {
   const free = PLANS.plans.free;
   const pro = PLANS.plans.pro;
   const proPlus = planById("pro_plus");
@@ -34,9 +37,11 @@ export function pricingGroups({ aiOn = false }: { aiOn?: boolean } = {}): RowGro
   return [
     {
       title: "Remote control",
-      summary: "All of it: YouTube, Windows media and volume, approved apps, lock and power, touchpad, keyboard, typed commands and dictation, at home or away",
+      summary: `${YOUTUBE_STATUS ? "" : "YouTube, "}Windows media and volume, approved apps, lock and power, touchpad, keyboard, typed commands and dictation, at home or away`,
       rows: [
-        same("YouTube controls, Windows media, system volume", yes),
+        // YouTube needs the browser extension, which no offered release includes yet: "Coming" on every plan until one does
+        same("YouTube controls in Chrome or Edge", YOUTUBE_STATUS ?? yes),
+        same("Windows media, system volume", yes),
         same("Approved app launch, focus, minimize, close", yes),
         same("Lock and confirmed power controls", yes),
         same("Touchpad, keyboard, typed commands and dictation", yes),
@@ -54,7 +59,7 @@ export function pricingGroups({ aiOn = false }: { aiOn?: boolean } = {}): RowGro
     },
     {
       title: "Screen view",
-      status: SCREEN_VIEW_STATUS,
+      ...(screenOn ? {} : { status: SCREEN_VIEW_STATUS }),
       // the paid plans' wording is the plan content's (plans.ts PAID_SCREEN_VIEW): no Free time limit, fair-use limits
       rows: [{ label: "Your PC’s screen live on your phone, tap what you see", free: `${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS}-hour window`, pro: proContent.screenView, proPlus: proPlus.screenView }],
     },

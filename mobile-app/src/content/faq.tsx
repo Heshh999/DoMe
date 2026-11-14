@@ -1,7 +1,8 @@
 /**
  * The FAQ's questions and answers, grouped by topic. Every answer describes the software as built: the AI
- * butler exists (optional, off until turned on); Screen view is coming, and its sound and TV-style remote later
- * still (no mini view over other apps: a home-screen app cannot draw one); paid Screen view has fair-use limits, never
+ * butler exists (optional, off until turned on, and "Not switched on yet" while the server has it off); Screen view is
+ * built and is "Coming" while the server switch (GET /healthz `screen_view`) is off, and its sound and TV-style remote
+ * are later still (no mini view over other apps: a home-screen app cannot draw one); paid Screen view has fair-use limits, never
  * "unlimited"; point-and-talk is planned; the AI never sees the screen; nothing is recorded; speech is not stored.
  * Rendered by src/pages/public/FaqPage.tsx.
  *
@@ -16,7 +17,7 @@ import { Link } from "react-router";
 import type { IconName } from "../components/icons.tsx";
 import { aiSwitchedOn, sellsPlan, type BillingAvailability } from "../lib/useBillingAvailability.ts";
 import type { PublicIconName } from "../pages/public/publicIcons.tsx";
-import { AI_RULES, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WINDOW_HOURS } from "./plans.ts";
+import { AI_OFF_STATUS, AI_RULES, aiWindowsRule, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TOP_UP, usd, WARN_AT_PERCENT, WINDOW_HOURS } from "./plans.ts";
 import { youtubeNotAvailable } from "./windowsAppStatus.ts";
 
 export type FaqEntry = { q: string; a: ReactNode };
@@ -33,9 +34,11 @@ const link = (to: string, label: string) => (
 
 /**
  * The FAQ for what the server says now; `null` (no answer yet, or a failed one) is today's static, honest wording.
- * `youtube` is why YouTube control is not available, or `null` when the offered release includes it.
+ * `youtube` is why YouTube control is not available, or `null` when the offered release includes it. `screenOn`: the
+ * server has Screen view switched on (GET /healthz `screen_view` is "on"); otherwise the Screen view answers say it is
+ * built but not switched on yet, under a "Coming" chip.
  */
-export function faqGroups(availability: BillingAvailability | null, youtube: string | null = youtubeNotAvailable()): FaqGroup[] {
+export function faqGroups(availability: BillingAvailability | null, youtube: string | null = youtubeNotAvailable(), screenOn = false): FaqGroup[] {
   const selling = !!availability?.selling;
   const proPlusSold = sellsPlan(availability, "pro_plus");
   const aiOn = aiSwitchedOn(availability);
@@ -68,6 +71,7 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
       id: "butler",
       title: "The AI butler",
       icon: "ask",
+      ...(aiOn ? {} : { status: AI_OFF_STATUS }),
       entries: [
         {
           q: "What is the AI butler?",
@@ -75,7 +79,7 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
             <>
               <p>Ask is where you talk to DoMe’s optional AI butler. Say or type what you want in your own words. When DoMe cannot work it out by itself, the AI interprets your request and picks safe PC actions from DoMe’s fixed list: media, volume, your approved apps, lock and confirmed power. The app shows every step it takes.</p>
               <p>{AI_RULES.actions}</p>
-              <p>The AI butler is off until you turn it on in Settings, and you can turn it off again at any time.</p>
+              <p>{aiOn ? "The AI butler is off until you turn it on in Settings, and you can turn it off again at any time." : "The AI butler is not switched on for DoMe accounts yet. Once it is, it stays off until you turn it on in Settings, and you can turn it off again at any time."}</p>
             </>
           ),
         },
@@ -89,7 +93,7 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
             <>
               <p>{AI_RULES.request}</p>
               <p>{AI_RULES.everyday}</p>
-              <p>{AI_RULES.taste}</p>
+              <p>{taste} It does not renew.</p>
             </>
           ),
         },
@@ -97,8 +101,8 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
           q: "What happens when I reach a limit?",
           a: (
             <>
-              <p>Everything that does not need the AI keeps working: every everyday command, the touchpad and keyboard, Screen view when it arrives. Only new AI requests wait.</p>
-              <p>{AI_RULES.windows}</p>
+              <p>Everything that does not need the AI keeps working: every everyday command, the touchpad and keyboard, and Screen view{screenOn ? "" : " once it is switched on"}. Only new AI requests wait.</p>
+              <p>{aiWindowsRule(selling)}</p>
               <p>
                 On Pro and Pro Plus you can also add {TOP_UP.requests} requests for {usd(TOP_UP.priceCents)} as a top-up. You choose to buy it; nothing is added or charged automatically.
               </p>
@@ -124,15 +128,18 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
       id: "screen-view",
       title: "Screen view",
       icon: "screen",
-      status: SCREEN_VIEW_STATUS,
+      ...(screenOn ? {} : { status: SCREEN_VIEW_STATUS }),
       entries: [
         {
-          q: "What is Screen view, and when is it coming?",
+          q: screenOn ? "What is Screen view?" : "What is Screen view, and when can I use it?",
           a: (
             <>
-              <p>Screen view shows your PC’s screen live on your phone so you can tap what you see and scroll with two fingers. It is in development and not in the app yet; this page will say so until it ships. Hearing your PC’s sound on your phone and a TV-style remote are coming later.</p>
               <p>
-                Free will include {FREE_SCREEN_VIEW_MINUTES} minutes per {WINDOW_HOURS}-hour window. {SCREEN_VIEW_FAIR_USE}
+                Screen view shows your PC’s screen live on your phone so you can tap what you see and scroll with two fingers.{" "}
+                {screenOn ? "It is a beta and switched on for DoMe accounts: open it from the Remote tab." : "It is built and included in DoMe for Windows 0.1.0, but it is not switched on for DoMe accounts yet, so it cannot be used; this page will say when it is."} Hearing your PC’s sound on your phone and a TV-style remote are coming later.
+              </p>
+              <p>
+                Free {screenOn ? "includes" : "will include"} {FREE_SCREEN_VIEW_MINUTES} minutes per {WINDOW_HOURS}-hour window. {SCREEN_VIEW_FAIR_USE}
               </p>
             </>
           ),
@@ -150,7 +157,7 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
           a: (
             <>
               <p>
-                Both add up to {pro.pcs} PCs and {pro.phones} phones. Screen view without the Free plan’s time limit (fair-use limits apply), custom remote layouts and saved routines are coming later: none of them is in the app yet. The difference is the AI butler allowance: Pro has {pro.ai.perWindow?.requests} requests per {WINDOW_HOURS}-hour window (about {pro.ai.perWindow?.minutes} minutes), up to {pro.ai.perWeek?.requests} a week; Pro Plus has {proPlus.ai.perWindow?.requests} per window (about {proPlus.ai.perWindow?.minutes} minutes), up to {proPlus.ai.perWeek?.requests} a week.
+                Both add up to {pro.pcs} PCs and {pro.phones} phones, and Screen view without the Free plan’s time limit (fair-use limits apply){screenOn ? "" : " once Screen view is switched on"}. Custom remote layouts and saved routines are coming later: they are not in the app yet. The difference is the AI butler allowance: Pro has {pro.ai.perWindow?.requests} requests per {WINDOW_HOURS}-hour window (about {pro.ai.perWindow?.minutes} minutes), up to {pro.ai.perWeek?.requests} a week; Pro Plus has {proPlus.ai.perWindow?.requests} per window (about {proPlus.ai.perWindow?.minutes} minutes), up to {proPlus.ai.perWeek?.requests} a week.
               </p>
               <p>
                 Pro is {usd(pro.price!.monthlyCents)} a month or {usd(pro.price!.annualCents)} a year; Pro Plus is {usd(proPlus.price!.monthlyCents)} a month or {usd(proPlus.price!.annualCents)} a year, in US dollars, tax included (the price shown is the amount charged). A subscription renews automatically every month or every year until you cancel. {howToBuy} See {link("/pricing", "Pricing")} for the full comparison.
@@ -160,7 +167,7 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
         },
         {
           q: "What is a top-up?",
-          a: `${AI_RULES.topUp} A top-up is a one-off purchase, not a subscription. When paid plans launch, the app will warn you at ${WARN_AT_PERCENT}% of a window before you need one.`,
+          a: `${AI_RULES.topUp} A top-up is a one-off purchase, not a subscription. ${selling ? `On Pro and Pro Plus the app warns you at ${WARN_AT_PERCENT}% of a window before you need one.` : `When paid plans launch, the app will warn you at ${WARN_AT_PERCENT}% of a window before you need one.`}`,
         },
         {
           q: "How do I cancel?",
@@ -184,7 +191,7 @@ export function faqGroups(availability: BillingAvailability | null, youtube: str
         { q: "What if I clear my browser data or reinstall?", a: "Each browser or home-screen installation has its own key. Clearing site data removes the key, and that installation must pair again on the PC. There is deliberately no shortcut." },
         {
           q: "What does the Windows app see or change?",
-          a: <>It runs as you (no administrator rights), shows a tray icon, and performs only actions from DoMe’s fixed list: YouTube and media controls, volume, your approved apps, lock and confirmed power actions, plus touchpad and keyboard input for phones you grant those permissions to on the PC. It never bypasses the Windows lock screen or UAC. See {link("/privacy", "Privacy")}.</>,
+          a: <>It runs as you (no administrator rights), shows a tray icon, and performs only actions from DoMe’s fixed list: {youtube ? "media controls" : "YouTube and media controls"}, volume, your approved apps, lock and confirmed power actions, plus touchpad and keyboard input for phones you grant those permissions to on the PC. It never bypasses the Windows lock screen or UAC. See {link("/privacy", "Privacy")}.</>,
         },
       ],
     },

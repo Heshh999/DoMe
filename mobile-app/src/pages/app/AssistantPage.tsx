@@ -15,6 +15,7 @@ import { PcSwitcher } from "../../components/PcSwitcher.tsx";
 import { TalkButton, type TalkState } from "../../components/TalkButton.tsx";
 import { Button, inputClass, Notice } from "../../components/ui.tsx";
 import { VoiceNoticeSheet } from "../../components/VoiceNoticeSheet.tsx";
+import { AI_OFF_STATUS } from "../../content/plans.ts";
 import { aiErrorText, aiUsable, MAX_TEXT } from "../../lib/assistant.ts";
 import { requestsLeft, warningText } from "../../lib/billing.ts";
 import type { RecognitionProblem } from "../../lib/speech.ts";
@@ -248,7 +249,7 @@ export function AssistantPage() {
           <ButlerAvatar size={40} />
           <div className="min-w-0">
             <h1 className="truncate text-[1.375rem] font-semibold leading-tight tracking-[-0.02em]">Ask</h1>
-            <p className="mt-0.5 truncate text-[13px] text-text-muted">{prefs.butlerName}, your AI butler</p>
+            <p className="mt-0.5 truncate text-[13px] text-text-muted">{status?.unavailable_reason === "not_configured" ? `${prefs.butlerName} · AI ${AI_OFF_STATUS.toLowerCase()}` : `${prefs.butlerName}, your AI butler`}</p>
           </div>
         </div>
         {aiOn && allowance && left !== null ? (

@@ -29,6 +29,7 @@ import { capabilityLabel, INPUT_SCOPE_EXPLANATION, errorMessage, recoverySteps }
 import { errorSummary, log } from "../../lib/log.ts";
 import { ALL_CAPABILITIES, defaultControllerName, pairingCodeHandle, pairingVerificationCode, parsePairingInput, takeCodeFromLocation, takeScanAgainHint } from "../../lib/pairing.ts";
 import { HeldPairingCode, verifyAndPin, type PinOutcome } from "../../lib/pcKeyPins.ts";
+import { YOUTUBE_COMING, youtubeComing } from "../../content/windowsAppStatus.ts";
 import { CameraError, detectQrSupport, startQrScanner, type QrScanner } from "../../lib/qr.ts";
 import { useBusyHold } from "../../store/busy.ts";
 import { useDevicesStore } from "../../store/devices.ts";
@@ -359,7 +360,7 @@ export function PairPage() {
           <h2 className="mt-3 text-lg font-semibold">This phone can now control {step.status.pc_name}</h2>
           {step.status.granted_capabilities ? <p className="mt-1 text-sm text-text-muted">Allowed: {step.status.granted_capabilities.map(capabilityLabel).join(", ")}.</p> : null}
           <PinNote pin={step.pin} screenViewOn={screenSwitch === "on"} />
-          <p className="mt-2 text-sm text-text-muted">Try Play/Pause from the remote. If YouTube control is what you want, make sure the DoMe browser extension is installed in Chrome or Edge on the PC.</p>
+          <p className="mt-2 text-sm text-text-muted">{youtubeComing() ? `Try Play/Pause from the remote. ${YOUTUBE_COMING} Windows media works now.` : "Try Play/Pause from the remote. If YouTube control is what you want, make sure the DoMe browser extension is installed in Chrome or Edge on the PC."}</p>
           <Button className="mt-4" variant="primary" size="lg" full onClick={() => void navigate("/app")}>
             Go to Home
           </Button>

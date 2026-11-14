@@ -1,12 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NowPlaying } from "../../src/components/NowPlaying.tsx";
 import { describeNowPlaying } from "../../src/lib/nowPlaying.ts";
 import { resolveMediaTarget, resolveYoutubeTarget } from "../../src/lib/targets.ts";
 import type { PcState } from "../../src/store/live.ts";
+
+const release = vi.hoisted(() => ({ placeholder: false, addon: false }));
+vi.mock("../../src/content/windows-release.json", async (importOriginal) => (await import("../helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
+afterEach(() => {
+  release.addon = false;
+});
 
 const tab = { browser_instance_id: "b", tab_id: 1, tab_token: "dGFiLXRva2VuLTAwMDAwMD", script_attached: true, context: "watch" as const, ad_showing: false, is_live: false, in_playlist: false, paused: false, title: "Lo-fi beats" };
 const chrome = { browser_instance_id: "b", browser: "chrome" as const, profile_label: "Work" };
@@ -40,6 +46,16 @@ describe("Now Playing (spec §9 media target clarity)", () => {
     const noExt = view({ remote_enabled: true, session_locked: false, extension_connected: false, youtube_tabs: [tab], media_sessions: [spotify] });
     expect(noExt.kind).toBe("media");
     expect(noExt.explanation).toMatch(/extension is not connected/);
+  });
+  it("with no extension and nothing playing, says YouTube control is coming instead of asking to install what cannot be installed", () => {
+    const v = view({ remote_enabled: true, session_locked: false, extension_connected: false });
+    expect(v.explanation).toBe("YouTube control in Chrome or Edge is coming. Windows media players appear here now.");
+    expect(v.explanation).not.toMatch(/install/i);
+  });
+  it("with a release that has the browser add-on, no extension and nothing playing asks for the extension", () => {
+    release.addon = true;
+    const v = view({ remote_enabled: true, session_locked: false, extension_connected: false });
+    expect(v.explanation).toBe("To control YouTube, install the DoMe browser extension on the PC. Windows media players appear here without it.");
   });
   it("stale state never shows controls as live", () => {
     expect(view({ remote_enabled: true, session_locked: false, extension_connected: true, youtube_tabs: [tab] }, false)).toMatchObject({ kind: "stale", stateLabel: "Unknown" });

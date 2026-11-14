@@ -15,7 +15,7 @@ import { api, ApiError, loginUrl } from "../../lib/api.ts";
 import { APP_VERSION, buildDiagnostics, diagnosticsText, type DiagnosticsReport } from "../../lib/diagnostics.ts";
 import { absoluteTime } from "../../lib/format.ts";
 import { errorMessage } from "../../lib/labels.ts";
-import { CATEGORIES, submissionFailure, type SubmissionFailure } from "../../lib/support.ts";
+import { CATEGORIES, submissionFailure, youtubeTopic, type SubmissionFailure } from "../../lib/support.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Button, Field, inputClass, Notice } from "../../components/ui.tsx";
 import { useDevicesStore } from "../../store/devices.ts";
@@ -26,9 +26,14 @@ import { PublicIcon, type PublicIconName } from "./publicIcons.tsx";
 
 const SUPPORT_URL: string | undefined = import.meta.env.VITE_DOME_SUPPORT_URL;
 
-const TOPICS: Array<{ title: string; icon: IconName | { public: PublicIconName }; steps: string[] }> = [
+type Topic = { title: string; icon: IconName | { public: PublicIconName }; steps: string[] };
+
+/** The YouTube topic follows the release the Download page offers (lib/support.ts youtubeTopic). */
+const YOUTUBE_TOPIC: Topic = { icon: "youtube", ...youtubeTopic() };
+
+const TOPICS: Topic[] = [
   { title: "The PC shows Offline", icon: "pulse", steps: ["Check the PC is awake and connected to the internet.", "Click the DoMe tray icon on the PC; it should say Connected. Use Reconnect if not.", "If the tray icon is missing, start DoMe from the Start menu.", "Connection health in the app shows which part is failing."] },
-  { title: "YouTube controls say the extension is not connected", icon: "youtube", steps: ["Open Chrome or Edge on the PC and check the DoMe extension is installed and enabled.", "Reload the YouTube tab so the extension attaches to it.", "Restart the browser if the extension icon still shows it is disconnected."] },
+  YOUTUBE_TOPIC,
   { title: "The touchpad or keyboard says it is not permitted", icon: "touchpad", steps: ["Touchpad and keyboard are separate permissions the PC owner grants on the PC (tray → Paired phones).", "Existing pairings do not get them automatically.", "They reach every app of the unlocked Windows session, so grant them only to phones you trust."] },
   { title: "Typing paused or went to the wrong place", icon: "keyboard", steps: ["DoMe types into whatever the PC has focused; click the field with the touchpad first.", "Live typing pauses when an edit cannot be mirrored safely (middle edits, emoji deletion). Use Compose and Send for the rest.", "If the window in front changed, the PC stops the remaining keys on purpose."] },
   { title: "The pairing code is rejected", icon: "key", steps: ["Codes last 5 minutes and work once. Ask the PC for a new one (tray → Pair a phone).", "Make sure the phone is signed in to the same account the PC is linked to.", "Compare the six-digit verification code on both screens before approving on the PC."] },

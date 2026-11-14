@@ -1,8 +1,20 @@
 /** Support-ticket categories (rest.schema.json support_ticket_request.category) with customer labels. */
 import { ProtocolError, type rest } from "@dome/protocol";
 
+import { youtubeComing } from "../content/windowsAppStatus.ts";
+import { getWindowsRelease, type WindowsRelease } from "../content/windowsRelease.ts";
 import { ApiError } from "./api.ts";
 import { supportCategoryFor } from "./labels.ts";
+
+/**
+ * The Support page's YouTube topic: "coming" while no offered release has the browser add-on (content/windowsAppStatus.ts),
+ * the extension steps once one has.
+ */
+export function youtubeTopic(release: WindowsRelease | null = getWindowsRelease()): { title: string; steps: string[] } {
+  const coming = youtubeComing(release);
+  if (!coming) return { title: "YouTube controls say the extension is not connected", steps: ["Open Chrome or Edge on the PC and check the DoMe extension is installed and enabled.", "Reload the YouTube tab so the extension attaches to it.", "Restart the browser if the extension icon still shows it is disconnected."] };
+  return { title: "YouTube control in Chrome or Edge (coming)", steps: [coming, "Windows media works now: Play/Pause, next, previous and volume work on whatever Windows is playing."] };
+}
 
 export const CATEGORIES: Array<{ value: rest.SupportTicketRequest["category"]; label: string }> = [
   { value: "connection", label: "Connection / PC offline" },

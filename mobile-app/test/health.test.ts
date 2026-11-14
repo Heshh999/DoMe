@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { rest } from "@dome/protocol";
 
@@ -6,6 +6,12 @@ import type { CommandRecord } from "../src/lib/commands.ts";
 import { assessHealth, lastVerifiedResult, onboardingSteps, type HealthInput } from "../src/lib/health.ts";
 import { EMPTY_INPUT_STATE } from "../src/lib/input.ts";
 import { EMPTY_LIVE_PC, type LivePc, type PcState } from "../src/store/live.ts";
+
+const release = vi.hoisted(() => ({ placeholder: false, addon: false }));
+vi.mock("../src/content/windows-release.json", async (importOriginal) => (await import("./helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
+afterEach(() => {
+  release.addon = false;
+});
 
 const PC = "33333333-3333-4333-8333-333333333333";
 const TS = "2026-10-08T12:00:00.000Z";
@@ -87,10 +93,24 @@ describe("assessHealth", () => {
     // no PC session reported: no note at all
     expect(layer(base(), "input").summary).not.toMatch(/Another phone|this phone’s last/);
   });
-  it("extension layer: disconnected → install/update, with the note that only YouTube needs it", () => {
+  it("extension layer: disconnected while no offered release has the browser add-on → Coming, not a problem, no install step", () => {
     const l = layer(base({ live: { ...live, state: { ...state, extension_connected: false } } }), "extension");
-    expect(l).toMatchObject({ status: "problem", action: { kind: "install_extension" } });
-    expect(l.summary).toMatch(/touchpad work without it/);
+    expect(l).toMatchObject({ title: "Browser extension · Coming", status: "unknown", action: { kind: "none" } });
+    expect(l.summary).toMatch(/^YouTube control in Chrome or Edge is coming\. It needs the DoMe extension/);
+    expect(l.summary).toMatch(/touchpad work now\./);
+    // the media target says the same instead of asking for the extension
+    const target = layer(base({ live: { ...live, state: { ...state, extension_connected: false, youtube_tabs: [], media_sessions: [] } } }), "target");
+    expect(target.action.kind).toBe("none");
+    expect(target.summary).toMatch(/YouTube control in Chrome or Edge is coming/);
+  });
+  it("extension layer: with a release that has the browser add-on, disconnected → install/update, with the note that only YouTube needs it", () => {
+    release.addon = true;
+    const l = layer(base({ live: { ...live, state: { ...state, extension_connected: false } } }), "extension");
+    expect(l).toMatchObject({ title: "Browser extension", status: "problem", action: { kind: "install_extension" } });
+    expect(l.summary).toBe("The DoMe extension is not connected on the PC. Needed only for YouTube controls; Windows media, volume, apps and the touchpad work without it.");
+    const target = layer(base({ live: { ...live, state: { ...state, extension_connected: false, youtube_tabs: [], media_sessions: [] } } }), "target");
+    expect(target).toMatchObject({ summary: "No media player is active; YouTube needs the extension.", action: { kind: "install_extension" } });
+    expect(onboardingSteps(base()).find((s) => s.id === "target")!.hint).toBe("A YouTube tab (with the extension) or a Windows media player.");
   });
   it("target layer: single tab ok; two playing tabs → choose; closed tab + no media → open YouTube; unattached → reload", () => {
     const two: PcState = { ...state, youtube_tabs: [state.youtube_tabs![0]!, { ...state.youtube_tabs![0]!, tab_id: 2, tab_token: "dGFiLXRva2VuLTAwMDAwMX", title: "Other" }] };
@@ -111,6 +131,9 @@ describe("onboarding walkthrough", () => {
     const notPaired = onboardingSteps(base({ grant: null }));
     expect(notPaired.find((s) => !s.done)?.id).toBe("pair");
     expect(notPaired.find((s) => s.id === "pair")?.to).toBe("/app/devices/pair");
+  });
+  it("the 'Choose what to control' hint names the Windows media player and says YouTube control in Chrome or Edge is coming", () => {
+    expect(onboardingSteps(base()).find((s) => s.id === "target")!.hint).toBe("A Windows media player (YouTube control in Chrome or Edge is coming).");
   });
   it("completes with the first verified media action", () => {
     expect(onboardingSteps(base()).find((s) => !s.done)?.id).toBe("first_action");

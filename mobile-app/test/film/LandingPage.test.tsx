@@ -15,6 +15,7 @@ import { committedRelease } from "../helpers/committedRelease.ts";
 import { api, ApiError } from "../../src/lib/api.ts";
 import { paidPlansLine } from "../../src/lib/useBillingAvailability.ts";
 import { LandingPage } from "../../src/pages/public/LandingPage.tsx";
+import { useScreenStore } from "../../src/store/screen.ts";
 
 // the real committed release, or the placeholder the site carried before it while `release.placeholder` is set
 const release = vi.hoisted(() => ({ placeholder: false }));
@@ -24,6 +25,8 @@ const PLANS: rest.PlansResponse = { plans: {}, pricing: { currency: "USD", plans
 let plans: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   plans = vi.spyOn(api, "plans").mockResolvedValue(PLANS);
+  // GET /healthz screen_view as domeremote.com answers it today
+  useScreenStore.setState({ switch: "off", switchChecked: true });
 });
 afterEach(() => {
   plans.mockRestore();
@@ -64,9 +67,18 @@ describe("LandingPage", () => {
     expect(screen.getByRole("link", { name: "Windows app · free beta" })).toHaveAttribute("href", "/download");
     expect(screen.getByTestId("hero-caveat")).toHaveTextContent(`DoMe for Windows ${r.version} is a free beta, not yet tested on a Windows 10 or 11 PC: see Download for what it includes.`);
     expect(container.textContent).not.toMatch(/not published yet|coming soon/);
-    // the YouTube card says this release leaves it out
+    // the YouTube card says this release leaves it out and carries the same "Coming" chip as Pricing
     expect(r.browserAddon).toBe(false);
-    const youtube = screen.getByRole("heading", { level: 3, name: "YouTube, the right tab" }).closest("li") as HTMLElement;
+    const heading = screen.getByRole("heading", { level: 3, name: /^YouTube, the right tab/ });
+    expect(heading).toHaveTextContent("Coming");
+    const youtube = heading.closest("li") as HTMLElement;
+    expect(within(youtube).queryByRole("link", { name: /See the preview/ })).toBeNull();
+    // the hero picture shows the Windows media player this release controls, not YouTube in the browser
+    const picture = screen.getByRole("img", { name: /The DoMe app on an iPhone/ });
+    expect(picture.getAttribute("aria-label")).toMatch(/Windows media playing/);
+    expect(picture.getAttribute("aria-label")).not.toMatch(/YouTube|back 10 seconds/);
+    expect(picture).toHaveTextContent("Windows media");
+    expect(picture).not.toHaveTextContent("YouTube · Edge");
     expect(youtube).toHaveTextContent(`It needs the DoMe extension for Chrome or Edge, which is not in the Chrome or Edge stores yet, so DoMe for Windows ${r.version} does not include it.`);
   });
 
@@ -76,16 +88,37 @@ describe("LandingPage", () => {
     expect(screen.getByRole("link", { name: "Windows app · coming soon" })).toHaveAttribute("href", "/download");
     expect(screen.getByTestId("hero-caveat")).toHaveTextContent("DoMe is in development. The Windows app is not published yet: see Download for its status.");
     expect(screen.queryByText(/free beta/)).toBeNull();
-    const youtube = screen.getByRole("heading", { level: 3, name: "YouTube, the right tab" }).closest("li") as HTMLElement;
+    const youtube = screen.getByRole("heading", { level: 3, name: /^YouTube, the right tab/ }).closest("li") as HTMLElement;
+    expect(youtube).toHaveTextContent("Coming");
     expect(youtube).toHaveTextContent("It needs the DoMe extension for Chrome or Edge, which is not in the Chrome or Edge stores yet.");
   });
 
-  it("lists Screen view in What you can do as Coming, never as available", () => {
+  it("lists Screen view in What you can do as Coming while the server has it switched off, never as available", () => {
     renderHome();
     const item = screen.getByRole("heading", { level: 3, name: /Screen view/ });
     expect(item).toHaveTextContent("Coming");
-    expect(item.closest("li")).toHaveTextContent(/In development/);
+    expect(item.closest("li")).toHaveTextContent(/Built, but not switched on for DoMe accounts yet\./);
+    expect(item.closest("li")?.textContent).not.toMatch(/In development/);
     expect(within(item.closest("li") as HTMLElement).getByRole("link", { name: /See the preview/ })).toHaveAttribute("href", "/demo");
+    expect(screen.getByText(CONCEPT_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: /Free today\. Pro and Pro Plus/ }).closest("section")).toHaveTextContent("Screen view without the Free plan’s time limit once it is switched on");
+  });
+
+  it("shows Screen view as an ordinary capability where the server has it switched on", () => {
+    useScreenStore.setState({ switch: "on", switchChecked: true });
+    renderHome();
+    const item = screen.getByRole("heading", { level: 3, name: "Screen view (beta)" });
+    expect(item).not.toHaveTextContent("Coming");
+    expect(item.closest("li")).toHaveTextContent("Free: 10 minutes per 5-hour window.");
+    expect(screen.getByText("Concept preview. Point-and-talk is planned.")).toBeInTheDocument();
+    const closing = screen.getByRole("heading", { level: 2, name: /Free today\. Pro and Pro Plus/ }).closest("section") as HTMLElement;
+    expect(closing).toHaveTextContent("Screen view without the Free plan’s time limit, and more AI butler time");
+    expect(closing.textContent).not.toMatch(/once it is switched on/);
+  });
+
+  it("says linking needs one command in this version", () => {
+    renderHome();
+    expect(screen.getByRole("heading", { level: 3, name: "Install DoMe on your PC" }).closest("li")).toHaveTextContent("this version links with one PowerShell command");
   });
 
   it("closes with Free, Pro and Pro Plus, their prices, and the paid-launch status", () => {

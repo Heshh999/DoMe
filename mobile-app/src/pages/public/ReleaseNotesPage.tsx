@@ -1,13 +1,20 @@
-/** Public release history and known issues, rendered from src/content/release-notes.json (spec §11A). */
+/**
+ * Public release history and known issues, rendered from src/content/release-notes.json (spec §11A). Entries tagged
+ * `screen_view: "off"` show only while the server has Screen view switched off (GET /healthz `screen_view` not "on";
+ * unknown counts as off), and `"on"` entries only where it is on, so both sites say what is true.
+ */
 import notes from "../../content/release-notes.json";
+import { useScreenSwitch } from "../../app/hooks.ts";
 import { Icon } from "../../components/icons.tsx";
 import { PublicIcon } from "./publicIcons.tsx";
 
+/** A line shown only while Screen view is switched off ("off") or on ("on"). */
+type Tagged = { text: string; screen_view?: "on" | "off" };
 interface Release {
   version: string;
   date: string;
   state: string;
-  changes: string[];
+  changes: Array<string | Tagged>;
   verified: string[];
   not_verified: string[];
 }
@@ -15,6 +22,7 @@ interface KnownIssue {
   title: string;
   detail: string;
   workaround: string;
+  screen_view?: "on" | "off";
 }
 
 const data = notes as { status: { channel: string; headline: string; verification: string }; releases: Release[]; known_issues: KnownIssue[] };
@@ -22,7 +30,11 @@ const data = notes as { status: { channel: string; headline: string; verificatio
 /** "pre-release" → "Pre-release" (sentence case, the way the page's text writes it). */
 const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Whether an entry tagged for the Screen view switch applies now. */
+const applies = (tag: "on" | "off" | undefined, screenOn: boolean) => tag === undefined || (tag === "on") === screenOn;
+
 export function ReleaseNotesPage() {
+  const screenOn = useScreenSwitch() === "on";
   return (
     <div>
       <header className="dome-page-intro animate-rise">
@@ -40,7 +52,7 @@ export function ReleaseNotesPage() {
           Known issues
         </h2>
         <ul className="mt-4 grid gap-3">
-          {data.known_issues.map((k) => (
+          {data.known_issues.filter((k) => applies(k.screen_view, screenOn)).map((k) => (
             <li key={k.title} className="dome-card p-5">
               <h3 className="font-semibold">{k.title}</h3>
               <p className="mt-1.5 text-[15px] leading-relaxed text-text-muted">{k.detail}</p>
@@ -73,12 +85,15 @@ export function ReleaseNotesPage() {
                   </p>
                 </div>
                 <ul className="mt-4 space-y-2 text-[15px] leading-relaxed text-text-muted">
-                  {r.changes.map((c) => (
-                    <li key={c} className="flex gap-3">
-                      <span aria-hidden="true" className="mt-[9px] h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                      <span>{c}</span>
-                    </li>
-                  ))}
+                  {r.changes
+                    .map((c) => (typeof c === "string" ? { text: c } : c))
+                    .filter((c) => applies(c.screen_view, screenOn))
+                    .map((c) => (
+                      <li key={c.text} className="flex gap-3">
+                        <span aria-hidden="true" className="mt-[9px] h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                        <span>{c.text}</span>
+                      </li>
+                    ))}
                 </ul>
                 <details className="dome-disclosure mt-3 border-t border-border">
                   <summary>

@@ -6,14 +6,21 @@
  * own) before a result opens; a window step right after its app was started waits for the app's first window; Stop
  * and a dropped connection end the plan at once, saying the step on its way may still run.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { JsonValue } from "@dome/protocol";
 
 import { intentContext, previewStep, resolveStep, resultsTabProblem, runPlan, stepFailure, WINDOW_RETRIES, type LiveView, type PlanRun, type PlanRunDeps } from "../src/lib/commandPlan.ts";
 import type { CommandRecord, TerminalOutcome } from "../src/lib/commands.ts";
 import { parseCommand, type IntentContext, type PlanStep } from "../src/lib/intents.ts";
+import { youtubeNotAvailable } from "../src/content/windowsAppStatus.ts";
 import type { LastSearch, PcState, YoutubeTab } from "../src/store/live.ts";
+
+const release = vi.hoisted(() => ({ placeholder: false, addon: false }));
+vi.mock("../src/content/windows-release.json", async (importOriginal) => (await import("./helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
+afterEach(() => {
+  release.addon = false;
+});
 
 const TS = "2026-10-08T12:00:00.000Z";
 const PLAYING: YoutubeTab = { browser_instance_id: "bi_test0001", tab_id: 1, tab_token: "dGFiLXRva2VuLTAwMDAwMD", script_attached: true, title: "Now playing", video_id: "playing1", paused: false, volume: 30, context: "watch", ad_showing: false, is_live: false, in_playlist: false };
@@ -121,8 +128,15 @@ describe("previewStep", () => {
   });
   it("explains a missing target", () => {
     const [pause] = steps("pause youtube", ctxFor(view));
-    expect(previewStep(pause!, 0, { state: { ...STATE, extension_connected: false } }, null).problem).toBe("The DoMe browser extension is not connected on the PC.");
+    expect(previewStep(pause!, 0, { state: { ...STATE, extension_connected: false } }, null).problem).toBe(`YouTube control in Chrome or Edge is coming. ${youtubeNotAvailable()}`);
     expect(previewStep(pause!, 0, { state: { ...STATE, youtube_tabs: [] } }, null).problem).toBe("No YouTube tab is open on the PC.");
+    const [search] = typed("search youtube for lofi beats", ctxFor(view));
+    expect(previewStep(search!, 0, { state: { ...STATE, extension_connected: false } }, null).problem).toBe(`YouTube control in Chrome or Edge is coming. ${youtubeNotAvailable()}`);
+    // a release with the browser add-on asks for the extension instead
+    release.addon = true;
+    expect(previewStep(pause!, 0, { state: { ...STATE, extension_connected: false } }, null).problem).toBe("The DoMe browser extension is not connected on the PC.");
+    expect(previewStep(search!, 0, { state: { ...STATE, extension_connected: false } }, null).problem).toBe("Searching needs the DoMe browser extension, which is not connected on the PC.");
+    release.addon = false;
     const [open] = typed("play the second video", ctxFor(view));
     expect(previewStep(open!, 0, { state: { ...STATE, youtube_tabs: [PLAYING] }, lastSearch: LAST }, null).problem).toBe("The results tab was closed on the PC. Search again.");
     expect(previewStep(open!, 0, { state: { ...STATE, youtube_tabs: [PLAYING, { ...RESULTS_TAB, context: "watch" }] }, lastSearch: LAST }, null).problem).toBe("You opened a video from this list, so that tab plays it now. Search again to pick another one.");

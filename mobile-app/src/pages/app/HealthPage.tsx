@@ -19,6 +19,7 @@ import { Button, Card, IconWell, Notice, PageHeader, Pill, type Tone, type WellT
 import { APP_VERSION } from "../../lib/diagnostics.ts";
 import { relativeTime } from "../../lib/format.ts";
 import { assessHealth, lastVerifiedResult, onboardingSteps, type HealthLayer, type LayerStatus } from "../../lib/health.ts";
+import { YOUTUBE_COMING, youtubeComing } from "../../content/windowsAppStatus.ts";
 import { useDevicesStore } from "../../store/devices.ts";
 import { useLiveStore } from "../../store/live.ts";
 import { useSessionStore } from "../../store/session.ts";
@@ -229,7 +230,7 @@ export function HealthPage() {
           <li>The DoMe Windows app running in a signed-in Windows user session (tray icon visible), linked to your account.</li>
           <li>Remote control switched on locally on the PC. Only the PC can switch it on.</li>
           <li>Touchpad and keyboard permission granted to this phone on the PC; it reaches every app of the unlocked session.</li>
-          <li>Chrome or Edge with the DoMe extension for YouTube controls. Windows media, volume, apps and the touchpad work without it.</li>
+          <li>{youtubeComing() ? `${YOUTUBE_COMING} It needs the DoMe extension, which is not in the Chrome or Edge stores yet. Windows media, volume, apps and the touchpad work now.` : "Chrome or Edge with the DoMe extension for YouTube controls. Windows media, volume, apps and the touchpad work without it."}</li>
           <li>Windows unlocked: the lock screen, sign-in and administrator prompts cannot be controlled, by design. Media while locked is a local PC setting.</li>
         </ul>
         <p className="mt-3 text-xs text-text-faint">DoMe cannot wake or power on a PC remotely in this version.</p>

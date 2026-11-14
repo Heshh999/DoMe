@@ -2,12 +2,14 @@
  * /demo: the public page around the film, its query flags, and the route itself. Its closing line follows the committed
  * release (DoMe for Windows 0.1.0, a free beta without YouTube control) and the placeholder before it.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 import { CONCEPT_NOTE, SCENES } from "../../src/components/film/timeline.ts";
+import { api } from "../../src/lib/api.ts";
 import { DemoPage } from "../../src/pages/public/DemoPage.tsx";
+import { useScreenStore } from "../../src/store/screen.ts";
 import { committedRelease } from "../helpers/committedRelease.ts";
 
 // the real committed release, or the placeholder the site carried before it while `release.placeholder` is set
@@ -30,6 +32,44 @@ function at(url: string) {
 }
 
 describe("DemoPage", () => {
+  it("follows the server: Screen view, the AI butler and the paid plans flip by themselves, and the export keeps the off wording", async () => {
+    const plans = vi.spyOn(api, "plans").mockResolvedValue({ plans: {}, pricing: { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } }, billing_enabled: true, billing_mode: "live", ai_enabled: true });
+    useScreenStore.setState({ switch: "on", switchChecked: true });
+    try {
+      const live = at("/demo");
+      await waitFor(() => expect(screen.getByTestId("demo-plans-intro")).toHaveTextContent("Free, Pro and Pro Plus are all available"));
+      expect(screen.getAllByText("Available now")).toHaveLength(3);
+      expect(screen.queryByText("Coming at paid launch")).toBeNull();
+      expect(screen.getAllByText("Concept preview. Point-and-talk is planned.").length).toBeGreaterThanOrEqual(1);
+      // no Screen view or AI chip on the plan cards
+      expect(screen.queryByText("Not switched on yet")).toBeNull();
+      live.unmount();
+      // the exported video is a fixed file: all-off wording whatever the server says
+      at("/demo?export=1&t=56000");
+      expect(screen.getAllByText("Coming at paid launch").length).toBeGreaterThanOrEqual(2);
+    } finally {
+      plans.mockRestore();
+      useScreenStore.setState({ switch: "unknown", switchChecked: true });
+    }
+  });
+
+  it("with billing and Screen view off, says Pro and Pro Plus arrive at paid launch and Screen view is not switched on", async () => {
+    const plans = vi.spyOn(api, "plans").mockResolvedValue({ plans: {}, pricing: { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } }, billing_enabled: false, billing_mode: "off", ai_enabled: false });
+    useScreenStore.setState({ switch: "off", switchChecked: true });
+    try {
+      at("/demo");
+      await waitFor(() => expect(plans).toHaveBeenCalled());
+      expect(screen.getByTestId("demo-plans-intro")).toHaveTextContent("they arrive at paid launch");
+      expect(screen.getAllByText(CONCEPT_NOTE).length).toBeGreaterThanOrEqual(1);
+      expect(CONCEPT_NOTE).toMatch(/Screen view is built but not switched on yet/);
+      expect(screen.getAllByText("Coming").length).toBeGreaterThanOrEqual(3);
+      expect(screen.getAllByText("Not switched on yet").length).toBeGreaterThanOrEqual(3);
+    } finally {
+      plans.mockRestore();
+      useScreenStore.setState({ switch: "unknown", switchChecked: true });
+    }
+  });
+
   it("shows the film with an introduction, the honest concept line, the plans and their links", () => {
     at("/demo");
     expect(screen.getByRole("heading", { level: 1, name: "See DoMe in action." })).toBeInTheDocument();

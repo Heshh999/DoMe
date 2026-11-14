@@ -4,16 +4,33 @@
  * frame at time t always looks the same: on the website, in the reduced-motion storyboard (one still per
  * scene), in QA stills (`/demo?scene=N&paused=1`) and in the exported video (`/demo?export=1`).
  *
- * Honesty (rollout brief §4): Screen view is "Coming", point-and-talk is "Planned", Pro and Pro Plus "arrive at
- * paid launch". The AI butler exists today. Nothing here claims recordings, screenshots or AI vision. Paid Screen view
+ * Honesty (rollout brief §4): point-and-talk is "Planned". Screen view, the AI butler and the paid plans follow what the
+ * server says (FilmSignals: GET /healthz `screen_view`, GET /v1/plans `ai_enabled` and `billing_enabled`): Screen view
+ * is "Coming" and the AI butler "Not switched on yet" while switched off, and Pro and Pro Plus "arrive at paid launch"
+ * until checkout exists. SCENES, PLAN_FACTS and CONCEPT_NOTE are the all-off wording, which the exported video (a
+ * fixed file) and a page whose server has not answered use. Nothing here claims recordings, screenshots or AI vision. Paid Screen view
  * is "fair use" (plans.ts PAID_SCREEN_VIEW_SHORT), never "unlimited": the relay keeps per-account limits. Scene 3
  * shows only what Screen view's first version has (tap, two-finger scroll, pinch to zoom on the phone, 1×): no mini
  * view (a home-screen app cannot draw one), no PC sound and no TV-style remote, none of which is built.
  */
 
-import { AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, PAID_SCREEN_VIEW_SHORT, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { AI_OFF_STATUS, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, PAID_SCREEN_VIEW_SHORT, planById, POINT_AND_TALK_STATUS, SCREEN_VIEW_STATUS, TOP_UP, usd, WINDOW_HOURS } from "../../content/plans.ts";
 
 export type StatusTone = "now" | "coming" | "planned" | "info";
+
+/** What the server says, for the film's labels. Every field false is today's static, honest wording. */
+export interface FilmSignals {
+  /** GET /healthz `screen_view` is "on". */
+  screenOn: boolean;
+  /** GET /v1/plans `ai_enabled`. */
+  aiOn: boolean;
+  /** Pro can be bought now (GET /v1/plans `billing_enabled`). */
+  proSold: boolean;
+  /** Pro Plus can be bought now (checkout exists and the AI butler is switched on). */
+  proPlusSold: boolean;
+}
+
+export const FILM_SIGNALS_OFF: FilmSignals = { screenOn: false, aiOn: false, proSold: false, proPlusSold: false };
 
 /**
  * One beat inside a scene: a short line under the caption that says what is happening right now, so the film works
@@ -67,7 +84,7 @@ export const SCENES: readonly Scene[] = [
     start: 8_000,
     end: 22_000,
     caption: "Just ask. The AI butler turns requests in your own words into safe, approved actions, and shows you each step.",
-    status: { label: `AI butler · Available now · Free: ${FREE_TASTE_REQUESTS} to try · more with Pro and Pro Plus`, tone: "now" },
+    status: { label: `AI butler · ${AI_OFF_STATUS} · Free: ${FREE_TASTE_REQUESTS} to try · more with Pro and Pro Plus`, tone: "coming" },
     still: 17_600,
     beats: [
       { at: 9_400, text: "Put on the next episode and make it full screen", speech: true },
@@ -131,6 +148,29 @@ export const SCENES: readonly Scene[] = [
   },
 ];
 
+/** The paid plans' line for scenes 5 and 6. */
+function paidPlansStatus(s: FilmSignals, end: boolean): string {
+  if (s.proPlusSold) return end ? "Free today · Pro and Pro Plus on sale" : `Pro and Pro Plus · ${AVAILABLE_NOW}`;
+  if (s.proSold) return end ? "Free today · Pro on sale" : "Pro on sale · Pro Plus once the AI butler is on";
+  return end ? "Free today · Pro and Pro Plus at paid launch" : "Pro and Pro Plus arrive at paid launch";
+}
+
+/** A scene's status chip for what the server says (SCENES holds the all-off wording). */
+export function sceneStatus(scene: Scene, s: FilmSignals): Scene["status"] {
+  switch (scene.id) {
+    case "ask":
+      return s.aiOn ? { label: `AI butler · ${AVAILABLE_NOW} · Free: ${FREE_TASTE_REQUESTS} to try · more with Pro and Pro Plus`, tone: "now" } : scene.status;
+    case "screen":
+      return s.screenOn ? { label: `Screen view (beta) · Free: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h · Pro: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, tone: "now" } : scene.status;
+    case "plans":
+      return { label: paidPlansStatus(s, false), tone: "info" };
+    case "end":
+      return { label: paidPlansStatus(s, true), tone: "info" };
+    default:
+      return scene.status;
+  }
+}
+
 /** The scene showing at time t (the last one at and after TOTAL_MS). */
 export function sceneAt(t: number): Scene {
   const ms = clamp(t, 0, TOTAL_MS);
@@ -180,60 +220,71 @@ const topUpLine = `Top-up: ${TOP_UP.requests} requests for ${usd(TOP_UP.priceCen
 
 /**
  * The plan facts shown in scene 5 and on /demo, read from the website's plan content (src/content/plans.ts) so the
- * film, the demo page and the pricing page never disagree. Screen view carries its "Coming" status on every card.
+ * film, the demo page and the pricing page never disagree. Screen view carries "Coming" on every card while the server
+ * has it switched off, every AI line "Not switched on yet" while the AI butler is off, and a paid plan "Coming at paid
+ * launch" until it can be bought.
  */
-export const PLAN_FACTS: readonly PlanFact[] = [
-  {
-    id: "free",
-    name: freePlan.name,
-    price: usd(0),
-    per: "",
-    sub: "No credit card",
-    status: AVAILABLE_NOW,
-    tone: "now",
-    lines: [
-      { text: `${freePlan.pcs} PC · ${freePlan.phones} phones` },
-      { text: "Remote control: all of it", key: true },
-      { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h`, status: SCREEN_VIEW_STATUS },
-      { text: `AI: ${FREE_TASTE_REQUESTS} requests to try, once`, key: true },
-    ],
-  },
-  {
-    id: "pro",
-    name: proPlan.name,
-    price: usd(proPlan.price!.monthlyCents),
-    per: "/ month",
-    sub: `or ${usd(proPlan.price!.annualCents)} / year`,
-    status: COMING_AT_PAID_LAUNCH,
-    tone: "info",
-    lines: [
-      { text: `${proPlan.pcs} PCs · ${proPlan.phones} phones` },
-      { text: "Remote control: all of it" },
-      { text: `Screen view: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, status: SCREEN_VIEW_STATUS, key: true },
-      { text: aiLine(proPlan.ai.perWindow?.requests, proPlan.ai.perWeek?.requests), key: true },
-      { text: topUpLine },
-    ],
-  },
-  {
-    id: "proplus",
-    name: plusPlan.name,
-    price: usd(plusPlan.price!.monthlyCents),
-    per: "/ month",
-    sub: `or ${usd(plusPlan.price!.annualCents)} / year`,
-    status: COMING_AT_PAID_LAUNCH,
-    tone: "info",
-    lines: [
-      { text: `${plusPlan.pcs} PCs · ${plusPlan.phones} phones` },
-      { text: "Remote control: all of it" },
-      { text: `Screen view: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, status: SCREEN_VIEW_STATUS, key: true },
-      { text: aiLine(plusPlan.ai.perWindow?.requests, plusPlan.ai.perWeek?.requests), key: true },
-      { text: topUpLine },
-    ],
-  },
-];
+export function planFacts(s: FilmSignals): readonly PlanFact[] {
+  const screen = s.screenOn ? {} : { status: SCREEN_VIEW_STATUS };
+  const ai = s.aiOn ? {} : { status: AI_OFF_STATUS };
+  const paid = (sold: boolean) => (sold ? { status: AVAILABLE_NOW, tone: "now" as const } : { status: COMING_AT_PAID_LAUNCH, tone: "info" as const });
+  return [
+    {
+      id: "free",
+      name: freePlan.name,
+      price: usd(0),
+      per: "",
+      sub: "No credit card",
+      status: AVAILABLE_NOW,
+      tone: "now",
+      lines: [
+        { text: `${freePlan.pcs} PC · ${freePlan.phones} phones` },
+        { text: "Remote control: all of it", key: true },
+        { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} min per ${WINDOW_HOURS} h`, ...screen },
+        { text: `AI: ${FREE_TASTE_REQUESTS} requests to try, once`, key: true, ...ai },
+      ],
+    },
+    {
+      id: "pro",
+      name: proPlan.name,
+      price: usd(proPlan.price!.monthlyCents),
+      per: "/ month",
+      sub: `or ${usd(proPlan.price!.annualCents)} / year`,
+      ...paid(s.proSold),
+      lines: [
+        { text: `${proPlan.pcs} PCs · ${proPlan.phones} phones` },
+        { text: "Remote control: all of it" },
+        { text: `Screen view: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, ...screen, key: true },
+        { text: aiLine(proPlan.ai.perWindow?.requests, proPlan.ai.perWeek?.requests), key: true, ...ai },
+        { text: topUpLine },
+      ],
+    },
+    {
+      id: "proplus",
+      name: plusPlan.name,
+      price: usd(plusPlan.price!.monthlyCents),
+      per: "/ month",
+      sub: `or ${usd(plusPlan.price!.annualCents)} / year`,
+      ...paid(s.proPlusSold),
+      lines: [
+        { text: `${plusPlan.pcs} PCs · ${plusPlan.phones} phones` },
+        { text: "Remote control: all of it" },
+        { text: `Screen view: ${PAID_SCREEN_VIEW_SHORT.toLowerCase()}`, ...screen, key: true },
+        { text: aiLine(plusPlan.ai.perWindow?.requests, plusPlan.ai.perWeek?.requests), key: true, ...ai },
+        { text: topUpLine },
+      ],
+    },
+  ];
+}
 
-/** The honest line under the film on the website: scenes 3 and 4 show features that are not in the app yet. */
-export const CONCEPT_NOTE = "Concept preview. Screen view is in development; point-and-talk is planned.";
+/** Today's static plan facts (everything off): the exported video and a page whose server has not answered. */
+export const PLAN_FACTS: readonly PlanFact[] = planFacts(FILM_SIGNALS_OFF);
+
+/** The honest line under the film on the website: which of the film's features cannot be used yet. */
+export function conceptNote(s: FilmSignals): string {
+  return s.screenOn ? "Concept preview. Point-and-talk is planned." : "Concept preview. Screen view is built but not switched on yet; point-and-talk is planned.";
+}
+export const CONCEPT_NOTE = conceptNote(FILM_SIGNALS_OFF);
 
 /* ── motion helpers (pure; the brand's easing, cubic-bezier(0.22, 1, 0.36, 1)) ───────────────────────────── */
 

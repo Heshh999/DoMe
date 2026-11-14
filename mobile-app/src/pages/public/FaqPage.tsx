@@ -4,8 +4,10 @@
  */
 import { Link } from "react-router";
 
+import { useScreenSwitch } from "../../app/hooks.ts";
 import { Icon } from "../../components/icons.tsx";
 import { faqGroups, type FaqGroup } from "../../content/faq.tsx";
+import { youtubeNotAvailable } from "../../content/windowsAppStatus.ts";
 import { useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 import { PublicIcon } from "./publicIcons.tsx";
 
@@ -18,7 +20,8 @@ const LINK = "font-semibold text-accent underline decoration-accent/35 underline
 
 export function FaqPage() {
   // the plan answers follow GET /v1/plans (checkout, AI switched on); until it answers, today's static wording
-  const groups = faqGroups(useBillingAvailability());
+  // and the Screen view answers follow GET /healthz `screen_view` (the switch the app reads); unknown counts as off
+  const groups = faqGroups(useBillingAvailability(), youtubeNotAvailable(), useScreenSwitch() === "on");
   return (
     <div className="mx-auto max-w-6xl px-5 py-12 lg:px-8 lg:py-16">
       <header className="dome-page-intro animate-rise">

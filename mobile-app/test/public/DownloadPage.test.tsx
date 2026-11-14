@@ -19,7 +19,8 @@ vi.mock("../../src/content/windows-release.json", () => ({
   },
 }));
 
-import { DownloadPage, SCREEN_VIEW_NOTE, SMART_APP_CONTROL_NOTE, TESTED_NOTE } from "../../src/pages/public/DownloadPage.tsx";
+import { DownloadPage, SCREEN_VIEW_NOTE, SCREEN_VIEW_ON_NOTE, SMART_APP_CONTROL_NOTE, TESTED_NOTE } from "../../src/pages/public/DownloadPage.tsx";
+import { useScreenStore } from "../../src/store/screen.ts";
 
 const SHA = "3f".repeat(32);
 const PUBLISHED = {
@@ -107,6 +108,21 @@ describe("Download page", () => {
     expect(screen.getByRole("link", { name: "release history and known issues" })).toHaveAttribute("href", "/release-notes");
     expect(screen.getByRole("heading", { name: "Install DoMe on your iPhone" })).toBeInTheDocument();
     expect(screen.queryByText(/not yet published/)).toBeNull();
+  });
+
+  it("the Screen view note follows the server's switch (GET /healthz screen_view): not switched on while off or unknown, usable where on", () => {
+    content.value = { ...PUBLISHED };
+    useScreenStore.setState({ switch: "off", switchChecked: true });
+    const off = page();
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent(SCREEN_VIEW_NOTE);
+    off.unmount();
+    useScreenStore.setState({ switch: "on", switchChecked: true });
+    const on = page();
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent(SCREEN_VIEW_ON_NOTE);
+    expect(SCREEN_VIEW_ON_NOTE).toMatch(/switched on for DoMe accounts: open it from the Remote tab/);
+    expect(on.container.textContent).not.toContain(SCREEN_VIEW_NOTE);
+    on.unmount();
+    useScreenStore.setState({ switch: "unknown", switchChecked: true });
   });
 
   it("says nothing about missing YouTube control when the release includes the add-on", () => {

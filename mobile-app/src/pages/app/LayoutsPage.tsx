@@ -1,5 +1,6 @@
-/** Custom remotes (layouts): a Pro preview reached only by a deliberate selection from More. Nothing is saved. */
+/** Custom remotes (layouts): a preview of a Pro feature that is not built yet ("Coming"), reached only from More. Nothing is saved. */
 import { Card, IconWell, PageHeader, Pill, SectionLabel } from "../../components/ui.tsx";
+import { LAYOUTS_STATUS } from "../../content/plans.ts";
 import { ProExplanation } from "../../components/ProExplanation.tsx";
 
 const EXAMPLES = [
@@ -11,7 +12,7 @@ const EXAMPLES = [
 export function LayoutsPage() {
   return (
     <div className="space-y-4">
-      <PageHeader title="Custom remotes" action={<Pill tone="info">Pro preview</Pill>} />
+      <PageHeader title="Custom remotes" action={<Pill tone="info">{LAYOUTS_STATUS}</Pill>} />
       <ProExplanation benefit="Saving your own remote layouts" />
       <section className="pt-1">
         <SectionLabel>Example layouts</SectionLabel>
@@ -27,7 +28,7 @@ export function LayoutsPage() {
           ))}
         </ul>
       </section>
-      <p className="px-1 text-xs text-text-muted">Arrange the controls you use most into named remotes such as Media, Desk or Presentation. Every control still goes through the same checked list of actions and the same confirmations; a layout can never add a capability the PC did not grant.</p>
+      <p className="px-1 text-xs text-text-muted">Arrange the controls you use most into named remotes such as Media, Desk or Presentation. Every control still goes through the same checked list of actions and the same confirmations; a layout can never add a capability the PC did not grant. Custom remotes are not in the app yet.</p>
     </div>
   );
 }

@@ -561,6 +561,14 @@ describe("dictation and typing", () => {
 });
 
 describe("header", () => {
+  it("says the AI is not switched on under the butler's name while the server says so (not_configured)", async () => {
+    status = { ...STATUS, available: false, unavailable_reason: "not_configured" };
+    useAssistantStore.getState().setPrefs({ butlerName: "Jenkins" });
+    renderPage();
+    expect(await screen.findByText("Jenkins · AI not switched on yet")).toBeInTheDocument();
+    expect(screen.queryByText("Jenkins, your AI butler")).toBeNull();
+  });
+
   it("the page is titled Ask with the butler's name under it; the speaker toggle mutes and says Unmute when muted", async () => {
     useAssistantStore.getState().setPrefs({ butlerName: "Jenkins" });
     renderPage();

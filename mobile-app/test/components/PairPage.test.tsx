@@ -134,6 +134,8 @@ describe("PairPage", () => {
     statusResponse = () => jsonResponse(200, { pairing_id: PAIRING_ID, state: "approved", pc_id: PC, pc_name: "Office PC", expires_at: EXPIRES, controller_id: CONTROLLER, granted_capabilities: ["status", "media"] });
     await waitFor(() => expect(screen.getByText("Paired")).toBeInTheDocument(), { timeout: 5000 });
     expect(screen.getByText(/This phone can now control Office PC/)).toBeInTheDocument();
+    // no offered release has the browser add-on: YouTube in the browser is coming, Windows media works now
+    expect(screen.getByText("Try Play/Pause from the remote. YouTube control in Chrome or Edge is coming. Windows media works now.")).toBeInTheDocument();
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(await getStoredControllerId()).toBe(CONTROLLER);
     const polls = captured.filter((c) => c.url.includes(`/v1/pairing/${PAIRING_ID}`));

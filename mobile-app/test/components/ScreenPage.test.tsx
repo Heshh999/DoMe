@@ -247,6 +247,16 @@ afterEach(() => {
 });
 
 describe("ScreenPage: the live path", () => {
+  it("the header says Screen view (beta) only while the server has it switched on", async () => {
+    const on = renderPage();
+    expect(screen.getByRole("heading", { level: 1, name: "Screen view (beta)" })).toBeInTheDocument();
+    on.unmount();
+    useScreenStore.setState({ switch: "off", switchChecked: true });
+    renderPage();
+    expect(screen.getByRole("heading", { level: 1, name: "Screen view" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Screen view (beta)" })).toBeNull();
+  });
+
   it("starts nothing on arrival; Show screen runs the signed path; 'Encrypted…' appears only after the answer verified; the input session follows the picture", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId("screen-status")).toHaveAttribute("data-kind", "ready"));

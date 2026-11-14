@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { PLANS } from "@dome/protocol";
 
-import { aboutTime, AGREE_TO_TERMS, AI_OFF_STATUS, AI_RULES, aiSummary, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, HOW_TO_CANCEL, PAID_SCREEN_VIEW, PLAN_CONTENT, planById, LAYOUTS_STATUS, POINT_AND_TALK_STATUS, renewalLine, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TAX_INCLUDED, TOP_UP, topUpTerms, usd, WARN_AT_PERCENT, WEEK_DAYS, WINDOW_HOURS } from "../../src/content/plans.ts";
+import { aboutTime, AGREE_TO_TERMS, AI_OFF_STATUS, AI_RULES, aiSummary, AVAILABLE_NOW, COMING_AT_PAID_LAUNCH, FREE_SCREEN_VIEW_MINUTES, FREE_TASTE_REQUESTS, HOW_TO_CANCEL, PAID_SCREEN_VIEW, PLAN_CONTENT, planById, LAYOUTS_STATUS, POINT_AND_TALK_STATUS, renewalLine, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, TAX_INCLUDED, TOP_UP, topUpTerms, usd, WARN_AT_PERCENT, WEEK_DAYS, WINDOW_HOURS, YOUTUBE_STATUS, aiBillingRule, aiWindowsRule } from "../../src/content/plans.ts";
 import { COMING, INCLUDED, NOT_INCLUDED, pricingGroups, pricingRows } from "../../src/lib/pricing.ts";
 
 describe("plan content", () => {
@@ -44,7 +44,7 @@ describe("plan content", () => {
     expect([planById("pro_plus").pcs, planById("pro_plus").phones]).toEqual([5, 5]);
   });
 
-  it("Screen view is coming: 10 minutes per 5-hour window on Free, no Free time limit but fair-use limits on the paid plans", () => {
+  it("Screen view is Coming while switched off: 10 minutes per 5-hour window on Free, no Free time limit but fair-use limits on the paid plans", () => {
     expect(SCREEN_VIEW_STATUS).toBe("Coming");
     expect(POINT_AND_TALK_STATUS).toBe("Planned");
     expect(FREE_SCREEN_VIEW_MINUTES).toBe(10);
@@ -58,8 +58,15 @@ describe("plan content", () => {
       expect(plan.tagline).not.toMatch(/unlimited/i);
       expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))!.text).not.toMatch(/unlimited/i);
     }
-    // the card says "Coming" next to Screen view on every plan
-    for (const plan of PLAN_CONTENT) expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))?.status).toBe("Coming");
+    // every Screen view line is marked, so the page says "Coming" beside it while the server has it switched off
+    for (const plan of PLAN_CONTENT) expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))).toMatchObject({ screen: true });
+    for (const plan of PLAN_CONTENT) expect(plan.highlights.find((h) => h.text.startsWith("Screen view"))?.status).toBeUndefined();
+    // it is built: no plan says "once it ships"
+    for (const plan of PLAN_CONTENT) expect(plan.tagline).not.toMatch(/ships|in development/);
+    // YouTube control has its own line, "Coming" while no offered release has the browser add-on
+    expect(planById("free").highlights.find((h) => h.text.startsWith("Full remote control"))!.text).not.toMatch(/YouTube/);
+    expect(planById("free").highlights.find((h) => h.text === "YouTube control in Chrome or Edge")?.status).toBe(YOUTUBE_STATUS);
+    expect(YOUTUBE_STATUS).toBe("Coming");
     // every AI allowance is marked, so the page can say "Not switched on yet" beside it while AI is off
     for (const plan of PLAN_CONTENT) expect(plan.highlights.filter((h) => h.ai).map((h) => h.text)).toEqual(plan.highlights.filter((h) => /AI /.test(h.text)).map((h) => h.text));
     for (const plan of PLAN_CONTENT.filter((p) => p.price)) {
@@ -111,6 +118,13 @@ describe("plan content", () => {
     expect(AI_RULES.privacy).toMatch(/never sees your screen: no screenshots/);
     expect(AI_RULES.billing).toMatch(/US dollars and are the full amount you pay \(any tax is included\)/);
     expect(AI_RULES.billing).toMatch(/Stripe/);
+    // the timing clauses follow the server: "when paid plans launch" only while nothing can be bought
+    expect(aiWindowsRule(false)).toBe(AI_RULES.windows);
+    expect(aiWindowsRule(true)).toMatch(/On Pro and Pro Plus the app shows the exact refresh time \(“Refreshes Saturday at 2 pm”\) and warns you at 80%\./);
+    expect(aiWindowsRule(true)).not.toMatch(/paid plans launch|will/);
+    expect(aiBillingRule(false)).toBe(AI_RULES.billing);
+    expect(aiBillingRule(true)).toMatch(/Billing runs through the DoMe web app \(Stripe\)\.$/);
+    expect(aiBillingRule(true)).not.toMatch(/paid plans launch/);
   });
 });
 
@@ -160,6 +174,13 @@ describe("pricing rows", () => {
     const groups = pricingGroups();
     const screen = groups.find((g) => g.title === "Screen view")!;
     expect(screen.status).toBe("Coming");
+    // the server's Screen view switch on (GET /healthz screen_view): no "Coming", the allowances stay
+    const on = pricingGroups({ screenOn: true }).find((g) => g.title === "Screen view")!;
+    expect(on.status).toBeUndefined();
+    expect(on.rows).toEqual(screen.rows);
+    // YouTube control is its own row, "Coming" on every plan while no offered release has the add-on
+    expect(groups[0]!.rows.find((r) => r.label === "YouTube controls in Chrome or Edge")).toMatchObject({ free: "Coming", pro: "Coming", proPlus: "Coming" });
+    expect(groups[0]!.summary).not.toMatch(/YouTube/);
     // the paid cells are the plan content's wording: no Free time limit, but fair-use limits on the relay, never "Unlimited"
     expect(screen.rows[0]).toMatchObject({ free: "10 min per 5-hour window", pro: PAID_SCREEN_VIEW, proPlus: PAID_SCREEN_VIEW });
     expect([screen.rows[0]!.pro, screen.rows[0]!.proPlus]).toEqual([planById("pro").screenView, planById("pro_plus").screenView]);

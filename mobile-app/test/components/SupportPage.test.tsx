@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { configureApi } from "../../src/lib/api.ts";
 import { clearLogs, log } from "../../src/lib/log.ts";
+import { youtubeComing } from "../../src/content/windowsAppStatus.ts";
+import { getWindowsRelease } from "../../src/content/windowsRelease.ts";
+import { youtubeTopic } from "../../src/lib/support.ts";
 import { SupportPage } from "../../src/pages/public/SupportPage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useLiveStore } from "../../src/store/live.ts";
@@ -163,5 +166,19 @@ describe("SupportPage", () => {
     expect(screen.queryByRole("button", { name: "Send request" })).toBeNull();
     expect(screen.getByText("The PC shows Offline")).toBeInTheDocument();
     expect(requests.filter((r) => r.init.method === "POST")).toHaveLength(0);
+  });
+
+  it("the YouTube topic says YouTube control in Chrome or Edge is coming while no offered release has the browser add-on, and keeps the extension steps for one that has", async () => {
+    useSessionStore.setState({ status: "signed_out", session: null, error: null });
+    mock(() => jsonResponse(401, { error: { code: "UNAUTHENTICATED", message: "x", retryable: false } }));
+    renderSupport();
+    expect(screen.queryByText("YouTube controls say the extension is not connected")).toBeNull();
+    await userEvent.click(screen.getByText("YouTube control in Chrome or Edge (coming)"));
+    expect(screen.getByText(youtubeComing()!)).toBeInTheDocument();
+    expect(screen.getByText(/^Windows media works now/)).toBeInTheDocument();
+    expect(screen.queryByText(/check the DoMe extension is installed/)).toBeNull();
+    const withAddon = youtubeTopic({ ...getWindowsRelease()!, browserAddon: true });
+    expect(withAddon.title).toBe("YouTube controls say the extension is not connected");
+    expect(withAddon.steps[0]).toMatch(/check the DoMe extension is installed and enabled/);
   });
 });

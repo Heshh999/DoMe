@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { rest } from "@dome/protocol";
 
 import { SCREEN_VIEW_COMING_TEXT } from "../../src/components/ScreenViewComingCard.tsx";
+import { youtubeComing } from "../../src/content/windowsAppStatus.ts";
 import { RemotePage } from "../../src/pages/app/RemotePage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useLiveStore } from "../../src/store/live.ts";
@@ -67,5 +68,17 @@ describe("Remote page: Screen view placeholder", () => {
     expect(screen.getAllByText("Screen view")).toHaveLength(1);
     expect(screen.queryAllByRole("button", { name: /screen view/i })).toHaveLength(0);
     expect(screen.queryAllByRole("link", { name: /screen view/i })).toHaveLength(0);
+  });
+});
+
+describe("Remote page: YouTube without the browser extension", () => {
+  it("says YouTube control in Chrome or Edge is coming, never asks to connect an extension no offered release has", () => {
+    useLiveStore.getState().onPcStatus({ type: "pc_status", pc_id: PC, connection: "online", last_seen: TS });
+    useLiveStore.getState().onState({ type: "state", pc_id: PC, at: TS, state: { remote_enabled: true, session_locked: false, extension_connected: false, volume: { value: 42, muted: false }, youtube_tabs: [] } });
+    renderRemote();
+    const coming = youtubeComing();
+    expect(coming).toMatch(/^YouTube control in Chrome or Edge is coming\. /);
+    expect(screen.getByText(coming!)).toBeInTheDocument();
+    expect(screen.queryByText("The DoMe browser extension is not connected on the PC.")).toBeNull();
   });
 });

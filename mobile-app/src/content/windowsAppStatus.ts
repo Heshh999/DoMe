@@ -48,3 +48,15 @@ export function youtubeNotAvailable(release: WindowsRelease | null = getWindowsR
   const store = "It needs the DoMe extension for Chrome or Edge, which is not in the Chrome or Edge stores yet";
   return release ? `${store}, so DoMe for Windows ${release.version} does not include it.` : `${store}.`;
 }
+
+/** The first words of the app's YouTube messages while no offered release has the add-on. */
+export const YOUTUBE_COMING = "YouTube control in Chrome or Edge is coming.";
+
+/**
+ * For the phone app's messages about a missing extension: while no offered release has the add-on, the customer cannot
+ * install it, so the app says the feature is coming instead of asking them to connect it. `null` once a release has it.
+ */
+export function youtubeComing(release: WindowsRelease | null = getWindowsRelease()): string | null {
+  const why = youtubeNotAvailable(release);
+  return why ? `${YOUTUBE_COMING} ${why}` : null;
+}

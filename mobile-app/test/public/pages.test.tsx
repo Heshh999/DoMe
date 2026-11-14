@@ -19,6 +19,7 @@ import { DownloadPage } from "../../src/pages/public/DownloadPage.tsx";
 import { NotFoundPage } from "../../src/pages/public/NotFoundPage.tsx";
 import { PrivacyPage } from "../../src/pages/public/PrivacyPage.tsx";
 import { ReleaseNotesPage } from "../../src/pages/public/ReleaseNotesPage.tsx";
+import { useScreenStore } from "../../src/store/screen.ts";
 import { TermsPage } from "../../src/pages/public/TermsPage.tsx";
 
 function page(el: React.ReactElement) {
@@ -224,11 +225,16 @@ describe("public reading pages", () => {
     expect(newest).toHaveTextContent(`signed for Windows by ${r.publisher} through Azure Artifact Signing`);
     expect(newest).toHaveTextContent("Not in this version: YouTube control in Chrome or Edge.");
     expect(newest).toHaveTextContent("Screen view (beta) is in the program, but it is not switched on for DoMe accounts yet, so it cannot be used.");
-    expect(newest).toHaveTextContent("Free: nothing can be bought yet. The licence terms Setup shows are still a draft");
+    // true whether or not paid plans are on sale
+    expect(newest).toHaveTextContent("Free to download: paid plans are bought on the website, not in the program, and nothing could be bought when this version was released. The licence terms Setup shows are still a draft");
+    expect(newest?.textContent).not.toContain("Screen view (beta) is in the program, and it is switched on for DoMe accounts.");
     expect(newest).toHaveTextContent("Integration-tested on GitHub’s Windows Server test machine (an administrator account with UAC off): install, upgrade and uninstall of the signed Setup");
     expect(newest).toHaveTextContent("Install, upgrade and uninstall on a Windows 10 or 11 PC, and by a standard (non-administrator) user.");
     expect(newest).toHaveTextContent("Windows 11 PCs with Smart App Control on.");
-    expect(newest).toHaveTextContent("Screen view on any device.");
+    // the release itself was not checked on a device; a test build of Screen view was, on the founder's own devices
+    expect(newest).toHaveTextContent("Screen view with this release on a device (a test build was checked on the founder’s own Windows PC and iPhone through DoMe’s test service, as the founder reports).");
+    expect(text).toContain("Remote control (media, volume, approved apps, lock and power, the touchpad, the keyboard and typed commands) was checked with test builds on the founder’s own Windows PC and iPhone, as the founder reports.");
+    expect(text).not.toContain("It has not been verified on a device either.");
     // the older builds stay in the history as what they were, named so that none reads as the published version
     expect(text).toContain("development build — not published");
     expect(text).toContain("internal build — not published");
@@ -259,6 +265,23 @@ describe("public reading pages", () => {
     expect(text).toContain(`Check that the publisher the dialog names is ${r.publisher} before you continue. DoMe never asks you to turn off antivirus or other protection.`);
     expect(text).toContain("If Smart App Control blocks DoMe, do not turn Smart App Control off");
     expectNoOfferToDisableProtection(text);
+  });
+
+  it("Release notes follow the server's Screen view switch: the 'not switched on' lines only while it is off", () => {
+    useScreenStore.setState({ switch: "on", switchChecked: true });
+    try {
+      const { container } = page(<ReleaseNotesPage />);
+      const text = container.textContent ?? "";
+      expect(text).toContain("Screen view (beta) is in the program, and it is switched on for DoMe accounts.");
+      expect(text).not.toContain("but it is not switched on for DoMe accounts yet");
+      const issues = within(screen.getByRole("region", { name: "Known issues" }))
+        .getAllByRole("heading", { level: 3 })
+        .map((h) => h.textContent);
+      expect(issues).not.toContain("Screen view is not switched on yet");
+      expect(issues).toContain("No YouTube control in Chrome or Edge in this version");
+    } finally {
+      useScreenStore.setState({ switch: "unknown", switchChecked: true });
+    }
   });
 
   it("404 offers the website and the app", () => {

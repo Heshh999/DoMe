@@ -3,13 +3,20 @@
  * code, the help category, and the plain-language result summaries. Labels are rendered from action, params and
  * target only (never PC text); a search query is quoted back shortened and only as typed.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registry } from "@dome/protocol";
 
 import type { CommandRecord } from "../src/lib/commands.ts";
 import { actionTitle, describeAction, errorMessage, QUERY_LABEL_MAX, recoverySteps, supportCategoryFor } from "../src/lib/labels.ts";
 import { resultSummary } from "../src/lib/outcome.ts";
+import { youtubeNotAvailable } from "../src/content/windowsAppStatus.ts";
+
+const release = vi.hoisted(() => ({ placeholder: false, addon: false }));
+vi.mock("../src/content/windows-release.json", async (importOriginal) => (await import("./helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
+afterEach(() => {
+  release.addon = false;
+});
 
 const PC = "33333333-3333-4333-8333-333333333333";
 const TS = "2026-10-08T12:00:00.000Z";
@@ -59,6 +66,18 @@ describe("recovery steps and help categories", () => {
     expect(recoverySteps("APP_NOT_APPROVED").join(" ")).not.toMatch(/command|CLI/i);
     expect(recoverySteps("ACTIVATION_REQUIRED").join(" ")).toMatch(/double-click the video with the touchpad/);
     expect(recoverySteps("SEARCH_RESULT_UNAVAILABLE").join(" ")).toMatch(/Search again/);
+  });
+
+  it("a missing or disconnected extension says YouTube control in Chrome or Edge is coming while no offered release has the add-on, and asks for it once one has", () => {
+    for (const code of ["EXTENSION_NOT_INSTALLED", "EXTENSION_DISCONNECTED"]) {
+      const steps = recoverySteps(code);
+      expect(steps[0], code).toBe(`YouTube control in Chrome or Edge is coming. ${youtubeNotAvailable()}`);
+      expect(steps[1], code).toBe("Windows media, volume and apps work now.");
+      expect(steps.join(" "), code).not.toMatch(/Install the DoMe extension|Check that the DoMe extension is enabled/);
+    }
+    release.addon = true;
+    expect(recoverySteps("EXTENSION_NOT_INSTALLED")).toEqual(["Install the DoMe extension in Chrome or Edge on the PC.", "Open a YouTube video, then try again."]);
+    expect(recoverySteps("EXTENSION_DISCONNECTED")).toContain("Check that the DoMe extension is enabled.");
   });
 
   it("ACTIVATION_REQUIRED for Play says the browser blocked starting the video, not fullscreen", () => {

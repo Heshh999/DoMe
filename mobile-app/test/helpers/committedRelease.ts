@@ -18,12 +18,17 @@ import { resolve } from "node:path";
 /** What src/content/windows-release.json held before the first release. */
 export const PLACEHOLDER_RELEASE = { status: "not-published" } as const;
 
-/** The mocked module: the real committed file, or the placeholder while `state.placeholder` is set. */
-export async function releaseOrPlaceholder(importOriginal: <T>() => Promise<T>, state: { placeholder: boolean }): Promise<{ readonly default: unknown }> {
+/**
+ * The mocked module: the real committed file, or the placeholder while `state.placeholder` is set. While `state.addon`
+ * is set it is the committed file as a release with the browser add-on would be (`browser_addon: true`), for the
+ * wording a future release with YouTube control in Chrome or Edge gets.
+ */
+export async function releaseOrPlaceholder(importOriginal: <T>() => Promise<T>, state: { placeholder: boolean; addon?: boolean }): Promise<{ readonly default: unknown }> {
   const actual = await importOriginal<{ default: unknown }>();
   return {
     get default() {
-      return state.placeholder ? PLACEHOLDER_RELEASE : actual.default;
+      if (state.placeholder) return PLACEHOLDER_RELEASE;
+      return state.addon ? { ...(actual.default as Record<string, unknown>), browser_addon: true } : actual.default;
     },
   };
 }

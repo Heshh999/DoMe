@@ -2,17 +2,19 @@
  * Product explanation. No testimonials, counts, certifications or platform claims that are not verified. Also where a
  * sign-in that was refused or could not be finished lands (`?sign_in=<reason>`, `lib/signInProblem.ts`): the notice
  * for it sits above the hero. The Windows button, the line under it and the YouTube card follow the release the Download
- * page offers (content/windowsAppStatus.ts).
+ * page offers (content/windowsAppStatus.ts). Screen view, the film and the closing card follow the server: GET /healthz
+ * `screen_view` (Screen view "Coming" unless it is "on") and GET /v1/plans (checkout, AI butler).
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { Wordmark } from "../../components/brand.tsx";
 import { Film } from "../../components/film/Film.tsx";
-import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
+import { FilmSignalsContext, useServerFilmSignals } from "../../components/film/signals.ts";
+import { conceptNote } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Notice } from "../../components/ui.tsx";
-import { FREE_SCREEN_VIEW_MINUTES, planById, SCREEN_VIEW_FAIR_USE, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { FREE_SCREEN_VIEW_MINUTES, planById, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, usd, WINDOW_HOURS, YOUTUBE_COMING_STATUS } from "../../content/plans.ts";
 import { windowsAppStatus, youtubeNotAvailable } from "../../content/windowsAppStatus.ts";
 import { loginUrl } from "../../lib/api.ts";
 import { ACCOUNT_DELETED_HERE, SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, carriedAccountDeleted, carriedSignInProblem, carrySignInProblem, signInAgainOptions, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
@@ -23,7 +25,7 @@ const PRO = planById("pro");
 const PRO_PLUS = planById("pro_plus");
 
 const STEPS = [
-  { title: "Install DoMe on your PC", text: "Sign in on your Windows PC and give it a name. It connects out to DoMe, so there are no ports to open and no router to change." },
+  { title: "Install DoMe on your PC", text: "Install DoMe for Windows and link it to your account, then give the PC a name (this version links with one PowerShell command: the release notes show it). It connects out to DoMe, so there are no ports to open and no router to change." },
   { title: "Pair your phone", text: "Scan the QR code the PC shows, check the six-digit code matches on both screens, and approve on the PC." },
   { title: "Sit back", text: "Play, pause, skip and set the volume from the couch, or from anywhere with internet." },
 ];
@@ -35,12 +37,22 @@ const CAPABILITIES: Array<{ icon: IconName; title: string; text: string; status?
   { icon: "lock", title: "Lock and power", text: "Lock Windows in one tap. Sleep, restart and shut down always ask you first." },
   { icon: "ask", title: "Just ask", text: "Say or type “skip this video” or “set the volume to 35”. Everyday commands need no AI and never count." },
   { icon: "check", title: "Honest results", text: "Every control shows what the PC actually did. “Sent” is never shown as “done”." },
-  { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. In development: Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window. ${SCREEN_VIEW_FAIR_USE}`, status: "Coming" },
 ];
 
-/** The capabilities, with the YouTube card saying why it is not available when the offered release leaves it out. */
-function capabilities(youtube: string | null): typeof CAPABILITIES {
-  return youtube ? CAPABILITIES.map((c) => (c.icon === "youtube" ? { ...c, text: `${c.text} ${youtube}` } : c)) : CAPABILITIES;
+/** Screen view's card: "Coming" while the server has it switched off (GET /healthz `screen_view`), an ordinary card where it is on. */
+function screenViewCapability(screenOn: boolean): (typeof CAPABILITIES)[number] {
+  return screenOn
+    ? { icon: "pc", title: "Screen view (beta)", text: `See your PC’s screen on your phone and tap what you see. Free: ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window.` }
+    : { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. Built, but not switched on for DoMe accounts yet. Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window. ${SCREEN_VIEW_FAIR_USE}`, status: SCREEN_VIEW_STATUS };
+}
+
+/**
+ * The capabilities. While the offered release leaves YouTube control out, its card says why and carries the same
+ * "Coming" chip as Pricing (YOUTUBE_STATUS); the cards still to come follow the available ones.
+ */
+function capabilities(youtube: string | null, screenOn = false): typeof CAPABILITIES {
+  const list = [...CAPABILITIES, screenViewCapability(screenOn)].map((c) => (youtube && c.icon === "youtube" ? { ...c, text: `${c.text} ${youtube}`, status: YOUTUBE_COMING_STATUS } : c));
+  return [...list.filter((c) => !c.status), ...list.filter((c) => c.status)];
 }
 
 const TRUST: Array<{ title: string; text: React.ReactNode }> = [
@@ -74,10 +86,30 @@ function Orbit() {
   );
 }
 
-/** A picture of the app on a phone (always the dark Midnight look), described in one sentence for screen readers. */
-function PhonePicture() {
+/**
+ * A picture of the app on a phone (always the dark Midnight look), described in one sentence for screen readers. While
+ * the offered release has no browser add-on (`youtube` false) it shows what works today, Windows media, instead of
+ * YouTube in the browser with seeking.
+ */
+function PhonePicture({ youtube }: { youtube: boolean }) {
+  const label = youtube
+    ? "The DoMe app on an iPhone: Living Room PC online, a YouTube video playing with pause and skip controls, the Windows volume at 40 percent, and quick actions for next video, back 10 seconds, lock and sleep."
+    : "The DoMe app on an iPhone: Living Room PC online, Windows media playing with play, pause and skip controls, the Windows volume at 40 percent, and quick actions for next track, previous track, lock and sleep.";
+  const quick: Array<[IconName, string]> = youtube
+    ? [
+        ["next", "Next video"],
+        ["back10", "Back 10 s"],
+        ["lock", "Lock"],
+        ["sleep", "Sleep"],
+      ]
+    : [
+        ["next", "Next track"],
+        ["prev", "Previous"],
+        ["lock", "Lock"],
+        ["sleep", "Sleep"],
+      ];
   return (
-    <div role="img" aria-label="The DoMe app on an iPhone: Living Room PC online, a YouTube video playing with pause and skip controls, the Windows volume at 40 percent, and quick actions for next video, back 10 seconds, lock and sleep." className="dome-dark relative mx-auto w-[288px] select-none sm:w-[304px]">
+    <div role="img" aria-label={label} className="dome-dark relative mx-auto w-[288px] select-none sm:w-[304px]">
       <div className="absolute -inset-x-16 -inset-y-10 -z-10 bg-[radial-gradient(closest-side,rgb(1_66_251/0.4),transparent)]" />
       <div className="rounded-[54px] bg-[linear-gradient(160deg,#25335c,#0a1230_45%,#1b2a52)] p-[9px] shadow-[0_40px_60px_-30px_rgb(0_10_40/0.55),0_0_0_1px_rgb(255_255_255/0.08)_inset]">
         <div className="relative h-[600px] overflow-hidden rounded-[46px] bg-navy sm:h-[624px]">
@@ -101,20 +133,24 @@ function PhonePicture() {
             <div className="mt-2.5 rounded-[22px] border border-white/10 bg-white/[0.06] p-3.5">
               <div className="flex items-center gap-3">
                 <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#2a62ff,#001441)] text-white">
-                  <Icon name="youtube" size={22} />
+                  <Icon name={youtube ? "youtube" : "music"} size={22} />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[10px] text-text-faint">YouTube · Edge</span>
+                  <span className="block text-[10px] text-text-faint">{youtube ? "YouTube · Edge" : "Windows media"}</span>
                   <span className="block truncate text-[13px] font-semibold">Lo-fi beats to relax to</span>
                 </span>
               </div>
-              <div className="mt-3 h-1 rounded-full bg-white/15">
-                <div className="h-1 w-[38%] rounded-full bg-white" />
-              </div>
-              <div className="mt-1 flex justify-between text-[9px] text-text-faint">
-                <span>12:04</span>
-                <span>31:40</span>
-              </div>
+              {youtube && (
+                <>
+                  <div className="mt-3 h-1 rounded-full bg-white/15">
+                    <div className="h-1 w-[38%] rounded-full bg-white" />
+                  </div>
+                  <div className="mt-1 flex justify-between text-[9px] text-text-faint">
+                    <span>12:04</span>
+                    <span>31:40</span>
+                  </div>
+                </>
+              )}
               <div className="mt-2 flex items-center justify-center gap-5">
                 <Icon name="prev" size={18} className="text-text-muted" />
                 <span className="dome-primary flex h-12 w-12 items-center justify-center rounded-full">
@@ -138,14 +174,7 @@ function PhonePicture() {
               </div>
             </div>
             <div className="mt-2.5 grid grid-cols-2 gap-2">
-              {(
-                [
-                  ["next", "Next video"],
-                  ["back10", "Back 10 s"],
-                  ["lock", "Lock"],
-                  ["sleep", "Sleep"],
-                ] as Array<[IconName, string]>
-              ).map(([icon, label]) => (
+              {quick.map(([icon, label]) => (
                 <span key={label} className="flex items-center gap-2 rounded-[18px] border border-white/10 bg-white/[0.06] px-3 py-2.5 text-[11px] font-semibold">
                   <Icon name={icon} size={15} className="text-accent" />
                   {label}
@@ -253,6 +282,7 @@ function SignInNotice() {
 
 export function LandingPage() {
   const availability = useBillingAvailability();
+  const signals = useServerFilmSignals(availability);
   const windows = windowsAppStatus();
   return (
     <div>
@@ -284,7 +314,7 @@ export function LandingPage() {
               {windows.heroCaveat}
             </p>
           </div>
-          <PhonePicture />
+          <PhonePicture youtube={!youtubeNotAvailable()} />
         </div>
       </section>
 
@@ -302,9 +332,11 @@ export function LandingPage() {
           </Link>
         </div>
         <div className="mt-8">
-          <Film autoplay />
+          <FilmSignalsContext.Provider value={signals}>
+            <Film autoplay />
+          </FilmSignalsContext.Provider>
         </div>
-        <p className="mt-4 text-sm text-text-muted">{CONCEPT_NOTE}</p>
+        <p className="mt-4 text-sm text-text-muted">{conceptNote(signals)}</p>
       </section>
 
       <section aria-labelledby="how" className={`${SECTION} py-[var(--dome-section)]`}>
@@ -329,9 +361,9 @@ export function LandingPage() {
           Everything within reach.
         </h2>
         <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {capabilities(youtubeNotAvailable()).map((c) =>
+          {capabilities(youtubeNotAvailable(), signals.screenOn).map((c) =>
             c.status ? (
-              // the one that is still being built: a full-width row with its status chip, never dressed as available
+              // one that customers cannot use yet: a full-width row with its status chip, never dressed as available
               <li key={c.title} className="dome-card flex gap-4 p-5 sm:col-span-2 sm:items-center sm:p-6 lg:col-span-3">
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-accent">
                   <Icon name={c.icon} size={22} />
@@ -346,10 +378,12 @@ export function LandingPage() {
                   </h3>
                   <p className="mt-1 max-w-3xl text-[15px] text-text-muted">{c.text}</p>
                 </div>
-                <Link to="/demo" className="tap dome-press hidden shrink-0 items-center gap-1 rounded-full border border-border-strong px-4 text-sm font-semibold hover:bg-surface sm:inline-flex">
-                  See the preview
-                  <Icon name="chevron" size={14} />
-                </Link>
+                {c.icon === "pc" && (
+                  <Link to="/demo" className="tap dome-press hidden shrink-0 items-center gap-1 rounded-full border border-border-strong px-4 text-sm font-semibold hover:bg-surface sm:inline-flex">
+                    See the preview
+                    <Icon name="chevron" size={14} />
+                  </Link>
+                )}
               </li>
             ) : (
               <li key={c.title} className="dome-card flex gap-4 p-5 sm:block sm:p-6">
@@ -402,7 +436,7 @@ export function LandingPage() {
               Free today. Pro and Pro Plus when they’re worth it.
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">
-              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, Screen view without the Free plan’s time limit when it ships, and more AI butler time. {paidPlansLine(availability)}
+              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, Screen view without the Free plan’s time limit{signals.screenOn ? "" : " once it is switched on"}, and more AI butler time. {paidPlansLine(availability)}
             </p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">

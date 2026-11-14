@@ -9,8 +9,9 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { youtubeNotAvailable } from "../../src/content/windowsAppStatus.ts";
 import { buildDiagnostics } from "../../src/lib/diagnostics.ts";
 import { clearLogs, recentLogs } from "../../src/lib/log.ts";
 import { tabKey } from "../../src/lib/targets.ts";
@@ -18,6 +19,12 @@ import { RemotePage } from "../../src/pages/app/RemotePage.tsx";
 import { useDevicesStore } from "../../src/store/devices.ts";
 import { useLiveStore, type YoutubeTab } from "../../src/store/live.ts";
 import { FakeSocket, freshStorage, makeRuntime, OFFICE_PC, PC, signedIn, TS, type RuntimeHarness } from "../helpers/harness.ts";
+
+const release = vi.hoisted(() => ({ placeholder: false, addon: false }));
+vi.mock("../../src/content/windows-release.json", async (importOriginal) => (await import("../helpers/committedRelease.ts")).releaseOrPlaceholder(importOriginal, release));
+afterEach(() => {
+  release.addon = false;
+});
 
 const EDGE = { browser_instance_id: "bi_test0001", browser: "edge" as const };
 const CHROME = { browser_instance_id: "bi_test0002", browser: "chrome" as const };
@@ -214,9 +221,18 @@ describe("Search YouTube", () => {
 
     pcState({ extension_connected: false, youtube_tabs: [] });
     renderRemote();
-    expect(screen.getByText("Searching needs the DoMe browser extension, which is not connected on the PC.")).toBeInTheDocument();
+    // no offered release has the browser add-on: the customer is told it is coming, not to connect it
+    expect(screen.getByText(`YouTube search is coming. ${youtubeNotAvailable()}`)).toBeInTheDocument();
     await userEvent.type(screen.getByRole("searchbox", { name: "Search YouTube" }), QUERY);
     expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
+  });
+
+  it("with a release that has the browser add-on, a disconnected extension asks for it", () => {
+    release.addon = true;
+    pcState({ extension_connected: false, youtube_tabs: [] });
+    renderRemote();
+    expect(screen.getByText("Searching needs the DoMe browser extension, which is not connected on the PC.")).toBeInTheDocument();
+    expect(screen.queryByText(/YouTube search is coming/)).toBeNull();
   });
 
   it("a results page picked by hand in the remote shows no player buttons, and Pause never goes there", async () => {

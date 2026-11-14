@@ -7,8 +7,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { windowsAppStatus, youtubeNotAvailable } from "../../src/content/windowsAppStatus.ts";
-import type { WindowsRelease } from "../../src/content/windowsRelease.ts";
+import { windowsAppStatus, YOUTUBE_COMING, youtubeComing, youtubeNotAvailable } from "../../src/content/windowsAppStatus.ts";
+import { getWindowsRelease, type WindowsRelease } from "../../src/content/windowsRelease.ts";
 
 const RELEASE: WindowsRelease = {
   version: "0.2.0",
@@ -44,5 +44,14 @@ describe("the Windows app's status on the website", () => {
     const withAddon = { ...RELEASE, browserAddon: true };
     expect(youtubeNotAvailable(withAddon)).toBeNull();
     expect(windowsAppStatus(withAddon).demo).toBe("DoMe for Windows 0.2.0 is a free beta: see Download for what it includes.");
+  });
+});
+
+describe("youtubeComing (the phone app's YouTube messages)", () => {
+  it("says YouTube control is coming while the offered release has no browser add-on, and nothing once one has it", () => {
+    const r = getWindowsRelease()!;
+    expect(r.browserAddon).toBe(false);
+    expect(youtubeComing(r)).toBe(`${YOUTUBE_COMING} It needs the DoMe extension for Chrome or Edge, which is not in the Chrome or Edge stores yet, so DoMe for Windows ${r.version} does not include it.`);
+    expect(youtubeComing({ ...r, browserAddon: true })).toBeNull();
   });
 });

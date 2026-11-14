@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { handAt, pcAt, phoneAt, stageAt } from "../../src/components/film/script.ts";
-import { beatAt, CONCEPT_NOTE, EASE, PLAN_FACTS, SCENES, sceneAt, sceneByNumber, seg, TOTAL_MS, typedWords, window as win } from "../../src/components/film/timeline.ts";
+import { beatAt, CONCEPT_NOTE, conceptNote, EASE, FILM_SIGNALS_OFF, PLAN_FACTS, planFacts, SCENES, sceneStatus, sceneAt, sceneByNumber, seg, TOTAL_MS, typedWords, window as win } from "../../src/components/film/timeline.ts";
 
 describe("the scene list", () => {
   it("has the six storyboard beats, numbered 1–6 and contiguous from 0 to the end of the film", () => {
@@ -69,19 +69,52 @@ describe("honesty rules (brief §4)", () => {
     expect(sceneByNumber(6).status.label).toMatch(/Pro and Pro Plus at paid launch/);
   });
 
-  it("presents the AI butler as available today, with the free taste, and remote control as free now", () => {
+  it("presents remote control as free now and the AI butler as the server says: not switched on yet, or available", () => {
     expect(sceneByNumber(1).status.tone).toBe("now");
     expect(sceneByNumber(1).status.label).toMatch(/Available now, free/);
-    expect(sceneByNumber(2).status.tone).toBe("now");
-    expect(sceneByNumber(2).status.label).toBe("AI butler · Available now · Free: 10 to try · more with Pro and Pro Plus");
+    // the static wording (export, no server answer) is production's today: the AI butler is switched off
+    expect(sceneByNumber(2).status).toEqual({ label: "AI butler · Not switched on yet · Free: 10 to try · more with Pro and Pro Plus", tone: "coming" });
+    expect(sceneStatus(sceneByNumber(2), FILM_SIGNALS_OFF)).toEqual(sceneByNumber(2).status);
+    expect(sceneStatus(sceneByNumber(2), { ...FILM_SIGNALS_OFF, aiOn: true })).toEqual({ label: "AI butler · Available now · Free: 10 to try · more with Pro and Pro Plus", tone: "now" });
+  });
+
+  it("Screen view follows the server's switch: Coming while off, beta where it is on", () => {
+    expect(sceneStatus(sceneByNumber(3), FILM_SIGNALS_OFF)).toEqual(sceneByNumber(3).status);
+    expect(sceneByNumber(3).status.label).toMatch(/^Screen view · Coming · /);
+    const on = sceneStatus(sceneByNumber(3), { ...FILM_SIGNALS_OFF, screenOn: true });
+    expect(on).toEqual({ label: "Screen view (beta) · Free: 10 min per 5 h · Pro: fair use", tone: "now" });
+    expect(conceptNote({ ...FILM_SIGNALS_OFF, screenOn: true })).toBe("Concept preview. Point-and-talk is planned.");
+    const facts = planFacts({ ...FILM_SIGNALS_OFF, screenOn: true });
+    for (const p of facts) expect(p.lines.find((l) => l.text.startsWith("Screen view"))?.status).toBeUndefined();
+    // point-and-talk stays Planned either way
+    expect(sceneStatus(sceneByNumber(4), { ...FILM_SIGNALS_OFF, screenOn: true }).label).toBe("Point-and-talk · Planned");
+  });
+
+  it("the paid plans follow checkout: at paid launch until sold, Pro alone while the AI butler is off, both once it is on", () => {
+    const pro = { ...FILM_SIGNALS_OFF, proSold: true };
+    const both = { ...pro, aiOn: true, proPlusSold: true };
+    expect(sceneStatus(sceneByNumber(5), FILM_SIGNALS_OFF).label).toBe("Pro and Pro Plus arrive at paid launch");
+    expect(sceneStatus(sceneByNumber(6), FILM_SIGNALS_OFF).label).toBe("Free today · Pro and Pro Plus at paid launch");
+    expect(sceneStatus(sceneByNumber(5), pro).label).toBe("Pro on sale · Pro Plus once the AI butler is on");
+    expect(sceneStatus(sceneByNumber(6), pro).label).toBe("Free today · Pro on sale");
+    expect(sceneStatus(sceneByNumber(5), both).label).toBe("Pro and Pro Plus · Available now");
+    expect(sceneStatus(sceneByNumber(6), both).label).toBe("Free today · Pro and Pro Plus on sale");
+    const [, p1, pp1] = planFacts(pro);
+    expect([p1!.status, pp1!.status]).toEqual(["Available now", "Coming at paid launch"]);
+    const [, p2, pp2] = planFacts(both);
+    expect([p2!.status, pp2!.status]).toEqual(["Available now", "Available now"]);
+    // every AI line says "Not switched on yet" while the AI butler is off, nothing once it is on
+    for (const p of planFacts(FILM_SIGNALS_OFF)) for (const l of p.lines.filter((x) => x.text.startsWith("AI:"))) expect(l.status).toBe("Not switched on yet");
+    for (const p of planFacts(both)) for (const l of p.lines.filter((x) => x.text.startsWith("AI:"))) expect(l.status).toBeUndefined();
   });
 
   it("never claims recordings, screenshots or AI vision anywhere in the film's words", () => {
     const words = [...SCENES.flatMap((s) => [s.caption, s.status.label, ...(s.beats ?? []).map((b) => b.text)]), ...PLAN_FACTS.flatMap((p) => [p.status, ...p.lines.map((l) => l.text)]), CONCEPT_NOTE].join(" ");
     expect(words).not.toMatch(/record(ed|ing)/i);
     expect(words).not.toMatch(/AI (can )?sees?\b(?! your screen)/);
-    // Screen view is being built; point-and-talk is only planned: the note says each as it is
-    expect(CONCEPT_NOTE).toBe("Concept preview. Screen view is in development; point-and-talk is planned.");
+    // Screen view is built but switched off on domeremote.com; point-and-talk is only planned: the note says each as it is
+    expect(CONCEPT_NOTE).toBe("Concept preview. Screen view is built but not switched on yet; point-and-talk is planned.");
+    expect(words).not.toMatch(/in development/);
   });
 
   it("shows only what Screen view's first version has: no mini view, no PC sound, no TV-style remote", () => {

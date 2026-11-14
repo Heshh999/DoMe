@@ -487,7 +487,7 @@ export function ScreenPage() {
   const failedKind = status.kind === "failed";
   return (
     <div className="space-y-4">
-      <PageHeader title={SCREEN_BETA_LABEL} back={{ to: "/app/remote", label: "Remote", ariaLabel: "Back to the remote" }} />
+      <PageHeader title={switchOn === "on" ? SCREEN_BETA_LABEL : "Screen view"} back={{ to: "/app/remote", label: "Remote", ariaLabel: "Back to the remote" }} />
       {updateReady && !updateWaiting ? (
         <Notice tone="info">
           <p data-testid="screen-update-ready">{COPY.updateReady}</p>

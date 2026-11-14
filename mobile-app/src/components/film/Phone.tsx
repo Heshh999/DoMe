@@ -1,17 +1,20 @@
 /**
  * The phone in the film: the real app's look (the brand mark, the Midnight cards, the tab bar with its coral dot),
  * authored at the real screen size (390 × 844) and scaled into the drawn handset. Pages: Home, Ask and Screen view
- * (coming). The PC's mirror is a layer of its own over the Screen view page; it zooms on the phone only, as Screen
+ * ("Coming" while the server has it switched off, "Beta" where it is on: signals.ts). The PC's mirror is a layer of its own over the Screen view page; it zooms on the phone only, as Screen
  * view's pinch does, with the 1× button while zoomed. It shows nothing Screen view's first version lacks: no mini view,
  * no PC sound, no TV-style remote. Everything is positioned explicitly so the fingertip lands where it should at any size.
  */
 import { memo, type ReactNode } from "react";
 
+import { SCREEN_VIEW_STATUS } from "../../content/plans.ts";
+import { youtubeNotAvailable } from "../../content/windowsAppStatus.ts";
 import { BrandMark, Wordmark } from "../brand.tsx";
 import { Icon, type IconName } from "../icons.tsx";
 import { PHONE_SCREEN } from "./layout.ts";
 import { PcScreen } from "./Pc.tsx";
 import { EPISODES, MIRROR, TOUCH, type HandView, type PcView, type PhonePage, type PhoneView } from "./script.ts";
+import { useFilmSignals } from "./signals.ts";
 import { lerp } from "./timeline.ts";
 
 type Box = { x: number; y: number; w?: number; h?: number };
@@ -107,6 +110,8 @@ const TABS: Array<[IconName, string]> = [
 const SCREEN_TABS: Array<[IconName, string]> = [TABS[0]!, TABS[1]!, ["pc", "Screen"], TABS[3]!, TABS[4]!];
 
 function TabBar({ active, screen = false }: { active: string; screen?: boolean }) {
+  // the coral "coming" dot only while the server has Screen view switched off
+  const coming = !useFilmSignals().screenOn;
   return (
     <At x={0} y={772} w={390} h={72} className="grid grid-cols-5 border-t border-white/10 bg-[rgb(0_14_50/0.9)] px-1 pt-1.5">
       {(screen ? SCREEN_TABS : TABS).map(([icon, label]) => {
@@ -115,7 +120,7 @@ function TabBar({ active, screen = false }: { active: string; screen?: boolean }
           <span key={label} className={`relative flex flex-col items-center gap-[3px] text-[11px] font-semibold tracking-[-0.01em] ${on ? "text-text" : "text-text-faint"}`}>
             <Icon name={icon} size={24} strokeWidth={on ? 2 : 1.75} className={on ? "text-accent" : ""} />
             {label}
-            {label === "Screen" ? <span className="absolute right-[18px] top-0 h-2 w-2 rounded-full border border-navy bg-coral" /> : null}
+            {label === "Screen" && coming ? <span className="absolute right-[18px] top-0 h-2 w-2 rounded-full border border-navy bg-coral" /> : null}
             <span className={`absolute -bottom-2 h-1 w-1 rounded-full ${on ? "bg-coral" : "bg-transparent"}`} />
           </span>
         );
@@ -137,6 +142,9 @@ function PcRow({ y = 112 }: { y?: number }) {
   );
 }
 
+/** Whether the offered release controls YouTube in the browser; until then the Home card shows the Windows media player it does control. */
+const YOUTUBE_IN_BROWSER = !youtubeNotAvailable();
+
 /* ── Home ────────────────────────────────────────────────────────────────────────────────────────────── */
 
 function HomePage({ view, pc }: { view: PhoneView; pc: PcView }) {
@@ -154,14 +162,14 @@ function HomePage({ view, pc }: { view: PhoneView; pc: PcView }) {
       <PcRow />
       <At x={16} y={208} w={358} h={226} className={CARD}>
         <At x={16} y={16} className="text-[12px] font-medium text-text-faint">
-          Now playing · Edge
+          {YOUTUBE_IN_BROWSER ? "Now playing · Edge" : "Windows media · Edge"}
         </At>
         <At x={262} y={14} className="flex items-center gap-0.5 text-[14px] font-semibold text-accent">
           Remote
           <Icon name="chevron" size={16} />
         </At>
         <At x={16} y={44} w={60} h={60} className="flex items-center justify-center rounded-[18px] bg-[linear-gradient(140deg,#3a72ff_0%,#0142fb_45%,#001441_100%)] text-white shadow-[0_14px_30px_-14px_rgb(1_66_251/0.8)]">
-          <Icon name="youtube" size={26} />
+          <Icon name={YOUTUBE_IN_BROWSER ? "youtube" : "music"} size={26} />
         </At>
         <At x={88} y={42} w={254} className="text-[17px] font-semibold leading-snug tracking-[-0.01em] text-text">
           {ep.title.replace(" — ", " · ")}
@@ -342,18 +350,25 @@ function AskPage({ view }: { view: PhoneView }) {
   );
 }
 
-/* ── Screen view (coming) ────────────────────────────────────────────────────────────────────────────── */
+/* ── Screen view ────────────────────────────────────────────────────────────────────────────── */
 
 function ScreenPage({ view }: { view: PhoneView }) {
+  const { screenOn } = useFilmSignals();
   return (
     <>
       <PageTitle
         title="Screen view"
         sub="Living Room PC · Online"
         chip={
-          <Pill tone="coral">
-            <span className="text-text-muted">Coming</span>
-          </Pill>
+          screenOn ? (
+            <Pill tone="info">
+              <span className="text-text-muted">Beta</span>
+            </Pill>
+          ) : (
+            <Pill tone="coral">
+              <span className="text-text-muted">{SCREEN_VIEW_STATUS}</span>
+            </Pill>
+          )
         }
       />
       <At x={16} y={334} w={358} className="flex gap-2">

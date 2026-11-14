@@ -111,7 +111,11 @@ describe("Upgrade experience (spec §12)", () => {
     expect(within(exp).getByRole("link", { name: "What’s in Pro" })).toHaveAttribute("href", "/pricing");
     // the example routines end in a status line, never a disabled button that looks tappable
     expect(screen.queryByRole("button", { name: /Run/ })).toBeNull();
-    expect(screen.getAllByText("Runs with Pro and Pro Plus, at paid launch")).toHaveLength(3);
+    // routines are not built: "Coming", never "at paid launch" (paid plans can go on sale first)
+    expect(screen.getAllByText("Coming to Pro and Pro Plus; not in the app yet")).toHaveLength(3);
+    expect(screen.queryByText(/^Runs with/)).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "Routines" }).closest("header")).toHaveTextContent("Coming");
+    expect(screen.queryByText("Pro preview")).toBeNull();
     await userEvent.click(within(exp).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByTestId("pro-explanation")).toBeNull();
     r.unmount();
@@ -121,6 +125,10 @@ describe("Upgrade experience (spec §12)", () => {
     again.unmount();
     page(<LayoutsPage />, "/app/layouts");
     expect(screen.getByTestId("pro-explanation")).toHaveTextContent(/Part of Pro and Pro Plus: Saving your own remote layouts/);
+    // a line that cannot be dismissed says it does not exist yet, and the header pill says Coming
+    expect(screen.getByText(/Custom remotes are not in the app yet\./)).toBeInTheDocument();
+    expect(screen.getAllByText("Coming").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Pro preview")).toBeNull();
   });
 
   it("follows what the server sells (GET /v1/plans): nothing to buy while it sells nothing, Pro on sale once it does, and nothing about buying on a paid plan", async () => {
@@ -210,14 +218,18 @@ describe("HealthPage", () => {
     page(<HealthPage />, "/app/health");
     const list = screen.getByRole("list", { name: "Health checks" });
     const items = within(list).getAllByRole("listitem");
-    expect(items.map((i) => i.getAttribute("aria-label"))).toEqual(["This phone", "Your account", "Office PC", "Remote control on the PC", "Touchpad and keyboard permission", "Browser extension", "Media target"]);
+    expect(items.map((i) => i.getAttribute("aria-label"))).toEqual(["This phone", "Your account", "Office PC", "Remote control on the PC", "Touchpad and keyboard permission", "Browser extension · Coming", "Media target"]);
     expect(within(items[3]!).getByText("Needs attention")).toBeInTheDocument();
     // one glyph per status pill: its icon, never a dot and an icon side by side
     const pill = within(items[3]!).getByText("Needs attention");
     expect(pill.querySelectorAll("svg")).toHaveLength(1);
     expect(pill.querySelector("span[aria-hidden]")).toBeNull();
     expect(within(items[3]!).getByText("Enable remote control on the PC")).toBeInTheDocument();
-    expect(within(items[5]!).getByText("Install or update the extension on the PC")).toBeInTheDocument();
+    // no offered release has the browser add-on: the extension is "Coming", not a problem with an install step
+    expect(within(items[5]!).queryByText("Install or update the extension on the PC")).toBeNull();
+    expect(within(items[5]!).queryByText("Needs attention")).toBeNull();
+    expect(items[5]).toHaveTextContent("YouTube control in Chrome or Edge is coming.");
+    expect(screen.getByText(/YouTube control in Chrome or Edge is coming\. It needs the DoMe extension, which is not in the Chrome or Edge stores yet\. Windows media, volume, apps and the touchpad work now\./)).toBeInTheDocument();
     expect(within(items[4]!).getByText("OK")).toBeInTheDocument();
     expect(screen.queryByText("PC_REMOTE_DISABLED")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Technical details" }));
