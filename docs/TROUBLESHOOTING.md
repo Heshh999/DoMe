@@ -629,8 +629,8 @@ approval on the PC (**integration-tested**: `pc-agent/tests/test_single_instance
 
 The official Windows download is **DoMe for Windows 0.1.0**, published on GitHub on 2026-11-13 as a free beta
 (https://github.com/Heshh999/DoMe/releases/tag/v0.1.0; signed, publisher Justin Gaskins;
-`docs/WINDOWS_INSTALL.md` "The installer", (A)). The Download page on domeremote.com shows its button only
-after the site's next Deploy; until then it says "Release status: not yet published" and offers no link.
+`docs/WINDOWS_INSTALL.md` "The installer", (A)). The Download page on domeremote.com has offered it since the
+site's Deploy of 2026-11-14; before that it said "Release status: not yet published" and offered no link.
 Unsigned **development** installers, `DoMe-Setup-<version>.exe`, are built by GitHub Actions for testers;
 source installs follow `docs/WINDOWS_INSTALL.md` §4.
 

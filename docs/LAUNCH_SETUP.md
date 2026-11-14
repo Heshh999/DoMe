@@ -847,13 +847,13 @@ your PC and iPhone (`docs/ACCEPTANCE.md` Scenario 26), a signed Windows build th
 privacy notice naming the connection relay provider as a sub-processor (the Privacy page draft of
 2026-11-12 names Cloudflare; it becomes final after counsel's review, `docs/legal/README.md`).
 
-## 17. Code signing and releases *(steps 1 to 6 done 2026-10-30; step 7 items 1 and 2, publishing 0.1.0, done 2026-11-13; item 3, the Deploy, still to do)*
+## 17. Code signing and releases *(steps 1 to 6 done 2026-10-30; step 7 items 1 and 2, publishing 0.1.0, done 2026-11-13; item 3, the Deploy, done 2026-11-14)*
 
 This section makes DoMe for Windows downloadable as a **signed** program: Windows then shows your name as
 the publisher instead of "Unknown publisher". The first release, **DoMe for Windows 0.1.0**, was published on
-GitHub on 2026-11-13 (status below). domeremote.com/download shows its download button only after your next
-**Deploy** (staging, then production) of the commit that carries the release's two files; until then that page
-still says "not yet published", and the GitHub release page is where the download is.
+GitHub on 2026-11-13 (status below). Your **Deploy** of 2026-11-14 (staging, then production) of the commit
+that carries the release's two files, 78d5bb8, put its download button on domeremote.com/download live; the
+GitHub release page has the download too.
 
 > **Status (2026-10-30): steps 1 to 6 done and proven.** The founder set up the signing account, the identity
 > (Completed), the profile `dome-windows`, the GitHub connection, the `release` environment and the update
@@ -868,7 +868,7 @@ still says "not yet published", and the GitHub release page is where the downloa
 > **Status (2026-11-13): step 7 items 1 and 2 done, DoMe for Windows 0.1.0 is published** at
 > https://github.com/Heshh999/DoMe/releases/tag/v0.1.0 (published 21:56:46 UTC). You ran "Release (signed
 > Windows app)" with **publish** on, from the default branch, and approved its signing (run 43513385142; built
-> from commit bf83141, the commit production runs). Every job passed: version, branch, release and update key;
+> from commit bf83141, the commit production then ran). Every job passed: version, branch, release and update key;
 > the Windows tests; the PyInstaller folder; Sign and package; Install and test the signed Setup; Publish the
 > GitHub Release (a draft first, GitHub's digest of each file checked, then published). Files:
 > `DoMe-Setup-0.1.0.exe` (37,708,680 bytes, SHA-256
@@ -884,9 +884,9 @@ still says "not yet published", and the GitHub release page is where the downloa
 > bought before the paid launch. The engineer has copied `latest.json` and `latest.json.sig` into the website
 > (step 7.3; their signature checks pass). The same change makes the home page, the footer of every page, the
 > demo page and the FAQ name 0.1.0 as a free beta (without YouTube control) instead of "not published yet", and
-> corrects the draft Privacy notice and Terms: 0.1.0 does not check for updates yet. Still to do: your **Deploy**,
-> staging then production, of that change, after which domeremote.com/download shows the button (step 7 item 3);
-> installing 0.1.0 on your own PC (`docs/PROGRESS.md` 2026-11-13).
+> corrects the draft Privacy notice and Terms: 0.1.0 does not check for updates yet. Your **Deploy** of that
+> change (78d5bb8; staging, then production, 2026-11-14) put the button on domeremote.com/download live (step 7
+> item 3). Still to do: installing 0.1.0 on your own PC (`docs/PROGRESS.md` 2026-11-13).
 
 **Words you will see**
 
@@ -1036,7 +1036,7 @@ This key signs the small file that describes each release. It never goes to Azur
 If the run stops at its first step with "Release signing is not configured. Missing: ...", add exactly the
 names it lists in the `release` environment (steps 4 and 5) and run it again. Nothing was signed.
 
-### Step 7. Publish *(items 1 and 2 done 2026-11-13: 0.1.0, run 43513385142; item 3, the Deploy, still to do)*
+### Step 7. Publish *(items 1 and 2 done 2026-11-13: 0.1.0, run 43513385142; item 3, the Deploy, done 2026-11-14)*
 
 1. Run the workflow again yourself with **publish** on, from the default branch, and approve it the
    same way (check the branch and that you started it). Publishing is always this: nobody publishes by
@@ -1045,7 +1045,7 @@ names it lists in the `release` environment (steps 4 and 5) and run it again. No
    checksum.
 3. The engineer copies two files from it into the website; when the checks pass, press **Deploy** for
    **production** (section 11). Only then does domeremote.com/download show the download button. (For 0.1.0
-   the two files were copied on 2026-11-13; the Deploy is still to do.)
+   the two files were copied on 2026-11-13, and your Deploy of 2026-11-14 put the button live.)
 
 ### Step 8. What to expect afterwards
 

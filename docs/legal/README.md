@@ -32,7 +32,7 @@ the Windows licence terms and notices). The Windows release of 2026-11-13 was ad
 | Document | What it is | Status on 2026-11-12 |
 | --- | --- | --- |
 | `h264-counsel-email.md` | Email 1: H.264 video patents and the FFmpeg (LGPL) build used by Screen view | **Ready to send.** Facts checked on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:117-118`); the Windows release of 2026-11-13 added the same day [GitHub Actions Release run 43513385142, 2026-11-13], with the correction that the FFmpeg build itself has been public as a GitHub pre-release since 2026-10-22 (`docs/WINDOWS_INSTALL.md:545-547`; [GitHub release av-lgpl-17.1.0-ffmpeg-n8.1.3-r3, 2026-10-22]). Not recorded as sent: the latest progress entry still lists "Send the counsel email" as next (`docs/PROGRESS.md:285-286`) |
-| `privacy-terms-counsel-email.md` | Email 2: review of the Privacy notice, the Terms and the Windows licence terms, and seventeen launch questions | **Ready to send** once you replace [name] in your own email program. The Windows release of 2026-11-13 added the same day [GitHub Actions Release run 43513385142, 2026-11-13]; question 14 now notes that the drafts say 0.1.0 does not check for updates yet (`mobile-app/src/pages/public/TermsPage.tsx:57`) |
+| `privacy-terms-counsel-email.md` | Email 2: review of the Privacy notice, the Terms and the Windows licence terms, and seventeen launch questions | **Ready to send** once you replace [name] in your own email program. The Windows release of 2026-11-13 added the same day [GitHub Actions Release run 43513385142, 2026-11-13]; question 14 now notes that the drafts say 0.1.0 does not check for updates yet (`mobile-app/src/pages/public/TermsPage.tsx:57`). Since your Deploy of 2026-11-14 the live site has that wording too, so the note for you at the top no longer says that paragraph is being corrected [GitHub Actions Deploy run 43535164002, 2026-11-14] (`docs/PROGRESS.md:18-19`) |
 | `ai-consent-text.md` | The AI assistant's consent screen, word for word, with its three allowance sentences | **Ready to attach** to email 2 (question 6). Copied from `mobile-app/src/components/AssistantConsentSheet.tsx`, which is draft text "the founder and a lawyer review" (lines 2-3) |
 | `founder-decisions.md` | The decisions only you can make, with suggested defaults; every [FOUNDER] gap and every [COUNSEL] note in the drafts | **To fill in**, in a downloaded copy. Not needed before you send the emails, but the lawyer can then review your choices instead of blanks |
 | `data-map.md` | Every kind of information DoMe handles: what, why, where, how long, who can see it | **Ready to attach.** Updated on 2026-11-12 to match the rewritten Privacy draft: its citations point to the new draft, and the four mismatches of the old draft are recorded as fixed (section 8). Corrected on 2026-11-13: 0.1.0 installs the browser bridge program but registers it with no browser (`pc-agent/packaging/installer/DoMe.iss:164,683-686`), and the drafts now say 0.1.0 does not check for updates (`mobile-app/src/pages/public/PrivacyPage.tsx:80`) |
@@ -50,12 +50,16 @@ On 2026-11-13 it was updated to commit bf83141 [GitHub Actions Deploy run 435084
 (`docs/PROGRESS.md:132-141`), so its /privacy and /terms now serve the rewritten drafts too, still under the DRAFT
 banner; that follows from the commit deployed, not from a look at the pages [GitHub Actions Deploy run
 43508425555, 2026-11-13] (`docs/PROGRESS.md:142-145`). After the update you signed in there, and Settings ends with
-Delete account [founder-reported 2026-11-13]. So open each page once before you send a link: the new Privacy
-notice starts with the heading "Who we are", and the new Terms with "About these terms". If you see "What DoMe is"
-or "The service" first, an old draft is showing: send the staging link or a PDF instead, tell an engineer, and do
-not print the page while it shows the old draft. The staging site is public and tells search engines not to list
-it (`deploy/launch/environments.toml:24-28`; `cloud-api/dome_api/security/headers.py:40-42`), and both pages show
-the DRAFT banner (`mobile-app/src/pages/public/DraftBanner.tsx:10`).
+Delete account [founder-reported 2026-11-13]. On 2026-11-14 your Deploy updated the live site to commit 78d5bb8,
+whose drafts also say that DoMe for Windows 0.1.0 does not check for updates yet; that too follows from the commit
+deployed, not from a look at the pages [GitHub Actions Deploy run 43535164002, 2026-11-14] (`docs/PROGRESS.md:18-19`;
+`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57`). So open each page
+once before you send a link: the new Privacy notice starts with the heading "Who we are", and the new Terms with
+"About these terms". If you see "What DoMe is" or "The service" first, an old draft is showing: send the staging link
+or a PDF instead, tell an engineer, and do not print the page while it shows the old draft. The staging site is
+public and tells search engines not to list it (`deploy/launch/environments.toml:24-28`;
+`cloud-api/dome_api/security/headers.py:40-42`), and both pages show the DRAFT banner
+(`mobile-app/src/pages/public/DraftBanner.tsx:10`).
 
 ## Who to send it to, and in what order
 

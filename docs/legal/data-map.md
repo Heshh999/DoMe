@@ -56,7 +56,7 @@ Auth0 tenant, each with its own application (`cloud-api/DECISIONS.md:1014-1025`)
 
 The Windows program. DoMe for Windows 0.1.0 has been published on GitHub since 2026-11-13, as a free beta, before
 counsel's answers [GitHub Actions Release run 43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:868-889`;
-`docs/PROGRESS.md:23-30`). It is built from the same commit as production, bf83141 (`docs/PROGRESS.md:23-30`).
+`docs/PROGRESS.md:23-30`). It is built from commit bf83141 (`docs/PROGRESS.md:23-30`).
 It installs the browser bridge program (`dome-native-host.exe`) but does not register it with any browser, so no
 extension can connect to it, and it has no YouTube control (`pc-agent/packaging/installer/DoMe.iss:164,683-686`;
 `mobile-app/src/content/windows-release.json:2`; `docs/WINDOWS_INSTALL.md:202-205`). Screen view is inside it
@@ -352,3 +352,7 @@ program" and the note under section 5, `pc-agent/packaging/installer/DoMe.iss:16
 notice and Terms, which had described a daily update check, now say that 0.1.0 does not check for updates yet
 (`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobile-app/src/pages/public/TermsPage.tsx:57`). Every citation
 into a file changed by that review was re-pointed again.
+
+On 2026-11-14 production was updated to commit 78d5bb8 [GitHub Actions Deploy run 43535164002, 2026-11-14]
+(`docs/PROGRESS.md:18-19`), so "The Windows program" no longer calls bf83141, the commit 0.1.0 is built from, the
+commit production runs. The change was made in place; no earlier line of this file moved.

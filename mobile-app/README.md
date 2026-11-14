@@ -549,7 +549,7 @@ left in this window", "Free Screen view refreshes today at 4:12 pm") and open th
   `src/content/release-notes.json` honestly (no device verification claimed). The Download page's
   official Windows path reads "not yet published" until `src/content/windows-release.json` and
   `windows-release.sig` hold a signed release (`src/content/windowsRelease.ts`); since 2026-11-13 they hold
-  DoMe for Windows 0.1.0's, so a build of this commit offers that download once deployed. The home page's Windows
+  DoMe for Windows 0.1.0's, and the Deploy of 2026-11-14 (78d5bb8) put that download live. The home page's Windows
   button and the line under it, every public page's footer, the demo page's closing line, the home page's YouTube
   card and the FAQ's YouTube answer follow the same release (`src/content/windowsAppStatus.ts`): "not published
   yet" only for the placeholder, then the version as a free beta, without YouTube control while the release has
