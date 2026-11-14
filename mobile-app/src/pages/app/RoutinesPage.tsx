@@ -1,9 +1,10 @@
-/** Routines: a Pro preview. Nothing here runs or is saved until paid launch; no checkout exists yet. */
+/** Routines: a preview of a Pro feature that is not built yet ("Coming", LAYOUTS_STATUS). Nothing here runs or is saved. */
 import { PLANS } from "@dome/protocol";
 
 import { Icon } from "../../components/icons.tsx";
 import { ProExplanation } from "../../components/ProExplanation.tsx";
 import { Card, IconWell, PageHeader, Pill, SectionLabel } from "../../components/ui.tsx";
+import { LAYOUTS_STATUS } from "../../content/plans.ts";
 import { useSessionStore } from "../../store/session.ts";
 
 const EXAMPLES = [
@@ -12,13 +13,16 @@ const EXAMPLES = [
   { name: "Finished for the night", steps: ["Pause YouTube", "Set Windows volume to 20%", "Lock Windows"] },
 ];
 
+/** Each example's status line: routines are not built, so not "at paid launch" (paid plans can go on sale first). */
+export const ROUTINE_STATUS = `${LAYOUTS_STATUS} to Pro and Pro Plus; not in the app yet`;
+
 export function RoutinesPage() {
   const session = useSessionStore((s) => s.session);
   const pro = PLANS.plans.pro;
   const enabled = session?.limits.routines === true;
   return (
     <div className="space-y-4">
-      <PageHeader title="Routines" action={<Pill tone="info">Pro preview</Pill>} />
+      <PageHeader title="Routines" action={<Pill tone="info">{LAYOUTS_STATUS}</Pill>} />
       <ProExplanation benefit={enabled ? "Running one-tap routines (not available in this version yet)" : "One-tap routines"} />
       <section className="pt-1">
         <SectionLabel>Example routines</SectionLabel>
@@ -38,7 +42,7 @@ export function RoutinesPage() {
               {/* a status line, not a disabled button that looks tappable */}
               <p className="mt-3 flex items-center gap-2 border-t border-border pt-3 text-sm text-text-muted">
                 <Icon name="clock" size={16} className="shrink-0 text-text-faint" />
-                Runs with Pro and Pro Plus, at paid launch
+                {ROUTINE_STATUS}
               </p>
             </Card>
           ))}

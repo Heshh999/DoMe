@@ -11,6 +11,7 @@ import { PLANS, type rest } from "@dome/protocol";
 
 import { AGREE_TO_TERMS, HOW_TO_CANCEL, PAID_SCREEN_VIEW, SCREEN_VIEW_FAIR_USE, TAX_INCLUDED, usd } from "../../src/content/plans.ts";
 import { api, ApiError } from "../../src/lib/api.ts";
+import { useScreenStore } from "../../src/store/screen.ts";
 import { PricingPage, PRO_PLUS_NEEDS_AI } from "../../src/pages/public/PricingPage.tsx";
 
 const PLANS_OFF: rest.PlansResponse = { plans: {}, pricing: { currency: "USD", plans: { pro: { monthly_cents: 999, annual_cents: 9999 }, pro_plus: { monthly_cents: 2499, annual_cents: 24999 } }, topup: { requests: 100, price_cents: 299, max_balance_requests: 1000 } }, billing_enabled: false, billing_mode: "off", ai_enabled: false };
@@ -20,6 +21,8 @@ let plans: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   // the public page asks GET /v1/plans once; by default the server has no Stripe keys
   plans = vi.spyOn(api, "plans").mockResolvedValue(PLANS_OFF);
+  // GET /healthz screen_view as production answers it today: off
+  useScreenStore.setState({ switch: "off", switchChecked: true });
 });
 
 afterEach(() => {
@@ -97,8 +100,14 @@ describe("PricingPage", () => {
     expect(container.textContent).not.toContain("nothing can be bought in this version");
     expect(container.textContent).not.toContain("Prices are planned, not final");
     expect(container.textContent).toContain("Test mode: no real charges.");
-    expect(container.textContent).toContain("Screen view is in development.");
-    // Screen view stays "Coming" whatever billing says
+    expect(screen.getByTestId("compare-note")).toHaveTextContent("Screen view is built but not switched on for DoMe accounts yet.");
+    expect(screen.getByTestId("compare-note")).not.toHaveTextContent("paid launch");
+    expect(container.textContent).not.toMatch(/in development|once it ships/);
+    // the timing clauses follow checkout too
+    expect(container.textContent).toContain("On Pro and Pro Plus the app shows the exact refresh time");
+    expect(container.textContent).toContain("Billing runs through the DoMe web app (Stripe). You can cancel");
+    expect(container.textContent).not.toContain("when paid plans launch");
+    // Screen view stays "Coming" whatever billing says, while the server has it switched off
     expect(within(pro).getByText(/^Screen view:/).closest("li")).toHaveTextContent("Coming");
 
     plans.mockResolvedValue({ ...PLANS_OFF, billing_enabled: true, billing_mode: "live", ai_enabled: true });
@@ -234,6 +243,35 @@ describe("PricingPage", () => {
   it("explains paid Screen view's fair-use limits under Good to know", () => {
     const { container } = renderPricing();
     expect(container.textContent).toContain(SCREEN_VIEW_FAIR_USE);
-    expect(screen.getByRole("heading", { level: 1 }).nextElementSibling).toHaveTextContent("Screen view without the Free plan’s time limit once it ships");
+    expect(screen.getByRole("heading", { level: 1 }).nextElementSibling).toHaveTextContent("Screen view without the Free plan’s time limit once it is switched on.");
+  });
+
+  it("Screen view follows the server's switch (GET /healthz screen_view): Coming while off or unknown, no chip where it is on", () => {
+    // off (domeremote.com today)
+    const off = renderPricing();
+    for (const name of ["Free", "Pro", "Pro Plus"]) expect(within(screen.getByRole("region", { name })).getByText(/^Screen view:/).closest("li"), name).toHaveTextContent("Coming");
+    expect(screen.getByTestId("compare-note")).toHaveTextContent("Screen view is built but not switched on for DoMe accounts yet. Pro and Pro Plus arrive at paid launch.");
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent("Screen view is built but not switched on for DoMe accounts yet.");
+    expect(off.container.textContent).not.toMatch(/in development|once it ships|not in the app yet/);
+    off.unmount();
+    // unknown (the server has not answered) keeps Coming
+    useScreenStore.setState({ switch: "unknown", switchChecked: true });
+    const unknown = renderPricing();
+    expect(within(screen.getByRole("region", { name: "Free" })).getByText(/^Screen view:/).closest("li")).toHaveTextContent("Coming");
+    unknown.unmount();
+    // on (the test service today)
+    useScreenStore.setState({ switch: "on", switchChecked: true });
+    const on = renderPricing();
+    for (const name of ["Free", "Pro", "Pro Plus"]) expect(within(screen.getByRole("region", { name })).getByText(/^Screen view:/).closest("li"), name).not.toHaveTextContent("Coming");
+    expect(screen.getByRole("heading", { level: 1 }).nextElementSibling).toHaveTextContent(/Screen view without the Free plan’s time limit\.$/);
+    expect(screen.getByTestId("compare-note")).toHaveTextContent("Pro and Pro Plus arrive at paid launch.");
+    expect(screen.getByTestId("compare-note")).not.toHaveTextContent("Screen view");
+    expect(screen.getByTestId("screen-view-note")).toHaveTextContent("Screen view (beta) is switched on: open it from the Remote tab. Nothing is recorded.");
+    const table = screen.getByRole("table", { name: "Feature comparison between DoMe Free, Pro and Pro Plus" });
+    const group = within(table).getByRole("columnheader", { name: /^Screen view/ });
+    expect(group).not.toHaveTextContent("Coming");
+    // YouTube control in Chrome or Edge stays Coming: no offered release has the browser add-on
+    expect(within(screen.getByRole("region", { name: "Free" })).getByText("YouTube control in Chrome or Edge").closest("li")).toHaveTextContent("Coming");
+    on.unmount();
   });
 });

@@ -2,6 +2,7 @@
  * Now Playing copy (spec §9 "Media target clarity"): what the panel shows is exactly the target the
  * controls will address. A YouTube control never falls back to a generic media key; ambiguity asks.
  */
+import { YOUTUBE_COMING, youtubeComing } from "../content/windowsAppStatus.ts";
 import type { Tone } from "../components/ui.tsx";
 import type { PcState } from "../store/live.ts";
 import { browserLabel, type MediaResolution, type YoutubeResolution } from "./targets.ts";
@@ -30,7 +31,7 @@ export function describeNowPlaying(pcName: string | null, state: PcState | null,
   }
   if (media.reason === "ambiguous") return { kind: "ambiguous", source: pc, title: "Several media players are active", stateLabel: "Choose one", tone: "warning", explanation: "Pick the player in the remote. DoMe does not switch to another player on its own." };
   if (yt.reason === "none_attached") return { kind: "none", source: pc, title: "YouTube tab needs a reload", stateLabel: "Not controllable", tone: "warning", explanation: "The tab is open but the DoMe extension is not attached to it. Reload the tab on the PC." };
-  if (state?.extension_connected === false) return { kind: "none", source: pc, title: "Nothing is playing", stateLabel: "Idle", tone: "neutral", explanation: "To control YouTube, install the DoMe browser extension on the PC. Windows media players appear here without it." };
+  if (state?.extension_connected === false) return { kind: "none", source: pc, title: "Nothing is playing", stateLabel: "Idle", tone: "neutral", explanation: youtubeComing() ? `${YOUTUBE_COMING} Windows media players appear here now.` : "To control YouTube, install the DoMe browser extension on the PC. Windows media players appear here without it." };
   return { kind: "none", source: pc, title: "Nothing is playing", stateLabel: "Idle", tone: "neutral", explanation: null };
 }
 

@@ -4,8 +4,9 @@
  * and "Good to know" as quiet prose. Honest by design: the paid plans carry a status line, never a button
  * that looks tappable, until the server says checkout exists (GET /v1/plans `billing_enabled`, asked once,
  * failures ignored); then they say "Available now" with a link to sign in and subscribe from Billing, and
- * "Test mode" while Stripe runs in test mode. Screen view, custom layouts and routines are marked "Coming" wherever
- * they appear. Every AI allowance says "Not switched on yet" unless the server says the assistant can be used
+ * "Test mode" while Stripe runs in test mode. Screen view is marked "Coming" wherever it appears while the server has it
+ * switched off (GET /healthz `screen_view`, the switch the app reads; unknown counts as off); custom layouts and
+ * routines are not built and are marked "Coming" wherever they appear. Every AI allowance says "Not switched on yet" unless the server says the assistant can be used
  * (`ai_enabled`), and Pro Plus, whose only difference from Pro is AI requests, is not offered while it cannot.
  * Under each paid plan, whether or not it is on sale: that it renews automatically at the prices shown until cancelled,
  * how to cancel, and the Terms and Privacy links (content/SubscriptionTerms.tsx). Paid Screen view is "without the Free
@@ -16,8 +17,9 @@ import { Link } from "react-router";
 
 import { PLANS } from "@dome/protocol";
 
+import { useScreenSwitch } from "../../app/hooks.ts";
 import { Icon } from "../../components/icons.tsx";
-import { AI_OFF_STATUS, AI_RULES, AVAILABLE_NOW, PAID_SCREEN_VIEW, PAID_SCREEN_VIEW_SHORT, PLAN_CONTENT, planById, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, usd, type PlanContent } from "../../content/plans.ts";
+import { AI_OFF_STATUS, AI_RULES, aiBillingRule, aiWindowsRule, AVAILABLE_NOW, PAID_SCREEN_VIEW, PAID_SCREEN_VIEW_SHORT, PLAN_CONTENT, planById, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, usd, type PlanContent } from "../../content/plans.ts";
 import { SubscriptionTerms } from "../../content/SubscriptionTerms.tsx";
 import { INCLUDED, NOT_INCLUDED, pricingGroups, type Row, type RowGroup } from "../../lib/pricing.ts";
 import { aiSwitchedOn, sellsPlan, useBillingAvailability, type BillingAvailability } from "../../lib/useBillingAvailability.ts";
@@ -26,10 +28,10 @@ import { PublicIcon, type PublicIconName } from "./publicIcons.tsx";
 /** Shown on Pro Plus while checkout exists but the assistant is off: its AI requests are its only difference. */
 export const PRO_PLUS_NEEDS_AI = "On sale once the AI butler is switched on";
 
-const RULES: Array<{ icon: PublicIconName; title: string; text: string }> = [
+const rules = (selling: boolean): Array<{ icon: PublicIconName; title: string; text: string }> => [
   { icon: "chat", title: "One request is one thing you ask the AI", text: AI_RULES.request },
   { icon: "hand", title: "Everyday commands are free and never count", text: AI_RULES.everyday },
-  { icon: "timer", title: "Two windows, refreshed on a clear schedule", text: AI_RULES.windows },
+  { icon: "timer", title: "Two windows, refreshed on a clear schedule", text: aiWindowsRule(selling) },
   { icon: "wallet", title: "A top-up only when you ask for one", text: AI_RULES.topUp },
 ];
 
@@ -149,7 +151,7 @@ function PhoneGroup({ group }: { group: RowGroup }) {
   );
 }
 
-function PlanCard({ plan, checkout }: { plan: PlanContent; checkout: BillingAvailability | null }) {
+function PlanCard({ plan, checkout, screenOn }: { plan: PlanContent; checkout: BillingAvailability | null; screenOn: boolean }) {
   const available = plan.status.kind === "available";
   // a paid plan the server sells now: the same "Available now" chip as Free, and a link into the app to subscribe
   const purchasable = !available && plan.id !== "free" && sellsPlan(checkout, plan.id);
@@ -177,22 +179,25 @@ function PlanCard({ plan, checkout }: { plan: PlanContent; checkout: BillingAvai
       <p className="mt-2 text-sm text-text-muted">{plan.price ? `or ${usd(plan.price.annualCents)} / year` : "No credit card. No ads."}</p>
       <p className="mt-4 text-[15px] text-text-muted">{plan.tagline}</p>
       <ul className="mt-6 space-y-3 border-t border-border pt-6 text-[15px]">
-        {plan.highlights.map((h) => (
+        {plan.highlights.map((h) => {
+          const status = h.status ?? (h.ai && !aiOn ? AI_OFF_STATUS : h.screen && !screenOn ? SCREEN_VIEW_STATUS : undefined);
+          return (
           <li key={h.text} className="flex gap-3">
             <span aria-hidden="true" className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success/12 text-success">
               <Icon name="check" size={12} strokeWidth={2.75} />
             </span>
             <span>
               {h.text}
-              {h.status ?? (h.ai && !aiOn ? AI_OFF_STATUS : null) ? (
+              {status ? (
                 <>
                   {" "}
-                  <Chip tone="quiet">{h.status ?? AI_OFF_STATUS}</Chip>
+                  <Chip tone="quiet">{status}</Chip>
                 </>
               ) : null}
             </span>
           </li>
-        ))}
+          );
+        })}
       </ul>
       <div className="mt-auto pt-8">
         {available ? (
@@ -218,7 +223,9 @@ function PlanCard({ plan, checkout }: { plan: PlanContent; checkout: BillingAvai
 export function PricingPage() {
   const checkout = useBillingAvailability();
   const aiOn = aiSwitchedOn(checkout);
-  const groups = withPlanScreenView(pricingGroups({ aiOn }));
+  // Screen view follows the server's switch (GET /healthz `screen_view`): "Coming" unless it says "on"
+  const screenOn = useScreenSwitch() === "on";
+  const groups = withPlanScreenView(pricingGroups({ aiOn, screenOn }));
   const free = PLANS.plans.free;
   const names = ["Free", "Pro", "Pro Plus"] as const;
   const selling = !!checkout?.selling;
@@ -227,12 +234,12 @@ export function PricingPage() {
       <header className="animate-rise max-w-3xl pb-10 pt-14 sm:pb-14 sm:pt-20">
         <p className="dome-eyebrow">Pricing</p>
         <h1 className="mt-4 text-h1 font-bold">Free for everyday control.</h1>
-        <p className="mt-5 max-w-2xl text-lg text-text-muted sm:text-xl">The remote is free: no credit card, no ads. Pro and Pro Plus add more PCs and a real AI butler allowance{selling ? "" : " at paid launch"}, and Screen view without the Free plan’s time limit once it ships.</p>
+        <p className="mt-5 max-w-2xl text-lg text-text-muted sm:text-xl">The remote is free: no credit card, no ads. Pro and Pro Plus add more PCs and a real AI butler allowance{selling ? "" : " at paid launch"}, and Screen view without the Free plan’s time limit{screenOn ? "" : " once it is switched on"}.</p>
       </header>
 
       <div className="grid gap-4 md:grid-cols-3 lg:gap-5">
         {PLAN_CONTENT.map((plan) => (
-          <PlanCard key={plan.id} plan={plan} checkout={checkout} />
+          <PlanCard key={plan.id} plan={plan} checkout={checkout} screenOn={screenOn} />
         ))}
       </div>
       <p className="mt-5 text-sm text-text-faint">{selling ? `Prices in US dollars, tax included. Subscribe from Billing in the app; payment runs on Stripe's secure page.${checkout?.mode === "test" ? " Test mode: no real charges." : ""}` : "Prices in US dollars, tax included. Pro and Pro Plus arrive at paid launch; nothing can be bought in this version."}</p>
@@ -254,7 +261,7 @@ export function PricingPage() {
             <p className="mt-4 max-w-md text-[15px] text-text-muted">{AI_RULES.privacy}</p>
           </div>
           <ul className="grid gap-4 sm:grid-cols-2">
-            {RULES.map((r) => (
+            {rules(selling).map((r) => (
               <li key={r.title} className="dome-card flex gap-4 p-5 sm:block sm:p-6">
                 <span className="dome-well">
                   <PublicIcon name={r.icon} size={22} />
@@ -274,10 +281,12 @@ export function PricingPage() {
           <h2 id="compare" className="text-h2 font-bold">
             Compare plans
           </h2>
-          <p className="inline-flex flex-wrap items-center gap-2 text-sm text-text-faint">
-            <Chip tone="quiet">{SCREEN_VIEW_STATUS}</Chip>
-            <span>{selling ? "Screen view is in development." : "Screen view · Pro and Pro Plus arrive at paid launch."}</span>
-          </p>
+          {screenOn && selling ? null : (
+            <p className="inline-flex flex-wrap items-center gap-2 text-sm text-text-faint" data-testid="compare-note">
+              {screenOn ? null : <Chip tone="quiet">{SCREEN_VIEW_STATUS}</Chip>}
+              <span>{[screenOn ? null : "Screen view is built but not switched on for DoMe accounts yet.", selling ? null : "Pro and Pro Plus arrive at paid launch."].filter(Boolean).join(" ")}</span>
+            </p>
+          )}
         </div>
 
         {/* Tablets and up: a real table, left-aligned. */}
@@ -350,12 +359,12 @@ export function PricingPage() {
         </h2>
         <ul className="dome-hairlines text-[15px] text-text-muted lg:col-span-8">
           <li className="pb-4">{selling ? "You see the exact price on Stripe’s checkout page before confirming anything; nothing is charged until you do." : "Prices are planned, not final, and may change before Pro and Pro Plus can be purchased. Nothing can be bought in this version."}</li>
-          <li className="py-4">{AI_RULES.billing} You can cancel at any time; access continues until the end of the paid period and your settings are kept.</li>
+          <li className="py-4">{aiBillingRule(selling)} You can cancel at any time; access continues until the end of the paid period and your settings are kept.</li>
           <li className="py-4">
             If your Pro or Pro Plus plan ends, you keep every PC, phone and setting and choose which {free.max_enabled_pcs} PC and {free.max_controllers} phones stay enabled (within {PLANS.downgrade_policy.selection_window_days} days; otherwise the most recently used are kept). Revocation and emergency stop always work.
           </li>
           <li className="py-4">The AI butler is optional and off until you turn it on. {AI_RULES.privacy}</li>
-          <li className="py-4">Screen view is in development. The allowances above describe the plans; the feature is not in the app yet, and nothing is recorded when it arrives. {SCREEN_VIEW_FAIR_USE}</li>
+          <li className="py-4" data-testid="screen-view-note">{screenOn ? "Screen view (beta) is switched on: open it from the Remote tab. Nothing is recorded." : "Screen view is built but not switched on for DoMe accounts yet. The allowances above describe the plans, and nothing is recorded."} {SCREEN_VIEW_FAIR_USE}</li>
           <li className="pt-4">An account is one person’s account, not a shared household login. Guest access is a later feature.</li>
         </ul>
         <p className="text-[15px] text-text-muted lg:col-span-8 lg:col-start-5">

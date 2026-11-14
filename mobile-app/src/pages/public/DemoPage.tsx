@@ -5,16 +5,20 @@
  *   ?layout=vertical    the 9:16 restack (phones and social)
  *   ?export=1           chrome-less, controls hidden, deterministic from t = 0 (scripts/export-film.mjs)
  * The page sits inside PublicLayout's reading column, so the stage breaks out to the viewport's width. Its closing line
- * says where the Windows app stands, from the release the Download page offers (content/windowsAppStatus.ts).
+ * says where the Windows app stands, from the release the Download page offers (content/windowsAppStatus.ts). The film's
+ * labels, the note under it and the plan cards follow the server (film/signals.ts: GET /healthz `screen_view`, GET
+ * /v1/plans); the export keeps the all-off wording, since the exported video is a fixed file.
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { Film } from "../../components/film/Film.tsx";
 import type { FilmLayout } from "../../components/film/layout.ts";
-import { CONCEPT_NOTE, PLAN_FACTS, sceneByNumber, SCENES } from "../../components/film/timeline.ts";
+import { FilmSignalsContext, useServerFilmSignals } from "../../components/film/signals.ts";
+import { conceptNote, planFacts, sceneByNumber, SCENES, type FilmSignals } from "../../components/film/timeline.ts";
 import { Icon } from "../../components/icons.tsx";
 import { windowsAppStatus } from "../../content/windowsAppStatus.ts";
+import { useBillingAvailability } from "../../lib/useBillingAvailability.ts";
 
 /** The document's client width (no scrollbar), so a full-bleed band never causes sideways scroll. */
 function useViewportWidth(): number | null {
@@ -28,6 +32,13 @@ function useViewportWidth(): number | null {
   return w;
 }
 
+/** Which plans can be bought, as the server says (GET /v1/plans); until it answers, "at paid launch". */
+function demoPlansIntro(s: FilmSignals): string {
+  if (s.proPlusSold) return "Free, Pro and Pro Plus are all available: subscribe to Pro or Pro Plus from Billing in the app.";
+  if (s.proSold) return "Free and Pro are available: subscribe to Pro from Billing in the app. Pro Plus goes on sale once the AI butler is switched on.";
+  return "Today only Free exists. Pro and Pro Plus are shown with their prices and contents; they arrive at paid launch.";
+}
+
 export function DemoPage() {
   const [params] = useSearchParams();
   const exportMode = params.get("export") === "1";
@@ -38,6 +49,7 @@ export function DemoPage() {
   const layoutParam = params.get("layout");
   const layout: FilmLayout | undefined = layoutParam === "vertical" ? "vertical" : layoutParam === "wide" ? "wide" : undefined;
   const vw = useViewportWidth();
+  const signals = useServerFilmSignals(useBillingAvailability());
 
   if (exportMode) {
     return (
@@ -61,8 +73,10 @@ export function DemoPage() {
         <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(180deg,#03195a,#001441_40%,#001441)] ring-1 ring-inset ring-white/8" />
         <div aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(60rem_26rem_at_50%_-6rem,rgb(1_66_251/0.5),transparent_70%)]" />
         <div className="relative mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <Film autoplay={!paused} initialTime={initialTime} {...(layout ? { layout } : {})} />
-          <p className="mt-5 text-center text-sm text-text-muted">{CONCEPT_NOTE}</p>
+          <FilmSignalsContext.Provider value={signals}>
+            <Film autoplay={!paused} initialTime={initialTime} {...(layout ? { layout } : {})} />
+          </FilmSignalsContext.Provider>
+          <p className="mt-5 text-center text-sm text-text-muted">{conceptNote(signals)}</p>
           <p className="mt-2 text-center text-sm text-text-muted sm:hidden">About a minute, muted, with captions: the AI butler, Screen view, point-and-talk and the plans.</p>
         </div>
       </section>
@@ -72,9 +86,9 @@ export function DemoPage() {
           <h2 id="demo-plans" className="text-h2 font-bold">
             What you saw, by plan.
           </h2>
-          <p className="mt-3 text-text-muted">Today only Free exists. Pro and Pro Plus are shown with their prices and contents; they arrive at paid launch. Everyday commands never count against an AI limit, on any plan.</p>
+          <p className="mt-3 text-text-muted" data-testid="demo-plans-intro">{demoPlansIntro(signals)} Everyday commands never count against an AI limit, on any plan.</p>
           <ul className="mt-8 grid gap-4 sm:grid-cols-3">
-            {PLAN_FACTS.map((plan) => (
+            {planFacts(signals).map((plan) => (
               <li key={plan.id} className="dome-card p-5">
                 <h3 className="text-lg font-semibold">{plan.name}</h3>
                 <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5">

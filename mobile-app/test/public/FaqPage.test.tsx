@@ -12,6 +12,7 @@ import type { rest } from "@dome/protocol";
 
 import { FAQ_GROUPS, faqGroups } from "../../src/content/faq.tsx";
 import { api, ApiError } from "../../src/lib/api.ts";
+import { useScreenStore } from "../../src/store/screen.ts";
 import { youtubeNotAvailable } from "../../src/content/windowsAppStatus.ts";
 import { getWindowsRelease } from "../../src/content/windowsRelease.ts";
 import type { BillingAvailability } from "../../src/lib/useBillingAvailability.ts";
@@ -22,6 +23,8 @@ let plans: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   // the page asks GET /v1/plans once; by default it fails, so the static answers stay
   plans = vi.spyOn(api, "plans").mockRejectedValue(new ApiError(0, "NETWORK", "offline", true));
+  // the Screen view switch (GET /healthz screen_view) as the server would answer it: off, as on domeremote.com
+  useScreenStore.setState({ switch: "off", switchChecked: true });
 });
 afterEach(() => plans.mockRestore());
 
@@ -41,7 +44,7 @@ describe("FAQ", () => {
       "What is the AI butler?",
       "What counts as an AI request?",
       "What happens when I reach a limit?",
-      "What is Screen view, and when is it coming?",
+      "What is Screen view, and when can I use it?",
       "Does the AI see my screen?",
       "Is my speech stored?",
       "What do Pro and Pro Plus include?",
@@ -57,6 +60,8 @@ describe("FAQ", () => {
       expect(questions).toContain(q);
     }
     expect(FAQ_GROUPS.find((g) => g.title === "Screen view")?.status).toBe("Coming");
+    // the AI butler group says it is not switched on while the server has it off
+    expect(FAQ_GROUPS.find((g) => g.title === "The AI butler")?.status).toBe("Not switched on yet");
   });
 
   it("renders every question as a disclosure; the screen answers say no screenshots and the speech answer says nothing is recorded", () => {
@@ -78,8 +83,8 @@ describe("FAQ", () => {
     expect(answer("What happens when I reach a limit?")).toMatch(/every everyday command/);
     expect(answer("What happens when I reach a limit?")).toMatch(/Refreshes Saturday at 2 pm/);
     expect(answer("What counts as an AI request?")).toMatch(/free and never count against your AI allowance/);
-    expect(answer("What is Screen view, and when is it coming?")).toMatch(/10 minutes per 5-hour window\. Pro and Pro Plus will not have Free’s time limit, but fair-use limits apply/);
-    expect(answer("What is Screen view, and when is it coming?")).not.toMatch(/unlimited/i);
+    expect(answer("What is Screen view, and when can I use it?")).toMatch(/10 minutes per 5-hour window\. Pro and Pro Plus will not have Free’s time limit, but fair-use limits apply/);
+    expect(answer("What is Screen view, and when can I use it?")).not.toMatch(/unlimited/i);
     expect(answer("What do Pro and Pro Plus include?")).toMatch(/\$9\.99 a month or \$99\.99 a year/);
     expect(answer("What do Pro and Pro Plus include?")).toMatch(/\$24\.99 a month or \$249\.99 a year/);
     expect(answer("What is a top-up?")).toMatch(/100 AI requests for \$2\.99/);
@@ -120,7 +125,7 @@ describe("FAQ", () => {
     }
     expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/in US dollars, tax included \(the price shown is the amount charged\)/);
     expect(answerFor(null, "What do Pro and Pro Plus include?")).not.toMatch(/at paid launch\. The difference/);
-    expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/custom remote layouts and saved routines are coming later: none of them is in the app yet/);
+    expect(answerFor(null, "What do Pro and Pro Plus include?")).toMatch(/Custom remote layouts and saved routines are coming later: they are not in the app yet/);
   });
 
   it("follows the server: static wording until it answers, how to subscribe once it sells, and Pro Plus only with the AI butler on", async () => {
@@ -152,6 +157,62 @@ describe("FAQ", () => {
     );
     await waitFor(() => expect(container.textContent).toContain("Yes: Pro can be bought from Billing"));
     expect(container.textContent).not.toContain("nothing can be bought in this version");
+  });
+
+  it("Screen view follows the server's switch: Coming and 'not switched on yet' while off, plain inclusion where it is on", () => {
+    const text = (screenOn: boolean, q: string) => {
+      const entry = faqGroups(null, youtubeNotAvailable(), screenOn).flatMap((g) => g.entries).find((e) => e.q === q)!;
+      return typeof entry.a === "string" ? entry.a : renderToStaticMarkup(<MemoryRouter>{entry.a}</MemoryRouter>).replace(/<[^>]+>/g, "");
+    };
+    const group = (screenOn: boolean) => faqGroups(null, youtubeNotAvailable(), screenOn).find((g) => g.id === "screen-view")!;
+    // off (production today): Coming, built but not switched on, never "in development"
+    expect(group(false).status).toBe("Coming");
+    expect(text(false, "What is Screen view, and when can I use it?")).toMatch(/It is built and included in DoMe for Windows 0\.1\.0, but it is not switched on for DoMe accounts yet, so it cannot be used/);
+    expect(text(false, "What is Screen view, and when can I use it?")).toMatch(/Free will include 10 minutes/);
+    expect(text(false, "What happens when I reach a limit?")).toMatch(/and Screen view once it is switched on\./);
+    expect(text(false, "What do Pro and Pro Plus include?")).toMatch(/fair-use limits apply\) once Screen view is switched on\./);
+    // on (the test service today): no chip, present tense, still "sound and TV-style remote are coming later"
+    expect(group(true).status).toBeUndefined();
+    expect(group(true).entries.map((e) => e.q)).toContain("What is Screen view?");
+    expect(text(true, "What is Screen view?")).toMatch(/It is a beta and switched on for DoMe accounts: open it from the Remote tab\./);
+    expect(text(true, "What is Screen view?")).toMatch(/Free includes 10 minutes/);
+    expect(text(true, "What is Screen view?")).toMatch(/a TV-style remote are coming later/);
+    expect(text(true, "What happens when I reach a limit?")).toMatch(/and Screen view\. Only new AI requests wait/);
+    expect(text(true, "What do Pro and Pro Plus include?")).not.toMatch(/once Screen view is switched on/);
+    for (const on of [false, true]) {
+      const all = faqGroups(null, youtubeNotAvailable(), on).flatMap((g) => g.entries.map((e) => e.q)).map((q) => text(on, q)).join(" ");
+      expect(all).not.toMatch(/in development|when it arrives|until it ships/);
+    }
+  });
+
+  it("the page reads the switch: Coming while the server says off, no chip once it says on", async () => {
+    const view = () =>
+      render(
+        <MemoryRouter initialEntries={["/faq"]}>
+          <FaqPage />
+        </MemoryRouter>,
+      );
+    const off = view();
+    expect(off.container.querySelector("#screen-view .dome-chip")).toHaveTextContent("Coming");
+    off.unmount();
+    useScreenStore.setState({ switch: "on", switchChecked: true });
+    const on = view();
+    expect(on.container.querySelector("#screen-view .dome-chip")).toBeNull();
+    expect(on.container.textContent).toContain("What is Screen view?");
+  });
+
+  it("the AI butler answers follow ai_enabled; the 80% warning and the Windows answer follow checkout and the release", () => {
+    const aiOn: BillingAvailability = { selling: true, mode: "live", aiEnabled: true };
+    expect(faqGroups(null).find((g) => g.id === "butler")!.status).toBe("Not switched on yet");
+    expect(faqGroups(aiOn).find((g) => g.id === "butler")!.status).toBeUndefined();
+    expect(answerFor(null, "What is the AI butler?")).toMatch(/not switched on for DoMe accounts yet/);
+    expect(answerFor(aiOn, "What is the AI butler?")).toMatch(/off until you turn it on in Settings/);
+    expect(answerFor(null, "What counts as an AI request?")).toMatch(/once the AI butler is switched on for DoMe accounts \(it is not yet\)/);
+    expect(answerFor(null, "What is a top-up?")).toMatch(/When paid plans launch, the app will warn you at 80%/);
+    expect(answerFor(aiOn, "What is a top-up?")).toMatch(/On Pro and Pro Plus the app warns you at 80%/);
+    expect(answerFor(aiOn, "What happens when I reach a limit?")).toMatch(/the app shows the exact refresh time/);
+    // 0.1.0 has no browser add-on: the Windows answer does not list YouTube controls
+    expect(answerFor(null, "What does the Windows app see or change?")).toMatch(/fixed list: media controls, volume/);
   });
 
   it("answers the YouTube question from the offered release: not in DoMe for Windows 0.1.0, which has no browser add-on", () => {

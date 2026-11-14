@@ -20,6 +20,7 @@ import { Button, Card, IconButton, Notice, PageHeader, Segmented, Steps } from "
 import { VolumeSlider } from "../../components/VolumeSlider.tsx";
 import { YoutubeSearch } from "../../components/YoutubeSearch.tsx";
 import { mmss } from "../../lib/format.ts";
+import { youtubeComing } from "../../content/windowsAppStatus.ts";
 import { errorMessage, recoverySteps } from "../../lib/labels.ts";
 import { browserLabel, controllableTabs, resolveMediaTarget, resolveYoutubeTarget, tabKey } from "../../lib/targets.ts";
 import { useLiveStore } from "../../store/live.ts";
@@ -144,7 +145,7 @@ export function RemotePage() {
                   </>
                 ) : (
                   <p className="text-sm text-text-muted">
-                    {!fresh ? "The PC’s state is not available right now." : !yt.ok && yt.reason === "no_extension" ? "The DoMe browser extension is not connected on the PC." : !yt.ok && yt.reason === "no_tabs" ? "No YouTube tab is open on the PC." : !yt.ok && yt.reason === "none_attached" ? "Reload the YouTube tab on the PC so DoMe can control it." : !yt.ok && yt.reason === "no_player" ? "No YouTube video is playing: the YouTube tab shows a list. Pick a video below or on the PC." : "Choose a tab above."}
+                    {!fresh ? "The PC’s state is not available right now." : !yt.ok && yt.reason === "no_extension" ? (youtubeComing() ?? "The DoMe browser extension is not connected on the PC.") : !yt.ok && yt.reason === "no_tabs" ? "No YouTube tab is open on the PC." : !yt.ok && yt.reason === "none_attached" ? "Reload the YouTube tab on the PC so DoMe can control it." : !yt.ok && yt.reason === "no_player" ? "No YouTube video is playing: the YouTube tab shows a list. Pick a video below or on the PC." : "Choose a tab above."}
                   </p>
                 )}
               </div>

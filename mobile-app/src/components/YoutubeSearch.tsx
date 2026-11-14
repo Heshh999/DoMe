@@ -13,6 +13,7 @@ import { LIMITS, type JsonValue } from "@dome/protocol";
 import { resultsTabProblem, reusableResultsTab } from "../lib/commandPlan.ts";
 import type { CommandRecord } from "../lib/commands.ts";
 import { mmss } from "../lib/format.ts";
+import { youtubeComing, youtubeNotAvailable } from "../content/windowsAppStatus.ts";
 import { browserInstanceIds, browserLabel, playingElsewhere, resolveYoutubeBrowserTarget, resolveYoutubeTarget, tabKey, targetForSearchResult, youtubeTargetFor } from "../lib/targets.ts";
 import { useLiveStore, type LastSearch, type PcState } from "../store/live.ts";
 import { Button, Card, inputClass, Toggle } from "./ui.tsx";
@@ -87,7 +88,7 @@ export function YoutubeSearch({ pcId, state, canControl, send }: { pcId: string 
           </Button>
         </div>
         <p id="youtube-search-where" className="text-sm text-text-muted">
-          {where.ok ? (inResultsTab ? "Searches again in the results tab" : where.mode === "tab" ? `Searches in this tab: ${where.tab.title ?? "YouTube"}` : `Opens a new tab in ${browserLabel(state, where.browserInstanceId)}`) : where.reason === "no_extension" ? "Searching needs the DoMe browser extension, which is not connected on the PC." : where.reason === "no_browser" ? "Open Chrome or Edge with the DoMe extension on the PC to search." : "Choose the browser to search in."}
+          {where.ok ? (inResultsTab ? "Searches again in the results tab" : where.mode === "tab" ? `Searches in this tab: ${where.tab.title ?? "YouTube"}` : `Opens a new tab in ${browserLabel(state, where.browserInstanceId)}`) : where.reason === "no_extension" ? (youtubeComing() ? `YouTube search is coming. ${youtubeNotAvailable()}` : "Searching needs the DoMe browser extension, which is not connected on the PC.") : where.reason === "no_browser" ? (youtubeComing() ? `YouTube search is coming. ${youtubeNotAvailable()}` : "Open Chrome or Edge with the DoMe extension on the PC to search.") : "Choose the browser to search in."}
         </p>
         {candidate ? (
           <div className="flex items-center justify-between gap-3 text-sm">

@@ -2,17 +2,19 @@
  * Product explanation. No testimonials, counts, certifications or platform claims that are not verified. Also where a
  * sign-in that was refused or could not be finished lands (`?sign_in=<reason>`, `lib/signInProblem.ts`): the notice
  * for it sits above the hero. The Windows button, the line under it and the YouTube card follow the release the Download
- * page offers (content/windowsAppStatus.ts).
+ * page offers (content/windowsAppStatus.ts). Screen view, the film and the closing card follow the server: GET /healthz
+ * `screen_view` (Screen view "Coming" unless it is "on") and GET /v1/plans (checkout, AI butler).
  */
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { Wordmark } from "../../components/brand.tsx";
 import { Film } from "../../components/film/Film.tsx";
-import { CONCEPT_NOTE } from "../../components/film/timeline.ts";
+import { FilmSignalsContext, useServerFilmSignals } from "../../components/film/signals.ts";
+import { conceptNote } from "../../components/film/timeline.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { Notice } from "../../components/ui.tsx";
-import { FREE_SCREEN_VIEW_MINUTES, planById, SCREEN_VIEW_FAIR_USE, usd, WINDOW_HOURS } from "../../content/plans.ts";
+import { FREE_SCREEN_VIEW_MINUTES, planById, SCREEN_VIEW_FAIR_USE, SCREEN_VIEW_STATUS, usd, WINDOW_HOURS } from "../../content/plans.ts";
 import { windowsAppStatus, youtubeNotAvailable } from "../../content/windowsAppStatus.ts";
 import { loginUrl } from "../../lib/api.ts";
 import { ACCOUNT_DELETED_HERE, SIGN_IN_AGAIN, SIGN_IN_PARAM, SIGN_IN_PROBLEMS, carriedAccountDeleted, carriedSignInProblem, carrySignInProblem, signInAgainOptions, signInProblem, supportContact, withoutSignInProblem } from "../../lib/signInProblem.ts";
@@ -23,7 +25,7 @@ const PRO = planById("pro");
 const PRO_PLUS = planById("pro_plus");
 
 const STEPS = [
-  { title: "Install DoMe on your PC", text: "Sign in on your Windows PC and give it a name. It connects out to DoMe, so there are no ports to open and no router to change." },
+  { title: "Install DoMe on your PC", text: "Install DoMe for Windows and link it to your account, then give the PC a name (this version links with one PowerShell command: the release notes show it). It connects out to DoMe, so there are no ports to open and no router to change." },
   { title: "Pair your phone", text: "Scan the QR code the PC shows, check the six-digit code matches on both screens, and approve on the PC." },
   { title: "Sit back", text: "Play, pause, skip and set the volume from the couch, or from anywhere with internet." },
 ];
@@ -35,12 +37,19 @@ const CAPABILITIES: Array<{ icon: IconName; title: string; text: string; status?
   { icon: "lock", title: "Lock and power", text: "Lock Windows in one tap. Sleep, restart and shut down always ask you first." },
   { icon: "ask", title: "Just ask", text: "Say or type “skip this video” or “set the volume to 35”. Everyday commands need no AI and never count." },
   { icon: "check", title: "Honest results", text: "Every control shows what the PC actually did. “Sent” is never shown as “done”." },
-  { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. In development: Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window. ${SCREEN_VIEW_FAIR_USE}`, status: "Coming" },
 ];
 
+/** Screen view's card: "Coming" while the server has it switched off (GET /healthz `screen_view`), an ordinary card where it is on. */
+function screenViewCapability(screenOn: boolean): (typeof CAPABILITIES)[number] {
+  return screenOn
+    ? { icon: "pc", title: "Screen view (beta)", text: `See your PC’s screen on your phone and tap what you see. Free: ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window.` }
+    : { icon: "pc", title: "Screen view", text: `See your PC’s screen on your phone and tap what you see. Built, but not switched on for DoMe accounts yet. Free will get ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window. ${SCREEN_VIEW_FAIR_USE}`, status: SCREEN_VIEW_STATUS };
+}
+
 /** The capabilities, with the YouTube card saying why it is not available when the offered release leaves it out. */
-function capabilities(youtube: string | null): typeof CAPABILITIES {
-  return youtube ? CAPABILITIES.map((c) => (c.icon === "youtube" ? { ...c, text: `${c.text} ${youtube}` } : c)) : CAPABILITIES;
+function capabilities(youtube: string | null, screenOn = false): typeof CAPABILITIES {
+  const list = [...CAPABILITIES, screenViewCapability(screenOn)];
+  return youtube ? list.map((c) => (c.icon === "youtube" ? { ...c, text: `${c.text} ${youtube}` } : c)) : list;
 }
 
 const TRUST: Array<{ title: string; text: React.ReactNode }> = [
@@ -253,6 +262,7 @@ function SignInNotice() {
 
 export function LandingPage() {
   const availability = useBillingAvailability();
+  const signals = useServerFilmSignals(availability);
   const windows = windowsAppStatus();
   return (
     <div>
@@ -302,9 +312,11 @@ export function LandingPage() {
           </Link>
         </div>
         <div className="mt-8">
-          <Film autoplay />
+          <FilmSignalsContext.Provider value={signals}>
+            <Film autoplay />
+          </FilmSignalsContext.Provider>
         </div>
-        <p className="mt-4 text-sm text-text-muted">{CONCEPT_NOTE}</p>
+        <p className="mt-4 text-sm text-text-muted">{conceptNote(signals)}</p>
       </section>
 
       <section aria-labelledby="how" className={`${SECTION} py-[var(--dome-section)]`}>
@@ -329,7 +341,7 @@ export function LandingPage() {
           Everything within reach.
         </h2>
         <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {capabilities(youtubeNotAvailable()).map((c) =>
+          {capabilities(youtubeNotAvailable(), signals.screenOn).map((c) =>
             c.status ? (
               // the one that is still being built: a full-width row with its status chip, never dressed as available
               <li key={c.title} className="dome-card flex gap-4 p-5 sm:col-span-2 sm:items-center sm:p-6 lg:col-span-3">
@@ -402,7 +414,7 @@ export function LandingPage() {
               Free today. Pro and Pro Plus when they’re worth it.
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg text-text-muted">
-              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, Screen view without the Free plan’s time limit when it ships, and more AI butler time. {paidPlansLine(availability)}
+              Remote control stays free, with {FREE.pcs} PC and {FREE.phones} phones. Pro ({usd(PRO.price!.monthlyCents)} a month) and Pro Plus ({usd(PRO_PLUS.price!.monthlyCents)} a month) add up to {PRO.pcs} PCs and {PRO.phones} phones, Screen view without the Free plan’s time limit{signals.screenOn ? "" : " once it is switched on"}, and more AI butler time. {paidPlansLine(availability)}
             </p>
             <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link to="/app" className="tap dome-primary dome-press inline-flex w-full items-center justify-center rounded-full px-7 text-base font-semibold sm:w-auto sm:min-h-[52px]">

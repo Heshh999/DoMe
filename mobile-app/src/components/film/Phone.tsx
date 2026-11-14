@@ -1,17 +1,19 @@
 /**
  * The phone in the film: the real app's look (the brand mark, the Midnight cards, the tab bar with its coral dot),
  * authored at the real screen size (390 × 844) and scaled into the drawn handset. Pages: Home, Ask and Screen view
- * (coming). The PC's mirror is a layer of its own over the Screen view page; it zooms on the phone only, as Screen
+ * ("Coming" while the server has it switched off, "Beta" where it is on: signals.ts). The PC's mirror is a layer of its own over the Screen view page; it zooms on the phone only, as Screen
  * view's pinch does, with the 1× button while zoomed. It shows nothing Screen view's first version lacks: no mini view,
  * no PC sound, no TV-style remote. Everything is positioned explicitly so the fingertip lands where it should at any size.
  */
 import { memo, type ReactNode } from "react";
 
+import { SCREEN_VIEW_STATUS } from "../../content/plans.ts";
 import { BrandMark, Wordmark } from "../brand.tsx";
 import { Icon, type IconName } from "../icons.tsx";
 import { PHONE_SCREEN } from "./layout.ts";
 import { PcScreen } from "./Pc.tsx";
 import { EPISODES, MIRROR, TOUCH, type HandView, type PcView, type PhonePage, type PhoneView } from "./script.ts";
+import { useFilmSignals } from "./signals.ts";
 import { lerp } from "./timeline.ts";
 
 type Box = { x: number; y: number; w?: number; h?: number };
@@ -107,6 +109,8 @@ const TABS: Array<[IconName, string]> = [
 const SCREEN_TABS: Array<[IconName, string]> = [TABS[0]!, TABS[1]!, ["pc", "Screen"], TABS[3]!, TABS[4]!];
 
 function TabBar({ active, screen = false }: { active: string; screen?: boolean }) {
+  // the coral "coming" dot only while the server has Screen view switched off
+  const coming = !useFilmSignals().screenOn;
   return (
     <At x={0} y={772} w={390} h={72} className="grid grid-cols-5 border-t border-white/10 bg-[rgb(0_14_50/0.9)] px-1 pt-1.5">
       {(screen ? SCREEN_TABS : TABS).map(([icon, label]) => {
@@ -115,7 +119,7 @@ function TabBar({ active, screen = false }: { active: string; screen?: boolean }
           <span key={label} className={`relative flex flex-col items-center gap-[3px] text-[11px] font-semibold tracking-[-0.01em] ${on ? "text-text" : "text-text-faint"}`}>
             <Icon name={icon} size={24} strokeWidth={on ? 2 : 1.75} className={on ? "text-accent" : ""} />
             {label}
-            {label === "Screen" ? <span className="absolute right-[18px] top-0 h-2 w-2 rounded-full border border-navy bg-coral" /> : null}
+            {label === "Screen" && coming ? <span className="absolute right-[18px] top-0 h-2 w-2 rounded-full border border-navy bg-coral" /> : null}
             <span className={`absolute -bottom-2 h-1 w-1 rounded-full ${on ? "bg-coral" : "bg-transparent"}`} />
           </span>
         );
@@ -342,18 +346,25 @@ function AskPage({ view }: { view: PhoneView }) {
   );
 }
 
-/* ── Screen view (coming) ────────────────────────────────────────────────────────────────────────────── */
+/* ── Screen view ────────────────────────────────────────────────────────────────────────────── */
 
 function ScreenPage({ view }: { view: PhoneView }) {
+  const { screenOn } = useFilmSignals();
   return (
     <>
       <PageTitle
         title="Screen view"
         sub="Living Room PC · Online"
         chip={
-          <Pill tone="coral">
-            <span className="text-text-muted">Coming</span>
-          </Pill>
+          screenOn ? (
+            <Pill tone="info">
+              <span className="text-text-muted">Beta</span>
+            </Pill>
+          ) : (
+            <Pill tone="coral">
+              <span className="text-text-muted">{SCREEN_VIEW_STATUS}</span>
+            </Pill>
+          )
         }
       />
       <At x={16} y={334} w={358} className="flex gap-2">

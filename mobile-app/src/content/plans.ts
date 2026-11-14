@@ -5,9 +5,11 @@
  * (shared/protocol/plans.json → `PLANS`) so the website, the app and the server never disagree; the
  * taglines, minutes and rules are content.
  *
- * Honesty: only Free exists today. Pro and Pro Plus are shown with the status "Coming at paid launch",
- * Screen view, custom layouts and routines are "Coming" wherever they appear, and every AI allowance carries
- * "Not switched on yet" while the server says the assistant is off (GET /v1/plans `ai_enabled`). Nothing here is a claim that it can be bought: the
+ * Honesty: Pro and Pro Plus are shown with the status "Coming at paid launch" until the server says checkout exists
+ * (GET /v1/plans `billing_enabled`). Screen view is built: it is marked "Coming" wherever it appears while the server
+ * has it switched off (GET /healthz `screen_view` not "on"; unknown counts as off). Custom layouts and routines are
+ * not built and are "Coming" wherever they appear. Every AI allowance carries "Not switched on yet" while the server
+ * says the assistant is off (GET /v1/plans `ai_enabled`). Nothing here is a claim that it can be bought: the
  * pricing page and the Billing page ask the server (GET /v1/plans, GET /v1/account/billing) whether
  * checkout exists before they offer one.
  *
@@ -22,6 +24,8 @@
  * and the top-up button carries topUpTerms. Paid Screen view is never called "unlimited" (PAID_SCREEN_VIEW).
  */
 import { PLANS } from "@dome/protocol";
+
+import { youtubeNotAvailable } from "./windowsAppStatus.ts";
 
 const PRICING = PLANS.pricing_defaults;
 
@@ -38,7 +42,11 @@ export type PlanStatus = { kind: "available"; label: typeof AVAILABLE_NOW } | { 
 
 export const AVAILABLE_NOW = "Available now";
 export const COMING_AT_PAID_LAUNCH = "Coming at paid launch";
-/** The label for Screen view everywhere it appears: the feature is in development. */
+/**
+ * The label for Screen view while the server has it switched off (GET /healthz `screen_view` not "on"; "unknown" counts
+ * as off). Screen view is built (DoMe for Windows 0.1.0 includes it); this label goes away by itself where the server
+ * switches it on.
+ */
 export const SCREEN_VIEW_STATUS = "Coming";
 /** Point-and-talk / click by name is planned, not built. */
 export const POINT_AND_TALK_STATUS = "Planned";
@@ -49,6 +57,11 @@ export const POINT_AND_TALK_STATUS = "Planned";
 export const LAYOUTS_STATUS = "Coming";
 /** Beside every AI allowance while the server says the assistant cannot be used (GET /v1/plans `ai_enabled`). */
 export const AI_OFF_STATUS = "Not switched on yet";
+/**
+ * YouTube control in Chrome or Edge needs the DoMe browser extension, which no offered release includes yet
+ * (windowsAppStatus.ts youtubeNotAvailable): "Coming" until one does, then no label.
+ */
+export const YOUTUBE_STATUS: string | undefined = youtubeNotAvailable() ? "Coming" : undefined;
 
 export interface PlanPrice {
   monthlyCents: number;
@@ -75,7 +88,7 @@ export interface PlanContent {
   price: PlanPrice | null;
   pcs: number;
   phones: number;
-  /** Screen view allowance (the feature itself is coming). */
+  /** Screen view allowance (the feature is built; switched on or off by the server). */
   screenView: string;
   ai: AiAllowance;
   topUp: boolean;
@@ -88,6 +101,8 @@ export interface Highlight {
   status?: string;
   /** An AI allowance: the page adds AI_OFF_STATUS while the assistant is switched off. */
   ai?: boolean;
+  /** A Screen view allowance: the page adds SCREEN_VIEW_STATUS while the server has Screen view switched off. */
+  screen?: boolean;
 }
 
 /** The 5-hour window in hours and the weekly window in days. */
@@ -188,7 +203,7 @@ export function topUpTerms(requests: number): string {
 
 const topUpLine: Highlight = { text: `Optional top-up: ${TOP_UP.requests} extra AI requests for ${usd(TOP_UP.priceCents)}, only when you choose`, ai: true };
 const layoutsLine: Highlight = { text: `Custom remote layouts and saved routines of up to ${pro.routine_max_steps} steps`, status: LAYOUTS_STATUS };
-const paidScreenView: Highlight = { text: `Screen view: ${PAID_SCREEN_VIEW.charAt(0).toLowerCase()}${PAID_SCREEN_VIEW.slice(1)}`, status: SCREEN_VIEW_STATUS };
+const paidScreenView: Highlight = { text: `Screen view: ${PAID_SCREEN_VIEW.charAt(0).toLowerCase()}${PAID_SCREEN_VIEW.slice(1)}`, screen: true };
 
 export const PLAN_CONTENT: readonly PlanContent[] = [
   {
@@ -204,18 +219,19 @@ export const PLAN_CONTENT: readonly PlanContent[] = [
     ai: { tasteRequests: FREE_TASTE_REQUESTS },
     topUp: false,
     highlights: [
-      { text: "Full remote control: YouTube, media, volume, approved apps, lock and power, touchpad, keyboard and typed commands" },
+      { text: "Full remote control: media, volume, approved apps, lock and power, touchpad, keyboard and typed commands" },
+      YOUTUBE_STATUS ? { text: "YouTube control in Chrome or Edge", status: YOUTUBE_STATUS } : { text: "YouTube control in Chrome or Edge" },
       { text: `${free.max_enabled_pcs} PC and up to ${free.max_controllers} phones` },
       { text: "Everyday commands without AI: free, never counted" },
       { text: `AI butler: a one-time taste of ${FREE_TASTE_REQUESTS} requests`, ai: true },
-      { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window`, status: SCREEN_VIEW_STATUS },
+      { text: `Screen view: ${FREE_SCREEN_VIEW_MINUTES} minutes per ${WINDOW_HOURS}-hour window`, screen: true },
     ],
   },
   {
     id: "pro",
     name: "Pro",
     displayName: pro.display_name,
-    tagline: "More PCs, Screen view without the Free plan’s time limit once it ships, and a real allowance for the AI butler.",
+    tagline: "More PCs, Screen view without the Free plan’s time limit, and a real allowance for the AI butler.",
     status: { kind: "coming", label: COMING_AT_PAID_LAUNCH },
     price: contractPrice("pro"),
     pcs: pro.max_enabled_pcs,
@@ -259,3 +275,14 @@ export const AI_RULES = {
   privacy: "The AI never sees your screen: no screenshots, no pictures. Nothing is recorded, and your speech and search words are not stored.",
   billing: "Prices are in US dollars and are the full amount you pay (any tax is included). Billing runs through the DoMe web app (Stripe) when paid plans launch.",
 } as const;
+
+/** AI_RULES.windows for what the server says: once checkout exists (GET /v1/plans `billing_enabled`) the paid plans show the refresh time and the warning now. */
+export function aiWindowsRule(selling: boolean): string {
+  if (!selling) return AI_RULES.windows;
+  return `The ${WINDOW_HOURS}-hour window starts with your first AI request; the weekly window refreshes ${WEEK_DAYS} days after the week’s first use. On Pro and Pro Plus the app shows the exact refresh time (“Refreshes Saturday at 2 pm”) and warns you at ${WARN_AT_PERCENT}%.`;
+}
+
+/** AI_RULES.billing for what the server says: "when paid plans launch" only while nothing can be bought. */
+export function aiBillingRule(selling: boolean): string {
+  return selling ? "Prices are in US dollars and are the full amount you pay (any tax is included). Billing runs through the DoMe web app (Stripe)." : AI_RULES.billing;
+}

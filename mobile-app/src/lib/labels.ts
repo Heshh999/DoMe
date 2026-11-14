@@ -397,7 +397,7 @@ export function recoverySteps(code: string, ctx?: ErrorContext): string[] {
     case "PC_PLAN_DISABLED":
     case "CONTROLLER_PLAN_DISABLED":
     case "DEVICE_LIMIT_REACHED":
-      return ["Your plan limits how many PCs and phones are enabled.", "Choose which devices stay enabled under Devices, or upgrade to DoMe Pro when available."];
+      return ["Your plan limits how many PCs and phones are enabled.", "Choose which devices stay enabled under Devices, or see Billing for DoMe Pro."];
     case "OUTCOME_UNKNOWN":
       return ["The PC's connection was lost before it reported a result, so this may or may not have run.", "Check the PC's current state here before sending it again; the PC reports what happened once it reconnects."];
     case "COMMAND_EXPIRED":

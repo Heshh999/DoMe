@@ -8,6 +8,7 @@ import type { rest } from "@dome/protocol";
 import type { CommandRecord } from "./commands.ts";
 import type { InputSessionState } from "./input.ts";
 import type { RelayStatus } from "./relay.ts";
+import { YOUTUBE_COMING, youtubeComing } from "../content/windowsAppStatus.ts";
 import { resolveMediaTarget, resolveYoutubeTarget } from "./targets.ts";
 import type { LivePc } from "../store/live.ts";
 import type { SessionStatus } from "../store/session.ts";
@@ -117,6 +118,8 @@ export function assessHealth(i: HealthInput): HealthLayer[] {
 
   // 6. Browser extension
   if (!state) layers.push({ id: "extension", title: "Browser extension", status: "unknown", summary: "Not known until the PC reports its state.", action: ACTIONS.none, details: [] });
+  // no offered release has the add-on yet: nothing to install, so not a problem; the feature is coming
+  else if (!state.extension_connected && youtubeComing()) layers.push({ id: "extension", title: "Browser extension · Coming", status: "unknown", summary: `${youtubeComing()} Windows media, volume, apps and the touchpad work now.`, action: ACTIONS.none, details: ["EXTENSION_DISCONNECTED"] });
   else if (!state.extension_connected) layers.push({ id: "extension", title: "Browser extension", status: "problem", summary: "The DoMe extension is not connected on the PC. Needed only for YouTube controls; Windows media, volume, apps and the touchpad work without it.", action: ACTIONS.install_extension, details: ["EXTENSION_DISCONNECTED"] });
   else layers.push({ id: "extension", title: "Browser extension", status: "ok", summary: "Connected.", action: ACTIONS.none, details: [`browser instances: ${state.browser_instances?.length ?? 0}`] });
 
@@ -128,7 +131,7 @@ export function assessHealth(i: HealthInput): HealthLayer[] {
   else if (media.ok) layers.push({ id: "target", title: "Media target", status: "ok", summary: `Windows media session: ${media.session.app_label ?? "player"}${yt.reason === "ambiguous" ? " (several YouTube tabs are playing: choose one for YouTube controls)" : ""}.`, action: yt.reason === "ambiguous" ? ACTIONS.choose_target : ACTIONS.none, details: [`youtube: ${yt.reason}`, `sessions: ${state.media_sessions?.length ?? 0}`] });
   else if (yt.reason === "ambiguous" || media.reason === "ambiguous") layers.push({ id: "target", title: "Media target", status: "problem", summary: "More than one player is active; DoMe does not guess which one you mean.", action: ACTIONS.choose_target, details: ["TARGET_AMBIGUOUS"] });
   else if (yt.reason === "none_attached") layers.push({ id: "target", title: "Media target", status: "problem", summary: "A YouTube tab is open but the extension is not attached to it; reload that tab on the PC.", action: ACTIONS.open_youtube, details: ["TAB_NOT_CONTROLLABLE"] });
-  else layers.push({ id: "target", title: "Media target", status: "problem", summary: state.extension_connected ? "No YouTube tab or media player is active on the PC." : "No media player is active; YouTube needs the extension.", action: state.extension_connected ? ACTIONS.open_youtube : ACTIONS.install_extension, details: [`youtube: ${yt.reason}`, `media: ${media.reason}`] });
+  else layers.push({ id: "target", title: "Media target", status: "problem", summary: state.extension_connected ? "No YouTube tab or media player is active on the PC." : youtubeComing() ? `No media player is active. ${YOUTUBE_COMING}` : "No media player is active; YouTube needs the extension.", action: state.extension_connected ? ACTIONS.open_youtube : youtubeComing() ? ACTIONS.none : ACTIONS.install_extension, details: [`youtube: ${yt.reason}`, `media: ${media.reason}`] });
 
   return layers;
 }
@@ -174,7 +177,7 @@ export function onboardingSteps(i: Pick<HealthInput, "sessionStatus" | "pc" | "l
     { id: "link_pc", title: "Install DoMe on the PC and link it", done: linked, to: "/download", hint: "The Windows app signs in to the same account." },
     { id: "pair", title: "Pair this phone", done: paired, to: "/app/devices/pair", hint: "Scan the code the PC shows; approve on the PC." },
     { id: "online", title: "PC online with remote control enabled", done: online, to: "/app/health", hint: "The tray icon on the PC shows Connected and remote control on." },
-    { id: "target", title: "Choose what to control", done: target, to: "/app/remote", hint: "A YouTube tab (with the extension) or a Windows media player." },
+    { id: "target", title: "Choose what to control", done: target, to: "/app/remote", hint: youtubeComing() ? "A Windows media player (YouTube control in Chrome or Edge is coming)." : "A YouTube tab (with the extension) or a Windows media player." },
     { id: "first_action", title: "Do one action and see its result", done: firstAction, to: "/app/remote", hint: "Play/pause, next or volume — the result card shows what the PC reported." },
   ];
 }

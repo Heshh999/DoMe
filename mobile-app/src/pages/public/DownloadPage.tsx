@@ -6,6 +6,7 @@
  */
 import { Link } from "react-router";
 
+import { useScreenSwitch } from "../../app/hooks.ts";
 import { Icon, type IconName } from "../../components/icons.tsx";
 import { formatDate, formatSize, getWindowsRelease, type WindowsRelease } from "../../content/windowsRelease.ts";
 import { PublicIcon } from "./publicIcons.tsx";
@@ -18,11 +19,12 @@ export const SMART_APP_CONTROL_NOTE =
   "Not yet verified on Windows 11 PCs with Smart App Control on; if it blocks DoMe, do not turn it off. See the release page for what to do.";
 
 /**
- * The published program includes Screen view (beta), but the server keeps it switched off for accounts, so the page
- * says so even though the GitHub release notes list it as included. Remove it when Screen view is switched on, with
- * SCREEN_VIEW_STATUS ("Coming") in content/plans.ts.
+ * The published program includes Screen view (beta). While the server keeps it switched off for accounts (GET /healthz
+ * `screen_view` not "on"; unknown counts as off) the page says so, even though the GitHub release notes list it as
+ * included; where the server has it on, the page says it can be used.
  */
 export const SCREEN_VIEW_NOTE = "The program includes Screen view (beta), but it is not switched on for DoMe accounts yet, so it cannot be used.";
+export const SCREEN_VIEW_ON_NOTE = "The program includes Screen view (beta), and it is switched on for DoMe accounts: open it from the Remote tab after pairing.";
 
 /**
  * What the published release was tested on: the release run's install, upgrade, uninstall and signature checks on
@@ -73,6 +75,7 @@ function NotPublished() {
 
 /** A signed release: the real download, its checksum, the publisher Windows will show, honest caveats. */
 function Published({ release }: { release: WindowsRelease }) {
+  const screenOn = useScreenSwitch() === "on";
   const file = `DoMe-Setup-${release.version}.exe`;
   return (
     <>
@@ -102,7 +105,7 @@ function Published({ release }: { release: WindowsRelease }) {
       </p>
       {release.browserAddon ? null : <p className="mt-3 text-[15px] leading-relaxed text-text-muted">This version does not include YouTube control in Chrome or Edge; everything else in DoMe is included.</p>}
       <p className="mt-3 text-[15px] leading-relaxed text-text-muted" data-testid="screen-view-note">
-        {SCREEN_VIEW_NOTE}
+        {screenOn ? SCREEN_VIEW_ON_NOTE : SCREEN_VIEW_NOTE}
       </p>
       <p className="mt-3 text-[15px] leading-relaxed text-text-muted" data-testid="tested-note">
         {TESTED_NOTE}
