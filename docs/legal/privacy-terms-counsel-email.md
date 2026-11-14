@@ -20,11 +20,11 @@ Before you send it, fill in whatever you have already decided in your own downlo
 
 Check the live site first. The live site, https://domeremote.com, ran the code of 2026-10-20 (commit 35a203f
 [GitHub Actions Deploy run 39464803237, 2026-10-20]) until 2026-11-13, when it was updated to commit bf83141
-[GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:116-125`). It now has the renewal wording
+[GitHub Actions Deploy run 43508425555, 2026-11-13] (`docs/PROGRESS.md:132-141`). It now has the renewal wording
 and the Delete account button that questions 1 and 4 describe, which the test site has had since earlier that
-day (`docs/PROGRESS.md:142-152,164-165`); its /privacy and /terms serve the current drafts under the DRAFT banner,
+day (`docs/PROGRESS.md:158-168,180-181`); its /privacy and /terms serve the current drafts under the DRAFT banner,
 known from the commit deployed, not from a look at the pages [GitHub Actions Deploy run 43508425555, 2026-11-13]
-(`docs/PROGRESS.md:126-129`). After the update you signed in there, and Settings ends with Delete account
+(`docs/PROGRESS.md:142-145`). After the update you signed in there, and Settings ends with Delete account
 [founder-reported 2026-11-13]. So before you send, open https://domeremote.com/privacy and /terms: the Privacy
 notice should start with "Who we are" and the Terms with "About these terms" (`README.md`, "Which version of the
 drafts the website shows"). If they do not, tell an engineer before you send. One paragraph of each draft changed
@@ -33,7 +33,7 @@ describe a daily check (`mobile-app/src/pages/public/PrivacyPage.tsx:80`; `mobil
 `docs/WINDOWS_INSTALL.md:104-107`). The live pages show the new wording after the next Deploy; if you send before
 then, tell the lawyer that this paragraph is being corrected. The email also says you have not
 yet checked whether anyone besides you has signed up on the live site (the repository does not record it,
-`docs/PROGRESS.md:105-106`); if you have counted the accounts by then (`founder-decisions.md` section 5), say so instead.
+`docs/PROGRESS.md:121-122`); if you have counted the accounts by then (`founder-decisions.md` section 5), say so instead.
 
 Attach:
 
@@ -197,35 +197,35 @@ that day to the same text.
   `mobile-app/src/pages/public/PrivacyPage.tsx:43`.
 - Screen view encrypted, Cloudflare relay: `shared/protocol/version.json:76-77`;
   `cloud-api/dome_api/screen/turn.py:1-3`. On only on staging: `cloud-api/dome_api/settings.py:175`;
-  `docs/LAUNCH_SETUP.md:533-540,555-557`.
+  `docs/LAUNCH_SETUP.md:547-554,569-571`.
 - Assistant only after consent, not switched on: `cloud-api/dome_api/settings.py:150`;
-  `docs/LAUNCH_SETUP.md:770`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
+  `docs/LAUNCH_SETUP.md:784`; `mobile-app/src/pages/public/PrivacyPage.tsx:89`. Called "the AI butler":
   `mobile-app/src/pages/public/TermsPage.tsx:120`; `mobile-app/src/pages/public/PrivacyPage.tsx:85`;
   `mobile-app/src/components/AssistantConsentSheet.tsx:24`.
 - Prices and top-up: `shared/protocol/plans.json:149-164`. Free needs no card: `docs/PRODUCT_AND_PLANS.md:22`.
 - DoMe the seller, tax included: `cloud-api/dome_api/billing/stripe_provider.py:222-237`;
   `cloud-api/DECISIONS.md:522-531`; `shared/protocol/plans.json:166`.
-- Nothing on sale: `docs/LAUNCH_SETUP.md:375-383`.
-- Website and server live since 2026-10-15, with the founder's own account: `docs/PROGRESS.md:101-102,1045-1053`;
-  free accounts only, billing off in production `docs/PROGRESS.md:112-115`; deployed 2026-10-20 at commit 35a203f
+- Nothing on sale: `docs/LAUNCH_SETUP.md:375-397`.
+- Website and server live since 2026-10-15, with the founder's own account: `docs/PROGRESS.md:117-118,1061-1069`;
+  free accounts only, billing off in production `docs/PROGRESS.md:128-131`; deployed 2026-10-20 at commit 35a203f
   [GitHub Actions Deploy run 39464803237, 2026-10-20] and updated 2026-11-13 to commit bf83141 [GitHub Actions
-  Deploy run 43508425555, 2026-11-13] `docs/PROGRESS.md:116-125`; the founder signed in after the update and
-  Settings ends with Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:126-129`;
-  whether anyone else has signed up is not recorded `docs/PROGRESS.md:105-106`. The Windows program, version
+  Deploy run 43508425555, 2026-11-13] `docs/PROGRESS.md:132-141`; the founder signed in after the update and
+  Settings ends with Delete account [founder-reported 2026-11-13] `docs/PROGRESS.md:142-145`;
+  whether anyone else has signed up is not recorded `docs/PROGRESS.md:121-122`. The Windows program, version
   0.1.0, published on GitHub on 2026-11-13 as a free beta [GitHub Actions Release run 43513385142, 2026-11-13]
-  `docs/PROGRESS.md:7-14`; `docs/LAUNCH_SETUP.md:854-875`; before counsel's answers, by the
-  founder's decision `docs/PROGRESS.md:33-39`; `docs/legal/founder-decisions.md:47-55`; the
+  `docs/PROGRESS.md:23-30`; `docs/LAUNCH_SETUP.md:868-889`; before counsel's answers, by the
+  founder's decision `docs/PROGRESS.md:49-55`; `docs/legal/founder-decisions.md:49-57`; the
   licence terms still marked as a draft `pc-agent/packaging/installer/licence-terms.txt:3`; the Privacy and Terms
   drafts under the DRAFT banner `mobile-app/src/pages/public/DraftBanner.tsx:10`; no paid ads before counsel's
-  answers [founder decision, 2026-11-13] `docs/PROGRESS.md:33-39`.
+  answers [founder decision, 2026-11-13] `docs/PROGRESS.md:49-55`.
 - Question 1: renewal and cancellation in Stripe's portal `mobile-app/src/pages/public/TermsPage.tsx:82,93-94`;
-  `docs/LAUNCH_SETUP.md:450-452`. The renewal statement (bold, larger), how to cancel and the Terms and
+  `docs/LAUNCH_SETUP.md:464-466`. The renewal statement (bold, larger), how to cancel and the Terms and
   Privacy links `mobile-app/src/content/SubscriptionTerms.tsx:1-42`; `mobile-app/src/content/plans.ts:161-178`;
   under each subscribe button `mobile-app/src/pages/app/BillingPage.tsx:400` and each paid plan on Pricing
   `mobile-app/src/pages/public/PricingPage.tsx:212`. No tick box and no acceptance at checkout
   `cloud-api/dome_api/billing/stripe_provider.py:222-237`; `mobile-app/src/pages/public/TermsPage.tsx:15,85`.
   No email sent by DoMe's server: search of `cloud-api/dome_api` (no email-sending code); Auth0's emails go
-  through Resend `docs/LAUNCH_SETUP.md:789-791`. No in-app notice feature: search of `mobile-app/src`. The
+  through Resend `docs/LAUNCH_SETUP.md:803-805`. No in-app notice feature: search of `mobile-app/src`. The
   drafts' notice promises and [FOUNDER] notes: `TermsPage.tsx:34,108,157`; `PrivacyPage.tsx:213`.
 - Question 2: `mobile-app/src/pages/public/TermsPage.tsx:102`; `docs/BILLING.md:298,334-335,408`;
   `cloud-api/KNOWN_ISSUES.md:107-109`; `shared/protocol/plans.json:2`. Disputes flagged, access not paused:
@@ -244,11 +244,11 @@ that day to the same text.
   copied in `docs/legal/ai-consent-text.md`; mistakes wording `mobile-app/src/pages/public/TermsPage.tsx:124`.
 - Question 7: PC sound planned `docs/design/screen-view.md:75-77`; `mobile-app/src/content/faq.tsx:131`.
 - Question 8: `mobile-app/src/pages/public/TermsPage.tsx:145`; `pc-agent/packaging/installer/licence-terms.txt:21-24`.
-- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:843-848,891-894`.
+- Question 9: signing in your own name `docs/LAUNCH_SETUP.md:857-862,905-908`.
 - Question 10: the extension's name `browser-extension/public/manifest.json:3`.
 - Question 11: `docs/legal/subprocessors.md` section 1.
 - Question 12: encryption `mobile-app/src/pages/public/PrivacyPage.tsx:100,185`; public downloads on GitHub
-  `docs/LAUNCH_SETUP.md:1024-1031`, published since 2026-11-13 `docs/LAUNCH_SETUP.md:854-875`; checkout
+  `docs/LAUNCH_SETUP.md:1038-1045`, published since 2026-11-13 `docs/LAUNCH_SETUP.md:868-889`; checkout
   restricts no country `mobile-app/src/pages/public/TermsPage.tsx:26`.
 - Question 13: public repository, as above; no licence file at the top of the repository (`git ls-files`: the
   only licence texts are third-party ones under `pc-agent/packaging/licenses`); "closed-source"
@@ -263,7 +263,7 @@ that day to the same text.
   reads what it routes `PrivacyPage.tsx:64,190`; signed updates and no automatic install
   `pc-agent/dome_agent/update_check.py:1-25,66-69`; the update check not yet started by the program
   `docs/WINDOWS_INSTALL.md:745`; `docs/SECURITY.md:103`; what the drafts say about it `PrivacyPage.tsx:80`;
-  `TermsPage.tsx:57`; publishing a release `docs/LAUNCH_SETUP.md:1024-1031`;
+  `TermsPage.tsx:57`; publishing a release `docs/LAUNCH_SETUP.md:1038-1045`;
   incident outline "procedure, not yet run" `docs/OPERATIONS.md:345-350,430`; the breach note
   `PrivacyPage.tsx:191`.
 - Question 15: `browser-extension/public/manifest.json:3,7-10`; no ad skipping

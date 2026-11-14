@@ -370,14 +370,28 @@ the address (section 16).
    reload the page once. On 2026-11-13, **Settings** ending with **Delete account** showed that update had
    arrived (founder-reported); the summary's healthz line names the commit production runs.
 
-## 11A. Stripe (payments) *(test mode done on staging 2026-10-26; live mode and production not yet)*
+## 11A. Stripe (payments) *(test mode done on staging 2026-10-26; live account set up 2026-11-13, payments not switched on)*
 
 Stripe is the company that takes card payments for DoMe. Card details are typed on Stripe's own pages and
 never reach DoMe. Until the values below are in place, DoMe sells nothing: the Billing page says
 "Upgrading is not available yet" and everyone stays on Free. That is the state of https://domeremote.com
 today.
 
-> **Status (2026-11-09): tested with Stripe in test mode on staging.** On 2026-10-26, after the Managed Payments
+> **Status (2026-11-13): the live Stripe account is set up; payments are still off.** The founder left the
+> sandbox for the main account, completed **Activate payments** (business details, bank account, public details,
+> statement descriptor `DOME REMOTE`), copied the three products and five prices from the sandbox into live mode,
+> created a live webhook destination for `https://domeremote.com/v1/billing/webhook` with the 13 events of step 4
+> (snapshot payload, the API version Stripe suggested), saved the customer portal settings of step 5, and set the
+> Terms and Privacy links in Business details [founder-reported 2026-11-13]. **Not done (step 8, "Then Live
+> mode"):** the seven live values in the GitHub **production** environment and the production Deploy that switches
+> payments on; the founder decided to do it when counsel has finalized the Terms. Before that day: check the five
+> live prices against step 2 (amounts, intervals, tax included); replace the support phone number and address in
+> Stripe's **Settings > Business > Public details** with a business number and a mailbox address, because Stripe
+> prints them on receipts and the phone on card statements; buy the Inno Setup commercial licence
+> (`docs/WINDOWS_INSTALL.md` status table). The Deploy button checks the live key, prices, webhook and portal only
+> once the live values are in GitHub.
+>
+> **Earlier status (2026-11-09): tested with Stripe in test mode on staging.** On 2026-10-26, after the Managed Payments
 > fix, the founder bought DoMe Pro on staging with the test card (invoice $9.99 paid in the domeremote sandbox),
 > the account turned Pro, and cancelling in the customer portal set the end date (cancels 2026-11-26). Live mode and
 > production are not done yet (step 8).

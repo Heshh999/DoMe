@@ -1,12 +1,12 @@
 # Email to counsel: H.264 patents and the FFmpeg (LGPL) build
 
 Status: a draft for Justin to send. It asks questions; it is not legal advice. Facts checked against the
-repository on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:101-102`). Windows release
+repository on 2026-11-09; production status corrected on 2026-11-13 (`docs/PROGRESS.md:117-118`). Windows release
 status added on 2026-11-13: DoMe for Windows 0.1.0, with Screen view and the FFmpeg build inside, was published on
 GitHub that day as a free beta, by Justin's decision before counsel answers [GitHub Actions Release run
-43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:854-875`; `docs/PROGRESS.md:15-22`;
-`docs/legal/founder-decisions.md:47-55`); Screen view stays switched off for accounts on domeremote.com
-(`docs/PROGRESS.md:15-22`; [GitHub Actions Deploy run 43508425555, 2026-11-13]). The FFmpeg build itself has been
+43513385142, 2026-11-13] (`docs/LAUNCH_SETUP.md:868-889`; `docs/PROGRESS.md:31-38`;
+`docs/legal/founder-decisions.md:49-57`); Screen view stays switched off for accounts on domeremote.com
+(`docs/PROGRESS.md:31-38`; [GitHub Actions Deploy run 43508425555, 2026-11-13]). The FFmpeg build itself has been
 public longer: since 2026-10-22, inside a PyAV wheel published as the GitHub pre-release
 `av-lgpl-17.1.0-ffmpeg-n8.1.3-r3` (`docs/WINDOWS_INSTALL.md:545-547`; [GitHub release
 av-lgpl-17.1.0-ffmpeg-n8.1.3-r3, published 2026-10-22, pre-release]).

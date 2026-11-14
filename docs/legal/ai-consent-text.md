@@ -7,7 +7,7 @@ question 6 of `privacy-terms-counsel-email.md` asks about. Attach this file to e
 
 The feature is called "the AI butler" in the app and in the drafts, and "the assistant" in the body of this
 screen and in the emails: they are the same feature. It is switched on in no deployment yet
-(`cloud-api/dome_api/settings.py:150`; `docs/LAUNCH_SETUP.md:770`), so the lawyer cannot see this screen in the
+(`cloud-api/dome_api/settings.py:150`; `docs/LAUNCH_SETUP.md:784`), so the lawyer cannot see this screen in the
 app. Changing this text changes its version, and the server then asks every account to agree again
 (`AssistantConsentSheet.tsx:3-4`).
 

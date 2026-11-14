@@ -2,6 +2,22 @@
 
 Newest first. Each entry: what changed, what was actually run, evidence tag, what is next.
 
+## 2026-11-13 — The live Stripe account is set up; payments stay off until counsel finalizes the Terms
+
+- **Done by the founder in Stripe's live account [founder-reported 2026-11-13].** Activate payments completed
+  (business details, bank account, public details, statement descriptor `DOME REMOTE`); the three products and
+  five prices copied from the sandbox; a live webhook destination for `https://domeremote.com/v1/billing/webhook`
+  with the 13 events of `docs/LAUNCH_SETUP.md` section 11A step 4; the customer portal saved as in step 5; the
+  Terms and Privacy links set in Business details.
+- **Still off.** No live value is in the GitHub production environment, so domeremote.com sells nothing (its
+  last Deploy summary says "Stripe: off"). The founder will switch payments on when counsel has finalized the
+  Terms (section 11A step 8, "Then Live mode").
+- **Before switching on:** check the five live prices against step 2; replace the public support phone and
+  address in Stripe with a business number and a mailbox address (receipts show both, card statements the
+  phone); buy the Inno Setup commercial licence.
+- **Download button live:** the founder deployed 78d5bb8 to staging (run 43534500706) and production (run
+  43535164002, 2026-11-14 00:37 UTC; healthz ok at 78d5bb8), so domeremote.com/download offers 0.1.0.
+
 ## 2026-11-13 — DoMe for Windows 0.1.0 is published
 
 - **Published.** GitHub release `v0.1.0`, https://github.com/Heshh999/DoMe/releases/tag/v0.1.0, published
